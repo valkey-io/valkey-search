@@ -20,6 +20,7 @@
 #include <variant>
 #include <vector>
 
+#include "absl/cleanup/cleanup.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/functional/any_invocable.h"
 #include "absl/status/status.h"
@@ -523,6 +524,18 @@ inline void SetDebugMode(bool enabled) {
   for (auto *arg : args) {
     TestValkeyModule_FreeString(nullptr, arg);
   }
+}
+
+// Sets a numeric config option for the lifetime of the returned object and
+// restores the previous value when it is destroyed. Keep the result alive for
+// the scope that needs the override:
+//   auto restore = OverrideConfig(options::GetMaxM(), 32);
+template <typename T>
+[[nodiscard]] auto OverrideConfig(vmsdk::config::Number &option, T value) {
+  const auto saved = option.GetValue();
+  VMSDK_EXPECT_OK(option.SetValue(value));
+  return absl::Cleanup{
+      [&option, saved] { VMSDK_EXPECT_OK(option.SetValue(saved)); }};
 }
 
 absl::StatusOr<std::shared_ptr<MockIndexSchema>> CreateIndexSchema(

@@ -11,8 +11,8 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
-#include "absl/cleanup/cleanup.h"
 #include "absl/status/status.h"
 #include "absl/strings/str_format.h"
 #include "gmock/gmock.h"
@@ -27,6 +27,10 @@
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
+
+namespace options {
+vmsdk::config::Number &GetMaxIndexes();
+}  // namespace options
 
 class SchemaManagerTest : public ValkeySearchTest {
  public:
@@ -621,11 +625,7 @@ TEST_F(SchemaManagerTest, MetadataUpdateRejectsOverLimitSchema) {
 
   // Lower the M limit below the fixture's m=240 to exercise the check without
   // depending on the hard-cap default.
-  const auto saved_max_m = options::GetMaxM().GetValue();
-  VMSDK_EXPECT_OK(options::GetMaxM().SetValue(32));
-  absl::Cleanup restore = [saved_max_m] {
-    VMSDK_EXPECT_OK(options::GetMaxM().SetValue(saved_max_m));
-  };
+  auto restore = OverrideConfig(options::GetMaxM(), 32);
 
   auto metadata = std::make_unique<google::protobuf::Any>();
   metadata->PackFrom(test_index_schema_proto_);
@@ -636,7 +636,9 @@ TEST_F(SchemaManagerTest, MetadataUpdateRejectsOverLimitSchema) {
                     .status();
 
   EXPECT_EQ(status.code(), absl::StatusCode::kOutOfRange);
-  EXPECT_THAT(status.message(), testing::HasSubstr("M"));
+  EXPECT_THAT(status.message(),
+              testing::HasSubstr("Attribute `*redacted*`: Invalid range: "
+                                 "Value above maximum; M must be"));
   EXPECT_FALSE(
       SchemaManager::Instance().GetIndexSchema(db_num_, index_name_).ok());
 }
@@ -691,11 +693,7 @@ TEST_F(SchemaManagerTest, ReconcileOnlyValidatesEntriesItApplies) {
   const uint32_t existing_encoding = existing.encoding_version();
   ASSERT_GE(existing_version, 1U);
 
-  const auto saved_max_m = options::GetMaxM().GetValue();
-  VMSDK_EXPECT_OK(options::GetMaxM().SetValue(32));
-  absl::Cleanup restore = [saved_max_m] {
-    VMSDK_EXPECT_OK(options::GetMaxM().SetValue(saved_max_m));
-  };
+  auto restore = OverrideConfig(options::GetMaxM(), 32);
 
   auto make_proposed = [&](uint32_t version) {
     coordinator::GlobalMetadata proposed;
@@ -726,7 +724,9 @@ TEST_F(SchemaManagerTest, ReconcileOnlyValidatesEntriesItApplies) {
   auto status = coordinator::MetadataManager::Instance().ReconcileMetadata(
       make_proposed(existing_version + 1), "test");
   EXPECT_EQ(status.code(), absl::StatusCode::kOutOfRange);
-  EXPECT_THAT(status.message(), testing::HasSubstr("M"));
+  EXPECT_THAT(status.message(),
+              testing::HasSubstr("Attribute `*redacted*`: Invalid range: "
+                                 "Value above maximum; M must be"));
   auto after = SchemaManager::Instance().GetIndexSchema(db_num_, index_name_);
   VMSDK_EXPECT_OK(after);
   EXPECT_EQ(after.value(), before.value());
@@ -748,11 +748,7 @@ TEST_F(SchemaManagerTest, FlushDBRecreatesIndexEvenIfNowOverLimit) {
   VMSDK_EXPECT_OK(previous);
 
   // Lower max-vector-m below the fixture's m=240 after creation.
-  const auto saved_max_m = options::GetMaxM().GetValue();
-  VMSDK_EXPECT_OK(options::GetMaxM().SetValue(32));
-  absl::Cleanup restore = [saved_max_m] {
-    VMSDK_EXPECT_OK(options::GetMaxM().SetValue(saved_max_m));
-  };
+  auto restore = OverrideConfig(options::GetMaxM(), 32);
 
   SchemaManager::Instance().OnFlushDBEnded(&fake_ctx_);
 
@@ -761,6 +757,242 @@ TEST_F(SchemaManagerTest, FlushDBRecreatesIndexEvenIfNowOverLimit) {
       SchemaManager::Instance().GetIndexSchema(db_num_, index_name_);
   VMSDK_EXPECT_OK(recreated);
   EXPECT_NE(recreated.value(), previous.value());
+}
+
+namespace {
+std::unique_ptr<data_model::RDBSection> MakeIndexSchemaSection(
+    const data_model::IndexSchema &proto) {
+  auto section = std::make_unique<data_model::RDBSection>();
+  section->set_type(data_model::RDB_SECTION_INDEX_SCHEMA);
+  section->mutable_index_schema_contents()->CopyFrom(proto);
+  section->set_supplemental_count(0);
+  return section;
+}
+}  // namespace
+
+// An RDB taken before a limit was lowered must not restore an index that
+// FT.CREATE would now reject: the load fails and nothing is materialized.
+TEST_F(SchemaManagerTest, LoadIndexRejectsSchemaOverConfiguredLimit) {
+  ON_CALL(*kMockValkeyModule, GetContextFromIO(testing::_))
+      .WillByDefault(testing::Return(&fake_ctx_));
+  // The fixture index has m=240.
+  auto restore = OverrideConfig(options::GetMaxM(), 32);
+
+  FakeSafeRDB fake_rdb;
+  auto status = SchemaManager::Instance().LoadIndex(
+      &fake_ctx_, MakeIndexSchemaSection(test_index_schema_proto_),
+      SupplementalContentIter(&fake_rdb, 0));
+
+  EXPECT_EQ(status.code(), absl::StatusCode::kOutOfRange);
+  EXPECT_THAT(status.message(),
+              testing::HasSubstr("cannot be loaded from RDB; raise the limit "
+                                 "to load it: Attribute `"));
+  EXPECT_THAT(status.message(),
+              testing::HasSubstr("Invalid range: Value above maximum; M must "
+                                 "be a positive integer greater than or equal "
+                                 "to 2 and cannot exceed 32."));
+  EXPECT_EQ(SchemaManager::Instance()
+                .GetIndexSchema(db_num_, index_name_)
+                .status()
+                .code(),
+            absl::StatusCode::kNotFound);
+}
+
+// The per-schema limits are validated on every load path, not just startup:
+// a replication load is rejected the same way, before anything is staged.
+TEST_F(SchemaManagerTest, LoadIndexDuringReplicationRejectsOverLimitSchema) {
+  ValkeyModuleEvent eid;
+  ON_CALL(*kMockValkeyModule, GetContextFromIO(testing::_))
+      .WillByDefault(testing::Return(&fake_ctx_));
+  SchemaManager::Instance().OnLoadingCallback(
+      &fake_ctx_, eid, VALKEYMODULE_SUBEVENT_LOADING_REPL_START, nullptr);
+  auto restore = OverrideConfig(options::GetMaxDimensions(), 8);
+
+  FakeSafeRDB fake_rdb;
+  auto status = SchemaManager::Instance().LoadIndex(
+      &fake_ctx_, MakeIndexSchemaSection(test_index_schema_proto_),
+      SupplementalContentIter(&fake_rdb, 0));
+  EXPECT_EQ(status.code(), absl::StatusCode::kOutOfRange);
+  EXPECT_THAT(status.message(),
+              testing::HasSubstr("The dimensions value must be"));
+
+  SchemaManager::Instance().OnLoadingCallback(
+      &fake_ctx_, eid, VALKEYMODULE_SUBEVENT_LOADING_ENDED, nullptr);
+  EXPECT_EQ(SchemaManager::Instance().GetNumberOfIndexSchemas(), 0);
+}
+
+// max-indexes is enforced on restore as well: the index that would take the
+// node past the limit fails the load. Reloading an index that is already
+// installed replaces it and does not count twice.
+TEST_F(SchemaManagerTest, LoadIndexRejectsIndexBeyondMaxIndexes) {
+  ON_CALL(*kMockValkeyModule, GetContextFromIO(testing::_))
+      .WillByDefault(testing::Return(&fake_ctx_));
+  auto restore = OverrideConfig(options::GetMaxIndexes(), 2);
+
+  FakeSafeRDB fake_rdb;
+  for (int i = 0; i < 2; ++i) {
+    auto proto = test_index_schema_proto_;
+    proto.set_name(absl::StrFormat("idx_%d", i));
+    VMSDK_EXPECT_OK(SchemaManager::Instance().LoadIndex(
+        &fake_ctx_, MakeIndexSchemaSection(proto),
+        SupplementalContentIter(&fake_rdb, 0)));
+  }
+
+  auto replacement = test_index_schema_proto_;
+  replacement.set_name("idx_1");
+  VMSDK_EXPECT_OK(SchemaManager::Instance().LoadIndex(
+      &fake_ctx_, MakeIndexSchemaSection(replacement),
+      SupplementalContentIter(&fake_rdb, 0)));
+
+  auto extra = test_index_schema_proto_;
+  extra.set_name("idx_2");
+  auto status = SchemaManager::Instance().LoadIndex(
+      &fake_ctx_, MakeIndexSchemaSection(extra),
+      SupplementalContentIter(&fake_rdb, 0));
+  EXPECT_EQ(status.code(), absl::StatusCode::kOutOfRange);
+  EXPECT_THAT(status.message(),
+              testing::HasSubstr("cannot be loaded from RDB; raise the limit "
+                                 "to load it: Invalid range: Value above "
+                                 "maximum; Number of indexes (3) exceeds the "
+                                 "maximum allowed (2)"));
+  EXPECT_EQ(SchemaManager::Instance().GetNumberOfIndexSchemas(), 2);
+}
+
+// A replication load replaces the live index set wholesale on loading ended,
+// so only the staged indexes count toward max-indexes: a replica already
+// holding as many indexes as the limit still accepts a full sync of the same
+// size.
+TEST_F(SchemaManagerTest, ReplicationLoadCountsOnlyStagedIndexes) {
+  ValkeyModuleEvent eid;
+  ON_CALL(*kMockValkeyModule, GetContextFromIO(testing::_))
+      .WillByDefault(testing::Return(&fake_ctx_));
+  auto restore = OverrideConfig(options::GetMaxIndexes(), 1);
+  VMSDK_EXPECT_OK(
+      CreateVectorHNSWSchema("live_index", &fake_ctx_, nullptr, {}, db_num_));
+  ASSERT_EQ(SchemaManager::Instance().GetNumberOfIndexSchemas(), 1);
+
+  SchemaManager::Instance().OnLoadingCallback(
+      &fake_ctx_, eid, VALKEYMODULE_SUBEVENT_LOADING_REPL_START, nullptr);
+  FakeSafeRDB fake_rdb;
+  VMSDK_EXPECT_OK(SchemaManager::Instance().LoadIndex(
+      &fake_ctx_, MakeIndexSchemaSection(test_index_schema_proto_),
+      SupplementalContentIter(&fake_rdb, 0)));
+
+  auto extra = test_index_schema_proto_;
+  extra.set_name("second");
+  EXPECT_EQ(SchemaManager::Instance()
+                .LoadIndex(&fake_ctx_, MakeIndexSchemaSection(extra),
+                           SupplementalContentIter(&fake_rdb, 0))
+                .code(),
+            absl::StatusCode::kOutOfRange);
+}
+
+// A peer proposing an index that exceeds this node's limit leaves the node's
+// metadata sync stuck on its current state until an operator fixes the limit.
+// Stuck means nothing in the proposal is applied, including entries that are
+// within limits, and indexes the node already serves are not rebuilt by the
+// failed rounds. Once the limit is raised, the next round applies everything.
+TEST_F(SchemaManagerTest, ReconcileWithOverLimitEntryAppliesNothing) {
+  coordinator::MetadataManager::InitInstance(std::move(test_metadata_manager_));
+  SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
+      &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/true));
+  auto &metadata_manager = coordinator::MetadataManager::Instance();
+
+  ValkeyModuleCallReply ok_reply;
+  ok_reply.type = VALKEYMODULE_REPLY_STRING;
+  ON_CALL(*kMockValkeyModule,
+          Call(testing::_, testing::StrEq("FT.INTERNAL_UPDATE"),
+               testing::StrEq("!Kcbb"), testing::_, testing::_, testing::_,
+               testing::_, testing::_))
+      .WillByDefault(testing::Return(&ok_reply));
+
+  auto within_limit = [&](absl::string_view name) {
+    data_model::IndexSchema proto = test_index_schema_proto_;
+    proto.set_name(std::string(name));
+    proto.mutable_attributes(0)
+        ->mutable_index()
+        ->mutable_vector_index()
+        ->mutable_hnsw_algorithm()
+        ->set_m(16);
+    return proto;
+  };
+
+  // An index this node already serves, created while every limit allows it.
+  auto served = std::make_unique<google::protobuf::Any>();
+  served->PackFrom(within_limit("served"));
+  VMSDK_EXPECT_OK(metadata_manager
+                      .CreateEntry(kSchemaManagerMetadataTypeName,
+                                   coordinator::ObjName(db_num_, "served"),
+                                   std::move(served))
+                      .status());
+  const auto served_schema =
+      SchemaManager::Instance().GetIndexSchema(db_num_, "served").value();
+
+  // Several within-limit indexes plus one over the limit (fixture m=240), so
+  // the rejected entry is unlikely to be the first one visited.
+  std::vector<std::string> new_names;
+  coordinator::GlobalMetadata proposed;
+  auto &entries =
+      *(*proposed
+             .mutable_type_namespace_map())[std::string(
+                                                kSchemaManagerMetadataTypeName)]
+           .mutable_entries();
+  auto add_entry = [&](const data_model::IndexSchema &proto) {
+    coordinator::GlobalMetadataEntry entry;
+    entry.set_version(0);
+    entry.set_fingerprint(entries.size() + 1);
+    entry.set_encoding_version(coordinator::kEncodingVersion);
+    entry.mutable_content()->PackFrom(proto);
+    entries[coordinator::ObjName(db_num_, proto.name()).Encode()] = entry;
+    new_names.push_back(proto.name());
+  };
+  for (int i = 0; i < 8; ++i) {
+    add_entry(within_limit(absl::StrFormat("good_%d", i)));
+  }
+  add_entry(test_index_schema_proto_);
+  proposed.mutable_version_header()->set_top_level_version(1);
+
+  const auto completed_before =
+      metadata_manager.GetMetadataReconciliationCompletedCount();
+  {
+    auto restore = OverrideConfig(options::GetMaxM(), 32);
+    for (int round = 0; round < 2; ++round) {
+      auto status = metadata_manager.ReconcileMetadata(proposed, "test");
+      EXPECT_EQ(status.code(), absl::StatusCode::kOutOfRange);
+      for (const auto &name : new_names) {
+        EXPECT_FALSE(
+            SchemaManager::Instance().GetIndexSchema(db_num_, name).ok())
+            << name;
+      }
+      EXPECT_EQ(
+          SchemaManager::Instance().GetIndexSchema(db_num_, "served").value(),
+          served_schema);
+      EXPECT_EQ(metadata_manager.GetMetadataReconciliationCompletedCount(),
+                completed_before);
+    }
+  }
+
+  // The operator raised the limit: the next round converges.
+  VMSDK_EXPECT_OK(metadata_manager.ReconcileMetadata(proposed, "test"));
+  EXPECT_EQ(metadata_manager.GetMetadataReconciliationCompletedCount(),
+            completed_before + 1);
+  std::vector<std::shared_ptr<IndexSchema>> applied;
+  for (const auto &name : new_names) {
+    auto schema = SchemaManager::Instance().GetIndexSchema(db_num_, name);
+    VMSDK_EXPECT_OK(schema) << name;
+    applied.push_back(schema.value_or(nullptr));
+  }
+  EXPECT_EQ(SchemaManager::Instance().GetIndexSchema(db_num_, "served").value(),
+            served_schema);
+
+  // Re-delivering the same proposal changes nothing.
+  VMSDK_EXPECT_OK(metadata_manager.ReconcileMetadata(proposed, "test"));
+  for (size_t i = 0; i < new_names.size(); ++i) {
+    EXPECT_EQ(
+        SchemaManager::Instance().GetIndexSchema(db_num_, new_names[i]).value(),
+        applied[i])
+        << new_names[i];
+  }
 }
 
 }  // namespace valkey_search

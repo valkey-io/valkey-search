@@ -13,7 +13,6 @@
 #include <string>
 #include <vector>
 
-#include "absl/cleanup/cleanup.h"
 #include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
@@ -23,7 +22,7 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/text/languages/french.h"
 #include "src/indexes/text/languages/german.h"
-#include "vmsdk/src/module_config.h"
+#include "testing/common.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
 
@@ -1011,7 +1010,7 @@ INSTANTIATE_TEST_SUITE_P(
              .expected_error_message =
                  "Invalid field type for field `hash_field1`: Invalid range: "
                  "Value below minimum; M must be a positive integer greater "
-                 "than 2 and cannot exceed 2000000.",
+                 "than or equal to 2 and cannot exceed 2000000.",
          },
          {
              .test_name = "invalid_m_too_big",
@@ -1022,7 +1021,7 @@ INSTANTIATE_TEST_SUITE_P(
              .expected_error_message =
                  "Invalid field type for field `hash_field1`: Invalid range: "
                  "Value above maximum; M must be a positive integer greater "
-                 "than 2 and cannot exceed 2000000.",
+                 "than or equal to 2 and cannot exceed 2000000.",
          },
          {
              .test_name = "invalid_m_too_small",
@@ -1033,7 +1032,7 @@ INSTANTIATE_TEST_SUITE_P(
              .expected_error_message =
                  "Invalid field type for field `hash_field1`: Invalid range: "
                  "Value below minimum; M must be a positive integer greater "
-                 "than 2 and cannot exceed 2000000.",
+                 "than or equal to 2 and cannot exceed 2000000.",
          },
          {
              .test_name = "invalid_ef_construction_zero",
@@ -2528,15 +2527,6 @@ class ValidateIndexSchemaLimitsTest : public vmsdk::ValkeyTest {
     vector_index->mutable_flat_algorithm()->set_block_size(block_size);
     return vector_index;
   }
-
-  // Temporarily lower a limit; restored when the returned Cleanup dies.
-  template <typename T>
-  static auto Override(vmsdk::config::Number &option, T value) {
-    const auto saved = option.GetValue();
-    VMSDK_EXPECT_OK(option.SetValue(value));
-    return absl::Cleanup{
-        [&option, saved] { VMSDK_EXPECT_OK(option.SetValue(saved)); }};
-  }
 };
 
 TEST_F(ValidateIndexSchemaLimitsTest, WithinLimitsIsAccepted) {
@@ -2552,34 +2542,46 @@ TEST_F(ValidateIndexSchemaLimitsTest, OverLimitDimensionsIsRejected) {
   AddHnsw(proto, "vec", /*dimension_count=*/40000);
   auto status = ValidateIndexSchemaLimits(proto);
   EXPECT_EQ(status.code(), absl::StatusCode::kOutOfRange);
-  EXPECT_THAT(status.message(), testing::HasSubstr("dimensions"));
+  EXPECT_THAT(
+      status.message(),
+      testing::HasSubstr("Attribute `*redacted*`: Invalid range: Value above "
+                         "maximum; The dimensions value must be"));
 }
 
 TEST_F(ValidateIndexSchemaLimitsTest, OverLimitMIsRejected) {
-  auto restore = Override(options::GetMaxM(), 32);
+  auto restore = OverrideConfig(options::GetMaxM(), 32);
   auto proto = MakeSchema();
   AddHnsw(proto, "vec", 16, /*m=*/64);
   auto status = ValidateIndexSchemaLimits(proto);
   EXPECT_EQ(status.code(), absl::StatusCode::kOutOfRange);
-  EXPECT_THAT(status.message(), testing::HasSubstr("M"));
+  EXPECT_THAT(
+      status.message(),
+      testing::HasSubstr("Attribute `*redacted*`: Invalid range: Value above "
+                         "maximum; M must be"));
 }
 
 TEST_F(ValidateIndexSchemaLimitsTest, OverLimitEfConstructionIsRejected) {
-  auto restore = Override(options::GetMaxEfConstruction(), 100);
+  auto restore = OverrideConfig(options::GetMaxEfConstruction(), 100);
   auto proto = MakeSchema();
   AddHnsw(proto, "vec", 16, 16, /*ef_construction=*/200);
   auto status = ValidateIndexSchemaLimits(proto);
   EXPECT_EQ(status.code(), absl::StatusCode::kOutOfRange);
-  EXPECT_THAT(status.message(), testing::HasSubstr("EF_CONSTRUCTION"));
+  EXPECT_THAT(
+      status.message(),
+      testing::HasSubstr("Attribute `*redacted*`: Invalid range: Value above "
+                         "maximum; EF_CONSTRUCTION must be"));
 }
 
 TEST_F(ValidateIndexSchemaLimitsTest, OverLimitEfRuntimeIsRejected) {
-  auto restore = Override(options::GetMaxEfRuntime(), 50);
+  auto restore = OverrideConfig(options::GetMaxEfRuntime(), 50);
   auto proto = MakeSchema();
   AddHnsw(proto, "vec", 16, 16, 50, /*ef_runtime=*/100);
   auto status = ValidateIndexSchemaLimits(proto);
   EXPECT_EQ(status.code(), absl::StatusCode::kOutOfRange);
-  EXPECT_THAT(status.message(), testing::HasSubstr("EF_RUNTIME"));
+  EXPECT_THAT(
+      status.message(),
+      testing::HasSubstr("Attribute `*redacted*`: Invalid range: Value above "
+                         "maximum; EF_RUNTIME must be"));
 }
 
 TEST_F(ValidateIndexSchemaLimitsTest, OverLimitFlatBlockSizeIsRejected) {
@@ -2587,7 +2589,10 @@ TEST_F(ValidateIndexSchemaLimitsTest, OverLimitFlatBlockSizeIsRejected) {
   AddFlat(proto, "flat", /*block_size=*/10000001);
   auto status = ValidateIndexSchemaLimits(proto);
   EXPECT_EQ(status.code(), absl::StatusCode::kOutOfRange);
-  EXPECT_THAT(status.message(), testing::HasSubstr("BLOCK_SIZE"));
+  EXPECT_THAT(
+      status.message(),
+      testing::HasSubstr("Attribute `*redacted*`: Invalid range: Value above "
+                         "maximum; BLOCK_SIZE must be"));
 }
 
 // A proto produced by ToProto() carries the index's grown capacity in
@@ -2609,31 +2614,37 @@ TEST_F(ValidateIndexSchemaLimitsTest, VectorWithoutAlgorithmIsRejected) {
   AddHnsw(proto, "vec")->clear_algorithm();
   auto status = ValidateIndexSchemaLimits(proto);
   EXPECT_EQ(status.code(), absl::StatusCode::kInvalidArgument);
-  EXPECT_THAT(status.message(), testing::HasSubstr("no algorithm set"));
+  EXPECT_THAT(status.message(),
+              testing::HasSubstr("Attribute `*redacted*`: vector index has no "
+                                 "algorithm set"));
 }
 
 TEST_F(ValidateIndexSchemaLimitsTest, OverLimitPrefixCountIsRejected) {
-  auto restore = Override(options::GetMaxPrefixes(), 2);
+  auto restore = OverrideConfig(options::GetMaxPrefixes(), 2);
   auto proto = MakeSchema();  // Already has one prefix.
   proto.add_subscribed_key_prefixes("b:");
   proto.add_subscribed_key_prefixes("c:");
   auto status = ValidateIndexSchemaLimits(proto);
   EXPECT_EQ(status.code(), absl::StatusCode::kOutOfRange);
-  EXPECT_THAT(status.message(), testing::HasSubstr("prefixes"));
+  EXPECT_THAT(status.message(),
+              testing::HasSubstr("Number of prefixes (3) exceeds the maximum "
+                                 "allowed (2)"));
 }
 
 TEST_F(ValidateIndexSchemaLimitsTest, OverLimitAttributeCountIsRejected) {
-  auto restore = Override(options::GetMaxAttributes(), 1);
+  auto restore = OverrideConfig(options::GetMaxAttributes(), 1);
   auto proto = MakeSchema();
   AddHnsw(proto, "vec_a");
   AddHnsw(proto, "vec_b");
   auto status = ValidateIndexSchemaLimits(proto);
   EXPECT_EQ(status.code(), absl::StatusCode::kOutOfRange);
-  EXPECT_THAT(status.message(), testing::HasSubstr("attributes"));
+  EXPECT_THAT(status.message(),
+              testing::HasSubstr("The maximum number of attributes cannot "
+                                 "exceed 1."));
 }
 
 TEST_F(ValidateIndexSchemaLimitsTest, OverLimitTagIdentifierLengthIsRejected) {
-  auto restore = Override(options::GetMaxTagFieldLen(), 5);
+  auto restore = OverrideConfig(options::GetMaxTagFieldLen(), 5);
   auto proto = MakeSchema();
   auto *attribute = proto.add_attributes();
   attribute->set_alias("t");
@@ -2641,12 +2652,16 @@ TEST_F(ValidateIndexSchemaLimitsTest, OverLimitTagIdentifierLengthIsRejected) {
   attribute->mutable_index()->mutable_tag_index()->set_separator(",");
   auto status = ValidateIndexSchemaLimits(proto);
   EXPECT_EQ(status.code(), absl::StatusCode::kOutOfRange);
-  EXPECT_THAT(status.message(), testing::HasSubstr("tag field"));
+  EXPECT_THAT(
+      status.message(),
+      testing::HasSubstr("Attribute `*redacted*`: Invalid range: Value above "
+                         "maximum; A tag field can have a maximum "
+                         "length of 5."));
 }
 
 TEST_F(ValidateIndexSchemaLimitsTest,
        OverLimitNumericIdentifierLengthIsRejected) {
-  auto restore = Override(options::GetMaxNumericFieldLen(), 5);
+  auto restore = OverrideConfig(options::GetMaxNumericFieldLen(), 5);
   auto proto = MakeSchema();
   auto *attribute = proto.add_attributes();
   attribute->set_alias("n");
@@ -2654,7 +2669,11 @@ TEST_F(ValidateIndexSchemaLimitsTest,
   attribute->mutable_index()->mutable_numeric_index();
   auto status = ValidateIndexSchemaLimits(proto);
   EXPECT_EQ(status.code(), absl::StatusCode::kOutOfRange);
-  EXPECT_THAT(status.message(), testing::HasSubstr("numeric field"));
+  EXPECT_THAT(
+      status.message(),
+      testing::HasSubstr("Attribute `*redacted*`: Invalid range: Value above "
+                         "maximum; A numeric field can have a "
+                         "maximum length of 5."));
 }
 
 }  // namespace

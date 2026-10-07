@@ -313,6 +313,7 @@ void MetadataManager::RegisterType(absl::string_view type_name,
                                    FingerprintCallback fingerprint_callback,
                                    MetadataUpdateCallback callback,
                                    MinVersionCallback min_version_callback,
+                                   MetadataValidateCallback validate_callback,
                                    vmsdk::ValkeyVersion encoding_version) {
   auto insert_result =
       registered_types_.Get().insert(std::pair<std::string, RegisteredType>{
@@ -321,7 +322,8 @@ void MetadataManager::RegisterType(absl::string_view type_name,
               .encoding_version = encoding_version,
               .fingerprint_callback = std::move(fingerprint_callback),
               .update_callback = std::move(callback),
-              .min_version_callback = std::move(min_version_callback)}});
+              .min_version_callback = std::move(min_version_callback),
+              .validate_callback = std::move(validate_callback)}});
   VMSDK_LOG(DEBUG, nullptr) << "Registering type: " << type_name;
   CHECK(insert_result.second) << "Type already registered: " << type_name;
 }
@@ -510,6 +512,15 @@ absl::Status MetadataManager::ReconcileMetadata(const GlobalMetadata &proposed,
   // current version.
   GlobalMetadata result;
   result.CopyFrom(metadata_.Get());
+  // Entries this reconciliation applies, in merge order. Callbacks run only
+  // after every one of them has been validated, so a rejected entry leaves
+  // the node exactly as it was instead of partially applied.
+  struct PendingEntry {
+    absl::string_view type_name;
+    const std::string *id;
+    const GlobalMetadataEntry *entry;
+  };
+  std::vector<PendingEntry> to_apply;
 
   // Merge the result with the incoming metadata
   for (const auto &[type_name, proposed_inner_map] :
@@ -566,20 +577,46 @@ absl::Status MetadataManager::ReconcileMetadata(const GlobalMetadata &proposed,
       }
 
       if (trigger_callbacks) {
-        auto obj_name = ObjName::Decode(id);
-        auto result = TriggerCallbacks(type_name, obj_name, proposed_entry);
-        if (!result.ok()) {
-          VMSDK_LOG(WARNING, detached_ctx_.get())
-              << "Failed during reconciliation callback: %s"
-              << result.message().data() << " for type " << type_name << ", id "
-              << vmsdk::config::RedactIfNeeded(id) << " from " << source;
-          return result;
-        }
-        auto status = CallFTInternalUpdateForReconciliation(id, proposed_entry);
-        if (!status.ok()) {
-          return status;
-        }
+        to_apply.push_back({type_name, &id, &proposed_entry});
       }
+    }
+  }
+
+  auto &registered_types = registered_types_.Get();
+  for (const auto &pending : to_apply) {
+    auto rt_it = registered_types.find(pending.type_name);
+    if (rt_it == registered_types.end() || !rt_it->second.validate_callback) {
+      continue;
+    }
+    const auto &entry = *pending.entry;
+    auto status = rt_it->second.validate_callback(
+        ObjName::Decode(*pending.id),
+        entry.has_content() ? &entry.content() : nullptr);
+    if (!status.ok()) {
+      VMSDK_LOG_EVERY_N_SEC(WARNING, detached_ctx_.get(), 1)
+          << "Rejected GlobalMetadata from " << source << ": entry for type "
+          << pending.type_name << ", id "
+          << vmsdk::config::RedactIfNeeded(*pending.id)
+          << " failed validation, nothing applied: " << status.message();
+      return status;
+    }
+  }
+
+  for (const auto &pending : to_apply) {
+    auto obj_name = ObjName::Decode(*pending.id);
+    auto result = TriggerCallbacks(pending.type_name, obj_name, *pending.entry);
+    if (!result.ok()) {
+      VMSDK_LOG(WARNING, detached_ctx_.get())
+          << "Failed during reconciliation callback: %s"
+          << result.message().data() << " for type " << pending.type_name
+          << ", id " << vmsdk::config::RedactIfNeeded(*pending.id) << " from "
+          << source;
+      return result;
+    }
+    auto status =
+        CallFTInternalUpdateForReconciliation(*pending.id, *pending.entry);
+    if (!status.ok()) {
+      return status;
     }
   }
 

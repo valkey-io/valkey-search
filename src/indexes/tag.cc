@@ -13,6 +13,7 @@
 #include <utility>
 #include <vector>
 
+#include "absl/base/optimization.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -28,12 +29,35 @@
 #include "src/utils/scanner.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
+#include "vmsdk/src/info.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes {
 
 namespace {
+
+// INFO counter for the non-UTF-8 TAG compatibility defect (see
+// COMPATIBILITY.md). Statically constructed because AddRecord/ModifyRecord run
+// on worker threads, where VALKEY_SEARCH_COMPATIBILITY_FIX's lazily
+// constructed counter is unsafe.
+vmsdk::info_field::Integer tag_rejects_non_utf8_compat_counter(
+    "compatibility", "compatibility-tag_rejects_non_utf8",
+    vmsdk::info_field::IntegerBuilder().App());
+
+// Redisearch rejects non-UTF-8 TAG data. This is gated on
+// search.emulate-release so the legacy behavior (index it) is preserved by
+// default.
+bool RejectNonUtf8(absl::string_view data) {
+  if (ABSL_PREDICT_TRUE(utils::IsValidUtf8(data))) {
+    return false;
+  }
+  if (options::EnabledInVersion(1, 3, 0)) {
+    return true;
+  }
+  tag_rejects_non_utf8_compat_counter.Increment();
+  return false;
+}
 
 inline uintptr_t SlotToStorage(void *p) {
   return reinterpret_cast<uintptr_t>(p);
@@ -111,7 +135,7 @@ absl::StatusOr<RecordResult> Tag::AddRecord(const InternedStringPtr &key,
                                             AttributeData &&data) {
   auto str = data.ConsumeString();
   auto data_sv = vmsdk::ToStringView(str.get());
-  if (!utils::IsValidUtf8(data_sv)) {
+  if (RejectNonUtf8(data_sv)) {
     absl::MutexLock lock(&index_mutex_);
     untracked_keys_.insert(key);
     return RecordResult::kInvalidData;
@@ -220,7 +244,7 @@ absl::StatusOr<RecordResult> Tag::ModifyRecord(const InternedStringPtr &key,
                                                AttributeData &&data) {
   auto str = data.ConsumeString();
   auto data_sv = vmsdk::ToStringView(str.get());
-  if (!utils::IsValidUtf8(data_sv)) {
+  if (RejectNonUtf8(data_sv)) {
     [[maybe_unused]] auto res =
         RemoveRecord(key, indexes::DeletionType::kIdentifier);
     return RecordResult::kInvalidData;

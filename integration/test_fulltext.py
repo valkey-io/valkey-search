@@ -2341,8 +2341,9 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         # ft.info
         info_data = IndexingTestHelper.get_ft_info(client, "idx").parsed_data
         assert info_data["num_docs"] == 9
-        assert info_data["hash_indexing_failures"] == 5  # doc:5 to doc:9
-        assert info_data["num_records"] == 4 # doc:1 to 4
+        # Default emulate-release (< 1.3.0): doc:9 non-UTF-8 tag is indexed
+        assert info_data["hash_indexing_failures"] == 4  # doc: 5, doc:6, doc:7, doc:8
+        assert info_data["num_records"] == 5 # doc:1 to 4 , doc:9
         # Query parsing: Verify tokenization handles non-ASCII
         assert client.execute_command("FT.SEARCH", "idx", "“smart")[0] == 1
         assert client.execute_command("FT.SEARCH", "idx", "café")[0] == 1
@@ -2367,10 +2368,32 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx_no_backslash")
         client.execute_command("HSET", "fr:1", "content", "foo")
         assert client.execute_command("FT.SEARCH", "idx_no_backslash", b"%fo\\\xffo%")[0] == 0
-        assert client.execute_command("FT.SEARCH", "idx", b"@category:{invalid\xc3}")[0] == 0
+        assert client.execute_command("FT.SEARCH", "idx", b"@category:{invalid\xc3}")[0] == 1
         with pytest.raises(ResponseError) as e:
             client.execute_command("FT.SEARCH", "idx", b"@price:invalid\xc3 invalid\xc3]")
         assert "Invalid filter expression" in str(e.value)
+
+    def test_non_utf8_tag_emulate_release(self):
+        """Non-UTF-8 TAG values are indexed before 1.3.0 and rejected from 1.3.0"""
+        client: Valkey = self.server.get_new_client()
+        counter = "search_compatibility-tag_rejects_non_utf8"
+        for release, expected in (("1.2.0", 1), ("1.3.0", 0)):
+            assert client.execute_command(
+                "CONFIG", "SET", "search.emulate-release", release) == b"OK"
+            client.execute_command("FLUSHALL")
+            client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA",
+                                   "category", "TAG")
+            IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+            before = client.info("SEARCH")[counter]
+            client.execute_command("HSET", "doc:1", "category", b"invalid\xc3")
+            info_data = IndexingTestHelper.get_ft_info(client, "idx").parsed_data
+            assert info_data["hash_indexing_failures"] == 1 - expected, release
+            assert info_data["num_records"] == expected, release
+            assert client.info("SEARCH")[counter] - before == expected, release
+            if expected:
+                assert client.execute_command(
+                    "FT.SEARCH", "idx", b"@category:{invalid\xc3}")[0] == 1
+            client.execute_command("FT.DROPINDEX", "idx")
 
     def test_multilanguage_text(self):
         """Test multi-language text handling - should not crash"""

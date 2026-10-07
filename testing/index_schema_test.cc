@@ -3737,8 +3737,12 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   auto k = StringInternStore::Intern("prefix1_orphan");
   index_schema->SetDbMutationSequenceNumber(k, 1);
   index_schema->EnqueueMultiMutation(k);  // deque=[K]
+  auto vectors = DeterministicallyGenerateVectors(1, dimensions, 2);
+  absl::string_view data_ptr((char *)&vectors[0][0],
+                             dimensions * sizeof(float));
   {
-    auto a = CreateMutatedAttributes(attribute_identifier, "d1");
+    auto a = CreateMutatedAttributes(attribute_identifier, data_ptr, k,
+                                     hnsw_index.get());
     index_schema->TrackMutatedRecord(nullptr, k, std::move(a), 1, false, false,
                                      /*from_multi=*/true, 0);  // map={K}
   }

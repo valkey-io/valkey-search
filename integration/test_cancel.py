@@ -683,6 +683,22 @@ class TestCancelCME(ValkeySearchClusterTestCaseDebugMode):
         assert flat_result[0] < 41
         self.control_set("ForceTimeout", "no")
 
+        # With only one shard timing out, partial results hold every key in
+        # range of the other shards, and only keys in range of that one.
+        expected = set(range_search(client, "hnsw", False)[1:])
+        timed_out = self.client_for_primary(1)
+        timed_out_keys = set(timed_out.keys("*"))
+        others = expected - timed_out_keys
+        assert others and others != expected
+        assert timed_out.execute_command(
+            "ft._debug", "CONTROLLED_VARIABLE", "set", "ForceTimeout", "yes") == b"OK"
+        for index in ("hnsw", "flat"):
+            range_search(client, index, True, enable_partial_results=False)
+            partial = range_search(client, index, False, enable_partial_results=True)
+            assert partial[0] == len(partial) - 1
+            assert others <= set(partial[1:]) < expected, index
+        self.control_set("ForceTimeout", "no")
+
     @wait_for_background_tasks()
     def test_aggregate_timeout_cluster(self):
         """Test FT.AGGREGATE timeout handling in cluster mode."""

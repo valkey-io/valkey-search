@@ -34,7 +34,7 @@ FT.HYBRID <index-name>
 
 - `<index-name>` (required): The index to query. Both arms search the same index.
 - `SEARCH <query>` (required): The non-vector arm. `<query>` is any query the search parser accepts, see [Search - query language](../topics/search-query.md). A vector query is rejected here — the vector search is the `VSIM` clause's job.
-  - `SCORER <scorer>` (optional): The relevance scorer for this arm. The only supported scorer is `BM25STD`, which is also the default.
+  - `SCORER <scorer>` (optional): The relevance scorer for this arm. The only supported scorer now is `BM25STD`, which is also the default.
   - `YIELD_SCORE_AS <alias>` (optional): Emits this arm's score under `<alias>`, making it available to `COMBINE FUNCTION` and to the processing stages.
 - `VSIM <field> <vector>` (required): The vector arm. `<field>` is a declared vector attribute and `<vector>` is a binary blob, supplied through `PARAMS`.
   - `KNN <count> [K <k>] [EF_RUNTIME <ef>] [SHARD_K_RATIO <ratio>]` (optional): The vector search parameters. `<count>` is a count of the arguments that follow within the block, not a count of parameters. `K` is the number of nearest neighbors to retrieve, between 1 and 10000, and defaults to 10. Omitting the whole block, or writing `KNN 0`, is the same as taking every default. `EF_RUNTIME` tunes HNSW's search breadth. `SHARD_K_RATIO` is accepted for compatibility and ignored.
@@ -60,7 +60,13 @@ Unlike `FT.AGGREGATE`, which returns every record, `FT.HYBRID` returns at most 1
 
 # Fusion methods
 
-Fusion sees each arm's results ranked best-first, and every arm's score in the same direction: higher is better. The `VSIM` arm's distance is converted to a similarity before fusion, so a nearer document scores higher.
+Fusion sees each arm's results ranked best-first. The `VSIM` arm's distance, defined in [Vector Distance](../topics/search-scoring.md#vector-distance), is converted to a similarity before fusion:
+
+- `L2`: the similarity is `1 / (1 + distance)`, so a nearer document scores higher.
+- `COSINE`: the similarity is `1 - distance / 2`, so a nearer document scores higher.
+- `IP`: the similarity is `(1 + distance) / 2`, so a nearer document scores lower.
+
+`RRF` uses only the ranks and is not affected. `LINEAR` and `FUNCTION` use the similarity value directly, so on an `IP` index a positive `BETA` favors farther documents.
 
 ## RRF
 

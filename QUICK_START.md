@@ -262,6 +262,7 @@ INFO SEARCH
 - [Command Reference](docs/COMMANDS.md) — detailed syntax and options for all commands.
 - [Query Language](docs/topics/search-query.md) — full filter expression syntax, logical operators, and text search operators.
 - [Data Formats](docs/topics/search-data-formats.md) — ingestion formats for tag, numeric, vector, and text fields.
+- [Scoring](docs/topics/search-scoring.md) — how query results are scored and ordered.
 - [Search Overview](docs/topics/search.md) — architecture, cluster mode, replication, and consistency model.
 - [Configuration](docs/topics/search-configurables.md) — tunable parameters for the search module.
 - [INFO SEARCH Metrics](docs/topics/search-observables.md) — module-wide memory, latency, query, and thread pool metrics.

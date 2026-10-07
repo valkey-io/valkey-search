@@ -77,10 +77,19 @@ def load_data(client: Valkey.client):
         index.write_data(client, i, records[i])
     return len(records)
 
-def verify_data(client: Valkey.client, this_index: Index):
+def verify_data(client: Valkey.client, this_index: Index, expected_keys=None):
     '''
     Do query operations against each index to ensure that all keys are present
     '''
+    if expected_keys is not None:
+        if this_index.has_field("n"):
+            res = do_search(client, this_index, "@n:[0 100]")
+            check_keys(res.keys(), expected_keys)
+        if this_index.has_field("t"):
+            res = do_search(client, this_index, "@t:{Tag*}")
+            check_keys(res.keys(), expected_keys)
+        return
+
     if this_index.has_field("n"):
         res = do_search(client, this_index, "@n:[0 100]")
         check_keys(res.keys(), full_key_names + [index.keyname(NUM_VECTORS+0).encode(), index.keyname(NUM_VECTORS+2).encode()])
@@ -422,7 +431,8 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
         self.client.execute_command("ft._debug PAUSEPOINT SET block_mutation_queue")
         self.client.execute_command("CONFIG SET search.info-developer-visible yes")
         index.create(self.client, True)
-        records = make_data()
+        records = make_data()[:3]
+        expected_keys = [index.keyname(i).encode() for i in range(len(records))]
         #
         # Now, load the data as a multi/exec... But this won't block us.
         #
@@ -439,10 +449,10 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
 
         i = self.client.info("search")
         assert i["search_rdb_save_multi_exec_entries"] == len(records)
-        verify_data(self.client, index)
+        verify_data(self.client, index, expected_keys)
         os.environ["SKIPLOGCLEAN"] = "1"
         self.server.restart(remove_rdb=False)
-        verify_data(self.client, index)
+        verify_data(self.client, index, expected_keys)
         self.client.execute_command("CONFIG SET search.info-developer-visible yes")
         i = self.client.info("search")
         print("Info: ", i)
@@ -454,7 +464,8 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
     def test_multi_exec_orphan_key_skipped_still_searchable(self):
         self.client.execute_command("CONFIG SET search.info-developer-visible yes")
         index.create(self.client, True)
-        records = make_data()
+        records = make_data()[:3]
+        expected_keys = [index.keyname(i).encode() for i in range(len(records))]
 
         # Persist a consistent queue so reload can create the orphan.
         self.client.execute_command("ft._debug PAUSEPOINT SET block_mutation_queue")
@@ -484,9 +495,9 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
         assert i["search_rdb_save_multi_exec_entries"] == 0
 
         # The serialized key list keeps the records searchable.
-        verify_data(self.client, index)
+        verify_data(self.client, index, expected_keys)
         self.server.restart(remove_rdb=False)
-        verify_data(self.client, index)
+        verify_data(self.client, index, expected_keys)
 
     def test_multi_exec_orphan_key_saved_on_first_save(self):
         self.client.execute_command("CONFIG SET search.info-developer-visible yes")

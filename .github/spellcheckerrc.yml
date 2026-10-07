@@ -1,0 +1,12 @@
+# Match valkey-io/valkey-doc's .spellcheckerrc.yml for published documentation.
+files:
+  - 'docs/commands/ft.*.md'
+  - 'docs/topics/search*.md'
+# Downloaded from valkey-io/valkey-doc's main branch before running the check.
+dictionaries:
+  - .cache/valkey-doc-wordlist.txt
+noSuggestions: true
+quiet: true
+plugins:
+  - spell
+  - frontmatter

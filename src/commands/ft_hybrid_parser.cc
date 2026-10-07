@@ -1156,6 +1156,15 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
             arm->query.size(), ") does not match index's expected size (",
             vector_index->GetVectorDataSize(), ")."));
       }
+      // Only COSINE uses the magnitude, so other metrics pay nothing here.
+      if (vector_index->GetNormalize() &&
+          !indexes::IsValidReciprocalMagnitude(indexes::CalcReciprocalMagnitude(
+              arm->query, vector_index->GetVectorDataType()))) {
+        return absl::InvalidArgumentError(
+            absl::StrCat("Error parsing vector similarity parameters: query "
+                         "vector ",
+                         indexes::kInvalidQueryVectorError));
+      }
       // Default score_as if the user didn't YIELD_SCORE_AS.
       if (!arm->score_as) {
         auto schema_default =

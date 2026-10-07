@@ -550,6 +550,26 @@ std::optional<absl::string_view> CurrentVectorBytes(
   return vmsdk::ToStringView(found->second.value.get());
 }
 
+// Strict weak ordering on `x`/`y` (a's and b's sort value), ties broken on key
+// ascending. A NaN sorts after every number in either direction. A plain `<`
+// is not a strict weak ordering once a NaN is present, and std::stable_sort
+// then reads and writes outside the range. A NaN distance comes from an L2 or
+// IP query vector holding a NaN, which is accepted. IsNaN reads the bits,
+// since -ffast-math folds std::isnan.
+static bool NeighborLess(float x, float y, bool descending,
+                         const indexes::Neighbor &a,
+                         const indexes::Neighbor &b) {
+  const bool x_nan = indexes::scoring::IsNaN(x);
+  const bool y_nan = indexes::scoring::IsNaN(y);
+  if (x_nan != y_nan) {
+    return y_nan;
+  }
+  if (!x_nan && x != y) {
+    return descending ? x > y : x < y;
+  }
+  return a.external_id->Str() < b.external_id->Str();
+}
+
 // Adds all local content for neighbors to the list of neighbors.
 //
 // Any neighbors already contained in the attribute content map will be skipped.
@@ -716,11 +736,7 @@ void ProcessNeighborsForReply(
     std::stable_sort(
         neighbors.begin(), neighbors.end(),
         [](const indexes::Neighbor &a, const indexes::Neighbor &b) {
-          if (a.score != b.score) {
-            return a.score > b.score;
-          }
-          // Tie-break on key ascending for a deterministic result order
-          return a.external_id->Str() < b.external_id->Str();
+          return NeighborLess(a.score, b.score, /*descending=*/true, a, b);
         });
   }
 
@@ -733,10 +749,8 @@ void ProcessNeighborsForReply(
     std::stable_sort(
         neighbors.begin(), neighbors.end(),
         [](const indexes::Neighbor &a, const indexes::Neighbor &b) {
-          if (a.distance != b.distance) {
-            return a.distance < b.distance;
-          }
-          return a.external_id->Str() < b.external_id->Str();
+          return NeighborLess(a.distance, b.distance, /*descending=*/false, a,
+                              b);
         });
   }
 }

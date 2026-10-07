@@ -21,6 +21,7 @@
 #include "absl/functional/any_invocable.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/time/clock.h"
@@ -200,7 +201,7 @@ void ThreadPool::JoinTerminatedWorkers() {
 // The suspend/resume handshake counts workers instead of pre-computing how
 // many to wait for, since Resize can add or retire workers at any time, even
 // while suspended.
-absl::Status ThreadPool::SuspendWorkers() {
+absl::Status ThreadPool::SuspendWorkers(absl::Duration timeout) {
   absl::MutexLock lock(&suspend_resume_mutex_);
   absl::MutexLock queue_lock(&queue_mutex_);
   if (!started_) {
@@ -215,13 +216,22 @@ absl::Status ThreadPool::SuspendWorkers() {
   }
   suspend_workers_ = true;
   condition_.SignalAll();
-  queue_mutex_.Await(absl::Condition(this, &ThreadPool::AllWorkersSuspended));
+  const bool all_suspended = queue_mutex_.AwaitWithTimeout(
+      absl::Condition(this, &ThreadPool::AllWorkersSuspended), timeout);
   if (stop_mode_.has_value()) {
     // Re-check: Await releases queue_mutex_ while waiting, so a stop request
     // may have arrived and cleared the suspension in the meantime.
     return absl::InvalidArgumentError(
         "Cannot suspend workers as the thread pool was marked for stop while "
         "suspension was in progress");
+  }
+  if (!all_suspended) {
+    // suspend_workers_ stays set: a busy worker suspends once its task ends,
+    // and ResumeWorkers works as usual.
+    return absl::DeadlineExceededError(
+        absl::StrCat("Timed out after ", absl::FormatDuration(timeout),
+                     " waiting for workers to suspend: ", suspended_workers_,
+                     " of ", active_workers_, " suspended"));
   }
   return absl::OkStatus();
 }

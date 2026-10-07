@@ -278,6 +278,18 @@ absl::Status PerformRDBSave(ValkeyModuleCtx *ctx, SafeRDB *rdb, int when) {
 }
 
 void AuxSaveCallback(ValkeyModuleIO *rdb, int when) {
+  // The fork happened while a worker was still running a task (see
+  // ValkeySearch::AtForkPrepare). That thread does not exist in this child,
+  // so a lock it held would never be released and the index may be
+  // half-updated. Exiting fails this save cleanly; writing could hang the
+  // child or produce an RDB whose index does not match its keys.
+  if (ValkeySearch::Instance().ForkedWithUnsuspendedWorkers()) {
+    VMSDK_LOG(WARNING, nullptr)
+        << "Abandoning RDB save: worker threads were still running when the "
+           "process forked";
+    ValkeyModule_ExitFromChild(1);
+    return;
+  }
   SafeRDB safe_rdb(rdb);
   auto ctx = ValkeySearch::Instance().GetBackgroundCtx();
   auto result = PerformRDBSave(ctx, &safe_rdb, when);

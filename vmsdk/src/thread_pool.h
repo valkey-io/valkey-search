@@ -23,6 +23,7 @@
 #include "absl/functional/any_invocable.h"
 #include "absl/status/status.h"
 #include "absl/synchronization/mutex.h"
+#include "absl/time/time.h"
 #include "gtest/gtest_prod.h"
 #include "vmsdk/src/thread_monitoring.h"
 #include "vmsdk/src/thread_safe_vector.h"
@@ -62,7 +63,11 @@ class ThreadPool {
   /// Suspend all workers until `ResumeWorkers` is called. On success no task
   /// is running and none can start, but a worker may still hold `queue_mutex_`,
   /// so a fork child must not touch the pool.
-  absl::Status SuspendWorkers();
+  /// Returns DeadlineExceededError if some worker is still running a task
+  /// after `timeout`. The pool then stays marked suspended: that worker
+  /// suspends once its task ends, and `ResumeWorkers` works as usual.
+  absl::Status SuspendWorkers(
+      absl::Duration timeout = absl::InfiniteDuration());
   bool IsSuspended() const {
     absl::MutexLock lock(&queue_mutex_);
     return suspend_workers_;

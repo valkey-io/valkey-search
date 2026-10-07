@@ -10,6 +10,7 @@
 #include <sys/types.h>
 
 #include <algorithm>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -45,6 +46,7 @@
 #include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -61,6 +63,14 @@ float CalcReciprocalMagnitude(const T *src, size_t size) {
   for (size_t i = 0; i < size; i++) {
     float v = static_cast<float>(src[i]);
     sum_sq += v * v;
+  }
+  // Squares are never negative, so the sum is NaN or Inf exactly when a
+  // component is NaN or Inf or the sum overflows float. One test on the sum
+  // therefore validates the whole vector at no per-element cost. It reads the
+  // IEEE bits because -ffast-math folds std::isnan/std::isfinite to constants.
+  if (ABSL_PREDICT_FALSE((std::bit_cast<uint32_t>(sum_sq) &
+                          kFloatExponentMask) == kFloatExponentMask)) {
+    return kInvalidReciprocalMagnitude;
   }
   return (sum_sq == 0.0f) ? 1.0f : (1.0f / std::sqrt(sum_sq));
 }
@@ -92,7 +102,9 @@ float CalcReciprocalMagnitude(absl::string_view record,
 template <typename T>
 std::vector<char> NormalizeVector(absl::string_view record,
                                   float reciprocal_magnitude) {
-  if (ABSL_PREDICT_FALSE(reciprocal_magnitude == 0.0f)) {
+  // <= also catches kInvalidReciprocalMagnitude, so a rejected vector is
+  // copied unscaled instead of being sign-flipped.
+  if (ABSL_PREDICT_FALSE(reciprocal_magnitude <= 0.0f)) {
     reciprocal_magnitude = 1.0f;
   }
   size_t dimensions = record.size() / sizeof(T);
@@ -232,6 +244,11 @@ absl::StatusOr<RecordResult> VectorBase::AddRecord(const InternedStringPtr &key,
     return RecordResult::kInvalidData;
   }
   auto vector_record = data.ConsumeVector();
+  // The magnitude was computed when the record was built, so rejecting a
+  // NaN/Inf or overflowing vector here costs no extra pass.
+  if (!IsValidReciprocalMagnitude(vector_record.GetReciprocalMagnitude())) {
+    return RecordResult::kInvalidData;
+  }
   float magnitude = 1.0f / vector_record.GetReciprocalMagnitude();
   VMSDK_ASSIGN_OR_RETURN(auto internal_id, TrackKey(key, magnitude));
   absl::Status add_result =
@@ -279,6 +296,11 @@ absl::StatusOr<RecordResult> VectorBase::ModifyRecord(
     return RecordResult::kInvalidData;
   }
   auto vector_record = data.ConsumeVector();
+  if (!IsValidReciprocalMagnitude(vector_record.GetReciprocalMagnitude())) {
+    [[maybe_unused]] auto res =
+        RemoveRecord(key, indexes::DeletionType::kRecord);
+    return RecordResult::kInvalidData;
+  }
   float magnitude = 1.0f / vector_record.GetReciprocalMagnitude();
   VMSDK_ASSIGN_OR_RETURN(auto internal_id, GetInternalId(key));
   VMSDK_ASSIGN_OR_RETURN(bool res,
@@ -475,7 +497,38 @@ absl::Status VectorBase::SaveTrackedKeys(
 absl::Status VectorBase::LoadTrackedKeys(
     ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
     SupplementalContentChunkIter &&iter) {
+  // Keys whose stored vector is NaN/Inf or overflows, persisted before such
+  // vectors were rejected at ingest.
+  std::vector<uint64_t> rejected_ids;
+  VMSDK_RETURN_IF_ERROR(LoadTrackedKeysLocked(ctx, attribute_data_type,
+                                              std::move(iter), rejected_ids));
+  if (rejected_ids.empty()) {
+    return absl::OkStatus();
+  }
+  // Removed after key_to_metadata_mutex_ is released: RemoveRecordImpl takes
+  // resize_mutex_, which is never acquired under key_to_metadata_mutex_.
+  for (uint64_t id : rejected_ids) {
+    auto status = RemoveRecordImpl(id);
+    if (!status.ok()) {
+      VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
+          << "Failed to remove a non-finite vector during load: " << status;
+    }
+  }
+  VMSDK_LOG(WARNING, nullptr)
+      << "Left " << rejected_ids.size() << " key(s) out of vector index "
+      << vmsdk::config::RedactIfNeeded(attribute_identifier_)
+      << " during load because their vector has a NaN or infinite value or "
+         "its magnitude is too large. A later valid write re-indexes them.";
+  return absl::OkStatus();
+}
+
+absl::Status VectorBase::LoadTrackedKeysLocked(
+    ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
+    SupplementalContentChunkIter &&iter, std::vector<uint64_t> &rejected_ids) {
   absl::WriterMutexLock lock(&key_to_metadata_mutex_);
+  // Placed in a rejected key's slot, so traversal through it stays finite
+  // until the slot is removed.
+  const std::vector<char> zeros(GetVectorDataSize(), 0);
 
   while (iter.HasNext()) {
     VMSDK_ASSIGN_OR_RETURN(auto metadata_str, iter.Next(),
@@ -485,12 +538,6 @@ absl::Status VectorBase::LoadTrackedKeys(
       return absl::InvalidArgumentError("Error parsing metadata from proto");
     }
     auto interned_key = StringInternStore::Intern(tracked_key_metadata.key());
-    tracked_metadata_by_key_.insert(
-        {interned_key,
-         {.internal_id = tracked_key_metadata.internal_id(),
-          .magnitude = tracked_key_metadata.magnitude()}});
-    key_by_internal_id_.insert(
-        {tracked_key_metadata.internal_id(), interned_key});
 
     auto key = vmsdk::MakeUniqueValkeyString(interned_key->Str());
     auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
@@ -508,8 +555,24 @@ absl::Status VectorBase::LoadTrackedKeys(
         interned_key, attribute_val.get(), attribute_data_type->ToProto(),
         db_num_, this);
     auto &save_vector = GetVectorLockFree(tracked_key_metadata.internal_id());
+    if (vector_record_with_size.vector_record &&
+        !IsValidReciprocalMagnitude(
+            vector_record_with_size.vector_record.GetReciprocalMagnitude())) {
+      save_vector =
+          VectorRecord::Construct(absl::string_view(zeros.data(), zeros.size()),
+                                  kDefaultMagnitude, GetVectorAllocator());
+      rejected_ids.push_back(tracked_key_metadata.internal_id());
+      continue;
+    }
+    tracked_metadata_by_key_.insert(
+        {interned_key,
+         {.internal_id = tracked_key_metadata.internal_id(),
+          .magnitude = tracked_key_metadata.magnitude()}});
+    key_by_internal_id_.insert(
+        {tracked_key_metadata.internal_id(), interned_key});
     save_vector = std::move(vector_record_with_size.vector_record);
   }
+  // Includes rejected labels, so they are never reused before removal.
   inc_id_ = GetMaxLoadedLabel() + 1;
   return absl::OkStatus();
 }
@@ -558,8 +621,15 @@ absl::StatusOr<float> VectorBase::RecomputeDistance(
   // Built with the default allocator rather than the index's own: this runs on
   // the main thread while writers may be using that allocator, and one record
   // per mutated key is not worth sharing.
-  auto vector_record = VectorRecord::Construct(
-      record, ComputeReciprocalMagnitude(record), nullptr);
+  const float reciprocal_magnitude = ComputeReciprocalMagnitude(record);
+  // A vector the index would reject at ingest has no meaningful distance.
+  if (!IsValidReciprocalMagnitude(reciprocal_magnitude)) {
+    return absl::InvalidArgumentError(
+        "Vector record contains a NaN or infinite value, or its magnitude is "
+        "too large");
+  }
+  auto vector_record =
+      VectorRecord::Construct(record, reciprocal_magnitude, nullptr);
   if (!vector_record) {
     return absl::InternalError("Could not construct a vector record");
   }

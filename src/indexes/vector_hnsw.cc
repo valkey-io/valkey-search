@@ -336,7 +336,7 @@ class RangeStopCondition : public hnswlib::BaseSearchStopCondition<float> {
  public:
   RangeStopCondition(float shell, size_t ef, size_t max_results)
       : shell_(shell),
-        ef_(std::max<size_t>(ef, 1)),
+        ef_(std::clamp<size_t>(ef, 1, max_results)),
         max_results_(max_results) {}
 
   void add_point_to_result(hnswlib::labeltype, const void *,

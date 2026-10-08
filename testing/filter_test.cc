@@ -15,9 +15,12 @@
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
+#include "src/indexes/text/language.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
 #include "src/utils/string_interning.h"
+#include "src/valkey_search_options.h"
+#include "src/version.h"
 #include "testing/common.h"
 namespace valkey_search {
 
@@ -38,7 +41,7 @@ struct FilterTestCase {
 
 class FilterTest : public ValkeySearchTestWithParam<FilterTestCase> {};
 
-void InitIndexSchema(MockIndexSchema *index_schema) {
+void InitIndexSchema(MockIndexSchema* index_schema) {
   data_model::NumericIndex numeric_index_proto;
 
   auto numeric_index_1_5 =
@@ -143,7 +146,7 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
 }
 
 TEST_P(FilterTest, ParseParams) {
-  const FilterTestCase &test_case = GetParam();
+  const FilterTestCase& test_case = GetParam();
   auto index_schema = CreateIndexSchema("index_schema_name").value();
   InitIndexSchema(index_schema.get());
   EXPECT_CALL(*index_schema, GetIdentifier(::testing::_))
@@ -1771,6 +1774,23 @@ INSTANTIATE_TEST_SUITE_P(
             .key = "key_pipe",
         },
         // =================================================================
+        // Multi-byte UTF-8 token content: exercises PeekCodepoint()
+        // multi-byte path (Scanner::NextUtf8 branch) in FilterParser
+        // =================================================================
+        {
+            // "café" contains é (U+00E9 = 0xC3 0xA9, 2 bytes). The token
+            // content loop calls PeekCodepoint() which decodes the 2-byte
+            // sequence via Scanner::NextUtf8 and advances by byte_len=2
+            // instead of 1, ensuring pos_ is not corrupted after the
+            // multi-byte char.
+
+            .test_name = "text_multibyte_term_in_query",
+            .filter = "caf\xC3\xA9",
+            .create_success = true,
+            .expected_tree_structure =
+                "TEXT-TERM(\"caf\xC3\xA9\", field_mask=3)\n",
+        },
+        // =================================================================
         // Field-scoped text group: @field:(a|b|c) — issue #1214
         // =================================================================
         {
@@ -1988,7 +2008,239 @@ INSTANTIATE_TEST_SUITE_P(
                 "Expected ']' got ''. Position: 28",
         },
     }),
-    [](const TestParamInfo<FilterTestCase> &info) {
+    [](const TestParamInfo<FilterTestCase>& info) {
+      return info.param.test_name;
+    });
+
+// Verifies the parser's PeekCodepoint() integration with the processor's
+// multi-byte PunctuationSet: when a custom PUNCTUATION contains a multi-byte
+// code point (Arabic comma ، U+060C, bytes 0xD8 0x8C), ParseUnquotedTextToken
+// must terminate the token on the full code point — not on byte 0xD8 alone,
+// which would shred Arabic words and emit a partial UTF-8 token. Default
+// FilterTest fixtures use ASCII-only punctuation, so a dedicated fixture is
+// needed to plumb a multi-byte PUNCTUATION through the schema.
+//
+// The query side also uses the punctuation set's normalization closure, so a
+// compatibility form of a delimiter splits here exactly as it does on ingest
+// (see PunctuationClosureTest and ArabicNfkcFullwidthCommaSplitsTokens).
+struct MultiBytePunctuationCase {
+  std::string test_name;
+  data_model::Language language;
+  std::string punctuation;
+  std::string filter;
+  std::string expected_tree;
+};
+
+class FilterMultiBytePunctuationTest
+    : public ValkeySearchTestWithParam<MultiBytePunctuationCase> {};
+
+TEST_P(FilterMultiBytePunctuationTest, UnquotedTokenBreaksOnPunctuation) {
+  const auto& tc = GetParam();
+  std::vector<absl::string_view> key_prefixes = {"prefix:"};
+  auto schema = MockIndexSchema::Create(
+                    &fake_ctx_, "mb_punct_schema", key_prefixes,
+                    std::make_unique<HashAttributeDataType>(),
+                    /*mutations_thread_pool=*/nullptr, tc.language,
+                    tc.punctuation, /*with_offsets=*/true, /*stop_words=*/{})
+                    .value();
+  schema->CreateTextIndexSchema();
+  auto text_index_schema = schema->GetTextIndexSchema();
+  data_model::TextIndex text_index_proto =
+      CreateTextIndexProto(true, false, 1.0);
+  auto text_index =
+      std::make_shared<indexes::Text>(text_index_proto, text_index_schema);
+  VMSDK_EXPECT_OK(schema->AddIndex("text_field1", "text_field1", text_index));
+  EXPECT_CALL(*schema, GetIdentifier(testing::_)).Times(testing::AnyNumber());
+
+  TextParsingOptions options{};
+  FilterParser parser(*schema, tc.filter, options);
+  auto parse_results = parser.Parse();
+  ASSERT_TRUE(parse_results.ok()) << parse_results.status().message();
+  EXPECT_EQ(PrintPredicateTree(parse_results.value().root_predicate.get()),
+            tc.expected_tree);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    MultiBytePunctuation, FilterMultiBytePunctuationTest,
+    ::testing::ValuesIn(std::vector<MultiBytePunctuationCase>{
+        // "hello،world": the parser must skip U+060C atomically (2 bytes).
+        {"listed_arabic_comma", data_model::Language::LANGUAGE_ENGLISH,
+         "\xD8\x8C", "hello\xD8\x8Cworld",
+         "AND{\n"
+         "  TEXT-TERM(\"hello\", field_mask=1)\n"
+         "  TEXT-TERM(\"world\", field_mask=1)\n"
+         "}\n"},
+        // Escaping listed multi-byte punctuation keeps it in the term.
+        {"escaped_arabic_comma", data_model::Language::LANGUAGE_ENGLISH,
+         "\xD8\x8C", "hello\\\xD8\x8Cworld",
+         "TEXT-TERM(\"hello\xD8\x8Cworld\", field_mask=1)\n"},
+        // When `\` is not punctuation, a backslash before a non-punctuation
+        // character is dropped and the word continues.
+        {"backslash_not_punctuation", data_model::Language::LANGUAGE_ENGLISH,
+         " ", "hel\\lo", "TEXT-TERM(\"hello\", field_mask=1)\n"},
+        // U+FF0C is ',' under Arabic's NFKC, so it splits.
+        {"nfkc_fullwidth_comma", data_model::Language::LANGUAGE_ARABIC,
+         indexes::text::kAsciiPunctuation,
+         "abc\xEF\xBC\x8C"
+         "def",
+         "AND{\n"
+         "  TEXT-TERM(\"abc\", field_mask=1)\n"
+         "  TEXT-TERM(\"def\", field_mask=1)\n"
+         "}\n"},
+        // Under NFC it is not punctuation and stays in the term.
+        {"nfc_fullwidth_comma", data_model::Language::LANGUAGE_ENGLISH,
+         indexes::text::kAsciiPunctuation,
+         "abc\xEF\xBC\x8C"
+         "def",
+         "TEXT-TERM(\"abc\xEF\xBC\x8C"
+         "def\", field_mask=1)\n"},
+    }),
+    [](const ::testing::TestParamInfo<MultiBytePunctuationCase>& info) {
+      return info.param.test_name;
+    });
+
+// The query string is the user-input boundary, so malformed UTF-8 must
+// be tolerated rather than rejected (preserves 1.2 behavior).
+// PeekCodepoint reports Peeked::valid == false for an invalid byte; the
+// token loops consume it as opaque single-byte data and keep parsing.
+class FilterMalformedUtf8Test : public ValkeySearchTest {};
+
+TEST_F(FilterMalformedUtf8Test, TruncatedUtf8InQueryToleratedNoError) {
+  std::vector<absl::string_view> key_prefixes = {"prefix:"};
+  auto schema =
+      MockIndexSchema::Create(&fake_ctx_, "malformed_utf8_schema", key_prefixes,
+                              std::make_unique<HashAttributeDataType>(),
+                              /*mutations_thread_pool=*/nullptr,
+                              data_model::Language::LANGUAGE_ENGLISH,
+                              /*punctuation=*/" ", /*with_offsets=*/true,
+                              /*stop_words=*/{})
+          .value();
+  schema->CreateTextIndexSchema();
+  auto text_index_schema = schema->GetTextIndexSchema();
+  data_model::TextIndex text_index_proto =
+      CreateTextIndexProto(true, false, 1.0);
+  auto text_index =
+      std::make_shared<indexes::Text>(text_index_proto, text_index_schema);
+  VMSDK_EXPECT_OK(schema->AddIndex("text_field1", "text_field1", text_index));
+  EXPECT_CALL(*schema, GetIdentifier(testing::_)).Times(testing::AnyNumber());
+
+  // "hello " + lone 0xC3 (truncated 2-byte lead). Parsing must succeed;
+  // the malformed trailing byte is tolerated as opaque token content.
+  std::string filter = "hello \xC3";
+  TextParsingOptions options{};
+  FilterParser parser(*schema, filter, options);
+  auto parse_results = parser.Parse();
+  ASSERT_TRUE(parse_results.ok()) << parse_results.status().message();
+  EXPECT_NE(parse_results.value().root_predicate, nullptr);
+}
+
+// Malformed UTF-8 at the query boundary is compat-gated (see
+// COMPATIBILITY.md): emulate-release >= 1.3.0 rejects with
+// InvalidArgumentError (matching the ingestion path), while < 1.3.0
+// preserves the legacy 1.2 tolerate behavior.
+class FilterMalformedUtf8CompatTest : public ValkeySearchTest {
+ protected:
+  void SetUp() override {
+    ValkeySearchTest::SetUp();
+    saved_emulate_release_ = options::GetEmulateRelease().GetValue();
+  }
+  void TearDown() override {
+    VMSDK_EXPECT_OK(
+        options::GetEmulateRelease().SetValue(saved_emulate_release_));
+    ValkeySearchTest::TearDown();
+  }
+
+  std::shared_ptr<MockIndexSchema> MakeTextSchema(
+      const std::string& punctuation = " ") {
+    std::vector<absl::string_view> key_prefixes = {"prefix:"};
+    auto schema = MockIndexSchema::Create(
+                      &fake_ctx_, "malformed_utf8_compat_schema", key_prefixes,
+                      std::make_unique<HashAttributeDataType>(),
+                      /*mutations_thread_pool=*/nullptr,
+                      data_model::Language::LANGUAGE_ENGLISH, punctuation,
+                      /*with_offsets=*/true,
+                      /*stop_words=*/{})
+                      .value();
+    schema->CreateTextIndexSchema();
+    auto text_index_schema = schema->GetTextIndexSchema();
+    data_model::TextIndex text_index_proto =
+        CreateTextIndexProto(true, false, 1.0);
+    auto text_index =
+        std::make_shared<indexes::Text>(text_index_proto, text_index_schema);
+    VMSDK_EXPECT_OK(schema->AddIndex("text_field1", "text_field1", text_index));
+    EXPECT_CALL(*schema, GetIdentifier(testing::_)).Times(testing::AnyNumber());
+    return schema;
+  }
+
+ private:
+  vmsdk::ValkeyVersion saved_emulate_release_{0};
+};
+
+TEST_F(FilterMalformedUtf8CompatTest, RejectsWhenEmulatingCurrentRelease) {
+  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue(kRelease13));
+  auto schema = MakeTextSchema();
+  std::string filter = "hello \xC3";  // truncated 2-byte lead
+  TextParsingOptions options{};
+  FilterParser parser(*schema, filter, options);
+  auto parse_results = parser.Parse();
+  ASSERT_FALSE(parse_results.ok());
+  EXPECT_EQ(parse_results.status().code(), absl::StatusCode::kInvalidArgument);
+  EXPECT_EQ(parse_results.status().message(),
+            "Invalid UTF-8 in query expression");
+}
+
+// Legacy (< 1.3.0): malformed text is tolerated and each maximal invalid
+// subsequence becomes one U+FFFD, the ICU conversion 1.2 applied when
+// case-folding a non-ASCII term. A malformed byte after a backslash is
+// non-punctuation; whether the backslash splits the token depends on whether
+// `\` is punctuation.
+struct LegacyMalformedQueryCase {
+  std::string test_name;
+  std::string punctuation;
+  std::string filter;
+  std::string expected_tree;
+};
+
+class LegacyMalformedQueryTest
+    : public FilterMalformedUtf8CompatTest,
+      public ::testing::WithParamInterface<LegacyMalformedQueryCase> {};
+
+TEST_P(LegacyMalformedQueryTest, SubstitutesReplacementCharacter) {
+  const auto& tc = GetParam();
+  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue(kRelease12));
+  auto schema = MakeTextSchema(tc.punctuation);
+  TextParsingOptions options{};
+  FilterParser parser(*schema, tc.filter, options);
+  auto parse_results = parser.Parse();
+  ASSERT_TRUE(parse_results.ok()) << parse_results.status().message();
+  EXPECT_EQ(PrintPredicateTree(parse_results.value().root_predicate.get()),
+            tc.expected_tree);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    LegacyMalformed, LegacyMalformedQueryTest,
+    ::testing::ValuesIn(std::vector<LegacyMalformedQueryCase>{
+        {"truncated_lead_byte", " ", "hello \xC3",
+         "AND{\n"
+         "  TEXT-TERM(\"hello\", field_mask=1)\n"
+         "  TEXT-TERM(\"\xEF\xBF\xBD\", field_mask=1)\n"
+         "}\n"},
+        // One U+FFFD for the whole truncated 3-byte sequence, not one per byte.
+        {"truncated_multi_byte_sequence", " ",
+         "ab\xE4\xB8"
+         "c",
+         "TEXT-TERM(\"ab\xEF\xBF\xBD"
+         "c\", field_mask=1)\n"},
+        {"escaped_byte_backslash_is_punctuation",
+         indexes::text::kAsciiPunctuation, "fo\\\xFFo",
+         "AND{\n"
+         "  TEXT-TERM(\"fo\", field_mask=1)\n"
+         "  TEXT-TERM(\"\xEF\xBF\xBDo\", field_mask=1)\n"
+         "}\n"},
+        {"escaped_byte_backslash_not_punctuation", " ", "fo\\\xFFo",
+         "TEXT-TERM(\"fo\xEF\xBF\xBDo\", field_mask=1)\n"},
+    }),
+    [](const ::testing::TestParamInfo<LegacyMalformedQueryCase>& info) {
       return info.param.test_name;
     });
 

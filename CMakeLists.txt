@@ -52,6 +52,8 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 include_directories(${CMAKE_SOURCE_DIR})
 include_directories(${CMAKE_BINARY_DIR}/.deps/install/include)
+include_directories(${CMAKE_SOURCE_DIR}/third_party/icu/source/common)
+include_directories(${CMAKE_SOURCE_DIR}/third_party/icu/source/i18n)
 
 include(valkey_search)
 

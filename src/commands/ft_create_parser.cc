@@ -27,7 +27,10 @@
 #include "src/index_schema.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
+#include "src/indexes/text/language.h"
+#include "src/indexes/text/language_registry.h"
 #include "src/indexes/vector_base.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -218,7 +221,18 @@ static auto default_timeout_ms =
 
 const absl::NoDestructor<
     absl::flat_hash_map<absl::string_view, data_model::Language>>
-    kLanguageByStr({{"ENGLISH", data_model::LANGUAGE_ENGLISH}});
+    kLanguageByStr({{"ENGLISH", data_model::LANGUAGE_ENGLISH},
+                    {"FRENCH", data_model::LANGUAGE_FRENCH},
+                    {"GERMAN", data_model::LANGUAGE_GERMAN},
+                    {"SPANISH", data_model::LANGUAGE_SPANISH},
+                    {"ITALIAN", data_model::LANGUAGE_ITALIAN},
+                    {"PORTUGUESE", data_model::LANGUAGE_PORTUGUESE},
+                    {"RUSSIAN", data_model::LANGUAGE_RUSSIAN},
+                    {"SWEDISH", data_model::LANGUAGE_SWEDISH},
+                    {"TURKISH", data_model::LANGUAGE_TURKISH},
+                    {"DUTCH", data_model::LANGUAGE_DUTCH},
+                    {"INDONESIAN", data_model::LANGUAGE_INDONESIAN},
+                    {"ARABIC", data_model::LANGUAGE_ARABIC}});
 const absl::NoDestructor<
     absl::flat_hash_map<absl::string_view, data_model::AttributeDataType>>
     kOnDataTypeByStr({{"HASH", data_model::ATTRIBUTE_DATA_TYPE_HASH},
@@ -475,8 +489,8 @@ absl::Status ParseStopWords(vmsdk::ArgsIterator &itr,
                             PerIndexTextParams &params) {
   uint32_t count;
   VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, count));
+  params.stop_words.emplace();
   if (count == 0) {
-    params.stop_words.clear();
     return absl::OkStatus();
   }
 
@@ -487,11 +501,10 @@ absl::Status ParseStopWords(vmsdk::ArgsIterator &itr,
         "of arguments provided for STOPWORDS");
   }
 
-  params.stop_words.clear();
   for (uint32_t i = 0; i < count; ++i) {
     std::string word;
     VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, word));
-    params.stop_words.push_back(word);
+    params.stop_words->push_back(std::move(word));
   }
   return absl::OkStatus();
 }
@@ -511,7 +524,7 @@ vmsdk::KeyValueParser<PerIndexTextParams> CreateSchemaTextParser() {
   parser.AddParamParser(kNoStemParam,
                         GENERATE_FLAG_PARSER(PerIndexTextParams, no_stem));
 
-  parser.AddParamParser(kNoStopWordsParam, GENERATE_CLEAR_CONTAINER_PARSER(
+  parser.AddParamParser(kNoStopWordsParam, GENERATE_EMPLACE_PARSER(
                                                PerIndexTextParams, stop_words));
 
   parser.AddParamParser(
@@ -579,7 +592,7 @@ absl::StatusOr<indexes::IndexerType> ParseIndexerType(
 
 absl::Status ValidateAttributeAlias(absl::string_view alias) {
   for (const char ch : alias) {
-    if (kDefaultPunctuation.find(ch) != absl::string_view::npos) {
+    if (indexes::text::kAsciiPunctuation.find(ch) != std::string::npos) {
       return absl::InvalidArgumentError(absl::StrCat(
           "Attribute alias `", alias, "` contains invalid character `",
           std::string(1, ch), "`"));
@@ -678,12 +691,10 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
   // Parse schema-level text parameters before SCHEMA
   PerIndexTextParams schema_text_defaults;
   // Initialize with defaults for each parse call
-  schema_text_defaults.punctuation = kDefaultPunctuation;
   schema_text_defaults.min_stem_size = kDefaultMinStemSize;
   schema_text_defaults.with_offsets = true;
   schema_text_defaults.no_stem = false;
   schema_text_defaults.language = data_model::LANGUAGE_ENGLISH;
-  schema_text_defaults.stop_words = kDefaultStopWords;
 
   // Parse pre-SCHEMA parameters in flexible order
   static auto schema_text_parser = CreateSchemaTextParser();
@@ -753,21 +764,39 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
   }
 
   // Validate global text parameters
-  if (schema_text_defaults.punctuation.empty()) {
+  if (schema_text_defaults.punctuation.has_value() &&
+      schema_text_defaults.punctuation->empty()) {
     return absl::InvalidArgumentError("PUNCTUATION string cannot be empty");
   }
 
   // updating the local schema_text_defaults with language for consistency
   schema_text_defaults.language = index_schema_proto.language();
 
+  // Apply punctuation: use user-provided value or per-language defaults
+  if (!schema_text_defaults.punctuation.has_value()) {
+    index_schema_proto.set_punctuation(
+        indexes::text::LanguageRegistry::Instance()
+            .Get(schema_text_defaults.language)
+            ->GetDefaultPunctuation());
+  } else {
+    index_schema_proto.set_punctuation(*schema_text_defaults.punctuation);
+  }
+
   // Apply global text defaults to the schema
-  index_schema_proto.set_punctuation(schema_text_defaults.punctuation);
   index_schema_proto.set_with_offsets(schema_text_defaults.with_offsets);
   index_schema_proto.set_min_stem_size(schema_text_defaults.min_stem_size);
 
   // Add stop words to the schema
-  for (const auto &word : schema_text_defaults.stop_words) {
-    index_schema_proto.add_stop_words(word);
+  if (!schema_text_defaults.stop_words.has_value()) {
+    for (const auto &w : indexes::text::LanguageRegistry::Instance()
+                             .Get(index_schema_proto.language())
+                             ->GetDefaultStopWords()) {
+      index_schema_proto.add_stop_words(w);
+    }
+  } else {
+    for (const auto &w : *schema_text_defaults.stop_words) {
+      index_schema_proto.add_stop_words(w);
+    }
   }
 
   absl::string_view schema;

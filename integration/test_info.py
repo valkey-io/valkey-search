@@ -108,6 +108,10 @@ class TestAppMetrics(ValkeySearchTestCaseDebugMode):
             # while search.emulate-release is below the fix version. See
             # COMPATIBILITY.md.
             "compatibility-invalid_data_drops_key",
+            # Count English MINSTEMSIZE checks and fuzzy terms that use 1.2's
+            # byte lengths while search.emulate-release is below 1.3.0.
+            "compatibility-min_stem_size_code_points",
+            "compatibility-fuzzy_code_point_distance",
             "coordinator_bytes_in",
             "coordinator_bytes_out",
             "coordinator_client_get_global_metadata_failure_count",

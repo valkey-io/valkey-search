@@ -223,9 +223,99 @@ redis-stack.
   engines. Without a `BY` clause the order is unspecified, so this is probably
   noise rather than a defect.
 
-## 4. Intentional divergences
+## 4. Multi-language text search
 
-### 4.1 INFIELDS strict validation
+Intentional differences in how non-English text is tokenized, normalized and
+matched. The compatibility datasets (`data_sets.py`) are curated to avoid them,
+so the compared queries still agree. Where noted, the Valkey side is asserted
+directly by a numbered divergence in `TestDeliberateDivergences`
+(`test_multi_language_search.py`). Except for 4.1 and 4.2, the Redis behavior
+below was observed while building the datasets rather than traced in
+Redisearch's source.
+
+Sections 4.1 and 4.2 were verified against `redis:latest` (Redis 8) with
+`LANGUAGE french`.  The same divergence applies to all non-English languages — Redis uses only ASCII
+punctuation regardless of the `LANGUAGE` setting, while Valkey uses
+language-specific punctuation lists.
+
+### 4.1 Unescaped non-ASCII punctuation — different tokenization
+
+Redis treats Unicode punctuation characters such as `'` (U+2019 RIGHT SINGLE
+QUOTATION MARK), `—` (U+2014 EM DASH), `«` (U+00AB LEFT GUILLEMET), etc. as
+regular characters.  A title like `professeur'étudiant` is indexed as a single
+token.  Searching for just `professeur` does **not** match that document.
+
+Valkey Search recognises these characters as language-specific punctuation and
+splits on them during both indexing and query parsing.  The same title produces
+two tokens (`professeur`, `étudiant`), and a search for `professeur` matches.
+
+This is an intentional improvement: these characters are real punctuation in
+French (and other languages) by Unicode General Category. The same holds for
+Unicode whitespace: every language except English also splits on characters
+such as the no-break space (U+00A0) and the ideographic space (U+3000), which
+Redis treats as word characters. Measured against `redis:latest` with English
+text (`test_text_search_unicode_whitespace`), where Valkey matches Redis.  The divergence
+affects every query in `test_multilang_unescaped`, so those queries are
+excluded from comparison (`exclude_all=True`) and run only as crash-safety
+checks against Valkey.
+
+### 4.2 Backslash-escaped non-ASCII punctuation — unsupported by Redis
+
+Redis does not support backslash-escaping of non-ASCII punctuation.  A query
+like `professeur\'étudiant` (where `\` precedes U+2019) returns 0 results on
+Redis, whereas Valkey correctly resolves the escape, treats the `'` as part
+of the token, and finds matching documents.
+
+This mirrors the existing English divergence where `test_text_search_escaped`
+is excluded for JSON keys.  All queries in `test_multilang_escaped` are
+excluded from comparison for the same reason.
+
+### 4.3 Dutch stemming
+
+Valkey uses Snowball 3.0.1, whose Dutch stemmer is Kraaij-Pohlmann and strips
+the `ge-`, `be-` and `ver-` prefixes. Redisearch's Dutch stemming does not, so
+the two can map different words to the same stem. The Dutch dataset leaves out
+terms whose Kraaij-Pohlmann stems collide with other terms in it (for example
+`geschilderd`, `schilder`, `gebouwd`). Asserted by Divergence #6.
+
+### 4.4 Case folding
+
+Valkey case-folds with ICU (`CaseMap::utf8Fold`), which expands characters such
+as `ß` to `ss` and the `ﬁ` ligature to `fi`; Redisearch lowercases them and
+keeps them as they are. The datasets avoid `ß` and ligatures. Asserted by
+Divergences #1 and #3.
+
+Turkish uses locale-aware lowercasing, so `I` folds to dotless `ı` and `İ` to
+`i`. Redis applies no Turkish casing: measured against `redis:latest`, every
+Turkish-uppercase query of an indexed word (`IŞIK`, `SICAK`, `KİRAZ`, `NEHİR`)
+returns 0 results, where Valkey matches the lowercase document. Those queries
+(`test_multilang_turkish_uppercase`) are excluded from comparison. Asserted by
+Divergence #2.
+
+### 4.5 Default stop words
+
+Valkey filters each language's Lucene stop word list by default; Redisearch
+filters only English stop words. The datasets avoid every term in the
+language's stop word list. Asserted by `TestMultiLanguageSearch.test_stop_words`.
+
+### 4.6 NOSTEM on bare queries
+
+On a `NOSTEM` field, a query without a field name matches stemmed forms on
+Redisearch, suggesting its query-time stemming does not honor `NOSTEM`. Valkey
+applies `NOSTEM` at both index and query time. The datasets avoid pairs where
+one term stems to another (for example Indonesian `kekuatan` stems to `kuat`).
+Asserted by Divergence #4.
+
+### 4.7 Fuzzy search over stems
+
+Redisearch's fuzzy search also matches against the stems of indexed terms;
+Valkey matches only the indexed forms. The fuzzy generator filters its
+vocabulary at generation time (`_compute_safe_fuzzy_vocab` in
+`generate_text.py`). Asserted by Divergence #5.
+
+## 5. Intentional divergences
+
+### 5.1 INFIELDS strict validation
 
 Redis silently ignores non-existent and non-TEXT fields in `INFIELDS` — they
 simply have no effect on the query. An explicit `@field:term` where the field

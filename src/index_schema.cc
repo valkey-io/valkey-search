@@ -12,7 +12,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <format>
 #include <memory>
 #include <optional>
 #include <string>
@@ -41,6 +40,7 @@
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
+#include "src/indexes/text/language_registry.h"
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
@@ -1408,14 +1408,11 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   }
 
   ValkeyModule_ReplyWithSimpleString(ctx, "language");
-  switch (language_) {
-    case data_model::LANGUAGE_ENGLISH:
-      ValkeyModule_ReplyWithSimpleString(ctx, "english");
-      break;
-    default:
-      ValkeyModule_ReplyWithSimpleString(ctx, "english");
-      break;
-  }
+  ValkeyModule_ReplyWithSimpleString(
+      ctx,
+      std::string(
+          indexes::text::LanguageRegistry::Instance().Get(language_)->Name())
+          .c_str());
 }
 
 std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {
@@ -1827,8 +1824,8 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
   // Select the DB number in the context for subsequent usage.
   int db_num = static_cast<int>(index_schema_proto->db_num());
   if (ValkeyModule_SelectDb(ctx, db_num) != VALKEYMODULE_OK) {
-    return absl::InternalError(std::format(
-        "Unable to select DB {} for loading index schema {}", db_num,
+    return absl::InternalError(absl::StrFormat(
+        "Unable to select DB %d for loading index schema %s", db_num,
         vmsdk::config::RedactIfNeeded(index_schema_proto->name()).data()));
   }
 
@@ -2377,7 +2374,19 @@ absl::StatusOr<vmsdk::ValkeyVersion> IndexSchema::GetMinVersion(
   // a failed load. Recording 1.3.0 makes that RDB refuse to load instead.
   if (has_low_precision_vector || unpacked->has_filter()) {
     return kRelease13;
-  } else if (has_text_index) {
+  }
+  if (has_text_index) {
+    auto lang =
+        indexes::text::LanguageRegistry::Instance().Get(unpacked->language());
+    if (!lang) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          data_model::Language_Name(unpacked->language()),
+          " is not supported in module version ", kModuleVersion.ToString()));
+    }
+    auto min_lang_version = lang->MinRequiredVersion();
+    if (min_lang_version > kRelease12) {
+      return min_lang_version;
+    }
     return kRelease12;
   } else if (unpacked->has_db_num() && unpacked->db_num() != 0) {
     return kRelease11;

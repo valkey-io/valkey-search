@@ -7,13 +7,13 @@
     ],
     "history": [
       [
-        "1.3.0",
+        "1.3.0-RC1",
         "Hybrid search combining text/filter and vector arms"
       ]
     ],
     "arity": -7,
     "group": "search",
-    "module_since": "1.3.0",
+    "module_since": "1.3.0-RC1",
     "summary": "Performs hybrid search combining a text/filter arm with a vector arm, fuses results via RRF, LINEAR or a user-supplied FUNCTION, and feeds the fused list through the FT.AGGREGATE post-pipeline.",
     "complexity": "O(N+M) where N is the complexity of the SEARCH arm and M is the complexity of the VSIM arm.",
     "arguments": [

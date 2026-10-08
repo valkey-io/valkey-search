@@ -444,6 +444,15 @@ class TestScoring(ValkeySearchTestCaseBase):
         assert zero == {k: 0.0 for k in ("doc:1", "doc:2", "doc:3", "doc:4",
                                           "doc:5", "doc:7")}
 
+        # In a composed query only the zero-weight leaf drops out, so each doc
+        # scores as if that term were absent.
+        _, world = search(client, IDX_DOC_SCORE, "world")
+        _, partial = search(client, IDX_DOC_SCORE, "(hello)=>{$weight:0} world")
+        assert 0.0 not in partial.values()
+        assert partial == pytest.approx(
+            {k: world[k] for k in ("doc:1", "doc:2", "doc:3", "doc:4", "doc:7")},
+            abs=SCORE_ABS_TOL)
+
     # Group 5: term frequency is counted document-wide, not per field.
     def test_doc_wide_term_frequency(self):
         client = self.server.get_new_client()

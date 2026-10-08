@@ -62,7 +62,7 @@ Thus on reload a backfilling index must restart the backfill at the beginning. H
 
 ## Query Operations
 
-Query commands operate by blocking the client and sending the query to the background threads. The background threads search the indexes to generate a preliminary result set. During this search operation, index mutations are queued, meaning that the preliminary result set is generated from a single point-in-time snapshot of the indexes. If `NOCONTENT` is specified without `SORTBY`, then the preliminary result set is the final result set.
+Query commands operate by blocking the client and sending the query to the background threads. The background threads search the indexes to generate a preliminary result set. During this search operation, index mutations are queued, meaning that the preliminary result set is generated from a point-in-time snapshot of the indexes on each shard. In cluster mode, these snapshots are not coordinated across shards. If `NOCONTENT` is specified without `SORTBY`, then the preliminary result set is the final result set.
 
 However, if the query requires content processing, then it is returned to the main thread in order to access the database. If keys within the preliminary result set have been mutated, those keys are revalidated and rescored against the filter, which might remove the key from the result set. For [`FT.SEARCH`](../commands/ft.search.md), the result set is then returned as the command result. For [`FT.HYBRID`](../commands/ft.hybrid.md) and [`FT.AGGREGATE`](../commands/ft.aggregate.md), the result set is input to the aggregation stages specified on the command.
 

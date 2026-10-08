@@ -1118,6 +1118,30 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   }
 }
 
+// The shell calculation remains finite when either multiplication would
+// overflow float: FLT_MAX with the default query epsilon, and FLT_MAX for both
+// radius and epsilon. RangeStopCondition checks the finite-shell invariant.
+TEST_F(SearchRangeFp32, HnswRangeShellStaysFiniteAtFloatLimits) {
+  auto index = MakeIndex(/*hnsw=*/true, data_model::DISTANCE_METRIC_L2);
+  ASSERT_NE(index, nullptr);
+  uint64_t seed = 17;
+  for (int i = 0; i < kVectors; ++i) {
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(*index, IndexToKey(i),
+                                                   Bytes(RandomVector(seed))));
+  }
+  const std::string query = Bytes(RandomVector(seed));
+  constexpr float kMaxFloat = std::numeric_limits<float>::max();
+  const auto expected = PerKeyReference(*index, query, kMaxFloat);
+  ASSERT_EQ(expected.size(), static_cast<size_t>(kVectors));
+  for (float epsilon : {0.01f, kMaxFloat}) {
+    SCOPED_TRACE(absl::StrCat("epsilon ", epsilon));
+    auto searched =
+        index->SearchRange(query, kMaxFloat, CancelNever(), epsilon);
+    ASSERT_TRUE(searched.ok()) << searched.status();
+    EXPECT_EQ(ToMap(*searched), expected);
+  }
+}
+
 // With allow-replace-deleted a new key takes a deleted key's hnswlib slot under
 // a fresh label, so slot ids and labels diverge; the range traversal must
 // report labels. Each new key is the only one near its own vector.

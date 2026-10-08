@@ -1986,6 +1986,34 @@ INSTANTIATE_TEST_SUITE_P(
                 "$epsilon must be a valid non-negative number",
         },
         {
+            .test_name = "vector_range_nan_epsilon",
+            .filter = "@vec_hnsw:[VECTOR_RANGE 1.5 $blob]=>{$epsilon: nan}",
+            .create_success = false,
+            .create_expected_error_message =
+                "$epsilon must be a valid non-negative number",
+        },
+        {
+            .test_name = "vector_range_infinite_epsilon",
+            .filter = "@vec_hnsw:[VECTOR_RANGE 1.5 $blob]=>{$epsilon: inf}",
+            .create_success = false,
+            .create_expected_error_message =
+                "$epsilon must be a valid non-negative number",
+        },
+        {
+            .test_name = "vector_range_float_overflow_epsilon",
+            .filter = "@vec_hnsw:[VECTOR_RANGE 1.5 $blob]=>{$epsilon: 1e40}",
+            .create_success = false,
+            .create_expected_error_message =
+                "$epsilon must be a valid non-negative number",
+        },
+        {
+            .test_name = "vector_range_double_overflow_epsilon",
+            .filter = "@vec_hnsw:[VECTOR_RANGE 1.5 $blob]=>{$epsilon: 1e400}",
+            .create_success = false,
+            .create_expected_error_message =
+                "$epsilon must be a valid non-negative number",
+        },
+        {
             .test_name = "vector_range_negative_epsilon",
             .filter = "@vec:[VECTOR_RANGE 1.5 $blob]=>{$epsilon: -0.5}",
             .create_success = false,

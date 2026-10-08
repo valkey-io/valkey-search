@@ -25,6 +25,7 @@
 #include "src/index_schema.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
+#include "src/indexes/scoring/scorer.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
 #include "src/indexes/text/language.h"
@@ -387,7 +388,9 @@ FilterParser::ParseVectorRangeQueryAttributes() {
         return absl::InvalidArgumentError(
             "$epsilon must be a valid non-negative number");
       }
-      if (epsilon_val < 0) {
+      const float epsilon_float = static_cast<float>(epsilon_val);
+      if (epsilon_val < 0 || indexes::scoring::IsNaN(epsilon_float) ||
+          indexes::scoring::IsInf(epsilon_float)) {
         return absl::InvalidArgumentError(
             "$epsilon must be a valid non-negative number");
       }

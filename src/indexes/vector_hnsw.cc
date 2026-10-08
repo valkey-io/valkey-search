@@ -326,6 +326,21 @@ class CancelCondition : public hnswlib::BaseCancellationFunctor {
   cancel::Token &token_;
 };
 
+// Compute the range traversal shell outside float arithmetic: FLT_MAX with
+// even the default epsilon overflows in float. Query parsing keeps epsilon
+// finite, and the double product of two finite floats cannot overflow double.
+float ComputeRangeShell(float radius, float epsilon) {
+  CHECK(!scoring::IsNaN(radius));
+  CHECK(!scoring::IsInf(radius));
+  CHECK(!scoring::IsNaN(epsilon));
+  CHECK(!scoring::IsInf(epsilon));
+  const double shell =
+      static_cast<double>(radius) * (1.0 + static_cast<double>(epsilon));
+  constexpr float kMaxShell = std::numeric_limits<float>::max();
+  return shell >= static_cast<double>(kMaxShell) ? kMaxShell
+                                                 : static_cast<float>(shell);
+}
+
 // Stop condition of the HNSW range traversal. A node is expanded while it is
 // within `shell` of the query or could still improve the `ef` nearest results,
 // so the walk first homes in on the query as an ef-bounded KNN search does,
@@ -337,7 +352,10 @@ class RangeStopCondition : public hnswlib::BaseSearchStopCondition<float> {
   RangeStopCondition(float shell, size_t ef, size_t max_results)
       : shell_(shell),
         ef_(std::clamp<size_t>(ef, 1, max_results)),
-        max_results_(max_results) {}
+        max_results_(max_results) {
+    CHECK(!scoring::IsNaN(shell_));
+    CHECK(!scoring::IsInf(shell_));
+  }
 
   void add_point_to_result(hnswlib::labeltype, const void *,
                            float dist) override {
@@ -457,8 +475,8 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
   std::vector<std::pair<float, hnswlib::labeltype>> raw_results;
   try {
     CancelCondition cancel_condition(cancellation_token);
-    RangeStopCondition stop_condition(radius * (1.0f + epsilon), algo_->ef_,
-                                      max_candidates);
+    RangeStopCondition stop_condition(ComputeRangeShell(radius, epsilon),
+                                      algo_->ef_, max_candidates);
     raw_results = algo_->searchStopConditionClosest(
         embedding, stop_condition, filter.get(), &cancel_condition);
   } catch (const std::exception &e) {

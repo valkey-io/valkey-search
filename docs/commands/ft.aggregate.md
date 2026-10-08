@@ -10,10 +10,12 @@ Once all stages have been executed, the working set of records output from the l
 
 ```
 FT.AGGREGATE <index-name> <query>
+    [ADDSCORES]
     [DIALECT <dialect>]
     [INORDER]
     [LOAD * | LOAD <count> <field> [AS <alias>] [<field> [AS <alias>] ...]]
     [PARAMS <count> <name> <value> [ <name> <value> ...]]
+    [SCORER <scorer>]
     [SLOP <slop>]
     [TIMEOUT <timeout>]
     [VERBATIM]
@@ -29,6 +31,7 @@ FT.AGGREGATE <index-name> <query>
 
 - `<index>` (required): This index name you want to query.
 - `<query>` (required): The query string, see [Search - query language](../topics/search-query.md) for details.
+- `ADDSCORES` (optional): Adds the relevance score computed for each key to its record as the field `__score`, which later stages can reference as `@__score`.
 - `DIALECT <dialect>` (optional): Specifies your dialect. The only supported dialect is 2.
 - `INORDER` (optional): Indicates that proximity matching of terms must be in order.
 - `LOAD * | LOAD <count> <field> [AS <alias>] [<field> [AS <alias>] ...]` (optional): This controls which fields of those keys are loaded into the working set. A star (\*) indicates that all of the fields of the keys are loaded. The key itself can be loaded by specifying `@__key`. For vector queries, the distance can also be loaded by using the name of that field.
@@ -41,6 +44,7 @@ FT.AGGREGATE <index-name> <query>
 
   Honoring `AS` in the `LOAD` clause is a compatibility fix gated on `search.emulate-release` being `1.3.0` or greater; under an emulated release below that, `AS` is treated as an ordinary field name. Accepting a JSON path as `<field>` is not gated, since before it was supported such a load simply failed. See [COMPATIBILITY.md](../../COMPATIBILITY.md) for details.
 - `PARAMS <count> <name> <value> [<name> <value> ...]` (optional): `count` is of the number of arguments, i.e., twice the number of `name`/`value` pairs. `PARAMS` can be used in both the query string as well as within an expression context. See [Search - query language](../topics/search-query.md) for usage details.
+- `SCORER <scorer>` (optional): Selects the relevance scoring function used to rank text results. The only supported scorer is `BM25STD`, which is also the default.
 - `SLOP <slop>` (Optional): Specifies a slop value for proximity matching of terms.
 - `TIMEOUT <timeout>` (optional): Lets you set a timeout value for the search command. This must be an integer in milliseconds.
 - `VERBATIM` (Optional): If specified stemming is not applied to term searches.
@@ -108,6 +112,6 @@ The following reducer functions are available. The reducer functions that take a
 | STDDEV 1 <expression>         | The standard deviation the values of the expression.                                                                               |
 | FIRST_VALUE 1 <expression>    | The first value of the expression encountered in the group. Order depends on record retrieval order. Use only when order does not matter. |
 | FIRST_VALUE 3 <expression> BY <expression> | The value of the first expression from the record with the smallest comparison expression (ascending). Ties broken by first-encountered order. |
-| FIRST_VALUE 4 <expression> BY <expression> ASC\|DESC | The value of the first expression from the record with the minimum (ASC) or maximum (DESC) comparison expression. Ties broken by first-encountered order. Invalid keyword arguments (e.g., wrong BY token or unrecognised direction) produce a parse-time error. |
+| FIRST_VALUE 4 <expression> BY <expression> ASC\|DESC | The value of the first expression from the record with the minimum (ASC) or maximum (DESC) comparison expression. Ties broken by first-encountered order. Invalid keyword arguments (e.g., wrong BY token or unrecognized direction) produce a parse-time error. |
 | RANDOM_SAMPLE 2 <expression> <sample_size> | A random sample of values from the expression using reservoir sampling. Returns an array of up to sample_size elements (maximum 1000). Nil values are excluded. Output is non-deterministic. |
 | QUANTILE 2 <expression> <quantile> | An approximation of the value at the given quantile of the expression. `<quantile>` is a number from 0 to 1; 0 returns the smallest value and 1 the largest. Nil, NaN and non-numeric strings are ignored. If any values remain, the result is one of them: with n values, its position in sorted order (1 for the smallest) differs from `<quantile>` × n, rounded up and at least 1, by at most 1% of n. For groups of more than 500 values the result can depend on the order in which records are processed. |

@@ -2263,7 +2263,7 @@ class InfieldsFilterTest
     : public ValkeySearchTestWithParam<InfieldsFilterTestCase> {};
 
 TEST_P(InfieldsFilterTest, ParseParams) {
-  const InfieldsFilterTestCase &test_case = GetParam();
+  const InfieldsFilterTestCase& test_case = GetParam();
   auto index_schema = CreateIndexSchema("index_schema_name").value();
   InitIndexSchema(index_schema.get());
   // key1 has identical text in both fields; add a key whose text is only in
@@ -2272,7 +2272,7 @@ TEST_P(InfieldsFilterTest, ParseParams) {
     auto key = StringInternStore::Intern("key_field2_only");
     auto field2 = index_schema->GetIndex("text_field2").value();
     VMSDK_EXPECT_OK(
-        static_cast<indexes::Text *>(field2.get())
+        static_cast<indexes::Text*>(field2.get())
             ->AddRecord(key,
                         AttributeData(vmsdk::MakeUniqueValkeyString("hello"))));
     index_schema->GetTextIndexSchema()->CommitKeyData(key);
@@ -2491,7 +2491,7 @@ INSTANTIATE_TEST_SUITE_P(
                 "INFIELDS field 'TEXT_FIELD1' does not exist in the index",
         },
     }),
-    [](const TestParamInfo<InfieldsFilterTestCase> &info) {
+    [](const TestParamInfo<InfieldsFilterTestCase>& info) {
       return info.param.test_name;
     });
 

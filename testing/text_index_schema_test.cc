@@ -48,14 +48,13 @@ class TextIndexSchemaTest : public vmsdk::ValkeyTest {
   // Returns nullopt when the root has no stem-tree entry.
   std::optional<uint32_t> StemDistinctDocs(TextIndexSchema &schema,
                                            absl::string_view word) {
-    std::optional<uint32_t> result;
-    schema.WithStemParents(
-        word, /*lock=*/true,
-        [&](const std::string &, absl::Span<const std::string> parents,
-            uint32_t distinct_docs) {
-          if (!parents.empty()) result = distinct_docs;
+    const std::string stemmed = schema.GetLexer().StemWord(word);
+    return schema.WithStemTreeLock(
+        [&](const Rax &stem_tree) -> std::optional<uint32_t> {
+          const auto root = stem_tree.FindStemParentsTarget(stemmed);
+          if (!root || root->parents.empty()) return std::nullopt;
+          return root->distinct_docs;
         });
-    return result;
   }
 };
 

@@ -15,10 +15,12 @@
 #include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
 #include "absl/strings/ascii.h"
+#include "absl/types/span.h"
 #include "src/indexes/scoring/scorer.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text/rax_wrapper.h"
 #include "src/indexes/text/term.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/debug.h"
 
 namespace valkey_search::query {
@@ -63,12 +65,12 @@ float ResolvedLeafCache::Idf(size_t dt) const {
 }
 
 WordPostings ResolvedLeafCache::Lookup(absl::string_view word) const {
-  return {
-      std::string(word),
-      MainThread()
-          ? text_index_schema_->LookupGlobalPostings(word)
-          : text_index_schema_->GetTextIndex()->GetPrefix().FindPostingsTarget(
-                word)};
+  auto find = [&](const indexes::text::TextIndex &index) {
+    return index.GetPrefix().FindPostingsTarget(word);
+  };
+  return {std::string(word), MainThread()
+                                 ? text_index_schema_->WithTextIndexLock(find)
+                                 : find(*text_index_schema_->GetTextIndex())};
 }
 
 ResolvedLeaf &ResolvedLeafCache::GetOrResolve(const Predicate *predicate) {
@@ -177,34 +179,38 @@ ResolvedLeaf ResolvedLeafCache::ResolveText(
     // Parents of the stem root: every surface word that stems to it with
     // surface != root (a self-stemming word is never added to the stem tree,
     // so the root literal is not among them). Includes the query word.
-    text_index_schema->WithStemParents(
-        word, MainThread(),
-        [&](const std::string &stemmed, absl::Span<const std::string> parents,
-            uint32_t distinct_docs) {
-          // Group 2: the stem root literal, only when it differs from the
-          // query word (else it is group 1) and is itself indexed.
-          if (stemmed != word) {
-            add_word_group(stemmed,
-                           ScoringFieldMask(stem_field_mask, num_text_fields),
-                           TermGroup::Kind::kStemRoot);
-          }
+    const std::string stemmed = text_index_schema->GetLexer().StemWord(word);
+    auto add_stem_groups = [&](const indexes::text::Rax &stem_tree) {
+      // Group 2: the stem root literal, only when it differs from the
+      // query word (else it is group 1) and is itself indexed.
+      if (stemmed != word) {
+        add_word_group(stemmed,
+                       ScoringFieldMask(stem_field_mask, num_text_fields),
+                       TermGroup::Kind::kStemRoot);
+      }
+      const auto root = stem_tree.FindStemParentsTarget(stemmed);
+      if (!root) return;
 
-          // Group 3: the stem inflections. F sums the per-doc frequencies of
-          // every inflection; dt is the distinct doc count counted at
-          // ingestion.
-          TermGroup stem;
-          stem.kind = TermGroup::Kind::kInflections;
-          for (const auto &parent : parents) {
-            WordPostings found = Lookup(parent);
-            if (found.postings) stem.words.push_back(std::move(found));
-          }
-          if (!stem.words.empty()) {
-            stem.idf = Idf(distinct_docs);
-            stem.field_mask =
-                ScoringFieldMask(stem_field_mask, num_text_fields);
-            leaf.groups.push_back(std::move(stem));
-          }
-        });
+      // Group 3: the stem inflections. F sums the per-doc frequencies of
+      // every inflection; dt is the distinct doc count counted at ingestion.
+      TermGroup stem;
+      stem.kind = TermGroup::Kind::kInflections;
+      const size_t max_words = options::GetMaxTermExpansions().GetValue();
+      for (const auto &parent :
+           absl::MakeConstSpan(root->parents)
+               .first(std::min(root->parents.size(), max_words))) {
+        WordPostings found = Lookup(parent);
+        if (found.postings) stem.words.push_back(std::move(found));
+      }
+      if (!stem.words.empty()) {
+        // The whole group's df, even when max expansions truncates the words.
+        stem.idf = Idf(root->distinct_docs);
+        stem.field_mask = ScoringFieldMask(stem_field_mask, num_text_fields);
+        leaf.groups.push_back(std::move(stem));
+      }
+    };
+    MainThread() ? text_index_schema->WithStemTreeLock(add_stem_groups)
+                 : add_stem_groups(text_index_schema->GetStemTree());
   }
   return leaf;
 }

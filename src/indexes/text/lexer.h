@@ -68,6 +68,8 @@ struct Lexer {
   void NormalizeLowerCaseInPlace(std::string& str) const;
   void StemWordInPlace(std::string& word, sb_stemmer* stemmer,
                        uint32_t min_stem_size = 0) const;
+  // Query-side stemming with this lexer's own stemmer.
+  std::string StemWord(absl::string_view word) const;
   void UpdateStemMap(absl::string_view original_word, sb_stemmer* stemmer,
                      uint32_t min_stem_size,
                      InProgressStemMap& stem_mappings) const;

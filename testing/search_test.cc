@@ -2256,6 +2256,17 @@ TEST_F(ScoreTextQueryTestBase, StemRootLiteralInNoStemFieldNotScored) {
   EXPECT_TRUE(ScoreViaIterator(*schema, "@title:running", "d4"));
 }
 
+// A word that is its own stem gets no stem-tree entry (lexer.cc adds a mapping
+// only when the stemmed form differs), so a corpus holding just `run` has no
+// root for `running` to look up. The root literal must still be searched.
+TEST_F(ScoreTextQueryTestBase, StemRootWithoutStemTreeEntryStillMatches) {
+  auto schema = BuildTwoTextFieldSchema({{"d1", "run", ""}});
+  auto score = Score(*schema, "@title:running @rating:[0 100]", "d1");
+  ASSERT_TRUE(score.has_value());
+  EXPECT_GT(*score, 0.0f);
+  EXPECT_TRUE(ScoreViaIterator(*schema, "@title:running", "d1"));
+}
+
 // Same rule with no field named: an unscoped query searches body too, yet
 // stemming stays off there, so `run`/`runs` in body still score nothing. This
 // is the only query shape where "all fields" and "stemming fields" differ.

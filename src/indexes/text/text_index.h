@@ -21,6 +21,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -122,7 +123,7 @@ class TextIndexSchema {
   bool HasTextOffsets() const { return with_offsets_; }
   uint8_t GetNumTextFields() const { return num_text_fields_; }
   std::shared_ptr<TextIndex> GetTextIndex() const { return text_index_; }
-  Lexer GetLexer() const { return lexer_; }
+  const Lexer &GetLexer() const { return lexer_; }
 
   // Access to metadata for memory pool usage
   TextIndexMetadata &GetMetadata() { return metadata_; }
@@ -185,30 +186,26 @@ class TextIndexSchema {
     text_index_ = std::make_shared<TextIndex>(true);
   }
 
-  // Looks up `word`'s stem root and calls `fn(stemmed, parents,
-  // distinct_docs)`. The parents are the indexed words that stem to this
-  // root, capped at max expansions and empty if the root is not there.
-  // distinct_docs is how many documents they cover between them. The parent
-  // list belongs to the stem tree and we want it stable while `fn` reads it,
-  // so on the main thread (`lock` set) we hold the stem tree lock while `fn`
-  // runs. In the background the time-sliced read phase already keeps the
-  // tree stable.
-  void WithStemParents(
-      absl::string_view word, bool lock,
-      absl::FunctionRef<void(const std::string &stemmed,
-                             absl::Span<const std::string> parents,
-                             uint32_t distinct_docs)>
-          fn) const ABSL_LOCKS_EXCLUDED(stem_tree_mutex_);
-
   // We avoid stalling the main thread waiting on the time-slice mutex and
-  // instead take the same short locks the writers take. LookupGlobalPostings
-  // holds the tree lock for the traversal and target retrieval. The returned
-  // Postings is then probed under its word's bucket via WithWordLock, never
-  // with the tree lock still held (writers take bucket first, tree second).
-  InvasivePtr<Postings> LookupGlobalPostings(absl::string_view word) const
+  // instead take the same short locks the writers take. WithTextIndexLock runs
+  // `fn` on the global text index with the tree lock held for the traversal
+  // and target retrieval. A returned Postings is then probed under its word's
+  // bucket via WithWordLock, never with the tree lock still held (writers take
+  // bucket first, tree second).
+  template <class Fn>
+  std::invoke_result_t<Fn, const TextIndex &> WithTextIndexLock(Fn &&fn) const
       ABSL_LOCKS_EXCLUDED(text_index_mutex_) {
-    absl::ReaderMutexLock lock(&text_index_mutex_);
-    return text_index_->GetPrefix().FindPostingsTarget(word);
+    absl::ReaderMutexLock guard(&text_index_mutex_);
+    return fn(*text_index_);
+  }
+
+  // Same for the stem tree. The parent lists in it belong to the tree and we
+  // want them stable while `fn` reads them.
+  template <class Fn>
+  std::invoke_result_t<Fn, const Rax &> WithStemTreeLock(Fn &&fn) const
+      ABSL_LOCKS_EXCLUDED(stem_tree_mutex_) {
+    absl::ReaderMutexLock guard(&stem_tree_mutex_);
+    return fn(stem_tree_);
   }
 
   // Runs `fn` under `word`'s bucket so the main thread can safely access a

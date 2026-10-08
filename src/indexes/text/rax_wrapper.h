@@ -108,6 +108,9 @@ class Rax {
   // Returns empty InvasivePtr if word not found.
   InvasivePtr<Postings> FindPostingsTarget(absl::string_view word) const;
 
+  // Same for a stem tree entry's StemParents target.
+  InvasivePtr<StemParents> FindStemParentsTarget(absl::string_view word) const;
+
   // Get the total number of unique words in the RadixTree (i.e. total number of
   // entries).
   size_t GetTotalUniqueWordCount() const;

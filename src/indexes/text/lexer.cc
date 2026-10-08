@@ -204,6 +204,10 @@ void Lexer::StemWordInPlace(std::string& word, sb_stemmer* stemmer,
   }
 }
 
+std::string Lexer::StemWord(absl::string_view word) const {
+  return std::string(DoStemming(word, GetStemmer(), /*min_stem_size=*/0));
+}
+
 void Lexer::UpdateStemMap(absl::string_view original_word, sb_stemmer* stemmer,
                           uint32_t min_stem_size,
                           InProgressStemMap& stem_mappings) const {

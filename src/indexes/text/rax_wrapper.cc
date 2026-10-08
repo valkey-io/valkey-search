@@ -93,6 +93,12 @@ InvasivePtr<Postings> Rax::FindPostingsTarget(absl::string_view word) const {
       static_cast<InvasivePtrRaw<Postings>>(FindTarget(word)));
 }
 
+InvasivePtr<StemParents> Rax::FindStemParentsTarget(
+    absl::string_view word) const {
+  return InvasivePtr<StemParents>::CopyRaw(
+      static_cast<InvasivePtrRaw<StemParents>>(FindTarget(word)));
+}
+
 size_t Rax::GetTotalUniqueWordCount() const { return raxSize(rax_); }
 
 size_t Rax::GetSubtreeItemCount(absl::string_view prefix) const {

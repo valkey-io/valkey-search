@@ -459,32 +459,6 @@ uint64_t TextIndexSchema::GetTotalTermFrequency() const {
   return metadata_.total_term_frequency.load();
 }
 
-void TextIndexSchema::WithStemParents(
-    absl::string_view word, bool lock,
-    absl::FunctionRef<void(const std::string &, absl::Span<const std::string>,
-                           uint32_t)>
-        fn) const {
-  std::string stemmed(word);
-  lexer_.StemWordInPlace(stemmed, lexer_.GetStemmer());
-
-  std::optional<absl::ReaderMutexLock> stem_guard;
-  if (lock) stem_guard.emplace(&stem_tree_mutex_);
-
-  absl::Span<const std::string> parents;
-  uint32_t distinct_docs = 0;
-  auto stem_iter = stem_tree_.GetWordIterator(stemmed);
-  if (!stem_iter.Done() && stem_iter.GetWord() == stemmed) {
-    if (const auto &target = stem_iter.GetStemParentsTarget()) {
-      // The whole group's df, even when max expansions truncates the words.
-      distinct_docs = target->distinct_docs;
-      parents = absl::MakeConstSpan(target->parents);
-      parents = parents.first(std::min<size_t>(
-          parents.size(), options::GetMaxTermExpansions().GetValue()));
-    }
-  }
-  fn(stemmed, parents, distinct_docs);
-}
-
 const TextIndex *TextIndexSchema::GetPerKeyTextIndex(const Key &key,
                                                      bool lock) const {
   if (!key) {

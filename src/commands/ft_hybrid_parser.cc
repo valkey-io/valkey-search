@@ -43,6 +43,8 @@ constexpr absl::string_view kSearchKw{"SEARCH"};
 constexpr absl::string_view kVsimKw{"VSIM"};
 constexpr absl::string_view kCombineKw{"COMBINE"};
 constexpr absl::string_view kPolicyKw{"POLICY"};
+constexpr absl::string_view kAdHocKw{"ADHOC"};
+constexpr absl::string_view kBatchesKw{"BATCHES"};
 constexpr absl::string_view kLocalOnlyKw{"LOCALONLY"};
 constexpr absl::string_view kRrfKw{"RRF"};
 constexpr absl::string_view kLinearKw{"LINEAR"};
@@ -130,7 +132,8 @@ bool IsTopLevelKeyword(absl::string_view tok) {
          absl::EqualsIgnoreCase(tok, "PARAMS") ||
          absl::EqualsIgnoreCase(tok, "TIMEOUT") ||
          absl::EqualsIgnoreCase(tok, "FILTER") ||
-         absl::EqualsIgnoreCase(tok, "DIALECT");
+         absl::EqualsIgnoreCase(tok, "DIALECT") ||
+         absl::EqualsIgnoreCase(tok, kWithCursorParam);
 }
 
 namespace {
@@ -154,6 +157,17 @@ absl::Status VerifyEfRuntime(unsigned ef) {
          "exceed "
       << max_ef_runtime_value << ".";
   return absl::OkStatus();
+}
+
+absl::StatusOr<HybridPolicy> ParseVsimPolicy(absl::string_view value) {
+  if (absl::EqualsIgnoreCase(value, kAdHocKw)) {
+    return HybridPolicy::kAdHocBruteForce;
+  }
+  if (absl::EqualsIgnoreCase(value, kBatchesKw)) {
+    return HybridPolicy::kBatches;
+  }
+  return absl::InvalidArgumentError(
+      absl::StrCat("Invalid POLICY value `", value, "`"));
 }
 
 // Reads a whole token as a non-negative integer.
@@ -468,14 +482,8 @@ absl::Status ParseVsimClause(MultiSearchParameters &env,
       break;
     }
     auto next = next_or.value();
-    // FILTER, POLICY and BATCH_SIZE are checked before the top-level break,
-    // because inside a VSIM clause they belong to the vector search. FILTER
-    // means a pre-filter on it rather than the aggregate stage it means
-    // everywhere else -- a FILTER meant as that stage comes after COMBINE,
-    // which has already ended this loop -- and POLICY/BATCH_SIZE tune how that
-    // search runs. Letting POLICY end the loop left the token after it to be
-    // read as a top-level one: `KNN 2 K 5 POLICY BATCHES YIELD_SCORE_AS vs`
-    // reached the aggregate parser as a stray `YIELD_SCORE_AS`.
+    // FILTER owns POLICY and BATCH_SIZE in the Redis grammar. Keep these
+    // tokens in VSIM scope so misplaced uses get a direct error here.
     const bool vsim_scoped = absl::EqualsIgnoreCase(next, kFilterKw) ||
                              absl::EqualsIgnoreCase(next, kPolicyKw) ||
                              absl::EqualsIgnoreCase(next, kBatchSizeKw);
@@ -491,30 +499,22 @@ absl::Status ParseVsimClause(MultiSearchParameters &env,
       arm->score_as = vmsdk::MakeUniqueValkeyString(alias_sv);
     } else if (absl::EqualsIgnoreCase(next, kPolicyKw) ||
                absl::EqualsIgnoreCase(next, kBatchSizeKw)) {
-      // Both pick how the vector search executes rather than what it answers,
-      // so the value is read and discarded -- the same thing the top-level
-      // POLICY handler does with it.
-      itr.Next();
-      if (!itr.HasNext()) {
-        return absl::InvalidArgumentError(
-            absl::StrCat(next, " requires a value"));
-      }
-      itr.Next();
+      return absl::InvalidArgumentError(absl::StrCat(
+          next, " is only supported inside a counted VSIM FILTER"));
     } else if (absl::EqualsIgnoreCase(next, kFilterKw)) {
       // FILTER [count] <search-expression> [POLICY <p>] [BATCH_SIZE <n>]
       //
       // A pre-filter on the vector search, in the same query language the
-      // SEARCH arm uses -- not the aggregate FILTER's expression language,
-      // which is what the token means once the VSIM clause has ended. The
-      // count is optional, and when given it counts every token that follows,
-      // the POLICY options included.
+      // SEARCH arm uses. Valkey Search retains its existing count-optional
+      // FILTER extension, but Redis policy options must be inside a counted
+      // block so their boundary is unambiguous.
       itr.Next();
       VMSDK_ASSIGN_OR_RETURN(auto first, itr.GetStringView());
       uint32_t token_count = 0;
       if (absl::SimpleAtoi(first, &token_count)) {
         itr.Next();
       } else {
-        token_count = 1;  // no count given: the expression alone
+        token_count = 1;  // Existing extension: expression without a count.
       }
       if (token_count == 0) {
         return absl::InvalidArgumentError("VSIM FILTER requires an expression");
@@ -522,41 +522,60 @@ absl::Status ParseVsimClause(MultiSearchParameters &env,
       VMSDK_ASSIGN_OR_RETURN(auto expr_sv, itr.GetStringView());
       itr.Next();
       vsim_filter = std::string(expr_sv);
-      // Anything else inside the count tunes how the pre-filter is executed --
-      // POLICY picks between an ad-hoc and a batched strategy, BATCH_SIZE sizes
-      // the batches. Both change how much work the search does rather than what
-      // it answers, so they are consumed and discarded. The count is a raw
-      // token count, as it is on the reference engine, so the tokens inside it
-      // are taken as they come rather than validated.
-      for (uint32_t consumed = 1; consumed < token_count; ++consumed) {
+
+      bool saw_policy = false;
+      bool saw_batch_size = false;
+      for (uint32_t consumed = 1; consumed < token_count;) {
         if (!itr.HasNext()) {
           return absl::InvalidArgumentError(
               "VSIM FILTER count exceeds the arguments given");
         }
+        VMSDK_ASSIGN_OR_RETURN(auto option, itr.GetStringView());
         itr.Next();
-      }
-      // And the same options are accepted outside a count, which is how the
-      // command reference writes them.
-      while (itr.HasNext()) {
-        auto opt_or = itr.GetStringView();
-        if (!opt_or.ok()) {
-          break;
-        }
-        if (!absl::EqualsIgnoreCase(opt_or.value(), kPolicyKw) &&
-            !absl::EqualsIgnoreCase(opt_or.value(), kBatchSizeKw)) {
-          break;
-        }
-        itr.Next();
-        if (!itr.HasNext()) {
+        ++consumed;
+        if (absl::EqualsIgnoreCase(option, kPolicyKw)) {
+          if (saw_policy) {
+            return absl::InvalidArgumentError(
+                "POLICY was specified more than once");
+          }
+          if (consumed >= token_count || !itr.HasNext()) {
+            return absl::InvalidArgumentError("POLICY requires a value");
+          }
+          VMSDK_ASSIGN_OR_RETURN(auto value, itr.GetStringView());
+          itr.Next();
+          ++consumed;
+          VMSDK_ASSIGN_OR_RETURN(arm->hybrid_policy, ParseVsimPolicy(value));
+          saw_policy = true;
+        } else if (absl::EqualsIgnoreCase(option, kBatchSizeKw)) {
+          if (saw_batch_size) {
+            return absl::InvalidArgumentError(
+                "BATCH_SIZE was specified more than once");
+          }
+          if (!saw_policy || arm->hybrid_policy != HybridPolicy::kBatches) {
+            return absl::InvalidArgumentError(
+                "BATCH_SIZE requires POLICY BATCHES");
+          }
+          if (consumed >= token_count || !itr.HasNext()) {
+            return absl::InvalidArgumentError("BATCH_SIZE requires a value");
+          }
+          itr.Next();  // Value remains unsupported; issue #1457.
+          ++consumed;
+          saw_batch_size = true;
+        } else {
           return absl::InvalidArgumentError(
-              absl::StrCat(opt_or.value(), " requires a value"));
+              absl::StrCat("Unknown VSIM FILTER sub-argument `", option, "`"));
         }
-        itr.Next();
       }
     } else {
       return absl::InvalidArgumentError(
           absl::StrCat("Unexpected token in VSIM clause: `", next, "`"));
     }
+  }
+
+  if (arm->hybrid_policy == HybridPolicy::kAdHocBruteForce &&
+      arm->ef.has_value()) {
+    return absl::InvalidArgumentError(
+        "EF_RUNTIME is irrelevant for POLICY ADHOC");
   }
 
   // With a pre-filter, the arm becomes an ordinary query in the FT.SEARCH
@@ -776,9 +795,9 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
   if (itr.PopIfNextIgnoreCase(kCombineKw)) {
     VMSDK_RETURN_IF_ERROR(ParseCombineClause(env, itr));
   }
-  // 4. Walk remaining tokens. POLICY is accepted-and-discarded; everything
-  //    else is forwarded to the aggregate-suffix parser via the embedded
-  //    AggregateParameters in env.agg.
+  // 4. Walk remaining tokens. POLICY belongs inside the VSIM FILTER block;
+  //    everything else is forwarded to the aggregate-suffix parser via the
+  //    embedded AggregateParameters in env.agg.
   if (env.agg == nullptr) {
     env.agg = std::make_unique<aggregate::AggregateParameters>(env.db_num);
     env.agg->index_schema = env.index_schema;
@@ -907,24 +926,16 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
                           env.agg.get());
   env.agg->parse_vars_.index_interface_ = &ii;
   // The aggregate parser owns the rest of the iterator (LOAD/APPLY/FILTER/
-  // GROUPBY/SORTBY/LIMIT/PARAMS/TIMEOUT/SCORER). Strip POLICY tokens before
-  // forwarding so the aggregate parser doesn't trip on them.
-  //
-  // Implementation: walk until end of args, accumulating a filtered argv-like
-  // list. To avoid building a synthetic ValkeyModuleString**, just consume
-  // POLICY in a loop here and let the aggregate parser handle the gaps.
+  // GROUPBY/SORTBY/LIMIT/PARAMS/TIMEOUT/SCORER). POLICY is valid only inside
+  // the counted VSIM FILTER block parsed above.
   while (itr.HasNext()) {
     auto next_or = itr.GetStringView();
     if (!next_or.ok()) {
       break;
     }
     if (absl::EqualsIgnoreCase(next_or.value(), kPolicyKw)) {
-      itr.Next();  // consume POLICY
-      if (!itr.HasNext()) {
-        return absl::InvalidArgumentError("POLICY requires a value");
-      }
-      itr.Next();  // consume the value (silently discarded)
-      continue;
+      return absl::InvalidArgumentError(
+          "POLICY is only supported inside a counted VSIM FILTER");
     }
     if (absl::EqualsIgnoreCase(next_or.value(), kLocalOnlyKw)) {
       itr.Next();

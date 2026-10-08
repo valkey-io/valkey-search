@@ -307,11 +307,12 @@ INSTANTIATE_TEST_SUITE_P(
                             "definition\r\n*8\r\n+key_type\r\n+HASH\r\n+"
                             "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n"
                             "1\r\n+score_field\r\n+\r\n+"
-                            "attributes\r\n*1\r\n*14\r\n+"
+                            "attributes\r\n*1\r\n*18\r\n+"
                             "identifier\r\n+test_identifier_1\r\n+"
                             "attribute\r\n+test_attribute_1\r\n+user_indexed_"
                             "memory\r\n:0\r\n+type\r\n+TAG\r\n+SEPARATOR\r\n+@"
                             "\r\n+CASESENSITIVE\r\n+0\r\n+size\r\n$1\r\n0\r\n+"
+                            "SORTABLE\r\n+0\r\n+UNF\r\n+0\r\n+"
                             "num_docs\r\n:0\r\n+num_records\r\n:0\r\n+total_"
                             "term_occurrences\r\n:0\r\n+num_terms\r\n:0\r\n+"
                             "hash_indexing_failures\r\n$1\r\n0\r\n+"
@@ -353,11 +354,12 @@ INSTANTIATE_TEST_SUITE_P(
                             "definition\r\n*8\r\n+key_type\r\n+HASH\r\n+"
                             "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n"
                             "1\r\n+score_field\r\n+\r\n+"
-                            "attributes\r\n*1\r\n*14\r\n+"
+                            "attributes\r\n*1\r\n*18\r\n+"
                             "identifier\r\n+test_identifier_1\r\n+"
                             "attribute\r\n+test_attribute_1\r\n+user_indexed_"
                             "memory\r\n:0\r\n+type\r\n+TAG\r\n+SEPARATOR\r\n+@"
                             "\r\n+CASESENSITIVE\r\n+1\r\n+size\r\n$1\r\n0\r\n+"
+                            "SORTABLE\r\n+0\r\n+UNF\r\n+0\r\n+"
                             "num_docs\r\n:0\r\n+num_records\r\n:0\r\n+total_"
                             "term_occurrences\r\n:0\r\n+num_terms\r\n:0\r\n+"
                             "hash_indexing_failures\r\n$1\r\n0\r\n+"
@@ -396,11 +398,12 @@ INSTANTIATE_TEST_SUITE_P(
                             "definition\r\n*8\r\n+key_type\r\n+HASH\r\n+"
                             "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n"
                             "1\r\n+score_field\r\n+\r\n+"
-                            "attributes\r\n*1\r\n*10\r\n+"
+                            "attributes\r\n*1\r\n*12\r\n+"
                             "identifier\r\n+test_identifier_1\r\n+"
                             "attribute\r\n+test_attribute_1\r\n+user_indexed_"
                             "memory\r\n:0\r\n+type\r\n+NUMERIC\r\n+size\r\n$"
-                            "1\r\n0\r\n+num_docs\r\n:0\r\n+num_records\r\n:"
+                            "1\r\n0\r\n+SORTABLE\r\n+0\r\n+num_docs\r\n:0\r\n+"
+                            "num_records\r\n:"
                             "0\r\n+total_term_occurrences\r\n:0\r\n+num_"
                             "terms\r\n:0\r\n+"
                             "hash_indexing_failures\r\n$"
@@ -467,11 +470,13 @@ INSTANTIATE_TEST_SUITE_P(
                          "definition\r\n*8\r\n+key_type\r\n+HASH\r\n+"
                          "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n"
                          "1\r\n+score_field\r\n+\r\n+attributes\r\n*"
-                         "1\r\n*14\r\n+"
+                         "1\r\n*18\r\n+"
                          "identifier\r\n+test_identifier_1\r\n+attribute\r\n+"
                          "test_attribute_1\r\n+user_indexed_memory\r\n:0\r\n+"
                          "type\r\n+TEXT\r\n+WITH_SUFFIX_TRIE\r\n+0\r\n+NO_"
-                         "STEM\r\n+0\r\n+WEIGHT\r\n+1\r\n+num_docs\r\n:0\r\n+"
+                         "STEM\r\n+0\r\n+WEIGHT\r\n+1\r\n+SORTABLE\r\n+0\r\n+"
+                         "UNF\r\n+0\r\n+"
+                         "num_docs\r\n:0\r\n+"
                          "num_records\r\n:"
                          "0\r\n+total_term_occurrences\r\n:0\r\n+num_terms\r\n:"
                          "0\r\n+"
@@ -522,11 +527,13 @@ INSTANTIATE_TEST_SUITE_P(
                          "definition\r\n*8\r\n+key_type\r\n+HASH\r\n+"
                          "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n"
                          "1\r\n+score_field\r\n+\r\n+attributes\r\n*"
-                         "1\r\n*14\r\n+"
+                         "1\r\n*18\r\n+"
                          "identifier\r\n+test_identifier_1\r\n+attribute\r\n+"
                          "test_attribute_1\r\n+user_indexed_memory\r\n:0\r\n+"
                          "type\r\n+TEXT\r\n+WITH_SUFFIX_TRIE\r\n+1\r\n+NO_"
-                         "STEM\r\n+1\r\n+WEIGHT\r\n+1\r\n+num_docs\r\n:0\r\n+"
+                         "STEM\r\n+1\r\n+WEIGHT\r\n+1\r\n+SORTABLE\r\n+0\r\n+"
+                         "UNF\r\n+0\r\n+"
+                         "num_docs\r\n:0\r\n+"
                          "num_records\r\n:"
                          "0\r\n+total_term_occurrences\r\n:0\r\n+num_terms\r\n:"
                          "0\r\n+"
@@ -541,6 +548,53 @@ INSTANTIATE_TEST_SUITE_P(
                          "stop_words\r\n*3\r\n+the\r\n+and\r\n+or\r\n+with_"
                          "offsets\r\n+1\r\n+min_stem_size\r\n:3\r\n+"
                          "language\r\n+english\r\n"},
+                },
+        },
+        {
+            .test_name = "language_reported_without_text_field",
+            .test_cases =
+                {
+                    {
+                        .argv = {"FT.Info", "test_name"},
+                        .index_schema_pbtxt = R"(
+                          name: "test_name"
+                          db_num: 0
+                          subscribed_key_prefixes: "prefix_1"
+                          attribute_data_type: ATTRIBUTE_DATA_TYPE_HASH
+                          language: LANGUAGE_FRENCH
+                          attributes: {
+                            alias: "test_attribute_1"
+                            identifier: "test_identifier_1"
+                            index: {
+                              tag_index: {
+                                separator: ","
+                              }
+                            }
+                          }
+                        )",
+                        .expect_return_failure = false,
+                        .expected_output =
+                            "*30\r\n+index_name\r\n+test_name\r\n+index_"
+                            "definition\r\n*8\r\n+key_type\r\n+HASH\r\n+"
+                            "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n"
+                            "1\r\n+score_field\r\n+\r\n+"
+                            "attributes\r\n*1\r\n*18\r\n+"
+                            "identifier\r\n+test_identifier_1\r\n+"
+                            "attribute\r\n+test_attribute_1\r\n+user_indexed_"
+                            "memory\r\n:0\r\n+type\r\n+TAG\r\n+SEPARATOR\r\n+,"
+                            "\r\n+CASESENSITIVE\r\n+0\r\n+size\r\n$1\r\n0\r\n+"
+                            "SORTABLE\r\n+0\r\n+UNF\r\n+0\r\n+"
+                            "num_docs\r\n:0\r\n+num_records\r\n:0\r\n+total_"
+                            "term_occurrences\r\n:0\r\n+num_terms\r\n:0\r\n+"
+                            "hash_indexing_failures\r\n$1\r\n0\r\n+"
+                            "filter_rejected_keys\r\n$1\r\n0\r\n+"
+                            "backfill_in_progress\r\n$1\r\n0\r\n+backfill_"
+                            "complete_percent\r\n$8\r\n1.000000\r\n+mutation_"
+                            "queue_size\r\n$1\r\n0\r\n+recent_mutations_queue_"
+                            "delay\r\n$5\r\n0 "
+                            "sec\r\n+state\r\n+ready\r\n+language\r\n+"
+                            "french\r\n",
+                    },
                 },
         },
         {

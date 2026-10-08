@@ -63,6 +63,27 @@
         "optional": true
       },
       {
+        "name": "INKEYS",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "inkeys_token",
+            "type": "pure-token",
+            "token": "INKEYS"
+          },
+          {
+            "name": "count",
+            "type": "integer"
+          },
+          {
+            "name": "keys",
+            "type": "string",
+            "multiple": true
+          }
+        ]
+      },
+      {
         "name": "INORDER",
         "type": "pure-token",
         "optional": true,
@@ -198,16 +219,48 @@
         "optional": true
       },
       {
+        "name": "SCORER",
+        "token": "SCORER",
+        "type": "string",
+        "optional": true
+      },
+      {
         "name": "VERBATIM",
         "type": "pure-token",
         "optional": true,
         "token": "VERBATIM"
       },
       {
+        "name": "WITHSCORES",
+        "type": "pure-token",
+        "optional": true,
+        "token": "WITHSCORES"
+      },
+      {
         "name": "WITHSORTKEYS",
         "type": "pure-token",
         "optional": true,
         "token": "WITHSORTKEYS"
+      },
+      {
+        "name": "WITHCURSOR",
+        "token": "WITHCURSOR",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "count",
+            "token": "COUNT",
+            "type": "integer",
+            "optional": true
+          },
+          {
+            "name": "maxidle",
+            "token": "MAXIDLE",
+            "type": "integer",
+            "optional": true
+          }
+        ]
       }
     ],
     "arity": -3,

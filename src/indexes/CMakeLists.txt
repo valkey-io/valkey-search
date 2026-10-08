@@ -62,6 +62,7 @@ target_link_libraries(vector_hnsw PUBLIC vector_type)
 target_link_libraries(vector_hnsw PUBLIC attribute_data_type)
 target_link_libraries(vector_hnsw PUBLIC metrics)
 target_link_libraries(vector_hnsw PUBLIC rdb_serialization)
+target_link_libraries(vector_hnsw PUBLIC scoring)
 target_link_libraries(vector_hnsw PUBLIC string_interning)
 target_link_libraries(vector_hnsw PUBLIC hnswlib_vmsdk)
 target_link_libraries(vector_hnsw PUBLIC vmsdklib)
@@ -135,8 +136,12 @@ set(SRCS_TEXT ${CMAKE_CURRENT_LIST_DIR}/text/text_index.h
               ${CMAKE_CURRENT_LIST_DIR}/text/orproximity.cc
               ${CMAKE_CURRENT_LIST_DIR}/text/term.cc
               ${CMAKE_CURRENT_LIST_DIR}/text/term.h
-              ${CMAKE_CURRENT_LIST_DIR}/text/lexer.cc
-              ${CMAKE_CURRENT_LIST_DIR}/text/lexer.h
+              ${CMAKE_CURRENT_LIST_DIR}/text/language_registry.cc
+              ${CMAKE_CURRENT_LIST_DIR}/text/language_registry.h
+              ${CMAKE_CURRENT_LIST_DIR}/text/snowball_language.cc
+              ${CMAKE_CURRENT_LIST_DIR}/text/snowball_language.h
+              ${CMAKE_CURRENT_LIST_DIR}/text/snowball_stem.cc
+              ${CMAKE_CURRENT_LIST_DIR}/text/snowball_stem.h
               ${CMAKE_CURRENT_LIST_DIR}/text/unicode_normalizer.cc
               ${CMAKE_CURRENT_LIST_DIR}/text/unicode_normalizer.h
               ${CMAKE_CURRENT_LIST_DIR}/text/fuzzy.h

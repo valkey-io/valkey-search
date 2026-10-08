@@ -18,6 +18,7 @@ FT.CREATE <index-name>
     [SKIPINITIALSCAN]
     [MINSTEMSIZE <min_stem_size>]
     [WITHOFFSETS | NOOFFSETS]
+    [NOHL]
     [NOSTOPWORDS | STOPWORDS <count> <word> word ...]
     [PUNCTUATION <punctuation>]
     SCHEMA
@@ -27,7 +28,7 @@ FT.CREATE <index-name>
                 | TAG [SEPARATOR <sep>] [CASESENSITIVE]
                 | TEXT [NOSTEM] [WITHSUFFIXTRIE | NOSUFFIXTRIE] [WEIGHT <weight>]
                 | VECTOR [HNSW | FLAT] <attr_count> [<attribute_name> <attribute_value>]+
-            [SORTABLE]
+            [SORTABLE [UNF]]
         )+
 ```
 
@@ -45,15 +46,17 @@ FT.CREATE <index-name>
 
   Field references use the `@<name>` syntax. For a `HASH` index the expression may reference a field that is **not** declared in the `SCHEMA`; its value is read directly off the key at ingestion time (an absent field makes the comparison false). Because an undeclared field name is read verbatim from the key, a **misspelled** field name does not produce an error — watch `filter_rejected_keys` in `FT.INFO` to detect this. For a `JSON` index every field referenced by the expression must be declared in the `SCHEMA`; referencing an undeclared field is rejected when the index is created.
 
-- `LANGUAGE <language>` (optional): For text fields, the language used to control lexical parsing and stemming. Currently only the value `ENGLISH` is supported.
+- `LANGUAGE <language>` (optional): For text fields, the language used to control lexical parsing and stemming. It selects the stemmer and the default punctuation and stop words. Supported values: `ENGLISH` (default), `ARABIC`, `DUTCH`, `FRENCH`, `GERMAN`, `INDONESIAN`, `ITALIAN`, `PORTUGUESE`, `RUSSIAN`, `SPANISH`, `SWEDISH`, `TURKISH`. Languages other than English require 1.3.0 or later.
 
-- `MINSTEMSIZE <min_stem_size>` (optional): For text fields with stemming enabled. This controls the minimum length of a word required for it to be subjected to stemming. The default value is 4.
+- `MINSTEMSIZE <min_stem_size>` (optional): For text fields with stemming enabled. This controls the minimum length of a word, in characters (Unicode code points), required for it to be subjected to stemming. The default value is 4. On English indexes with `search.emulate-release` below 1.3.0, the length is counted in bytes (see COMPATIBILITY.md).
 
 - `WITHOFFSETS | NOOFFSETS` (optional): Enables/Disables the retention of per-word offsets within a text field. Offsets are required to perform exact phrase matching and slop-based proximity matching. Thus if offsets are disabled, those query operations will be rejected with an error. The default is `WITHOFFSETS`.
 
+- `NOHL` (optional): This parameter is accepted for compatibility, but has no effect.
+
 - `NOSTOPWORDS | STOPWORDS <count> <word1> <word2>...` (optional): Stop words are words which are not put into the indexes. The default value of `STOPWORDS`is language dependent. For`LANGUAGE ENGLISH` the default is: [a, an, and, are, as, at, be, but, by, for, if, in, into, is, it, no, not, of, on, or, such, that, their, then, there, these, they, this, to, was, will, with].
 
-- `PUNCTUATION <punctuation>` (optional): A string of characters that define the separation points between words, in addition to whitespace characters (spaces, tabs, newlines, carriage returns, and control characters) which always break words. The default value is `,.<>{}[]"':;!@#$%^&\*()-+=~/\|?`.
+- `PUNCTUATION <punctuation>` (optional): A string of characters that define the separation points between words, in addition to whitespace characters (spaces, tabs, newlines, carriage returns, and control characters) which always break words. Each character, including a multi-byte one such as `—`, is matched as a whole Unicode code point; before 1.3 each byte of a multi-byte character was matched separately, which also split unrelated characters sharing those bytes. The default value depends on `LANGUAGE`; for English it is `,.<>{}[]"':;!@#$%^&\*()-+=~/\|?`.
 
 - `SKIPINITIALSCAN` (optional): If specified, this option skips the normal backfill operation for an index. If this option is specified, pre-existing keys which match the `PREFIX` clause will not be loaded into the index during a backfill operation. This clause has no effect on processing of key mutations _after_ an index is created, i.e., keys which are mutated after an index is created and satisfy the data type and `PREFIX` clause will be inserted into that index.
 
@@ -107,12 +110,14 @@ This table shows the actual computation that Search uses when computing the dist
 | Classical Name | Valkey Search Distance Metric Name |   Classical Distance Formula Definition   | Valkey Search Distance Formula                  |
 | :------------: | :--------------------------------: | :---------------------------------------: | :---------------------------------------------- |
 | Inner Product  |                 IP                 |                 dot(X,Y)                  | 1 - dot(X,Y)                                    |
-|   Euclidean    |                 L2                 |          sqrt(sum(x[i]-y[i])^2)           | sqrt(sum(x[i]-y[i])^2)                          |
+|   Euclidean    |                 L2                 |         sqrt(sum((x[i]-y[i])^2))          | sum((x[i]-y[i])^2)                              |
 |     Cosine     |               COSINE               | dot(x,y) / (magnitude(X) \* magnitude(Y)) | 1 - (dot(X,Y) / (magnitude(X) \* magnitude(Y))) |
 
 ### Field options
 
-`SORTABLE` (optional): This parameter is accepted for compatibility, but has no effect and is not required.
+`SORTABLE` (optional): This parameter is not required. Any field may be used with `SORTBY` whether or not it is declared `SORTABLE`. It is recorded on the attribute and reported by [`FT.INFO`](ft.info.md), but does not otherwise affect indexing or query behavior.
+
+- `UNF` (optional): Only valid immediately after `SORTABLE`. In RediSearch this keeps the sort value of a `SORTABLE` field in its original form instead of converting it to lowercase. `SORTBY` already compares the stored field value directly, so this has no effect beyond being reported by [`FT.INFO`](ft.info.md).
 
 ## Examples
 

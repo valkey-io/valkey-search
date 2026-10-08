@@ -1,11 +1,12 @@
+# Never use time.sleep() to wait for indexing: writes are searchable
+# immediately (see README).
 import pytest
 import random
 import re
 import os
-import traceback
 from . import data_sets
 from .data_sets import load_data
-from .generate import BaseCompatibilityTest
+from .generate import BaseCompatibilityTest, format_stack_cached
 from .text_query_builder import *
 
 # exclude some edge cases with known Redis bugs
@@ -88,7 +89,7 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
         self.key_type = key_type
         self.schema_type = schema_type
         self.client.execute_command("FLUSHALL SYNC")
-        load_data(self.client, data_set_name, key_type, data_source='text', schema_type=schema_type)
+        return load_data(self.client, data_set_name, key_type, data_source='text', schema_type=schema_type)
     
     def execute_command(self, cmd):
         """Override to include schema_type in answer."""
@@ -97,7 +98,7 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
                 "data_set_name": self.data_set_name,
                 "schema_type": self.schema_type,
                 "testname": os.environ.get('PYTEST_CURRENT_TEST').split(':')[-1].split(' ')[0],
-                "traceback": "".join(traceback.format_stack())}
+                "traceback": format_stack_cached()}
         try:
             print("Cmd:", *cmd)
             answer["result"] = self.client.execute_command(*cmd)
@@ -361,13 +362,15 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
                         "testname": os.environ.get('PYTEST_CURRENT_TEST').split(':')[-1].split(' ')[0],
                         "excluded": True,
                     })
+                    query_count += 1
                     continue
 
                 args = self._build_search_args(key_type, current_query, dialect, inorder, slop, rng)
                 self.check(*args)
                 query_count += 1
 
-            except Exception:
+            except Exception as e:
+                print(f"Error generating query: {e}")
                 continue
 
         print(f"Generated {query_count} unique queries from {attempts} attempts")
@@ -438,9 +441,292 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
         exclude_all = True if key_type == "json" else False
         self._run_test(gen_escaped_word, "punctuation", key_type, dialect, schema_type, field='body', exclude_all=exclude_all)
 
+    def test_text_search_unicode_whitespace(self, key_type, dialect, schema_type):
+        """Query one word of a pair joined by non-ASCII whitespace (NBSP etc.).
+
+        Matches only if the engine splits on that character.
+        """
+        self._run_test(gen_whitespace_joined_half, "unicode whitespace", key_type, dialect, schema_type)
+
     # ========================================================================
     # fuzzy search
     # ========================================================================
     def test_text_search_fuzzy(self, key_type, dialect, schema_type):
         """Test fuzzy search with Levenshtein distance 1."""
         self._run_test(gen_fuzzy_1, "pure text", key_type, dialect, schema_type)
+
+
+# ============================================================================
+# Multi-language compatibility tests
+# ============================================================================
+# All supported non-English languages from the Language enum in index_schema.proto
+MULTILANG_LANGUAGES = [
+    "french", "german", "spanish", "italian", "portuguese",
+    "russian", "swedish", "turkish", "dutch", "indonesian", "arabic",
+]
+
+# Map language name to its dataset name in TEXT_DATASETS
+LANG_TO_DATASET = {lang: f"{lang} text" for lang in MULTILANG_LANGUAGES}
+
+
+def _edit_distance(s: str, t: str) -> int:
+    """Compute Levenshtein edit distance between two strings."""
+    m, n = len(s), len(t)
+    if m == 0:
+        return n
+    if n == 0:
+        return m
+    dp = list(range(n + 1))
+    for i in range(1, m + 1):
+        prev = dp[0]
+        dp[0] = i
+        for j in range(1, n + 1):
+            temp = dp[j]
+            if s[i - 1] == t[j - 1]:
+                dp[j] = prev
+            else:
+                dp[j] = 1 + min(prev, dp[j], dp[j - 1])
+            prev = temp
+    return dp[n]
+
+
+def _compute_safe_fuzzy_vocab(vocab_by_field: dict, language: str) -> dict:
+    """Filter vocab to words safe for fuzzy compatibility testing.
+
+    When running fuzzy queries against RediSearch, we observe that fuzzy matches
+    can occur against stemmed forms of indexed terms — i.e. RediSearch appears to
+    match fuzzy queries against stems in addition to original tokens. Valkey Search
+    does not do this; fuzzy matching operates only on the original indexed forms.
+
+    To avoid this known behavioral divergence in the compatibility suite, we
+    exclude any vocab word W where a 1-char mutation of W could land within
+    edit-distance 1 of a stem. Since gen_fuzzy_1 mutates W by exactly 1
+    character, the resulting query is distance 1 from W. For that query to also
+    be within distance 1 of a stem S, W must be within distance 2 of S (by
+    triangle inequality). Therefore we conservatively exclude any word W where
+    edit_distance(W, S) <= 2 for any stem S that differs from its original.
+
+    The Valkey side of this divergence is asserted outside the compatibility
+    suite, in TestDeliberateDivergences (test_multi_language_search.py).
+
+    Returns a new vocab_by_field dict with only safe words per field.
+    If a field has no safe words, it is omitted from the result.
+    """
+    import snowballstemmer  # dev-only dep; used at generation time (regenerate.sh), not CI runtime
+    stemmer = snowballstemmer.stemmer(language)
+
+    # Collect all unique stems across all fields that differ from the original
+    all_words = set()
+    for words in vocab_by_field.values():
+        all_words.update(w.lower() for w in words)
+    divergent_stems = set()
+    for word in all_words:
+        stem = stemmer.stemWord(word)
+        if stem != word:
+            divergent_stems.add(stem)
+
+    if not divergent_stems:
+        return vocab_by_field  # No stems differ from originals — all words are safe
+
+    # Filter each field's vocab to only safe words
+    safe_vocab = {}
+    for field, words in vocab_by_field.items():
+        safe_words = []
+        for word in words:
+            w_lower = word.lower()
+            is_safe = all(
+                _edit_distance(w_lower, stem) > 2 for stem in divergent_stems
+            )
+            if is_safe:
+                safe_words.append(word)
+        if safe_words:
+            safe_vocab[field] = safe_words
+
+    return safe_vocab
+
+
+
+@pytest.mark.parametrize("language", MULTILANG_LANGUAGES)
+@pytest.mark.parametrize("schema_type", ["default", "nostem"])
+@pytest.mark.parametrize("dialect", [2])
+@pytest.mark.parametrize("key_type", ["hash", "json"])
+class TestMultiLangTextSearchCompatibility(BaseCompatibilityTest):
+    """Compatibility tests for non-English language text search.
+
+    Exercises the same query patterns as TestTextSearchCompatibility but
+    against language-specific datasets with LANGUAGE set in FT.CREATE.
+    """
+    TEXT_QUERY_TEST_SEED = 7721
+    MAX_QUERIES = 200  # Fewer per-language to keep total pickle size manageable
+    ANSWER_FILE_NAME = "text-search-multilang-answers.pickle.gz"
+
+    def setup_data(self, data_set_name, key_type, schema_type):
+        """Override to specify text data source with language."""
+        self.data_set_name = data_set_name
+        self.key_type = key_type
+        self.schema_type = schema_type
+        self.client.execute_command("FLUSHALL SYNC")
+        load_data(self.client, data_set_name, key_type, data_source='text', schema_type=schema_type)
+
+    def execute_command(self, cmd):
+        """Override to include schema_type and language in answer."""
+        answer = {"cmd": cmd,
+                "key_type": self.key_type,
+                "data_set_name": self.data_set_name,
+                "schema_type": self.schema_type,
+                "testname": os.environ.get('PYTEST_CURRENT_TEST').split(':')[-1].split(' ')[0],
+                "traceback": "".join(traceback.format_stack())}
+        try:
+            print("Cmd:", *cmd)
+            answer["result"] = self.client.execute_command(*cmd)
+            answer["exception"] = False
+            if answer["result"] != [0]:
+                self.__class__.replied_count += 1
+            print(f"replied: {answer['result']} (count: {self.__class__.replied_count})")
+        except Exception as exc:
+            print(f"Got exception for Error: '{exc}', Cmd:{cmd}")
+            answer["result"] = {}
+            answer["exception"] = True
+        self.answers.append(answer)
+
+    def _run_test(self, builder_fn, data_set_name, key_type, dialect, schema_type,
+                  language, inorder=False, slop=False, field=None, vocab_override=None,
+                  exclude_all=False):
+        """Run a test with given term builder function against a language dataset."""
+        self.setup_data(data_set_name, key_type, schema_type)
+        rng = random.Random(self.TEXT_QUERY_TEST_SEED)
+        renderer = TermRenderer()
+        vocab_by_field = vocab_override if vocab_override is not None else \
+            data_sets.extract_vocab_by_field_from_text_data(data_set_name, key_type)
+
+        seen = set()
+        query_count = 0
+        attempts = 0
+        max_attempts = self.MAX_QUERIES * 20
+
+        while query_count < self.MAX_QUERIES and attempts < max_attempts:
+            attempts += 1
+            selected_field = field if field is not None else rng.choice(list(vocab_by_field.keys()))
+            vocab = vocab_by_field[selected_field]
+
+            try:
+                result = builder_fn(vocab, rng)
+                current_query = result if isinstance(result, str) else renderer.render(result)
+                if current_query in seen:
+                    continue
+                seen.add(current_query)
+
+                if exclude_all:
+                    excluded_args = ["FT.SEARCH", f"{key_type}_idx1", current_query, "DIALECT", str(dialect)]
+                    self.answers.append({
+                        "cmd": excluded_args,
+                        "key_type": self.key_type,
+                        "data_set_name": self.data_set_name,
+                        "schema_type": self.schema_type,
+                        "testname": os.environ.get('PYTEST_CURRENT_TEST').split(':')[-1].split(' ')[0],
+                        "excluded": True,
+                    })
+                    query_count += 1
+                    continue
+
+                args = ["FT.SEARCH", f"{key_type}_idx1", current_query]
+                if inorder:
+                    args.append("INORDER")
+                if slop:
+                    args.extend(["SLOP", str(rng.randint(1, 2))])
+                args.extend(["DIALECT", str(dialect)])
+                self.check(*args)
+                query_count += 1
+
+            except Exception as e:
+                print(f"Error generating query: {e}")
+                continue
+
+        print(f"Generated {query_count} unique queries from {attempts} attempts")
+
+    # ========================================================================
+    # Core query types — exercised per language
+    # ========================================================================
+
+    def test_multilang_exact_match(self, key_type, dialect, schema_type, language):
+        """Test exact word matching in the given language."""
+        self._run_test(gen_word, LANG_TO_DATASET[language], key_type, dialect, schema_type, language)
+
+    def test_multilang_prefix(self, key_type, dialect, schema_type, language):
+        """Test prefix wildcard queries in the given language."""
+        self._run_test(gen_prefix, LANG_TO_DATASET[language], key_type, dialect, schema_type, language)
+
+    def test_multilang_suffix(self, key_type, dialect, schema_type, language):
+        """Test suffix wildcard queries in the given language."""
+        self._run_test(gen_suffix, LANG_TO_DATASET[language], key_type, dialect, schema_type, language)
+
+    def test_multilang_group_depth2(self, key_type, dialect, schema_type, language):
+        """Test grouped queries with depth 2 in the given language."""
+        self._run_test(gen_depth2, LANG_TO_DATASET[language], key_type, dialect, schema_type, language)
+
+    def test_multilang_fuzzy(self, key_type, dialect, schema_type, language):
+        """Test fuzzy search with Levenshtein distance 1 in the given language."""
+        dataset = LANG_TO_DATASET[language]
+        full_vocab = data_sets.extract_vocab_by_field_from_text_data(dataset, key_type)
+        safe_vocab = _compute_safe_fuzzy_vocab(full_vocab, language)
+        if not safe_vocab:
+            pytest.skip(
+                f"{language}: no vocab words safe for fuzzy compat testing "
+                f"(all within edit-distance 2 of a stem)"
+            )
+        self._run_test(
+            gen_fuzzy_1, dataset, key_type, dialect, schema_type,
+            language, vocab_override=safe_vocab
+        )
+
+    # ========================================================================
+    # Case folding — Turkish dotted and dotless I
+    # ========================================================================
+
+    def test_multilang_turkish_uppercase(self, key_type, dialect, schema_type, language):
+        """Query Turkish words in Turkish uppercase (i -> İ, ı -> I).
+
+        Excluded: Redis does not apply Turkish casing, so every such query
+        returns 0 results there (measured against redis:latest). Valkey
+        lowercases with the Turkish locale (I -> ı, İ -> i) and matches. The
+        Valkey side is asserted by Divergence #2 in TestDeliberateDivergences.
+        See known_differences.md §4.4.
+        """
+        if language != "turkish":
+            pytest.skip("Turkish casing only applies to the turkish dataset")
+        self._run_test(gen_turkish_uppercase_word, LANG_TO_DATASET[language],
+                       key_type, dialect, schema_type, language,
+                       exclude_all=True)
+
+    # ========================================================================
+    # Punctuation / escape tests — non-ASCII punct (mirrors English
+    # test_text_search_unescaped / test_text_search_escaped)
+    # ========================================================================
+
+    def test_multilang_unescaped(self, key_type, dialect, schema_type, language):
+        """Test unescaped non-ASCII punctuation in title field (French dataset).
+
+        Excluded: Redis treats non-ASCII punctuation (U+2019, U+2014, U+00AB,
+        etc.) as regular characters, keeping e.g. ``professeur\u2019étudiant``
+        as a single token.  Valkey recognises them as language-specific
+        punctuation and splits on them, producing different search results.
+        See known_differences.md §4.
+        """
+        if language != "french":
+            pytest.skip("punctuation dataset only available for french")
+        self._run_test(gen_unescaped_word, "french punctuation", key_type, dialect,
+                       schema_type, language, field='title', exclude_all=True)
+
+    def test_multilang_escaped(self, key_type, dialect, schema_type, language):
+        """Test escaped non-ASCII punctuation in body field (French dataset).
+
+        Excluded: Redis does not support backslash-escaping of non-ASCII
+        punctuation characters and returns 0 results for every such query.
+        Valkey correctly resolves the escape, keeping the punctuation as part
+        of the token.  See known_differences.md §4.
+        """
+        if language != "french":
+            pytest.skip("punctuation dataset only available for french")
+        self._run_test(gen_escaped_word, "french punctuation", key_type, dialect,
+                       schema_type, language, field='body', exclude_all=True)
+

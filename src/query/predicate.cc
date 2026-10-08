@@ -86,6 +86,37 @@ bool ProbePostings(const indexes::text::TextIndexSchema &schema,
 
 }  // namespace
 
+// ExpansionPredicate: the key's own tree is walked for the matching words it
+// carries, and each is probed for the key.
+EvaluationResult ExpansionPredicate::Evaluate(
+    const valkey_search::indexes::text::TextIndex &text_index,
+    const InternedStringPtr &target_key, bool require_positions,
+    bool lock) const {
+  const uint64_t field_mask = GetFieldMask();
+  PositionMaps maps;
+  bool matched = false;
+  ForEachMatch(
+      text_index,
+      [&](absl::string_view word,
+          const indexes::text::InvasivePtr<indexes::text::Postings> &postings) {
+        matched |=
+            ProbePostings(*GetTextIndexSchema(), *postings, word, target_key,
+                          field_mask, require_positions, lock, maps);
+        // A bare verdict is settled by the first hit; positions need every
+        // word.
+        return !matched || require_positions;
+      });
+  if (!matched) {
+    return EvaluationResult(false);
+  }
+  if (!require_positions) {
+    return EvaluationResult(true);
+  }
+  auto iterator = std::make_unique<indexes::text::SingleKeyTermIterator>(
+      target_key, maps, field_mask);
+  return BuildTextEvaluationResult(std::move(iterator));
+}
+
 // TermPredicate: the leaf already names every word (exact, stem root,
 // inflections) with its shared postings; one probe per word answers the key.
 EvaluationResult TermPredicate::Evaluate(const TermLeaf &leaf,
@@ -128,38 +159,16 @@ EvaluationResult PrefixPredicate::Evaluate(Evaluator &evaluator) const {
   return evaluator.EvaluateText(*this, false);
 }
 
-// PrefixPredicate: Matches all terms that start with the given prefix.
-EvaluationResult PrefixPredicate::Evaluate(
+void PrefixPredicate::ForEachMatch(
     const valkey_search::indexes::text::TextIndex &text_index,
-    const InternedStringPtr &target_key, bool require_positions,
-    bool lock) const {
-  uint64_t field_mask = field_mask_;
-  auto word_iter = text_index.GetPrefix().GetWordIterator(term_);
-  PositionMaps maps;
-  // Limit the number of term word expansions
-  uint32_t max_words = options::GetMaxTermExpansions().GetValue();
-  uint32_t word_count = 0;
-  bool matched = false;
-  while (!word_iter.Done() && word_count < max_words) {
+    MatchSink sink) const {
+  const uint32_t max_words = options::GetMaxTermExpansions().GetValue();
+  auto it = text_index.GetPrefix().GetWordIterator(term_);
+  for (uint32_t n = 0; !it.Done() && n < max_words; ++n, it.Next()) {
     BACKGROUND_PAUSEPOINT("search_prefix_predicate");
-    auto postings = word_iter.GetPostingsTarget();
-    if (postings) {
-      matched |=
-          ProbePostings(*text_index_schema_, *postings, word_iter.GetWord(),
-                        target_key, field_mask, require_positions, lock, maps);
-    }
-    word_iter.Next();
-    ++word_count;
+    auto postings = it.GetPostingsTarget();
+    if (postings && !sink(it.GetWord(), postings)) return;
   }
-  if (!matched) {
-    return EvaluationResult(false);
-  }
-  if (!require_positions) {
-    return EvaluationResult(true);
-  }
-  auto iterator = std::make_unique<indexes::text::SingleKeyTermIterator>(
-      target_key, maps, field_mask);
-  return BuildTextEvaluationResult(std::move(iterator));
 }
 
 SuffixPredicate::SuffixPredicate(
@@ -173,48 +182,25 @@ EvaluationResult SuffixPredicate::Evaluate(Evaluator &evaluator) const {
   return evaluator.EvaluateText(*this, false);
 }
 
-// SuffixPredicate: Matches terms that end with the given suffix
-EvaluationResult SuffixPredicate::Evaluate(
+void SuffixPredicate::ForEachMatch(
     const valkey_search::indexes::text::TextIndex &text_index,
-    const InternedStringPtr &target_key, bool require_positions,
-    bool lock) const {
-  uint64_t field_mask = field_mask_;
-  auto suffix_opt = text_index.GetSuffix();
-  if (!suffix_opt.has_value()) {
-    return EvaluationResult(false);
-  }
-  std::string reversed_term(term_.rbegin(), term_.rend());
-  auto word_iter = suffix_opt.value().get().GetWordIterator(reversed_term);
-  PositionMaps maps;
-  // Limit the number of term word expansions
-  uint32_t max_words = options::GetMaxTermExpansions().GetValue();
-  uint32_t word_count = 0;
-  bool matched = false;
-  while (!word_iter.Done() && word_count < max_words) {
+    MatchSink sink) const {
+  // The suffix tree stores reversed words; without WITHSUFFIXTRIE there are no
+  // matched terms.
+  auto suffix = text_index.GetSuffix();
+  if (!suffix.has_value()) return;
+  const uint32_t max_words = options::GetMaxTermExpansions().GetValue();
+  auto it =
+      suffix->get().GetWordIterator(std::string(term_.rbegin(), term_.rend()));
+  for (uint32_t n = 0; !it.Done() && n < max_words; ++n, it.Next()) {
     BACKGROUND_PAUSEPOINT("search_suffix_expansion");
-    std::string_view reversed = word_iter.GetWord();
-    if (!reversed.starts_with(reversed_term)) {
-      break;
-    }
-    auto postings = word_iter.GetPostingsTarget();
-    if (postings) {
-      // Buckets are keyed on the forward word, as CommitKeyData locks them.
-      const std::string word(reversed.rbegin(), reversed.rend());
-      matched |= ProbePostings(*text_index_schema_, *postings, word, target_key,
-                               field_mask, require_positions, lock, maps);
-    }
-    word_iter.Next();
-    ++word_count;
+    auto postings = it.GetPostingsTarget();
+    if (!postings) continue;
+    // Buckets and callers want the forward word.
+    const absl::string_view reversed = it.GetWord();
+    if (!sink(std::string(reversed.rbegin(), reversed.rend()), postings))
+      return;
   }
-  if (!matched) {
-    return EvaluationResult(false);
-  }
-  if (!require_positions) {
-    return EvaluationResult(true);
-  }
-  auto iterator = std::make_unique<indexes::text::SingleKeyTermIterator>(
-      target_key, maps, field_mask);
-  return BuildTextEvaluationResult(std::move(iterator));
 }
 
 InfixPredicate::InfixPredicate(
@@ -228,13 +214,11 @@ EvaluationResult InfixPredicate::Evaluate(Evaluator &evaluator) const {
   return evaluator.EvaluateText(*this, false);
 }
 
-EvaluationResult InfixPredicate::Evaluate(
+void InfixPredicate::ForEachMatch(
     const valkey_search::indexes::text::TextIndex &text_index,
-    const InternedStringPtr &target_key, bool require_positions,
-    bool lock) const {
+    MatchSink sink) const {
   // TODO: Implement infix evaluation
   CHECK(false) << "Infix Search - Not implemented";
-  return EvaluationResult(false);
 }
 
 FuzzyPredicate::FuzzyPredicate(
@@ -249,34 +233,17 @@ EvaluationResult FuzzyPredicate::Evaluate(Evaluator &evaluator) const {
   return evaluator.EvaluateText(*this, false);
 }
 
-EvaluationResult FuzzyPredicate::Evaluate(
+void FuzzyPredicate::ForEachMatch(
     const valkey_search::indexes::text::TextIndex &text_index,
-    const InternedStringPtr &target_key, bool require_positions,
-    bool lock) const {
-  uint64_t field_mask = field_mask_;
-  // Limit the number of term word expansions
-  uint32_t max_words = options::GetMaxTermExpansions().GetValue();
-  PositionMaps maps;
-  bool matched = false;
+    MatchSink sink) const {
+  const uint32_t max_words = options::GetMaxTermExpansions().GetValue();
   indexes::text::FuzzySearch::Search(
       text_index.GetPrefix(), term_, distance_, max_words,
       [&](absl::string_view word,
           const indexes::text::InvasivePtr<indexes::text::Postings> &postings) {
         BACKGROUND_PAUSEPOINT("search_fuzzy_search");
-        matched |=
-            ProbePostings(*text_index_schema_, *postings, word, target_key,
-                          field_mask, require_positions, lock, maps);
-        return true;
+        return !postings || sink(word, postings);
       });
-  if (!matched) {
-    return EvaluationResult(false);
-  }
-  if (!require_positions) {
-    return EvaluationResult(true);
-  }
-  auto iterator = std::make_unique<indexes::text::SingleKeyTermIterator>(
-      target_key, maps, field_mask);
-  return BuildTextEvaluationResult(std::move(iterator));
 }
 
 NumericPredicate::NumericPredicate(const indexes::Numeric *index,

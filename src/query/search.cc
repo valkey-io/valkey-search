@@ -1096,9 +1096,9 @@ std::optional<float> ScoreNode(const Predicate *predicate,
         // term: find one in the document's own tree rather than scoring 0.
         const auto *per_key_index = score_ctx.PerKeyTextIndex(key);
         if (per_key_index == nullptr) return std::nullopt;
-        const auto &text_pred = *static_cast<const TextPredicate *>(predicate);
         auto match = score_ctx.cache.FindExpansionMatch(
-            text_pred, expansion->kind, *per_key_index, score_ctx.per_key.key);
+            *static_cast<const ExpansionPredicate *>(predicate), *per_key_index,
+            score_ctx.per_key.key);
         if (!match) return std::nullopt;
         const float idf =
             score_ctx.cache.OfferExpansionTerm(*expansion, *match);

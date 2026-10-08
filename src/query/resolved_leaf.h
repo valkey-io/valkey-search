@@ -64,8 +64,6 @@ struct TermLeaf {
 // representative if it is more common; every candidate that carries it is
 // answered by one btree probe.
 struct ExpansionLeaf {
-  enum class Kind { kPrefix, kSuffix, kFuzzy };
-  Kind kind = Kind::kPrefix;
   uint64_t field_mask = ~0ULL;  // Shared by all terms; expansions never stem.
   struct Term {
     WordPostings term;

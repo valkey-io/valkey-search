@@ -12,7 +12,6 @@
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "src/index_schema.pb.h"
-#include "src/indexes/text/fuzzy.h"
 #include "src/indexes/text/term.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/type_conversions.h"
@@ -249,11 +248,11 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
           .scorer = GetScorer()});
 }
 
-std::unique_ptr<indexes::text::TextIterator> PrefixPredicate::BuildTextIterator(
+std::unique_ptr<indexes::text::TextIterator>
+ExpansionPredicate::BuildTextIterator(
     const std::shared_ptr<indexes::text::TextIndex> &text_index,
     FieldMaskPredicate field_mask, bool require_positions,
     float or_weight_multiplier) const {
-  auto word_iter = text_index->GetPrefix().GetWordIterator(GetTextString());
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
                       indexes::text::kWordExpansionInlineCapacity>
       key_iterators;
@@ -261,16 +260,14 @@ std::unique_ptr<indexes::text::TextIterator> PrefixPredicate::BuildTextIterator(
   // so the scored TermIterator contributes ONE term's own BM25 (never the sum).
   absl::InlinedVector<uint32_t, indexes::text::kWordExpansionInlineCapacity>
       per_term_dt;
-  // Limit the number of term word expansions
-  uint32_t max_words = options::GetMaxTermExpansions().GetValue();
-  uint32_t word_count = 0;
-  while (!word_iter.Done() && word_count < max_words) {
-    auto postings = word_iter.GetPostingsTarget();
-    per_term_dt.push_back(postings->GetKeyCount());
-    key_iterators.emplace_back(postings->GetKeyIterator());
-    word_iter.Next();
-    ++word_count;
-  }
+  ForEachMatch(
+      *text_index,
+      [&](absl::string_view,
+          const indexes::text::InvasivePtr<indexes::text::Postings> &postings) {
+        per_term_dt.push_back(postings->GetKeyCount());
+        key_iterators.emplace_back(postings->GetKeyIterator());
+        return true;
+      });
   return std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), field_mask, require_positions,
       /*stem_field_mask=*/0, /*has_original=*/false,
@@ -287,32 +284,8 @@ std::unique_ptr<indexes::text::TextIterator> SuffixPredicate::BuildTextIterator(
     float or_weight_multiplier) const {
   CHECK(text_index->GetSuffix().has_value())
       << "Text index does not have suffix trie enabled.";
-  std::string reversed_word(GetTextString().rbegin(), GetTextString().rend());
-  auto word_iter =
-      text_index->GetSuffix().value().get().GetWordIterator(reversed_word);
-  absl::InlinedVector<indexes::text::Postings::KeyIterator,
-                      indexes::text::kWordExpansionInlineCapacity>
-      key_iterators;
-  absl::InlinedVector<uint32_t, indexes::text::kWordExpansionInlineCapacity>
-      per_term_dt;
-  // Limit the number of term word expansions
-  uint32_t max_words = options::GetMaxTermExpansions().GetValue();
-  uint32_t word_count = 0;
-  while (!word_iter.Done() && word_count < max_words) {
-    auto postings = word_iter.GetPostingsTarget();
-    per_term_dt.push_back(postings->GetKeyCount());
-    key_iterators.emplace_back(postings->GetKeyIterator());
-    word_iter.Next();
-    ++word_count;
-  }
-  return std::make_unique<indexes::text::TermIterator>(
-      std::move(key_iterators), field_mask, require_positions,
-      /*stem_field_mask=*/0, /*has_original=*/false,
-      indexes::text::TermScoringParams{
-          .leaf_weight = GetWeight() * or_weight_multiplier,
-          .text_index_schema = GetTextIndexSchema().get(),
-          .scorer = GetScorer(),
-          .per_term_dt = std::move(per_term_dt)});
+  return ExpansionPredicate::BuildTextIterator(
+      text_index, field_mask, require_positions, or_weight_multiplier);
 }
 
 std::unique_ptr<indexes::text::TextIterator> InfixPredicate::BuildTextIterator(
@@ -320,35 +293,6 @@ std::unique_ptr<indexes::text::TextIterator> InfixPredicate::BuildTextIterator(
     FieldMaskPredicate field_mask, bool require_positions,
     float or_weight_multiplier) const {
   CHECK(false) << "Unsupported TextPredicate type";
-}
-
-std::unique_ptr<indexes::text::TextIterator> FuzzyPredicate::BuildTextIterator(
-    const std::shared_ptr<indexes::text::TextIndex> &text_index,
-    FieldMaskPredicate field_mask, bool require_positions,
-    float or_weight_multiplier) const {
-  absl::InlinedVector<indexes::text::Postings::KeyIterator,
-                      indexes::text::kWordExpansionInlineCapacity>
-      key_iterators;
-  absl::InlinedVector<uint32_t, indexes::text::kWordExpansionInlineCapacity>
-      per_term_dt;
-  // Limit the number of term word expansions
-  uint32_t max_words = options::GetMaxTermExpansions().GetValue();
-  indexes::text::FuzzySearch::Search(
-      text_index->GetPrefix(), GetTextString(), GetDistance(), max_words,
-      [&](absl::string_view,
-          const indexes::text::InvasivePtr<indexes::text::Postings> &postings) {
-        per_term_dt.push_back(postings->GetKeyCount());
-        key_iterators.emplace_back(postings->GetKeyIterator());
-        return true;
-      });
-  return std::make_unique<indexes::text::TermIterator>(
-      std::move(key_iterators), field_mask, require_positions,
-      /*stem_field_mask=*/0, /*has_original=*/false,
-      indexes::text::TermScoringParams{
-          .leaf_weight = GetWeight() * or_weight_multiplier,
-          .text_index_schema = GetTextIndexSchema().get(),
-          .scorer = GetScorer(),
-          .per_term_dt = std::move(per_term_dt)});
 }
 
 /*

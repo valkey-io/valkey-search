@@ -92,7 +92,7 @@ class ResolvedLeafCache {
   // order). `per_key_index` must be the document's own tree, where the walk is
   // bounded.
   std::optional<ExpansionMatch> FindExpansionMatch(
-      const TextPredicate &predicate, ExpansionLeaf::Kind kind,
+      const ExpansionPredicate &predicate,
       const indexes::text::TextIndex &per_key_index,
       const InternedStringPtr &key) const;
 

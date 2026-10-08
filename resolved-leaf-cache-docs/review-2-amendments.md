@@ -60,12 +60,14 @@ PR today   evaluator fetches leaf        →  EvaluateTermLeaf(leaf, key)      (
 
 32. **One traversal per expansion kind** (second commit, after 30/31).
     `ExpansionPredicate::ForEachMatch(tree, FunctionRef<bool(word, postings)>)` is implemented
-    once each by Prefix (`WordIterator`), Suffix (suffix tree + `starts_with` guard) and Fuzzy
-    (`FuzzySearch::Search`). `Evaluate`, `ResolvedLeafCache::FindExpansionMatch` and
+    once each by Prefix (`WordIterator`), Suffix (suffix tree, forward word handed to the sink)
+    and Fuzzy (`FuzzySearch::Search`). `Evaluate`, `ResolvedLeafCache::FindExpansionMatch` and
     `BuildTextIterator` become sinks over it, so each walk exists once instead of three times and
     the cache no longer knows how to walk a tree. `BACKGROUND_PAUSEPOINT` names move inside
-    `ForEachMatch` unchanged (`integration/test_cancel.py` keys on them). `ResolveText`'s
-    `dynamic_cast` chain is replaced by the predicate's kind.
+    `ForEachMatch` unchanged (`integration/test_cancel.py` keys on them). `ExpansionLeaf::Kind`
+    is deleted with the switch that read it; `ResolveText` casts once to `ExpansionPredicate`.
+    The suffix `starts_with(reversed_term)` guard is dropped: `WordIterator` is bounded to its
+    prefix's subtree, so it could never fire, and the other two suffix walks never had it.
 
 33. **Seeding the representative during filtering is optional, last, and benchmark-gated.**
     The filter walk sees every matching word a key carries, so it is the only place the
@@ -79,10 +81,10 @@ PR today   evaluator fetches leaf        →  EvaluateTermLeaf(leaf, key)      (
 
 ## Order
 
-1. Decisions 30 and 31, one commit. The three uncommitted cleanups in the tree (ResolveTag
-   `MainThread()`, posting.h NOTE dedupe; the `ProbeWord` edit is subsumed) ride along.
+1. Decisions 30 and 31, one commit. The three small cleanups (ResolveTag `MainThread()`,
+   posting.h NOTE dedupe, `ProbeWord`) went in their own commit first. *Done.*
 2. Decision 32, second commit, with query/text_index unit tests and `test_cancel` /
-   `test_scoring` / `test_fulltext_inflight_blocking` integration runs.
+   `test_scoring` / `test_fulltext*` integration runs. *Done.*
 3. Decision 33 only after measurement, as its own commit if at all.
 
 Fine-grained choices made while applying these go in

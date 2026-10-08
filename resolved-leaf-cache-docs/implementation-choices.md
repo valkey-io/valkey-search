@@ -386,6 +386,26 @@ section.
 - **The `filter_test` cross-check against the tree walk is gone** with the tree walk. Main vs
   background equivalence is `MainThreadLockModesMatchBackground` in `search_test.cc`.
 
+Decision 32:
+
+- **`ExpansionPredicate::ForEachMatch(tree, sink)` is the walk; `Evaluate`, `FindExpansionMatch`
+  and `BuildTextIterator` are sinks over it**, all three on `ExpansionPredicate` or taking one.
+  Prefix and Fuzzy inherit `BuildTextIterator`; Suffix keeps a one-line override for its
+  pre-existing `CHECK` on the suffix tree, Infix for its `CHECK(false)`.
+- **`ExpansionLeaf::Kind` is deleted.** Its only reader was the switch in `FindExpansionMatch`,
+  which the walk replaces. `ResolveText` casts once to `ExpansionPredicate` instead of once per
+  concrete kind. Infix now resolves to an `ExpansionLeaf` rather than monostate; nothing can
+  reach it, since `BuildTextIterator` CHECKs before any evaluation.
+- **The suffix `starts_with(reversed_term)` guard is gone.** `WordIterator` is bounded to the
+  subtree under its prefix (`RadixTreeTest.WordIterator*`), so the guard could never fire; the
+  other two suffix walks never had it. No behavior change.
+- **A bare-verdict expansion `Evaluate` stops at the first hit.** The old prefix/suffix/fuzzy
+  bodies probed every matched word even without `require_positions`. Same verdict; fewer probes.
+- **Pausepoints live in `ForEachMatch`** under their old names, so `test_cancel.py` is unchanged.
+  They now also fire from `BuildTextIterator` on the background path, an extra pause site for
+  the same name, which the tests tolerate (they wait for any pause, then cancel).
+- **Null postings are skipped once in the walk**, so no sink repeats the check.
+
 ### Merge with main (#985 Vector Range)
 
 - **`SearchVectorRangeQuery` gets its own `ResolvedLeafCache`**, built in `Search()` and shared

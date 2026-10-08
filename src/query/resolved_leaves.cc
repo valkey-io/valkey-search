@@ -17,10 +17,8 @@
 #include "absl/strings/ascii.h"
 #include "src/indexes/scoring/scorer.h"
 #include "src/indexes/tag.h"
-#include "src/indexes/text/fuzzy.h"
 #include "src/indexes/text/rax_wrapper.h"
 #include "src/indexes/text/term.h"
-#include "src/valkey_search_options.h"
 #include "vmsdk/src/debug.h"
 
 namespace valkey_search::query {
@@ -105,17 +103,15 @@ float ResolvedLeafCache::OfferExpansionTerm(ExpansionLeaf &leaf,
 }
 
 std::optional<ExpansionMatch> ResolvedLeafCache::FindExpansionMatch(
-    const TextPredicate &predicate, ExpansionLeaf::Kind kind,
+    const ExpansionPredicate &predicate,
     const indexes::text::TextIndex &per_key_index,
     const InternedStringPtr &key) const {
   const uint64_t field_mask = predicate.GetFieldMask();
-  const uint32_t max_words = options::GetMaxTermExpansions().GetValue();
   std::optional<ExpansionMatch> found;
-  // True once `found` is set, so the walks stop at the first match.
-  auto probe =
+  predicate.ForEachMatch(
+      per_key_index,
       [&](absl::string_view word,
-          indexes::text::InvasivePtr<indexes::text::Postings> postings) {
-        if (!postings) return false;
+          const indexes::text::InvasivePtr<indexes::text::Postings> &postings) {
         auto get = [&] {
           return std::pair{postings->GetPostingValue(
                                BorrowedInternedStringPtr(key), field_mask),
@@ -123,75 +119,27 @@ std::optional<ExpansionMatch> ResolvedLeafCache::FindExpansionMatch(
         };
         auto [entry, key_count] =
             MainThread() ? text_index_schema_->WithWordLock(word, get) : get();
-        if (!entry) return false;
-        found.emplace(ExpansionMatch{
-            {std::string(word), std::move(postings)}, *entry, key_count});
-        return true;
-      };
-  const absl::string_view term = predicate.GetTextString();
-  switch (kind) {
-    case ExpansionLeaf::Kind::kPrefix: {
-      auto it = per_key_index.GetPrefix().GetWordIterator(term);
-      for (uint32_t n = 0; !it.Done() && n < max_words; ++n, it.Next()) {
-        if (probe(it.GetWord(), it.GetPostingsTarget())) break;
-      }
-      break;
-    }
-    case ExpansionLeaf::Kind::kSuffix: {
-      // The suffix trie stores reversed words; without WITHSUFFIXTRIE there
-      // are no matched terms.
-      auto suffix = per_key_index.GetSuffix();
-      if (!suffix.has_value()) break;
-      auto it = suffix->get().GetWordIterator(
-          std::string(term.rbegin(), term.rend()));
-      for (uint32_t n = 0; !it.Done() && n < max_words; ++n, it.Next()) {
-        const absl::string_view reversed = it.GetWord();
-        if (probe(std::string(reversed.rbegin(), reversed.rend()),
-                  it.GetPostingsTarget())) {
-          break;
-        }
-      }
-      break;
-    }
-    case ExpansionLeaf::Kind::kFuzzy: {
-      indexes::text::FuzzySearch::Search(
-          per_key_index.GetPrefix(), term,
-          static_cast<const FuzzyPredicate &>(predicate).GetDistance(),
-          max_words,
-          [&](absl::string_view word,
-              indexes::text::InvasivePtr<indexes::text::Postings> postings) {
-            return !probe(word, std::move(postings));
-          });
-      break;
-    }
-  }
+        if (!entry) return true;
+        found.emplace(
+            ExpansionMatch{{std::string(word), postings}, *entry, key_count});
+        return false;
+      });
   return found;
 }
 
 ResolvedLeaf ResolvedLeafCache::ResolveText(
     const TextPredicate *predicate) const {
-  // The concrete kind is established once here so the per-document walk never
-  // pays a dynamic_cast. Infix is unimplemented (its Evaluate CHECKs), so it
-  // never reaches this point; a stray one resolves to monostate.
+  // Resolved once per query, so the per-document walk never pays a
+  // dynamic_cast.
   auto text_index_schema = predicate->GetTextIndexSchema();
   CHECK(text_index_schema.get() == text_index_schema_);
   const uint8_t num_text_fields = text_index_schema->GetNumTextFields();
 
-  auto expansion = [&](ExpansionLeaf::Kind kind) {
+  if (dynamic_cast<const ExpansionPredicate *>(predicate)) {
     ExpansionLeaf leaf;
-    leaf.kind = kind;
     leaf.field_mask =
         ScoringFieldMask(predicate->GetFieldMask(), num_text_fields);
     return leaf;
-  };
-  if (dynamic_cast<const PrefixPredicate *>(predicate)) {
-    return expansion(ExpansionLeaf::Kind::kPrefix);
-  }
-  if (dynamic_cast<const SuffixPredicate *>(predicate)) {
-    return expansion(ExpansionLeaf::Kind::kSuffix);
-  }
-  if (dynamic_cast<const FuzzyPredicate *>(predicate)) {
-    return expansion(ExpansionLeaf::Kind::kFuzzy);
   }
   auto term_pred = dynamic_cast<const TermPredicate *>(predicate);
   if (term_pred == nullptr) return std::monostate{};

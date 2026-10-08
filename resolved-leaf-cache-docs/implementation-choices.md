@@ -208,15 +208,18 @@ Cleanups from the PR #1472 review that are not design decisions. The design deci
   so there is one per-key probe path instead of a `KeyIterator` variant beside it. The
   entries-fetcher path (`BuildTextIterator`) keeps its multi-key `TermIterator`, which embeds a
   `SingleKeyTermIterator` for the positions of the current key (decision 29).
-- **`lock` is a plain `bool`** on `WithWordLock`, `WithStemParents` and `TextPredicate::Evaluate`,
-  following `GetKeyDocLen(key, lock)` / `GetPerKeyTextIndex(key, lock)` /
-  `GetTagValueDocCount(value, lock)`. No default, so every caller states its mode.
+- **`lock` is a plain `bool`** on `WithStemParents` and `TextPredicate::Evaluate`, following
+  `GetKeyDocLen(key, lock)` / `GetPerKeyTextIndex(key, lock)` / `GetTagValueDocCount(value, lock)`.
+  No default, so every caller states its mode. `WithWordLock(word, fn)` takes no flag and always
+  locks; its three callers (`ResolvedLeafCache::Probe`, `::KeyCount`, `ProbePostings`) already
+  hold the decision and branch themselves. Round 2 review: the earlier
+  `WithWordLock(word, lock, fn)` read as a contradiction when `lock` was false.
 - **`WithStemParents` is a non-template taking `absl::FunctionRef`** (one call per leaf resolve);
   `WithWordLock` is a template (per-probe path). The unused `stem_enabled_mask` parameter of
   `GetAllStemVariants` has no counterpart.
 - **`ResolveText` `CHECK`s the predicate's schema is the cache's.** The cache now owns the schema
-  pointer for `WithWordLock`; a predicate from another schema would silently probe the wrong
-  trees.
+  pointer for `WithWordLock`; a predicate from another schema would silently probe
+  the wrong trees.
 - **Decision 23 is a comment, not a `DCHECK`.** FT.HYBRID arm `SearchParameters` report
   `kNoContent` because the contention check ran on the enclosing `ArmGate`, so the parameters
   passed to `VerifyFilter` cannot assert it.

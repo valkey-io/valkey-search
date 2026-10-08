@@ -45,16 +45,17 @@ ResolvedLeafCache::ResolvedLeafCache(
                        : 0.0f) {}
 
 size_t ResolvedLeafCache::KeyCount(const WordPostings &word) const {
-  return text_index_schema_->WithWordLock(
-      word.word, MainThread(), [&] { return word.postings->GetKeyCount(); });
+  auto get = [&] { return word.postings->GetKeyCount(); };
+  return MainThread() ? text_index_schema_->WithWordLock(word.word, get)
+                      : get();
 }
 
 std::optional<indexes::text::PostingValue> ResolvedLeafCache::Probe(
     const WordPostings &word, BorrowedInternedStringPtr key,
     uint64_t field_mask) const {
-  return text_index_schema_->WithWordLock(word.word, MainThread(), [&] {
-    return word.postings->GetPostingValue(key, field_mask);
-  });
+  auto get = [&] { return word.postings->GetPostingValue(key, field_mask); };
+  return MainThread() ? text_index_schema_->WithWordLock(word.word, get)
+                      : get();
 }
 
 float ResolvedLeafCache::Idf(size_t dt) const {

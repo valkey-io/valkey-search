@@ -37,7 +37,7 @@ uint64_t ScoringFieldMask(uint64_t field_mask, uint8_t num_fields);
 
 // A word's shared posting list. Every tree (global and per-key) hands back the
 // same Postings object for a word, so one lookup answers for every candidate.
-// The word names the bucket a main-thread probe takes (WithWordLock).
+// The word names the bucket a main-thread probe takes.
 struct WordPostings {
   std::string word;
   indexes::text::InvasivePtr<indexes::text::Postings> postings;

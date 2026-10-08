@@ -74,10 +74,11 @@ bool ProbePostings(const indexes::text::TextIndexSchema &schema,
                    absl::string_view word, const InternedStringPtr &target_key,
                    uint64_t field_mask, bool require_positions, bool lock,
                    PositionMaps &maps) {
-  auto value = schema.WithWordLock(word, lock, [&] {
+  auto get = [&] {
     return postings.GetPostingValue(BorrowedInternedStringPtr(target_key),
                                     field_mask);
-  });
+  };
+  auto value = lock ? schema.WithWordLock(word, get) : get();
   if (!value) return false;
   if (require_positions) maps.push_back(value->map);
   return true;

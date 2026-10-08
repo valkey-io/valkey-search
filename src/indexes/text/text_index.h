@@ -183,13 +183,13 @@ class TextIndexSchema {
   }
 
   // Runs `fn` under `word`'s bucket, the lock every writer of its Postings
-  // holds, when `lock` is set (main thread); directly otherwise (the
-  // time-sliced read phase already excludes writers). The bucket covers only
-  // the btree access: nothing that reads the btree may outlive `fn`.
+  // holds. Needed on the main thread; the time-sliced read phase already
+  // excludes writers, so background callers run `fn` directly. The bucket
+  // covers only the btree access: a PostingValue is a copy, and the map it
+  // points at is freed only when the key is removed.
   template <class Fn>
-  auto WithWordLock(absl::string_view word, bool lock, Fn &&fn) const {
-    std::optional<absl::MutexLock> guard;
-    if (lock) guard.emplace(&rax_target_mutex_pool_.Get(word));
+  auto WithWordLock(absl::string_view word, Fn &&fn) const -> decltype(fn()) {
+    absl::MutexLock guard(&rax_target_mutex_pool_.Get(word));
     return fn();
   }
 

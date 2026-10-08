@@ -171,40 +171,6 @@ class TextIndexSchema {
   // Access stem tree for word expansion during search
   const Rax &GetStemTree() const { return stem_tree_; }
 
-  // We avoid stalling the main thread waiting on the time-slice mutex and
-  // instead take the same short locks the writers take. The lookup holds the
-  // tree lock only for the find; the returned Postings is then probed under its
-  // word's bucket via WithWordLock, never with the tree lock still held
-  // (writers take bucket first, tree second).
-  InvasivePtr<Postings> LookupGlobalPostings(absl::string_view word) const
-      ABSL_LOCKS_EXCLUDED(text_index_mutex_) {
-    absl::ReaderMutexLock lock(&text_index_mutex_);
-    return text_index_->GetPrefix().FindPostingsTarget(word);
-  }
-
-  // Runs `fn` under `word`'s bucket, the lock every writer of its Postings
-  // holds. Needed on the main thread; the time-sliced read phase already
-  // excludes writers, so background callers run `fn` directly. The bucket
-  // covers only the btree access: a PostingValue is a copy, and the map it
-  // points at is freed only when the key is removed.
-  template <class Fn>
-  auto WithWordLock(absl::string_view word, Fn &&fn) const -> decltype(fn()) {
-    absl::MutexLock guard(&rax_target_mutex_pool_.Get(word));
-    return fn();
-  }
-
-  // Runs `fn(stemmed, parents, distinct_docs)` for `word`'s stem root: the
-  // parents are the indexed words stemming to it (capped at max expansions,
-  // empty if the root is absent) and distinct_docs is their document count.
-  // The parents are tree-owned, so `fn` runs under the stem tree lock when
-  // `lock` is set (main thread); the time-sliced read phase covers the rest.
-  void WithStemParents(
-      absl::string_view word, bool lock,
-      absl::FunctionRef<void(const std::string &stemmed,
-                             absl::Span<const std::string> parents,
-                             uint32_t distinct_docs)>
-          fn) const ABSL_LOCKS_EXCLUDED(stem_tree_mutex_);
-
   // Get the minimum stem size across all fields
   uint32_t GetMinStemSize() const { return min_stem_size_; }
 
@@ -217,6 +183,40 @@ class TextIndexSchema {
   void EnableSuffix() {
     with_suffix_trie_ = true;
     text_index_ = std::make_shared<TextIndex>(true);
+  }
+
+  // Looks up `word`'s stem root and calls `fn(stemmed, parents,
+  // distinct_docs)`. The parents are the indexed words that stem to this
+  // root, capped at max expansions and empty if the root is not there.
+  // distinct_docs is how many documents they cover between them. The parent
+  // list belongs to the stem tree and we want it stable while `fn` reads it,
+  // so on the main thread (`lock` set) we hold the stem tree lock while `fn`
+  // runs. In the background the time-sliced read phase already keeps the
+  // tree stable.
+  void WithStemParents(
+      absl::string_view word, bool lock,
+      absl::FunctionRef<void(const std::string &stemmed,
+                             absl::Span<const std::string> parents,
+                             uint32_t distinct_docs)>
+          fn) const ABSL_LOCKS_EXCLUDED(stem_tree_mutex_);
+
+  // We avoid stalling the main thread waiting on the time-slice mutex and
+  // instead take the same short locks the writers take. LookupGlobalPostings
+  // holds the tree lock for the traversal and target retrieval. The returned
+  // Postings is then probed under its word's bucket via WithWordLock, never
+  // with the tree lock still held (writers take bucket first, tree second).
+  InvasivePtr<Postings> LookupGlobalPostings(absl::string_view word) const
+      ABSL_LOCKS_EXCLUDED(text_index_mutex_) {
+    absl::ReaderMutexLock lock(&text_index_mutex_);
+    return text_index_->GetPrefix().FindPostingsTarget(word);
+  }
+
+  // Runs `fn` under `word`'s bucket so the main thread can safely access a
+  // posting's underlying Key map without contending writes.
+  template <class Fn>
+  auto WithWordLock(absl::string_view word, Fn &&fn) const -> decltype(fn()) {
+    absl::MutexLock guard(&rax_target_mutex_pool_.Get(word));
+    return fn();
   }
 
  private:

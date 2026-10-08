@@ -14,8 +14,8 @@ Two markers are used, and they mean different things:
   If one starts matching, the run prints a loud `XPASS` banner: the gap has
   been closed, and both the marker and the entry here should be removed.
 
-Sections 1-4 cover the text-search suite (`generate_text.py`); section 5 covers
-the FT.HYBRID suite (`generate_hybrid.py`).
+Sections 1-4 and 6 cover the text-search suite (`generate_text.py`); section 5
+covers the FT.HYBRID suite (`generate_hybrid.py`).
 
 ## 1. Exact Phrase Query
 
@@ -678,3 +678,16 @@ computation, or to capture a second set of reference answers from a Redis
 cluster. Until one of those happens, flipping the flag would record the
 divergence 169 times rather than test anything. Note the reference engine's own
 cluster behaviour is unmeasured here: this generator runs one container.
+
+## 6. Multi-language text search
+
+Excluded wholesale (`exclude_all=True`) because the engines differ by design;
+each is described, with the measured Redis behavior, in `known_differences.md`
+§4.
+
+- `test_multilang_unescaped` — Valkey splits on language-specific non-ASCII
+  punctuation; Redis treats it as word characters (§4.1).
+- `test_multilang_escaped` — Redis does not resolve backslash-escaped non-ASCII
+  punctuation (§4.2).
+- `test_multilang_turkish_uppercase` — Redis applies no Turkish casing, so
+  `IŞIK` does not match `ışık` (§4.4).

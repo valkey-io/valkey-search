@@ -33,7 +33,6 @@ namespace valkey_search::indexes::text {
 class TextIterator;
 class TextIndexSchema;
 class TextIndex;
-class RaxTargetMutexPool;
 }  // namespace valkey_search::indexes::text
 
 namespace valkey_search::indexes::scoring {

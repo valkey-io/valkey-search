@@ -124,15 +124,13 @@ class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
  public:
   InlineVectorFilter(
       query::Predicate *filter_predicate, indexes::VectorBase *vector_index,
-      const std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
+      const indexes::text::TextIndexSchema *text_index_schema,
       query::ResolvedLeafCache &cache, QueryOperations query_operations,
       const IndexSchema *index_schema,
       const std::optional<absl::flat_hash_set<std::string>> &inkeys)
       : filter_predicate_(filter_predicate),
         vector_index_(vector_index),
-        text_index_schema_(text_index_schema),
-        evaluator_(text_index_schema.get(), cache, query_operations,
-                   index_schema),
+        evaluator_(text_index_schema, cache, query_operations, index_schema),
         inkeys_(inkeys) {}
   ~InlineVectorFilter() override = default;
 
@@ -156,7 +154,6 @@ class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
  private:
   query::Predicate *filter_predicate_;
   indexes::VectorBase *vector_index_;
-  const std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
   indexes::PrefilterEvaluator evaluator_;
   const std::optional<absl::flat_hash_set<std::string>> &inkeys_;
 };
@@ -202,11 +199,9 @@ absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
   // aren't silently dropped by post-filtering.
   if (parameters.filter_parse_results.root_predicate != nullptr ||
       parameters.inkeys.has_value()) {
-    const std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema =
-        parameters.index_schema->GetTextIndexSchema();
     inline_filter = std::make_unique<InlineVectorFilter>(
         parameters.filter_parse_results.root_predicate.get(), vector_index,
-        text_index_schema, cache,
+        parameters.index_schema->GetTextIndexSchema().get(), cache,
         parameters.filter_parse_results.query_operations,
         parameters.index_schema.get(), parameters.inkeys);
     VMSDK_LOG(DEBUG, nullptr) << "Performing vector search with inline filter";
@@ -1008,11 +1003,11 @@ struct ScoreContext {
     if (!per_key.fetched) {
       per_key.fetched = true;
       per_key.key = key.Materialize();
-      if (auto schema = index_schema.GetTextIndexSchema()) {
+      if (text_index_schema != nullptr) {
         // On the main thread the map lock guards the find; the tree itself is
         // stable because the revalidated key has no in-flight mutation.
-        per_key.index =
-            schema->GetPerKeyTextIndex(per_key.key, cache.MainThread());
+        per_key.index = text_index_schema->GetPerKeyTextIndex(
+            per_key.key, cache.MainThread());
       }
     }
     return per_key.index;

@@ -207,6 +207,15 @@ class IndexSchema : public KeyspaceEventSubscription,
     }
     return itr->second.document_score;
   }
+  // Main-thread read, which must not wait on the time-sliced mutex: every
+  // writer of index_key_info_ takes mutated_records_mutex_, so a short hold of
+  // it suffices.
+  float GetDocumentScoreLocked(BorrowedInternedStringPtr key) const
+      ABSL_LOCKS_EXCLUDED(mutated_records_mutex_) {
+    absl::MutexLock lock(&mutated_records_mutex_);
+    auto itr = index_key_info_.find(key);
+    return itr == index_key_info_.end() ? score_ : itr->second.document_score;
+  }
 
   void CreateTextIndexSchema() {
     text_index_schema_ = std::make_shared<indexes::text::TextIndexSchema>(
@@ -368,19 +377,13 @@ class IndexSchema : public KeyspaceEventSubscription,
     return index_key_info_.size();
   }
 
-  // Main-thread reads, which must not wait on the time-sliced mutex: every
+  // Main-thread read, which must not wait on the time-sliced mutex: every
   // writer of index_key_info_ takes mutated_records_mutex_, so a short hold of
   // it suffices.
   size_t GetIndexKeyInfoSizeLocked() const
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_) {
     absl::MutexLock lock(&mutated_records_mutex_);
     return index_key_info_.size();
-  }
-  float GetDocumentScoreLocked(BorrowedInternedStringPtr key) const
-      ABSL_LOCKS_EXCLUDED(mutated_records_mutex_) {
-    absl::MutexLock lock(&mutated_records_mutex_);
-    auto itr = index_key_info_.find(key);
-    return itr == index_key_info_.end() ? score_ : itr->second.document_score;
   }
 
   // Unit test only

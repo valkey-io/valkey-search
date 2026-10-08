@@ -62,7 +62,48 @@ Thus on reload a backfilling index must restart the backfill at the beginning. H
 
 ## Query Operations
 
-Query commands operate by blocking the client and sending the query to the background threads to locate a set of keys. Then the client is unblocked and control resumes on the main thread which can access the database to generate the final result. If a key is modified by another client while a query is in progress then that key may or may not be included in the query result. In no case will a key be returned which does not satisfy the query expression.
+Query commands operate by blocking the client and sending the query to the background threads. The background threads search the indexes to generate a preliminary result set. During this search operation, index mutations are queued, meaning that the preliminary result set is generated from a single point-in-time snapshot of the indexes. If `NOCONTENT` is specified without `SORTBY`, then the preliminary result set is the final result set.
+
+However, if the query requires content processing, then it is returned to the main thread in order to access the database. If keys within the preliminary result set have been mutated, those keys are revalidated and rescored against the filter, which might remove the key from the result set. For [`FT.SEARCH`](../commands/ft.search.md), the result set is then returned as the command result. For [`FT.HYBRID`](../commands/ft.hybrid.md) and [`FT.AGGREGATE`](../commands/ft.aggregate.md), the result set is input to the aggregation stages specified on the command.
+
+In practice, this means that keys which are mutated during the pendency of a search operation (i.e., mutations that have not completed before the start of the search or are submitted before the results of the search are returned) may or may not be present in the result set. However, if they are present, they will have their most recent values. When content processing runs, in no case will a key be in a result set whose current value doesn't match the filter. Because the revalidation and rescoring process doesn't respect the order of mutation of the keys, the results are not guaranteed to be consistent with the database at any specific point in time.
+
+### Post-search re-filtering and re-scoring
+
+For a key in the preliminary result set that has been mutated, the following processing applies:
+
+- **Re-filtering:** The query conditions are evaluated again. Tag and numeric conditions use the fetched field values, vector range conditions use the fetched vector, and text conditions use the document's current text index. A key that fails the conditions, or that is no longer in the index, is removed.
+- **Re-scoring:** For a non-KNN query with query conditions, a surviving mutated key's relevance score is recomputed using the selected scorer. Only mutated keys are re-scored; unchanged keys keep the scores computed during the index search. The recomputed score uses the index's current corpus-level statistics, such as the document count, average document length, and term document frequencies used by `BM25STD`. Because a mutation can change these statistics, which also affect the scores of other keys, a single reply can contain scores computed from different index states. If scores change, the surviving keys are reordered by descending relevance score.
+- **KNN distance refresh:** For a KNN query, the distance is recomputed from the key's current vector when that vector is available and valid; otherwise, the distance from the index search is kept. When the query ranks by distance, surviving keys are reordered by ascending distance. For a text query combined with KNN, the distance is refreshed separately from the text relevance score; this `FT.SEARCH` path does not recompute the text relevance score of a KNN query.
+
+Limiting the returned fields with `RETURN` does not disable re-filtering: fields needed to check the query are fetched even if they are not returned.
+
+For example, consider `FT.SEARCH products '@status:{active}'` while another client updates the matching keys:
+
+```
+ time   query client                         other client
+ ----   ------------------------------       ------------------------------------
+  t0                                         HSET product:1 status active
+                                             HSET product:2 status active
+  t1    FT.SEARCH products '@status:{active}'
+  t2    index search (background threads)
+          preliminary result set:
+          product:1, product:2
+  t3                                         HSET product:1 status inactive
+  t4    content processing (main thread)
+          product:1 mutated -> re-filtered
+            status is inactive -> removed
+          product:2 not mutated -> kept
+  t5    reply: product:2
+```
+
+`product:1` matched when the indexes were searched, but its current value no longer matches the filter, so it is removed from the reply. If instead `product:1` had been modified in a way that still matched (for example, a text field change under a text query), it would be kept with its most recent values and a recomputed relevance score, and its position among the surviving keys could change.
+
+### Scope and limitations
+
+Post-search processing operates on the keys already in the preliminary result set. It does not run the search again or discover keys that became matches after the index search. Removing keys can leave fewer results than requested by `LIMIT` or KNN, even if other matching keys exist. `FT.SEARCH` reduces the reported match count by the number of keys removed during content processing; this is not a fresh count of all matches in the database. Reordering the surviving keys also does not guarantee the same top results or page boundaries as a new search against the updated data. Likewise, re-scoring does not guarantee a ranking consistent with the updated index state: unchanged keys are not re-scored, even when an in-flight mutation changes corpus-level statistics in ways that would affect their scores.
+
+[`FT.HYBRID`](../commands/ft.hybrid.md) revalidates each search arm before combining its results. Mutated keys can be removed from an arm, relevance scores or vector distances can be recomputed, and the arm can be reordered before fusion. A key can remain in one arm while being removed from another. As with `FT.SEARCH`, relevance scores are recomputed only for mutated keys in a `SEARCH` arm with query conditions, so such an arm can mix scores computed from different index states. A match-all `SEARCH *` arm keeps the scores from the search.
 
 ## Save/Restore
 

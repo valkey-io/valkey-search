@@ -83,20 +83,23 @@ struct ExpansionMatch {
 
 // Tag leaf: each matched tag value is a BM25 term with tf = 1.
 struct TagLeaf {
-  const indexes::Tag *tag_index = nullptr;
-  // Query values present in the index. The bag answers membership and dt with
-  // one probe per candidate, replacing a per-candidate parse of the document's
-  // tag string.
+  // The values the query names (e.g. `{red|blue}`), minus any absent from the
+  // index.
   struct Value {
     std::string value;
-    // Borrowed from the rax slot, so only held while ingestion is excluded
-    // (LockMode::kBackground); the main thread reads membership from the
-    // fetched record instead.
+    // Background only: the keys that have this value, borrowed from the index
+    // and probed once per candidate. Unset on the main thread, which checks
+    // membership against the fetched record's tags instead.
     std::optional<BorrowedBagOfInternedStringPtrs> bag;
     float idf = 0.0f;
   };
   absl::InlinedVector<Value, 4> tag_values;
-  // `foo*` values; dt depends on the doc's matching tag, so resolved per doc.
+  // The query's prefix values (`re*`). Nothing is resolved for them: a prefix
+  // credits the doc's first matching tag, so dt is looked up while scoring.
+  // They are kept here so the split from exact values and the case-dedup
+  // (`{re*|Re*}` on a case-insensitive index) happen once per query, not once
+  // per candidate.
+  // Note: We could move this parsing into the predicate.
   absl::InlinedVector<absl::string_view, 2> tag_prefixes;
 };
 

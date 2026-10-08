@@ -227,7 +227,6 @@ ResolvedLeaf ResolvedLeafCache::ResolveTag(const Predicate *predicate) const {
   // documents carrying that value (dt). A union (`{red|blue}`) resolves several
   // values, each contributing its own term.
   TagLeaf leaf;
-  leaf.tag_index = tag_index;
   // Dedupe query values that collapse to the same tag under the index's case
   // rules (e.g. `{red|Red}` on a case-insensitive index).
   const bool case_sensitive = tag_index->IsCaseSensitive();
@@ -246,6 +245,11 @@ ResolvedLeaf ResolvedLeafCache::ResolveTag(const Predicate *predicate) const {
     // contributes a term.
     TagLeaf::Value resolved{value};
     size_t dt = 0;
+    // In the background the read phase keeps the index stable, so the leaf
+    // keeps the borrowed bag and answers each candidate with a probe. The main
+    // thread is outside that phase: the bag could change under it, so it takes
+    // the index mutex just long enough to read dt and later checks membership
+    // against the fetched record's own tags.
     if (MainThread()) {
       dt = tag_index->GetTagValueDocCount(value, /*lock=*/true);
     } else {

@@ -351,12 +351,6 @@ std::optional<BorrowedBagOfInternedStringPtrs> Tag::LookupValue(
   return BorrowedBagOfInternedStringPtrs(SlotToStorage(slot));
 }
 
-bool Tag::ContainsKey(absl::string_view value,
-                      BorrowedInternedStringPtr key) const {
-  auto bag = LookupValue(value);
-  return bag && bag->contains(key);
-}
-
 // -- Search / EntriesFetcher / EntriesFetcherIterator --------------------
 
 Tag::EntriesFetcherIterator::EntriesFetcherIterator(
@@ -525,7 +519,7 @@ size_t Tag::GetPrefixMatchDocCount(absl::string_view prefix_value,
 
   // Scan the doc's own tags rather than the prefix's rax subtree: a doc carries
   // a handful of tags while a prefix can match an unbounded slice of the index.
-  // Lock-free by the read-side invariant GetValue / ContainsKey rely on.
+  // Lock-free by the read-side invariant GetValue relies on.
   auto it = tracked_tags_by_keys_.find(key);
   if (it == tracked_tags_by_keys_.end()) return 0;
 
@@ -537,7 +531,8 @@ size_t Tag::GetPrefixMatchDocCount(absl::string_view prefix_value,
     if (tag.empty()) continue;
     if (case_sensitive_ ? absl::StartsWith(tag, prefix)
                         : absl::StartsWithIgnoreCase(tag, prefix)) {
-      return GetTagValueDocCount(tag);
+      auto bag = LookupValue(tag);
+      return bag ? bag->size() : 0;
     }
   }
   return 0;

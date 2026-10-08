@@ -1158,10 +1158,12 @@ std::optional<float> ScoreNode(const Predicate *predicate,
           std::get_if<TagLeaf>(&score_ctx.cache.GetOrResolve(predicate));
       // An index-less leaf contributes 0 without rejecting the already-admitted
       // candidate.
-      if (leaf == nullptr || leaf->tag_index == nullptr ||
+      if (leaf == nullptr ||
           (leaf->tag_values.empty() && leaf->tag_prefixes.empty())) {
         return 0.0f;
       }
+      const auto *tag_pred = static_cast<const TagPredicate *>(predicate);
+      const indexes::Tag *tag_index = tag_pred->GetIndex();
 
       const uint32_t doc_len = score_ctx.DocLen(key);
       const uint32_t total_docs = score_ctx.cache.Stats().total_docs;
@@ -1171,13 +1173,11 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       const absl::flat_hash_set<absl::string_view> *doc_tags = nullptr;
       if (score_ctx.record_tags != nullptr) {
         doc_tags = score_ctx.record_tags->Get(
-            vmsdk::ToStringView(static_cast<const TagPredicate *>(predicate)
-                                    ->GetRetainedIdentifier()
-                                    .get()),
-            leaf->tag_index->GetSeparator());
+            vmsdk::ToStringView(tag_pred->GetRetainedIdentifier().get()),
+            tag_index->GetSeparator());
         if (doc_tags == nullptr) return 0.0f;
       }
-      const bool case_sensitive = leaf->tag_index->IsCaseSensitive();
+      const bool case_sensitive = tag_index->IsCaseSensitive();
       auto carries = [&](const TagLeaf::Value &value) {
         if (doc_tags == nullptr) return value.bag->contains(key);
         for (absl::string_view tag : *doc_tags) {
@@ -1202,7 +1202,7 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       // independently-locked counters.
       for (absl::string_view prefix : leaf->tag_prefixes) {
         const uint32_t dt = static_cast<uint32_t>(std::min<size_t>(
-            leaf->tag_index->GetPrefixMatchDocCount(
+            tag_index->GetPrefixMatchDocCount(
                 prefix, key, /*lock=*/score_ctx.cache.MainThread()),
             total_docs));
         if (dt == 0) continue;

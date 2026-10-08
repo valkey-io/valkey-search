@@ -102,17 +102,6 @@ class Tag : public IndexBase {
       const InternedStringPtr &key,
       bool &case_sensitive) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
-  // Returns whether `key` carries tag value `value`. `value` is normalized
-  // (lowercased unless case-sensitive) before lookup, so callers pass the raw
-  // query value. Unlike GetValue, this avoids parsing/allocating the document's
-  // tag set per call: it looks the value up in the rax and tests the key
-  // against that value's posting bag. Lock-free like GetValue, relying on the
-  // read-side invariant that the index is not mutated while the time-sliced
-  // mutex is held in read mode.
-  // Borrowed key: the only caller is the scoring walk, which holds the lock.
-  bool ContainsKey(absl::string_view value, BorrowedInternedStringPtr key) const
-      ABSL_NO_THREAD_SAFETY_ANALYSIS;
-
   // Iterator yielded by EntriesFetcher::Begin(). Walks a vector of rax slots
   // (each slot's 8 bytes encode a BagOfInternedStringPtrs); for negated
   // queries, also walks an extras vector of untracked keys.
@@ -174,19 +163,11 @@ class Tag : public IndexBase {
   size_t GetTagValueDocCount(absl::string_view value, bool lock = false) const
       ABSL_LOCKS_EXCLUDED(index_mutex_);
 
-  // The bag of documents carrying `value`, so a query does one lookup per
-  // value and answers every candidate with a bag probe; nullopt if none does.
-  // The bag is borrowed from the rax slot: lock-free only under the background
-  // read-side invariant (no mutation during the time-sliced read phase), so
-  // the main thread, which runs outside that phase, does not use it and takes
-  // index_mutex_ for its lookups instead.
-  std::optional<BorrowedBagOfInternedStringPtrs> LookupValue(
-      absl::string_view value) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
-
   // Document count (dt) of the first value on `key` matching prefix query value
   // `prefix_value` (must end in '*') -- the value a tag prefix is scored on,
   // since a prefix credits ONE matched value, never the sum. 0 if none matches.
-  // Lock-free like GetValue/ContainsKey (read-side invariant).
+  // `lock` is for the main thread, which is outside the time-sliced read
+  // phase and instead takes the index's own mutex for the lookup.
   size_t GetPrefixMatchDocCount(
       absl::string_view prefix_value, BorrowedInternedStringPtr key,
       bool lock = false) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
@@ -196,6 +177,10 @@ class Tag : public IndexBase {
       absl::string_view data, char separator);
   // Unescape a tag string (e.g. escaped pipe becomes literal pipe)
   static std::string UnescapeTag(absl::string_view tag);
+
+  // A view of the keys that have tag `value`, or nullopt if none do.
+  std::optional<BorrowedBagOfInternedStringPtrs> LookupValue(
+      absl::string_view value) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
  private:
   void IndexTagForKey(absl::string_view tag, const InternedStringPtr &key)

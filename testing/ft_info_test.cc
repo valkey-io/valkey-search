@@ -581,7 +581,8 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*30\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*32\r\n+index_name\r\n+test_name\r\n+"
+                            "aliases\r\n*0\r\n+index_"
                             "definition\r\n*8\r\n+key_type\r\n+HASH\r\n+"
                             "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n"
                             "1\r\n+score_field\r\n+\r\n+"

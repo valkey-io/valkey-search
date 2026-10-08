@@ -89,9 +89,7 @@ bool ProbeWord(const indexes::text::TextIndexSchema &schema,
                absl::string_view word, const InternedStringPtr &target_key,
                uint64_t field_mask, bool require_positions, bool lock,
                PositionMaps &maps) {
-  auto word_iter = text_index.GetPrefix().GetWordIterator(word);
-  if (word_iter.Done() || word_iter.GetWord() != word) return false;
-  auto postings = word_iter.GetPostingsTarget();
+  auto postings = text_index.GetPrefix().FindPostingsTarget(word);
   return postings && ProbePostings(schema, *postings, word, target_key,
                                    field_mask, require_positions, lock, maps);
 }

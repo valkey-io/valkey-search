@@ -118,8 +118,6 @@ struct Postings {
   // term occurs in at least one field of `field_mask`. Postings are shared
   // across all TEXT fields, so the field check is needed; pass `~0ULL` to
   // accept any field without scanning positions.
-  // NOTE: We could make a space tradeoff and store a union of the field masks
-  // upon creation for every PostingValue to avoid iteration cost.
   std::optional<PostingValue> GetPostingValue(BorrowedInternedStringPtr key,
                                               uint64_t field_mask) const;
 
@@ -146,8 +144,6 @@ struct Postings {
 
     // Check if word is present in any of the fields specified by field_mask for
     // current key
-    // NOTE: We could make a space tradeoff and store a union of the field masks
-    // upon creation for every PostingValue to avoid iteration cost.
     bool ContainsFields(uint64_t field_mask) const;
 
     // Get Position Iterator

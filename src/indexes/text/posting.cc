@@ -90,6 +90,8 @@ size_t Postings::GetTotalTermFrequency() const {
 namespace {
 
 // Does any position for this key fall in a field in `field_mask`?
+// NOTE: We could make a space tradeoff and store a union of the field masks
+// upon creation for every PostingValue to avoid iteration cost.
 bool ContainsFields(const PostingValue& value, uint64_t field_mask) {
   CHECK(value.map != nullptr)
       << "Posting list contains a key with no FlatPositionMap";

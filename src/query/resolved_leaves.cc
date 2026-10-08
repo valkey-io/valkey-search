@@ -293,11 +293,11 @@ ResolvedLeaf ResolvedLeafCache::ResolveTag(const Predicate *predicate) const {
     // contributes a term.
     TagLeaf::Value resolved{value};
     size_t dt = 0;
-    if (mode_ == LockMode::kBackground) {
+    if (MainThread()) {
+      dt = tag_index->GetTagValueDocCount(value, /*lock=*/true);
+    } else {
       resolved.bag = tag_index->LookupValue(value);
       if (resolved.bag) dt = resolved.bag->size();
-    } else {
-      dt = tag_index->GetTagValueDocCount(value, /*lock=*/true);
     }
     if (dt == 0) continue;
     resolved.idf = Idf(dt);

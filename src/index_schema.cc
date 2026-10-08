@@ -1696,13 +1696,8 @@ absl::Status IndexSchema::SaveIndexExtension(RDBChunkOutputStream out) const {
   //
   // Write out the multi/exec queued keys.
   //
-  // A key in multi_mutations_keys_ may no longer have an entry in
-  // tracked_mutated_records_ by the time we serialize: the queue and the map
-  // are updated on different threads, so an RDB write can observe a key whose
-  // mutation was already consumed. Serialize only keys that still have a map
-  // entry and write that count; a skipped key is re-derived from the key list /
-  // backfill on load. This mirrors ConsumeTrackedMutatedAttribute, which also
-  // treats a key missing from the map as a no-op.
+  // Queue keys can outlive their mutation records. Save only tracked keys;
+  // skipped keys are recovered from the saved key list or backfill on load.
   std::vector<Key> live_multi_keys;
   live_multi_keys.reserve(multi_mutations_keys_.Get().size());
   size_t orphan_keys_skipped = 0;

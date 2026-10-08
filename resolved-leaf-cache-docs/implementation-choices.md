@@ -17,7 +17,10 @@ follows directly from the amendments is not repeated.
   saving is one extra per-key walk per query (the first scored candidate, before
   any representative exists). Not worth the plumbing.
 - The fallback returns the first matching word and stops (`FindExpansionMatch`);
-  see amendment 19.
+  see amendment 19. It returns the document's `PostingValue` and the word's key
+  count with it, read in the one locked section, and `ExpansionLeaf::Term` keeps
+  its key count: round 2 review found the match being probed again for tf and
+  doc_len and both counts re-read, four btree lookups where one does.
 - `FuzzySearch::Search` gained an opt-in `collect_words` so the fallback can name
   the matched word (needed to store `WordPostings` and, in Phase 4, to pick the
   bucket lock). Off by default: 200 inline `std::string`s would have been ~6KB

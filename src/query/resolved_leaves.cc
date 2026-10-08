@@ -94,32 +94,38 @@ ResolvedLeaf ResolvedLeafCache::Resolve(const Predicate *predicate) const {
 }
 
 float ResolvedLeafCache::OfferExpansionTerm(ExpansionLeaf &leaf,
-                                            const WordPostings &term) const {
-  const size_t count = KeyCount(term);
-  if (leaf.representative && KeyCount(leaf.representative->term) >= count) {
-    return Idf(count);
+                                            const ExpansionMatch &match) const {
+  if (leaf.representative &&
+      leaf.representative->key_count >= match.key_count) {
+    return Idf(match.key_count);
   }
-  leaf.representative.emplace(ExpansionLeaf::Term{term, Idf(count)});
+  leaf.representative.emplace(
+      ExpansionLeaf::Term{match.term, match.key_count, Idf(match.key_count)});
   return leaf.representative->idf;
 }
 
-std::optional<WordPostings> ResolvedLeafCache::FindExpansionMatch(
+std::optional<ExpansionMatch> ResolvedLeafCache::FindExpansionMatch(
     const TextPredicate &predicate, ExpansionLeaf::Kind kind,
     const indexes::text::TextIndex &per_key_index,
     const InternedStringPtr &key) const {
   const uint64_t field_mask = predicate.GetFieldMask();
   const uint32_t max_words = options::GetMaxTermExpansions().GetValue();
-  std::optional<WordPostings> found;
+  std::optional<ExpansionMatch> found;
   // True once `found` is set, so the walks stop at the first match.
   auto probe =
       [&](absl::string_view word,
           indexes::text::InvasivePtr<indexes::text::Postings> postings) {
         if (!postings) return false;
-        WordPostings candidate{std::string(word), std::move(postings)};
-        if (!Probe(candidate, BorrowedInternedStringPtr(key), field_mask)) {
-          return false;
-        }
-        found = std::move(candidate);
+        auto get = [&] {
+          return std::pair{postings->GetPostingValue(
+                               BorrowedInternedStringPtr(key), field_mask),
+                           postings->GetKeyCount()};
+        };
+        auto [entry, key_count] =
+            MainThread() ? text_index_schema_->WithWordLock(word, get) : get();
+        if (!entry) return false;
+        found.emplace(ExpansionMatch{
+            {std::string(word), std::move(postings)}, *entry, key_count});
         return true;
       };
   const absl::string_view term = predicate.GetTextString();

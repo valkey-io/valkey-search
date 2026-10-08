@@ -71,9 +71,18 @@ struct ExpansionLeaf {
   uint64_t field_mask = ~0ULL;  // Shared by all terms; expansions never stem.
   struct Term {
     WordPostings term;
+    size_t key_count = 0;
     float idf = 0.0f;
   };
   std::optional<Term> representative;
+};
+
+// One of an expansion's matching words that a document carries, with the
+// document's entry and the word's key count, read together under one lock.
+struct ExpansionMatch {
+  WordPostings term;
+  indexes::text::PostingValue entry;
+  size_t key_count = 0;
 };
 
 // Tag leaf: each matched tag value is a BM25 term with tf = 1.
@@ -140,9 +149,10 @@ class ResolvedLeafCache {
   // holds one leaf while resolving a sibling.
   ResolvedLeaf &GetOrResolve(const Predicate *predicate);
 
-  // Makes `term` the leaf's representative if it is more common than the
-  // current one. Returns the IDF to score `term` with either way.
-  float OfferExpansionTerm(ExpansionLeaf &leaf, const WordPostings &term) const;
+  // Makes `match` the leaf's representative if it is more common than the
+  // current one. Returns the IDF to score `match` with either way.
+  float OfferExpansionTerm(ExpansionLeaf &leaf,
+                           const ExpansionMatch &match) const;
 
   // Postings reads, under the word's bucket in kMainThread.
   size_t KeyCount(const WordPostings &word) const;
@@ -154,7 +164,7 @@ class ResolvedLeafCache {
   // `key` carries in the predicate's fields. Which match is unspecified (tree
   // order). `per_key_index` must be the document's own tree, where the walk is
   // bounded.
-  std::optional<WordPostings> FindExpansionMatch(
+  std::optional<ExpansionMatch> FindExpansionMatch(
       const TextPredicate &predicate, ExpansionLeaf::Kind kind,
       const indexes::text::TextIndex &per_key_index,
       const InternedStringPtr &key) const;

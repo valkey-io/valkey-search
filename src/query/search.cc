@@ -1102,10 +1102,8 @@ std::optional<float> ScoreNode(const Predicate *predicate,
         if (!match) return std::nullopt;
         const float idf =
             score_ctx.cache.OfferExpansionTerm(*expansion, *match);
-        auto entry = score_ctx.cache.Probe(*match, key, expansion->field_mask);
-        if (!entry) return std::nullopt;
-        return score_ctx.ScoreLeaf(idf, entry->doc_stats.tf,
-                                   entry->doc_stats.doc_len,
+        return score_ctx.ScoreLeaf(idf, match->entry.doc_stats.tf,
+                                   match->entry.doc_stats.doc_len,
                                    predicate->GetWeight());
       }
 

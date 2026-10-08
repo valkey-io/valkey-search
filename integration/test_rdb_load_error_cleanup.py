@@ -23,6 +23,7 @@ import struct
 import time
 
 import pytest
+from valkey.exceptions import BusyLoadingError
 
 from valkey_search_test_case import ValkeySearchTestCaseDebugMode
 from valkeytestframework.util import waiters
@@ -186,11 +187,14 @@ class TestRdbLoadErrorCleanup(ValkeySearchTestCaseDebugMode):
             "destructor ran on a worker thread without MarkAsDestructing "
             "being called on the main thread - the fix is missing.")
 
-        # Liveness check with retry over a window.
+        # Liveness check with retry over a window. -LOADING means the replica
+        # is alive and retrying the sync; only a dead process fails this.
         deadline = time.time() + 10
         while time.time() < deadline:
             try:
                 replica.client.ping()
+            except BusyLoadingError:
+                pass
             except Exception as exc:
                 pytest.fail(f"{crash_msg} ({exc!r})")
             time.sleep(0.25)

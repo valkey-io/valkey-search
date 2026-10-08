@@ -1,4 +1,4 @@
-# Review amendments — PR #1472, round 1
+# Review amendments — PR #1472, round 1 (review 1)
 
 Companion to [plan-amendments.md](plan-amendments.md), which it continues (decisions are numbered
 from 20). Where this doc disagrees with plan-amendments.md, plan.md or plan-walkthrough.md,

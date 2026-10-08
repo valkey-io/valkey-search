@@ -175,9 +175,9 @@ follows directly from the amendments is not repeated.
 ### Review round 1
 
 Cleanups from the PR #1472 review that are not design decisions. The design decisions are in
-[review-amendments.md](review-amendments.md), which wins over this section.
+[review-1-amendments.md](review-1-amendments.md), which wins over this section.
 
-- **`PrefilterEvaluator` contract change is decision 28** in review-amendments.md, not here.
+- **`PrefilterEvaluator` contract change is decision 28** in review-1-amendments.md, not here.
   Mechanical consequences recorded for the implementer: `cache_` becomes a reference, the
   `dynamic_cast` in `ResolveTag` stays (it is the one-time resolve, not the per-key path), and
   `EvaluateTextLeaf`'s `FunctionRef` for the per-key index is unchanged.
@@ -205,7 +205,7 @@ Cleanups from the PR #1472 review that are not design decisions. The design deci
   stem → `text_index_mutex_` as decision 24's lock table says: `ResolveText` does its `Lookup`s
   and `KeyCount`s inside `WithStemParents`' callback. Deadlock-free by the same argument:
   writers take the stem lock only after releasing both the bucket and the tree lock. The lock
-  table in review-amendments.md is left for its author to amend.
+  table in review-1-amendments.md is left for its author to amend.
 - **Per-key `TextPredicate::Evaluate` uses the single-key iterator in both modes.** The
   overrides build a `SingleKeyTermIterator` over the copied-out position maps in the background too,
   so there is one per-key probe path instead of a `KeyIterator` variant beside it. The

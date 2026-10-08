@@ -405,6 +405,28 @@ Decision 32:
   They now also fire from `BuildTextIterator` on the background path, an extra pause site for
   the same name, which the tests tolerate (they wait for any pause, then cancel).
 - **Null postings are skipped once in the walk**, so no sink repeats the check.
+- **Benchmark, `ForEachMatch` indirect call.** Same method as decision 29 (release, alignment
+  flags, 1000 docs, 500 connections, median of 7 paired runs, pinned), before = `3d44218`,
+  after = `0aba68d`, on a scenario set that exercises each expansion kind through each sink
+  (`search_benchmark_exp.sh`, index created `WITHSUFFIXTRIE`). Pure-text rows go through
+  `BuildTextIterator`; the `+num+tag` rows go through the per-key `Evaluate` and the scoring
+  fallback.
+
+  | Scenario | before rps | after rps | rps Δ | p50 Δ |
+  |---|---|---|---|---|
+  | prefix `a*` (wide) | 5229 | 5336 | +3.1% | -2.9% |
+  | prefix `app*` | 13093 | 13195 | -0.3% | -0.7% |
+  | suffix `*ing` | 9272 | 9078 | -2.3% | +0.6% |
+  | fuzzy `%aple%` | 11190 | 11331 | +1.3% | -0.4% |
+  | fuzzy `%%banan%%` | 6413 | 6378 | -1.0% | +2.0% |
+  | prefix+num+tag | 8280 | 8188 | +1.5% | +1.5% |
+  | suffix+num+tag | 5608 | 5494 | -0.9% | +1.3% |
+  | fuzzy+num+tag | 7535 | 7355 | -1.5% | +1.2% |
+  | prefix OR term+num+tag | 2177 | 2206 | +1.9% | -0.1% |
+
+  Every row is inside the A/A envelope from decision 29 (rps -2.0% to +0.1%, candidate side
+  low) with no consistent direction; the per-word `FunctionRef` call is not visible above the
+  probe and traversal cost.
 
 ### Merge with main (#985 Vector Range)
 

@@ -15,6 +15,7 @@ GENERATORS = [
     {"generator": "generate_search.py",  "answers": "search-answers.pickle.gz",       "cluster": True},
     {"generator": "generate_alias.py",   "answers": "alias-answers.pickle.gz",        "cluster": True},
     {"generator": "generate_text.py",    "answers": "text-search-answers.pickle.gz",  "cluster": False},
+    {"generator": "generate_text.py",    "answers": "text-search-multilang-answers.pickle.gz", "cluster": False},
     {"generator": "generate_array.py",   "answers": "array-input-answers.pickle.gz",  "cluster": False},
     {"generator": "generate_expr.py",    "answers": "expr-answers.pickle.gz",         "cluster": False},
     {"generator": "generate_sortkey.py", "answers": "sortkey-answers.pickle.gz",      "cluster": False},
@@ -27,6 +28,9 @@ GENERATORS = [
     # distributed text scoring lands.
     {"generator": "generate_hybrid.py",  "answers": "hybrid-answers.pickle.gz",       "cluster": False},
 ]
+
+# De-duplicated generator files for regenerate.sh (each file is run once)
+GENERATOR_FILES_UNIQUE = sorted(set(g["generator"] for g in GENERATORS))
 
 
 def compute_sources_hash():

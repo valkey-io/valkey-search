@@ -1121,7 +1121,8 @@ void ResolveLeaves(const Predicate *predicate, uint32_t total_docs,
             ScoringFieldMask(f->GetFieldMask(), num_text_fields);
         auto expansion = indexes::text::FuzzySearch::Search(
             f->GetTextIndexSchema()->GetTextIndex()->GetPrefix(),
-            f->GetTextString(), f->GetDistance(), max_words);
+            f->GetTextString(), f->GetDistance(), max_words,
+            f->GetLengthUnit());
         for (auto &postings : expansion.postings) {
           AddExpansionTerm(std::move(postings), total_docs, scorer,
                            expansion_leaf);
@@ -1822,32 +1823,34 @@ absl::StatusOr<std::vector<indexes::Neighbor>> DoSearchVector(
         absl::StrCat(parameters.attribute_alias, " is not a Vector index "));
   }
 
-  if (!parameters.filter_parse_results.root_predicate) {
-    if (parameters.inkeys.has_value()) {
-      ++Metrics::GetStats().query_prefiltering_requests_cnt;
-      std::priority_queue<std::pair<float, hnswlib::labeltype>> results =
-          CalcBestMatchingInkeys(parameters, vector_index);
-      return vector_index->CreateReply(results);
-    }
+  const bool has_filter =
+      parameters.filter_parse_results.root_predicate != nullptr;
+  if (!has_filter && !parameters.inkeys.has_value()) {
     return PerformVectorSearch(vector_index, parameters);
   }
-  std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
-  size_t qualified_entries = EvaluateFilterAsPrimary(
-      parameters, parameters.filter_parse_results.root_predicate.get(),
-      entries_fetchers, false);
 
-  // With INKEYS, prefer pre-filtering to ensure exact K nearest within the
-  // restricted set (inline filter with HNSW approximation might miss them).
-  if (parameters.inkeys.has_value() ||
-      UsePreFiltering(qualified_entries, vector_index)) {
+  std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
+  size_t qualified_entries =
+      parameters.inkeys.has_value() ? parameters.inkeys->size() : 0;
+  if (has_filter) {
+    qualified_entries = EvaluateFilterAsPrimary(
+        parameters, parameters.filter_parse_results.root_predicate.get(),
+        entries_fetchers, false);
+  }
+
+  if (UsePreFiltering(qualified_entries, vector_index, parameters)) {
     VMSDK_LOG(DEBUG, nullptr)
         << "Using pre-filter query execution, qualified entries="
         << qualified_entries;
     // Do an exact nearest neighbour search on the reduced search space.
     ++Metrics::GetStats().query_prefiltering_requests_cnt;
-    std::priority_queue<std::pair<float, hnswlib::labeltype>> results =
-        CalcBestMatchingPrefilteredKeys(parameters, entries_fetchers,
-                                        vector_index, qualified_entries);
+    std::priority_queue<std::pair<float, hnswlib::labeltype>> results;
+    if (has_filter) {
+      results = CalcBestMatchingPrefilteredKeys(
+          parameters, entries_fetchers, vector_index, qualified_entries);
+    } else {
+      results = CalcBestMatchingInkeys(parameters, vector_index);
+    }
 
     VMSDK_ASSIGN_OR_RETURN(auto neighbors, vector_index->CreateReply(results));
     ApplyHybridTextScore(parameters, neighbors);
@@ -2088,6 +2091,17 @@ absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
   return absl::OkStatus();
 }
 
+// Lives here so both fanout.cc and server.cc can use it.
+CONTROLLED_INT(ForceMultiArmFailure, -1);
+
+absl::Status ForcedMultiArmFailure(size_t arm_index) {
+  const int forced = ForceMultiArmFailure.GetValue();
+  if (forced < 0 || static_cast<size_t>(forced) != arm_index) {
+    return absl::OkStatus();
+  }
+  return absl::InternalError("Forced multi-arm failure");
+}
+
 absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
                          vmsdk::ThreadPool *thread_pool,
                          SearchMode search_mode) {
@@ -2303,6 +2317,16 @@ absl::Status ParseKnnInner(query::SearchParameters &parameters,
         return absl::InvalidArgumentError("EF_RUNTIME argument is missing");
       }
       parameters.parse_vars.ef_string = params[i++];
+    } else if (absl::EqualsIgnoreCase(params[i], "HYBRID_POLICY")) {
+      i++;
+      if (i == params.size()) {
+        return absl::InvalidArgumentError("HYBRID_POLICY argument is missing");
+      }
+      if (!parameters.parse_vars.hybrid_policy_string.empty()) {
+        return absl::InvalidArgumentError(
+            "HYBRID_POLICY was specified more than once");
+      }
+      parameters.parse_vars.hybrid_policy_string = params[i++];
     } else if (absl::EqualsIgnoreCase(params[i], kAsParam)) {
       i++;
       if (i == params.size()) {
@@ -2542,6 +2566,25 @@ absl::Status PostParseVectorParameters(query::SearchParameters &parameters) {
         auto ef_string,
         SubstituteParam(parameters, parameters.parse_vars.ef_string));
     VMSDK_ASSIGN_OR_RETURN(parameters.ef, vmsdk::To<unsigned>(ef_string));
+  }
+
+  if (!parameters.parse_vars.hybrid_policy_string.empty()) {
+    if (!parameters.filter_parse_results.root_predicate &&
+        !parameters.inkeys.has_value()) {
+      return absl::InvalidArgumentError(
+          "hybrid query attributes were sent for a non-hybrid query");
+    }
+    VMSDK_ASSIGN_OR_RETURN(
+        auto hybrid_policy_string,
+        SubstituteParam(parameters,
+                        parameters.parse_vars.hybrid_policy_string));
+    if (absl::EqualsIgnoreCase(hybrid_policy_string, "BATCHES")) {
+      parameters.hybrid_policy = HybridPolicy::kBatches;
+    } else if (absl::EqualsIgnoreCase(hybrid_policy_string, "ADHOC_BF")) {
+      parameters.hybrid_policy = HybridPolicy::kAdHocBruteForce;
+    } else {
+      return absl::InvalidArgumentError("invalid hybrid policy was given");
+    }
   }
 
   if (!parameters.parse_vars.score_as_string.empty()) {

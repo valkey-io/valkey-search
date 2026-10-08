@@ -1199,7 +1199,7 @@ class TestRepeatedSortByAndReturnGate(ValkeySearchTestCaseDebugMode):
                     info.get("search_compatibility-ft_search_return_duplicate_field", 0))
 
         two_sortby = ("FT.SEARCH", "rsr_idx", "@m:{all}", "SORTBY", "s", "ASC",
-                      "SORTBY", "p", "DESC", "RETURN", "1", "p", "DIALECT", "2")
+                      "SORTBY", "p", "ASC", "RETURN", "1", "p", "DIALECT", "2")
         dup_return = ("FT.SEARCH", "rsr_idx", "@m:{all}", "RETURN", "3",
                       "p", "title", "p", "LIMIT", "0", "1", "DIALECT", "2")
         same_output_name = ("FT.SEARCH", "rsr_idx", "@m:{all}", "RETURN", "4",
@@ -1208,9 +1208,10 @@ class TestRepeatedSortByAndReturnGate(ValkeySearchTestCaseDebugMode):
 
         assert client.execute_command(
             "CONFIG", "SET", "search.emulate-release", "1.2.1") == b"OK"
-        # Legacy: the last SORTBY wins and duplicates are emitted.
+        # Legacy: the last SORTBY wins (s ASC would put rsr:2 first) and
+        # duplicates are emitted.
         assert client.execute_command(*two_sortby) == [
-            2, b"rsr:2", [b"p", b"30"], b"rsr:1", [b"p", b"20"]]
+            2, b"rsr:1", [b"p", b"20"], b"rsr:2", [b"p", b"30"]]
         assert client.execute_command(*dup_return) == [
             2, b"rsr:1", [b"p", b"20", b"title", b"hello", b"p", b"20"]]
         assert client.execute_command(*same_output_name) == [

@@ -7,7 +7,6 @@
 
 #include "src/commands/ft_search_parser.h"
 
-#include <algorithm>
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
@@ -16,6 +15,7 @@
 #include <utility>
 #include <vector>
 
+#include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/match.h"
@@ -220,7 +220,7 @@ std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructReturnParser() {
         if (cnt == 0) {
           return absl::OkStatus();
         }
-        const size_t clause_start = parameters.return_attributes.size();
+        absl::flat_hash_set<absl::string_view> output_names;
         for (uint32_t i = 0; i < cnt; ++i) {
           vmsdk::UniqueValkeyString identifier;
           VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, identifier));
@@ -234,15 +234,9 @@ std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructReturnParser() {
               return absl::InvalidArgumentError("Unexpected parameter `AS` ");
             }
           }
-          const auto output_name = vmsdk::ToStringView(as_property.get());
-          const bool duplicate_output_name = std::any_of(
-              parameters.return_attributes.begin() + clause_start,
-              parameters.return_attributes.end(),
-              [&](const query::ReturnAttribute &earlier) {
-                return vmsdk::ToStringView(earlier.alias.get()) == output_name;
-              });
           // The first entry with a given output name wins.
-          if (duplicate_output_name &&
+          if (!output_names.insert(vmsdk::ToStringView(as_property.get()))
+                   .second &&
               VALKEY_SEARCH_COMPATIBILITY_FIX(
                   1, 3, 0, "ft_search_return_duplicate_field",
                   [&]() { return true; }, [&]() { return false; })) {

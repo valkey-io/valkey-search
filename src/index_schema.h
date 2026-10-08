@@ -208,37 +208,6 @@ class IndexSchema : public KeyspaceEventSubscription,
     return itr->second.document_score;
   }
 
-  uint32_t GetDocumentLength(BorrowedInternedStringPtr key) const
-      ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
-    if (!text_index_schema_) {
-      return 0;
-    }
-    return text_index_schema_->GetKeyDocLen(key, false);
-  }
-  // Main-thread variant: takes the per-key map's own lock instead.
-  uint32_t GetDocumentLengthLocked(BorrowedInternedStringPtr key) const {
-    if (!text_index_schema_) {
-      return 0;
-    }
-    return text_index_schema_->GetKeyDocLen(key, true);
-  }
-
-  uint32_t GetDocumentNorm(const Key &key) const
-      ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
-    if (!text_index_schema_) {
-      return 0;
-    }
-    return text_index_schema_->GetKeyNorm(key);
-  }
-
-  // Atomic, so readable from the main thread without the time-sliced mutex.
-  uint64_t GetTotalDocumentLength() const {
-    if (!text_index_schema_) {
-      return 0;
-    }
-    return text_index_schema_->GetMetadata().total_doc_len.load();
-  }
-
   void CreateTextIndexSchema() {
     text_index_schema_ = std::make_shared<indexes::text::TextIndexSchema>(
         language_, punctuation_, with_offsets_, stop_words_, min_stem_size_);

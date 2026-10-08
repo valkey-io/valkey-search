@@ -989,6 +989,9 @@ struct ScoreContext {
   ResolvedLeafCache &cache;
   // Main thread only: the document's tags from the fetched record.
   RecordTags *record_tags = nullptr;
+  // Null on a schema with no TEXT fields.
+  const indexes::text::TextIndexSchema *text_index_schema =
+      index_schema.GetTextIndexSchema().get();
 
   // The current document's own tree, fetched on the first expansion leaf that
   // misses its representative and reused by the rest of that document's walk.
@@ -1019,9 +1022,8 @@ struct ScoreContext {
   // runtime branch.
   uint32_t DocLen(BorrowedInternedStringPtr key) const
       ABSL_NO_THREAD_SAFETY_ANALYSIS {
-    if (!cache.NeedsDocLen()) return 0;
-    return cache.MainThread() ? index_schema.GetDocumentLengthLocked(key)
-                              : index_schema.GetDocumentLength(key);
+    if (!cache.NeedsDocLen() || text_index_schema == nullptr) return 0;
+    return text_index_schema->GetKeyDocLen(key, cache.MainThread());
   }
   float DocScore(BorrowedInternedStringPtr key) const
       ABSL_NO_THREAD_SAFETY_ANALYSIS {
@@ -1226,12 +1228,14 @@ std::optional<float> ScoreNode(const Predicate *predicate,
 // kBackground callers hold the time-sliced mutex; see ScoreContext::DocLen.
 CorpusStats ReadCorpusStats(const IndexSchema &index_schema,
                             LockMode mode) ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  const auto text = index_schema.GetTextIndexSchema();
   return {
       .total_docs =
           static_cast<uint32_t>(mode == LockMode::kBackground
                                     ? index_schema.GetIndexKeyInfoSize()
                                     : index_schema.GetIndexKeyInfoSizeLocked()),
-      .total_doc_len = index_schema.GetTotalDocumentLength(),
+      // Atomic, so readable from the main thread without the time-sliced mutex.
+      .total_doc_len = text ? text->GetMetadata().total_doc_len.load() : 0,
       .has_score_field = index_schema.HasScoreField(),
       .default_document_score = index_schema.GetScore(),
   };

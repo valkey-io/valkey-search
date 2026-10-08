@@ -213,12 +213,11 @@ ResolvedLeaf ResolvedLeafCache::ResolveText(
     leaf.groups.push_back(std::move(group));
   };
 
-  // Mirrors TermPredicate::Evaluate, which this lookup replaces for a cached
-  // leaf; test_cancel.py expects the pausepoint to fire on either route.
+  // Fires once per query here rather than per key; test_cancel.py pauses on it.
   BACKGROUND_PAUSEPOINT("search_term_predicate");
   const absl::string_view word = term_pred->GetTextString();
-  // Leaf 1: the exact surface term. For a stemmed term this same word is scored
-  // again in the inflection group below (it is one of its parents), the
+  // Group 1: the exact surface term. For a stemmed term this same word is
+  // scored again in the inflection group below (it is one of its parents), the
   // deliberate exact-match boost.
   add_word_group(word,
                  ScoringFieldMask(term_pred->GetFieldMask(), num_text_fields),
@@ -234,16 +233,16 @@ ResolvedLeaf ResolvedLeafCache::ResolveText(
         word, MainThread(),
         [&](const std::string &stemmed, absl::Span<const std::string> parents,
             uint32_t distinct_docs) {
-          // Leaf 2: the stem root literal, only when it differs from the query
-          // word (else it is Leaf 1) and is itself indexed.
+          // Group 2: the stem root literal, only when it differs from the
+          // query word (else it is group 1) and is itself indexed.
           if (stemmed != word) {
             add_word_group(stemmed,
                            ScoringFieldMask(stem_field_mask, num_text_fields),
                            TermGroup::Kind::kStemRoot);
           }
 
-          // Leaf 3: the stem inflection group. F sums the per-doc frequencies
-          // of every inflection; dt is the distinct doc count counted at
+          // Group 3: the stem inflections. F sums the per-doc frequencies of
+          // every inflection; dt is the distinct doc count counted at
           // ingestion.
           TermGroup stem;
           stem.kind = TermGroup::Kind::kInflections;
@@ -306,62 +305,19 @@ ResolvedLeaf ResolvedLeafCache::ResolveTag(const Predicate *predicate) const {
   return leaf;
 }
 
-EvaluationResult EvaluateTagLeaf(const TagPredicate &predicate,
-                                 const TagLeaf &leaf,
-                                 const InternedStringPtr &key) {
-  for (const TagLeaf::Value &value : leaf.tag_values) {
-    CHECK(value.bag.has_value()) << "tag bags are background-only";
-    if (value.bag->contains(BorrowedInternedStringPtr(key))) {
-      return EvaluationResult(true);
-    }
-  }
-  if (leaf.tag_prefixes.empty()) return EvaluationResult(false);
-  bool case_sensitive = true;
-  auto tags = predicate.GetIndex()->GetValue(key, case_sensitive);
-  return predicate.Evaluate(tags ? &*tags : nullptr, case_sensitive);
-}
-
-EvaluationResult EvaluateTermLeaf(const ResolvedLeafCache &cache,
-                                  const TermPredicate &predicate,
-                                  const TermLeaf &leaf,
-                                  const InternedStringPtr &key,
-                                  bool require_positions) {
-  // Raw predicate masks, not the collapsed scoring masks: TermIterator
-  // intersects QueryFieldMask() across AND children.
-  const uint64_t field_mask = predicate.GetFieldMask();
-  const uint64_t stem_field_mask =
-      field_mask & predicate.GetTextIndexSchema()->GetStemTextFieldMask();
-  indexes::text::SingleKeyTermIterator::PositionMaps maps;
-  for (const TermGroup &group : leaf.groups) {
-    const uint64_t mask =
-        group.kind == TermGroup::Kind::kOriginal ? field_mask : stem_field_mask;
-    for (const WordPostings &word : group.words) {
-      auto value = cache.Probe(word, BorrowedInternedStringPtr(key), mask);
-      if (!value) continue;
-      if (!require_positions) return EvaluationResult(true);
-      maps.push_back(value->map);
-    }
-  }
-  if (maps.empty()) return EvaluationResult(false);
-  auto iterator = std::make_unique<indexes::text::SingleKeyTermIterator>(
-      key, maps, field_mask);
-  if (!iterator->IsIteratorValid()) return EvaluationResult(false);
-  return {true, std::move(iterator)};
-}
-
-EvaluationResult EvaluateTextLeaf(
+EvaluationResult EvaluateText(
     ResolvedLeafCache &cache, const TextPredicate &predicate,
     const InternedStringPtr &key, bool require_positions,
     absl::FunctionRef<const indexes::text::TextIndex *()> per_key_index) {
-  if (const auto *term =
+  if (const auto *leaf =
           std::get_if<TermLeaf>(&cache.GetOrResolve(&predicate))) {
-    return EvaluateTermLeaf(cache,
-                            static_cast<const TermPredicate &>(predicate),
-                            *term, key, require_positions);
+    return static_cast<const TermPredicate &>(predicate).Evaluate(
+        *leaf, key, require_positions, cache.MainThread());
   }
   const auto *index = per_key_index();
   if (index == nullptr) return EvaluationResult(false);
-  return predicate.Evaluate(*index, key, require_positions, cache.MainThread());
+  return static_cast<const ExpansionPredicate &>(predicate).Evaluate(
+      *index, key, require_positions, cache.MainThread());
 }
 
 }  // namespace valkey_search::query

@@ -1,13 +1,16 @@
 set(SRCS_PREDICATE ${CMAKE_CURRENT_LIST_DIR}/predicate.cc
-                   ${CMAKE_CURRENT_LIST_DIR}/predicate.h)
+                   ${CMAKE_CURRENT_LIST_DIR}/predicate.h
+                   ${CMAKE_CURRENT_LIST_DIR}/resolved_leaf.h)
 
 valkey_search_add_static_library(predicate "${SRCS_PREDICATE}")
 target_include_directories(predicate PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(predicate PUBLIC numeric)
 target_link_libraries(predicate PUBLIC tag)
+target_link_libraries(predicate PUBLIC text)
 target_link_libraries(predicate PUBLIC vmsdklib)
 
-set(SRCS_PREDICATE_HEADER ${CMAKE_CURRENT_LIST_DIR}/predicate.h)
+set(SRCS_PREDICATE_HEADER ${CMAKE_CURRENT_LIST_DIR}/predicate.h
+                          ${CMAKE_CURRENT_LIST_DIR}/resolved_leaf.h)
 
 add_library(predicate_header INTERFACE ${SRCS_PREDICATE_HEADER})
 target_include_directories(predicate_header INTERFACE ${CMAKE_CURRENT_LIST_DIR})

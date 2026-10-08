@@ -127,14 +127,14 @@ class PredicateEvaluator : public query::Evaluator {
 
   EvaluationResult EvaluateText(const query::TextPredicate &predicate,
                                 bool require_positions) override {
-    return EvaluateTextLeaf(cache_, predicate, target_key_, require_positions,
-                            [this] {
-                              // The map lock guards the find; the tree itself
-                              // is stable because a revalidated key has no
-                              // in-flight mutation.
-                              return text_index_schema_->GetPerKeyTextIndex(
-                                  target_key_, /*lock=*/true);
-                            });
+    return query::EvaluateText(cache_, predicate, target_key_,
+                               require_positions, [this] {
+                                 // The map lock guards the find; the tree
+                                 // itself is stable because a revalidated key
+                                 // has no in-flight mutation.
+                                 return text_index_schema_->GetPerKeyTextIndex(
+                                     target_key_, /*lock=*/true);
+                               });
   }
 
   EvaluationResult EvaluateVectorRange(

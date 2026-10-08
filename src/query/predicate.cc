@@ -84,57 +84,29 @@ bool ProbePostings(const indexes::text::TextIndexSchema &schema,
   return true;
 }
 
-bool ProbeWord(const indexes::text::TextIndexSchema &schema,
-               const valkey_search::indexes::text::TextIndex &text_index,
-               absl::string_view word, const InternedStringPtr &target_key,
-               uint64_t field_mask, bool require_positions, bool lock,
-               PositionMaps &maps) {
-  auto postings = text_index.GetPrefix().FindPostingsTarget(word);
-  return postings && ProbePostings(schema, *postings, word, target_key,
-                                   field_mask, require_positions, lock, maps);
-}
-
 }  // namespace
 
-// TermPredicate: Exact term match in the text index.
-EvaluationResult TermPredicate::Evaluate(
-    const valkey_search::indexes::text::TextIndex &text_index,
-    const InternedStringPtr &target_key, bool require_positions,
-    bool lock) const {
-  uint64_t field_mask = field_mask_;
-  PositionMaps maps;
-  // Search for the original word - may or may not exist in corpus
-  BACKGROUND_PAUSEPOINT("search_term_predicate");
-  bool found_original =
-      ProbeWord(*text_index_schema_, text_index, term_, target_key, field_mask,
-                require_positions, lock, maps);
-  if (found_original && !require_positions) {
-    return EvaluationResult(true);
-  }
-  // Get stem variants if not exact term search
-  uint64_t stem_field_mask =
+// TermPredicate: the leaf already names every word (exact, stem root,
+// inflections) with its shared postings; one probe per word answers the key.
+EvaluationResult TermPredicate::Evaluate(const TermLeaf &leaf,
+                                         const InternedStringPtr &target_key,
+                                         bool require_positions,
+                                         bool lock) const {
+  // Raw predicate masks, not the collapsed scoring masks: TermIterator
+  // intersects QueryFieldMask() across AND children.
+  const uint64_t field_mask = field_mask_;
+  const uint64_t stem_field_mask =
       field_mask & text_index_schema_->GetStemTextFieldMask();
-  if (!exact_ && stem_field_mask != 0) {
-    bool matched = false;
-    text_index_schema_->WithStemParents(
-        term_, lock,
-        [&](const std::string &stemmed, absl::Span<const std::string> parents,
-            uint32_t) {
-          // Search for the stemmed word itself - may or may not exist in corpus
-          if (stemmed != term_) {
-            matched |=
-                ProbeWord(*text_index_schema_, text_index, stemmed, target_key,
-                          stem_field_mask, require_positions, lock, maps);
-          }
-          // Search for stem variants - these should all exist from ingestion
-          for (const auto &parent : parents) {
-            matched |=
-                ProbeWord(*text_index_schema_, text_index, parent, target_key,
-                          stem_field_mask, require_positions, lock, maps);
-          }
-        });
-    if (matched && !require_positions) {
-      return EvaluationResult(true);
+  PositionMaps maps;
+  for (const TermGroup &group : leaf.groups) {
+    const uint64_t mask =
+        group.kind == TermGroup::Kind::kOriginal ? field_mask : stem_field_mask;
+    for (const WordPostings &word : group.words) {
+      if (ProbePostings(*text_index_schema_, *word.postings, word.word,
+                        target_key, mask, require_positions, lock, maps) &&
+          !require_positions) {
+        return EvaluationResult(true);
+      }
     }
   }
   if (maps.empty()) {
@@ -409,6 +381,22 @@ EvaluationResult TagPredicate::Evaluate(
     }
   }
   return EvaluationResult(false);
+}
+
+EvaluationResult TagPredicate::Evaluate(
+    const TagLeaf &leaf, const InternedStringPtr &target_key) const {
+  for (const TagLeaf::Value &value : leaf.tag_values) {
+    CHECK(value.bag.has_value()) << "tag bags are background-only";
+    if (value.bag->contains(BorrowedInternedStringPtr(target_key))) {
+      return EvaluationResult(true);
+    }
+  }
+  if (leaf.tag_prefixes.empty()) {
+    return EvaluationResult(false);
+  }
+  bool case_sensitive = true;
+  auto tags = index_->GetValue(target_key, case_sensitive);
+  return Evaluate(tags ? &*tags : nullptr, case_sensitive);
 }
 
 ComposedPredicate::ComposedPredicate(

@@ -175,9 +175,8 @@ const text::TextIndex *PrefilterEvaluator::PerKeyTextIndex() {
 query::EvaluationResult PrefilterEvaluator::EvaluateTags(
     const query::TagPredicate &predicate) {
   CHECK(key_);
-  return query::EvaluateTagLeaf(
-      predicate, std::get<query::TagLeaf>(cache_.GetOrResolve(&predicate)),
-      *key_);
+  return predicate.Evaluate(
+      std::get<query::TagLeaf>(cache_.GetOrResolve(&predicate)), *key_);
 }
 
 query::EvaluationResult PrefilterEvaluator::EvaluateNumeric(
@@ -190,8 +189,8 @@ query::EvaluationResult PrefilterEvaluator::EvaluateNumeric(
 query::EvaluationResult PrefilterEvaluator::EvaluateText(
     const query::TextPredicate &predicate, bool require_positions) {
   CHECK(key_);
-  return query::EvaluateTextLeaf(cache_, predicate, *key_, require_positions,
-                                 [this] { return PerKeyTextIndex(); });
+  return query::EvaluateText(cache_, predicate, *key_, require_positions,
+                             [this] { return PerKeyTextIndex(); });
 }
 
 query::EvaluationResult PrefilterEvaluator::EvaluateVectorRange(

@@ -363,6 +363,29 @@ Cleanups from the PR #1472 review that are not design decisions. The design deci
   row is faster, by about the same margin the template showed before the split, so the PR's
   positional path carries no regression relative to the merge base.
 
+### Review round 2
+
+Decisions 30 and 31 of [review-2-amendments.md](review-2-amendments.md), which wins over this
+section.
+
+- **`resolved_leaf.h` includes `text_index.h`** for `kStemVariantsInlineCapacity`, and
+  `predicate` links `text`. `text` does not link `predicate` or `resolved_leaves`, so no cycle.
+  `indexes::Tag` is forward-declared; `TagLeaf` only holds a pointer to it.
+- **The `search_term_predicate` pausepoint fires once per query**, in `ResolveText`, not per key.
+  It used to fire on both routes; the per-key one went with the tree-walk overload.
+  `test_cancel.py` only needs the query to pause somewhere mid-search, which the resolve does.
+- **`ProbeWord` is deleted.** It existed to look a word up in a tree before probing; a `TermLeaf`
+  already holds the postings, so `TermPredicate::Evaluate` calls `ProbePostings` directly.
+- **`EvaluateText(cache, predicate, key, …)` in `resolved_leaves.h` is the shared dispatch**, so
+  the two evaluators do not repeat the leaf-type branch. It fetches and dispatches only; the
+  verdict is the predicate's.
+- **The dispatch `static_cast`s on the leaf type.** `ResolveText` returns a `TermLeaf` only for a
+  `TermPredicate`, and every other `TextPredicate` is an `ExpansionPredicate` (checked: no other
+  subclass exists in `src` or `testing`). The `dynamic_cast` chain in `ResolveText` stays until
+  decision 32 gives the predicate a kind.
+- **The `filter_test` cross-check against the tree walk is gone** with the tree walk. Main vs
+  background equivalence is `MainThreadLockModesMatchBackground` in `search_test.cc`.
+
 ### Merge with main (#985 Vector Range)
 
 - **`SearchVectorRangeQuery` gets its own `ResolvedLeafCache`**, built in `Search()` and shared

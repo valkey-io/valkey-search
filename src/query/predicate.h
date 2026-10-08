@@ -17,6 +17,7 @@
 
 #include "absl/strings/string_view.h"
 #include "src/indexes/text/text_iterator.h"
+#include "src/query/resolved_leaf.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/type_conversions.h"
 
@@ -195,6 +196,13 @@ class TagPredicate : public Predicate {
   // Evaluate against tags (string_view set from indexed data or parsed query)
   EvaluationResult Evaluate(const absl::flat_hash_set<absl::string_view>* tags,
                             bool case_sensitive) const;
+  // One bag probe per exact value; only if none hits and the predicate carries
+  // a prefix value does it fall back to the document's own tags. Same verdict
+  // as Evaluate(GetValue(key)): rax keys are stored with the ASCII folding
+  // EqualsIgnoreCase applies, both sides are whitespace-stripped, and query
+  // values are already unescaped.
+  EvaluationResult Evaluate(const TagLeaf& leaf,
+                            const InternedStringPtr& target_key) const;
   const indexes::Tag* GetIndex() const { return index_; }
   absl::string_view GetAlias() const { return alias_; }
   absl::string_view GetIdentifier() const {
@@ -277,13 +285,6 @@ class TextPredicate : public Predicate {
  public:
   TextPredicate() : Predicate(PredicateType::kText) {}
   ~TextPredicate() override = default;
-  // Walks `text_index` (the document's own tree) for `target_key`. `lock` is
-  // for the main thread, which runs outside the time-sliced read phase and
-  // probes each matched word's shared Postings under its bucket instead.
-  virtual EvaluationResult Evaluate(
-      const valkey_search::indexes::text::TextIndex& text_index,
-      const InternedStringPtr& target_key, bool require_positions,
-      bool lock) const = 0;
   virtual std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema()
       const = 0;
   virtual const FieldMaskPredicate GetFieldMask() const = 0;
@@ -309,6 +310,18 @@ class TextPredicate : public Predicate {
   mutable const indexes::scoring::Scorer* scorer_ = nullptr;
 };
 
+// A text leaf whose matching words are only known per corpus (prefix, suffix,
+// fuzzy): evaluation walks the document's own tree rather than a resolved word
+// list. `lock` is for the main thread, which runs outside the time-sliced read
+// phase and probes each matched word's shared Postings under its bucket.
+class ExpansionPredicate : public TextPredicate {
+ public:
+  virtual EvaluationResult Evaluate(
+      const valkey_search::indexes::text::TextIndex& text_index,
+      const InternedStringPtr& target_key, bool require_positions,
+      bool lock) const = 0;
+};
+
 class TermPredicate : public TextPredicate {
  public:
   TermPredicate(
@@ -320,10 +333,12 @@ class TermPredicate : public TextPredicate {
   }
   absl::string_view GetTextString() const override { return term_; }
   EvaluationResult Evaluate(Evaluator& evaluator) const override;
-  EvaluationResult Evaluate(
-      const valkey_search::indexes::text::TextIndex& text_index,
-      const InternedStringPtr& target_key, bool require_positions,
-      bool lock) const override;
+  // Probes each of the leaf's words for `target_key`. `lock` as on
+  // ExpansionPredicate::Evaluate. Under `require_positions` the result carries
+  // the iterator an enclosing AND/OR needs for its proximity check.
+  EvaluationResult Evaluate(const TermLeaf& leaf,
+                            const InternedStringPtr& target_key,
+                            bool require_positions, bool lock) const;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const std::shared_ptr<indexes::text::TextIndex>& text_index,
       FieldMaskPredicate field_mask, bool require_positions,
@@ -339,7 +354,7 @@ class TermPredicate : public TextPredicate {
   bool exact_;
 };
 
-class PrefixPredicate : public TextPredicate {
+class PrefixPredicate : public ExpansionPredicate {
  public:
   PrefixPredicate(
       std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
@@ -367,7 +382,7 @@ class PrefixPredicate : public TextPredicate {
   std::string term_;
 };
 
-class SuffixPredicate : public TextPredicate {
+class SuffixPredicate : public ExpansionPredicate {
  public:
   SuffixPredicate(
       std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
@@ -395,7 +410,7 @@ class SuffixPredicate : public TextPredicate {
   std::string term_;
 };
 
-class InfixPredicate : public TextPredicate {
+class InfixPredicate : public ExpansionPredicate {
  public:
   InfixPredicate(
       std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
@@ -423,7 +438,7 @@ class InfixPredicate : public TextPredicate {
   std::string term_;
 };
 
-class FuzzyPredicate : public TextPredicate {
+class FuzzyPredicate : public ExpansionPredicate {
  public:
   FuzzyPredicate(
       std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,

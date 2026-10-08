@@ -9,6 +9,10 @@
       [
         "1.2.0",
         "Added Text Indexing and Search support"
+      ],
+      [
+        "1.3.0-RC1",
+        "Added INKEYS, SCORER, WITHSCORES and WITHCURSOR options, BM25STD scoring, VECTOR_RANGE queries and HYBRID_POLICY"
       ]
     ],
     "arguments": [

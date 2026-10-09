@@ -3,6 +3,7 @@ from valkey.client import Valkey
 from valkey_search_test_case import ValkeySearchTestCaseBase, ValkeySearchTestCaseDebugMode
 from valkeytestframework.conftest import resource_port_tracker
 import json
+import pytest
 import random
 from valkey.cluster import ValkeyCluster
 from valkey_search_test_case import ValkeySearchClusterTestCase
@@ -972,6 +973,71 @@ def validate_aggregate_complex_queries(client: Valkey):
         else:
             assert min_price == 2.0, f"Books min_price should be 2.0, got {min_price}"
 
+
+def validate_aggregate_count_distinctish(client: Valkey):
+    """
+        Test FT.AGGREGATE with COUNT_DISTINCTISH reducer.
+        Uses the 1000-record dataset: price 1-1000 (unique), rating cycles
+        through (i%100)+1.0 so each category gets 50 distinct ratings,
+        category alternates electronics/books (500 each).
+        The estimates are deterministic for a given hash input.
+    """
+    expected_prices = {b'electronics': 501, b'books': 501}
+    # 1. Basic COUNT_DISTINCTISH - count distinct prices per category
+    # 500 unique prices per category
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 1000]",
+        "LOAD", "2", "price", "category",
+        "GROUPBY", "1", "@category",
+        "REDUCE", "COUNT_DISTINCTISH", "1", "@price", "AS", "approx_distinct"
+    )
+    assert result[0] == 2
+    for i in range(1, len(result)):
+        row = dict(zip(result[i][::2], result[i][1::2]))
+        approx = float(row[b'approx_distinct'])
+        assert approx == expected_prices[row[b'category']], f"{row[b'category']}: got {approx}"
+
+    # 2. Multiple COUNT_DISTINCTISH reducers in same query
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 1000]",
+        "LOAD", "3", "price", "rating", "category",
+        "GROUPBY", "1", "@category",
+        "REDUCE", "COUNT_DISTINCTISH", "1", "@price", "AS", "approx_prices",
+        "REDUCE", "COUNT_DISTINCTISH", "1", "@rating", "AS", "approx_ratings"
+    )
+    assert result[0] == 2
+    for i in range(1, len(result)):
+        row = dict(zip(result[i][::2], result[i][1::2]))
+        approx_prices = float(row[b'approx_prices'])
+        approx_ratings = float(row[b'approx_ratings'])
+        assert approx_prices == expected_prices[row[b'category']], f"{row[b'category']}: got {approx_prices}"
+        assert approx_ratings == 50, f"Expected 50, got {approx_ratings}"
+
+    # 3. COUNT_DISTINCTISH vs COUNT_DISTINCT comparison
+    result_exact = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 1000]",
+        "LOAD", "2", "rating", "category",
+        "GROUPBY", "1", "@category",
+        "REDUCE", "COUNT_DISTINCT", "1", "@rating", "AS", "exact"
+    )
+    result_approx = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 1000]",
+        "LOAD", "2", "rating", "category",
+        "GROUPBY", "1", "@category",
+        "REDUCE", "COUNT_DISTINCTISH", "1", "@rating", "AS", "approx"
+    )
+    assert result_exact[0] == 2
+    assert result_approx[0] == 2
+    for i in range(1, len(result_exact)):
+        row_exact = dict(zip(result_exact[i][::2], result_exact[i][1::2]))
+        row_approx = dict(zip(result_approx[i][::2], result_approx[i][1::2]))
+        exact_val = float(row_exact[b'exact'])
+        approx_val = float(row_approx[b'approx'])
+        # No register collisions: equals COUNT_DISTINCT
+        assert approx_val == exact_val, f"exact={exact_val}, approx={approx_val}"
+
+
+
 class TestNonVector(ValkeySearchTestCaseBase):
 
     def test_basic(self):
@@ -1006,6 +1072,13 @@ class TestNonVector(ValkeySearchTestCaseBase):
         # Test RANDOM_SAMPLE functionality
         validate_random_sample_queries(client, aggregate_complex_hash_docs)
         validate_random_sample_error_queries(client)
+
+    def test_aggregate_count_distinctish(self):
+        client: Valkey = self.server.get_new_client()
+        create_indexes(client)
+        for doc in aggregate_complex_hash_docs:
+            assert client.execute_command(*doc) == 3
+        validate_aggregate_count_distinctish(client)
 
     def test_uningested_multi_field(self):
         """

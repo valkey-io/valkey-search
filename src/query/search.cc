@@ -124,13 +124,12 @@ class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
  public:
   InlineVectorFilter(
       query::Predicate *filter_predicate, indexes::VectorBase *vector_index,
-      const indexes::text::TextIndexSchema *text_index_schema,
       query::ResolvedLeafCache &cache, QueryOperations query_operations,
-      const IndexSchema *index_schema,
+      const IndexSchema &index_schema,
       const std::optional<absl::flat_hash_set<std::string>> &inkeys)
       : filter_predicate_(filter_predicate),
         vector_index_(vector_index),
-        evaluator_(text_index_schema, cache, query_operations, index_schema),
+        evaluator_(cache, query_operations, index_schema),
         inkeys_(inkeys) {}
   ~InlineVectorFilter() override = default;
 
@@ -201,9 +200,8 @@ absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
       parameters.inkeys.has_value()) {
     inline_filter = std::make_unique<InlineVectorFilter>(
         parameters.filter_parse_results.root_predicate.get(), vector_index,
-        parameters.index_schema->GetTextIndexSchema().get(), cache,
-        parameters.filter_parse_results.query_operations,
-        parameters.index_schema.get(), parameters.inkeys);
+        cache, parameters.filter_parse_results.query_operations,
+        *parameters.index_schema, parameters.inkeys);
     VMSDK_LOG(DEBUG, nullptr) << "Performing vector search with inline filter";
   }
   // Search dispatches virtually on VectorBase, so neither the storage type
@@ -546,14 +544,9 @@ void EvaluatePrefilteredKeys(
   const bool requires_prefilter_evaluation =
       IsUnsolvedQuery(parameters.filter_parse_results.query_operations,
                       parameters.filter_parse_results.is_match_all);
-  const std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema =
-      requires_prefilter_evaluation && parameters.index_schema
-          ? parameters.index_schema->GetTextIndexSchema()
-          : nullptr;
   indexes::PrefilterEvaluator key_evaluator(
-      text_index_schema.get(), cache,
-      parameters.filter_parse_results.query_operations,
-      parameters.index_schema.get());
+      cache, parameters.filter_parse_results.query_operations,
+      *parameters.index_schema);
   while (!entries_fetchers.empty()) {
     auto fetcher = std::move(entries_fetchers.front());
     entries_fetchers.pop();
@@ -852,16 +845,12 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
         std::min(qualified_entries, kInitialNeighborReserveSize));
   }
 
-  const std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema =
-      parameters.index_schema ? parameters.index_schema->GetTextIndexSchema()
-                              : nullptr;
   // TODO: this drain duplicates EvaluatePrefilteredKeys; it exists only
   // because the appender there cannot see the EvaluationResult the VR distance
   // rides on. Fold it in when the drain loops are unified.
   indexes::PrefilterEvaluator key_evaluator(
-      text_index_schema.get(), cache,
-      parameters.filter_parse_results.query_operations,
-      parameters.index_schema.get());
+      cache, parameters.filter_parse_results.query_operations,
+      *parameters.index_schema);
 
   // Resolve the single VR predicate and index once. In a compound OR, an
   // EvaluateFull short-circuit on any non-VR child (text, tag, or numeric)

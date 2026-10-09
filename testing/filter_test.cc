@@ -180,8 +180,8 @@ TEST_P(FilterTest, ParseParams) {
     query::ResolvedLeafCache cache(
         text_index_schema, query::CorpusStats{.total_docs = 1},
         indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std));
-    indexes::PrefilterEvaluator evaluator(text_index_schema, cache,
-                                          query_operations, index_schema.get());
+    indexes::PrefilterEvaluator evaluator(cache, query_operations,
+                                          *index_schema);
     EXPECT_EQ(test_case.evaluate_success.value(),
               evaluator.Evaluate(root, interned_key));
     // The cache is warm now; a second evaluation must not change the verdict.

@@ -708,16 +708,10 @@ class VectorBase : public IndexBase {
 
 class PrefilterEvaluator : public query::Evaluator {
  public:
-  // Built once per query and reused across candidates. index_schema is needed
-  // to resolve a VectorRange predicate's alias to its vector index.
-  PrefilterEvaluator(const text::TextIndexSchema *text_index_schema,
-                     query::ResolvedLeafCache &cache,
+  // Built once per query and reused across candidates.
+  PrefilterEvaluator(query::ResolvedLeafCache &cache,
                      QueryOperations query_operations,
-                     const IndexSchema *index_schema)
-      : query::Evaluator(query_operations),
-        text_index_schema_(text_index_schema),
-        cache_(cache),
-        index_schema_(index_schema) {}
+                     const IndexSchema &index_schema);
   bool Evaluate(const query::Predicate &predicate,
                 const InternedStringPtr &key);
   // Like Evaluate(), but returns the full EvaluationResult so that callers
@@ -744,9 +738,10 @@ class PrefilterEvaluator : public query::Evaluator {
   // predicates never do (tag/numeric, or text served from the cache).
   const text::TextIndex *PerKeyTextIndex();
 
-  const text::TextIndexSchema *text_index_schema_;
   query::ResolvedLeafCache &cache_;
-  const IndexSchema *index_schema_;
+  const IndexSchema &index_schema_;
+  // Null on a schema with no TEXT fields.
+  const text::TextIndexSchema *text_index_schema_;
   const InternedStringPtr *key_{nullptr};
   const text::TextIndex *per_key_index_{nullptr};
   bool per_key_index_fetched_{false};

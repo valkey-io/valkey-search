@@ -821,6 +821,7 @@ TEST_P(FetchFilteredKeysTest, ParseParams) {
       index_schema->GetIndex(kVectorAttributeAlias)->get());
   const FetchFilteredKeysTestCase &test_case = GetParam();
   UnitTestSearchParameters params;
+  params.index_schema = index_schema;
   TextParsingOptions options{};
   FilterParser parser(*index_schema, test_case.filter, options);
   params.filter_parse_results = std::move(parser.Parse().value());
@@ -2656,9 +2657,8 @@ TEST_F(ScoreTextQueryTestBase, TermLeavesWalkTreesOncePerQuery) {
     query::ResolvedLeafCache cache(
         schema->GetTextIndexSchema().get(),
         query::ReadCorpusStats(*schema, query::LockMode::kBackground), scorer);
-    indexes::PrefilterEvaluator evaluator(schema->GetTextIndexSchema().get(),
-                                          cache, parsed->query_operations,
-                                          schema.get());
+    indexes::PrefilterEvaluator evaluator(cache, parsed->query_operations,
+                                          *schema);
     std::vector<InternedStringPtr> keys;
     std::vector<indexes::BorrowedNeighbor> matched;
     vmsdk::ReaderMutexLock lock(&schema->GetTimeSlicedMutex());
@@ -2694,9 +2694,8 @@ TEST_F(ScoreTextQueryTestBase, EvaluateFullRefetchesPerKeyTreeForEachKey) {
   query::ResolvedLeafCache cache(
       schema->GetTextIndexSchema().get(),
       query::ReadCorpusStats(*schema, query::LockMode::kBackground), scorer);
-  indexes::PrefilterEvaluator evaluator(schema->GetTextIndexSchema().get(),
-                                        cache, parsed->query_operations,
-                                        schema.get());
+  indexes::PrefilterEvaluator evaluator(cache, parsed->query_operations,
+                                        *schema);
   const auto d0 = StringInternStore::Intern("d0");
   const auto d1 = StringInternStore::Intern("d1");
   vmsdk::ReaderMutexLock lock(&schema->GetTimeSlicedMutex());
@@ -2727,9 +2726,8 @@ TEST_F(ScoreTextQueryTestBase, TagValuesLookedUpOncePerQuery) {
     query::ResolvedLeafCache cache(
         schema->GetTextIndexSchema().get(),
         query::ReadCorpusStats(*schema, query::LockMode::kBackground), scorer);
-    indexes::PrefilterEvaluator evaluator(schema->GetTextIndexSchema().get(),
-                                          cache, parsed->query_operations,
-                                          schema.get());
+    indexes::PrefilterEvaluator evaluator(cache, parsed->query_operations,
+                                          *schema);
     std::vector<InternedStringPtr> keys;
     std::vector<indexes::BorrowedNeighbor> matched;
     vmsdk::ReaderMutexLock lock(&schema->GetTimeSlicedMutex());
@@ -2800,10 +2798,10 @@ TEST_F(ScoreTextQueryTestBase, MainThreadLockModesMatchBackground) {
         text_schema,
         query::ReadCorpusStats(*schema, query::LockMode::kMainThread), scorer,
         query::LockMode::kMainThread);
-    indexes::PrefilterEvaluator bg_eval(text_schema, background,
-                                        parsed->query_operations, schema.get());
-    indexes::PrefilterEvaluator main_eval(
-        text_schema, main, parsed->query_operations, schema.get());
+    indexes::PrefilterEvaluator bg_eval(background, parsed->query_operations,
+                                        *schema);
+    indexes::PrefilterEvaluator main_eval(main, parsed->query_operations,
+                                          *schema);
     for (const auto &k : {"d1", "d2", "d3", "d4"}) {
       auto key = StringInternStore::Intern(k);
       std::vector<indexes::BorrowedNeighbor> bg_cands{

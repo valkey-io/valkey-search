@@ -144,6 +144,14 @@ std::vector<char> NormalizeVector(absl::string_view record,
   }
 }
 
+PrefilterEvaluator::PrefilterEvaluator(query::ResolvedLeafCache &cache,
+                                       QueryOperations query_operations,
+                                       const IndexSchema &index_schema)
+    : query::Evaluator(query_operations),
+      cache_(cache),
+      index_schema_(index_schema),
+      text_index_schema_(index_schema.GetTextIndexSchema().get()) {}
+
 bool PrefilterEvaluator::Evaluate(const query::Predicate &predicate,
                                   const InternedStringPtr &key) {
   return EvaluateFull(predicate, key).matches;
@@ -200,13 +208,7 @@ query::EvaluationResult PrefilterEvaluator::EvaluateVectorRange(
   if (query_vector.empty()) {
     return query::EvaluationResult(false);
   }
-  DCHECK(index_schema_)
-      << "PrefilterEvaluator requires a non-null index_schema "
-         "to evaluate VectorRange predicates";
-  if (!index_schema_) {
-    return query::EvaluationResult(false);
-  }
-  auto index = index_schema_->GetIndex(predicate.GetAlias());
+  auto index = index_schema_.GetIndex(predicate.GetAlias());
   if (!index.ok()) {
     return query::EvaluationResult(false);
   }

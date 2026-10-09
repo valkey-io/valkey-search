@@ -94,6 +94,7 @@ constexpr absl::string_view kScorer{"SCORER"};
 constexpr absl::string_view kInorder{"INORDER"};
 constexpr absl::string_view kVerbatim{"VERBATIM"};
 constexpr absl::string_view kInkeysParam{"INKEYS"};
+constexpr absl::string_view kInfieldsParam{"INFIELDS"};
 
 struct LimitParameter {
   uint64_t first_index{0};
@@ -251,6 +252,7 @@ struct SearchParameters {
   // Seeded from the `default-scorer` config; an explicit SCORER overrides it.
   indexes::scoring::ScorerType scorer{static_cast<indexes::scoring::ScorerType>(
       options::GetDefaultScorer().GetValue())};
+  std::optional<absl::flat_hash_set<std::string>> infields;
   coordinator::IndexFingerprintVersion index_fingerprint_version;
   uint64_t slot_fingerprint;
   SearchResult search_result;

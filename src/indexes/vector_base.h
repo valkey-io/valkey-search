@@ -453,7 +453,7 @@ class VectorBase : public IndexBase {
   // radius * (1 + epsilon).
   virtual absl::StatusOr<std::vector<Neighbor>> SearchRange(
       absl::string_view query, float radius, cancel::Token &cancellation_token,
-      float epsilon = 0.0f,
+      float epsilon,
       std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr) = 0;
 
   // Distance and internal label for `key`, or an error if untracked. Backs

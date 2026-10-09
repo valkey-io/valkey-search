@@ -359,6 +359,9 @@ class RangeStopCondition : public hnswlib::BaseSearchStopCondition<float> {
 
   void add_point_to_result(hnswlib::labeltype, const void *,
                            float dist) override {
+    if (scoring::IsNaN(dist)) {
+      encountered_nan_ = true;
+    }
     ++num_results_;
     if (nearest_.size() < ef_) {
       nearest_.push(dist);
@@ -382,12 +385,17 @@ class RangeStopCondition : public hnswlib::BaseSearchStopCondition<float> {
            candidate_dist > nearest_.top();
   }
   bool should_consider_candidate(float dist, float lower_bound) override {
+    // A NaN cannot enter the distance-ordered candidate queue, but silently
+    // dropping it can hide in-radius keys reachable only through that node.
+    // Record it so SearchRange can use the exact scan instead.
+    if (scoring::IsNaN(dist)) {
+      encountered_nan_ = true;
+      return false;
+    }
     if (num_results_ >= max_results_ && dist >= lower_bound) {
       return false;
     }
-    // Filling the beam skips NaN, which breaks the candidate queue's order.
-    return dist <= shell_ ||
-           (EfFull() ? dist < nearest_.top() : !scoring::IsNaN(dist));
+    return dist <= shell_ || !EfFull() || dist < nearest_.top();
   }
   bool should_remove_extra() override { return num_results_ > max_results_; }
   void filter_results(
@@ -396,6 +404,7 @@ class RangeStopCondition : public hnswlib::BaseSearchStopCondition<float> {
       results.pop_back();
     }
   }
+  bool EncounteredNaN() const { return encountered_nan_; }
 
  private:
   // Compares the count, not a distance against a sentinel: a stored vector
@@ -407,6 +416,7 @@ class RangeStopCondition : public hnswlib::BaseSearchStopCondition<float> {
   const size_t ef_;
   const size_t max_results_;
   size_t num_results_{0};
+  bool encountered_nan_{false};
   std::priority_queue<float> nearest_;  // The ef nearest distances, max on top.
 };
 
@@ -479,10 +489,10 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
                                                 GetVectorAllocator()),
                         nq.view.size(), normalize_, GetVectorDataType());
   std::vector<std::pair<float, hnswlib::labeltype>> raw_results;
+  RangeStopCondition stop_condition(ComputeRangeShell(radius, epsilon),
+                                    algo_->ef_, max_candidates);
   try {
     CancelCondition cancel_condition(cancellation_token);
-    RangeStopCondition stop_condition(ComputeRangeShell(radius, epsilon),
-                                      algo_->ef_, max_candidates);
     raw_results = algo_->searchStopConditionClosest(
         embedding, stop_condition, filter.get(), &cancel_condition);
   } catch (const std::exception &e) {
@@ -494,10 +504,13 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
   // scan do; the reply is a timeout error unless partial results are enabled.
   const bool cancelled = cancellation_token->IsCancelled();
 
-  // A full fetch holds only results within the shell, and the walk stops once
-  // it is full, so keys in range may be unvisited; scan exhaustively, as FLAT
-  // does.
-  if (!cancelled && raw_results.size() >= max_candidates) {
+  // A NaN rejected before entering the candidate queue can hide keys reachable
+  // only through that graph node, and therefore never appears in raw_results.
+  // A full fetch likewise may have stopped before visiting every in-radius key.
+  // In either case scan exhaustively, unless cancellation requests a partial
+  // result.
+  if (!cancelled && (stop_condition.EncounteredNaN() ||
+                     raw_results.size() >= max_candidates)) {
     query::RecordNonVectorResultsFetchedLimited();
     return this->SearchRangeExhaustive(query, radius, cancellation_token,
                                        filter.get());

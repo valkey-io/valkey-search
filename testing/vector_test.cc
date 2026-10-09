@@ -1250,6 +1250,45 @@ TEST_F(SearchRangeFp32, HnswRangeWalksPastInfiniteEntryPoint) {
   EXPECT_GT(walks_from_infinite_key, 0);
 }
 
+// A finite-vector graph can still produce a NaN traversal distance: with an
+// infinite IP query, its dot product with a zero component is NaN. Here M 2
+// makes the graph the path start - bridge - target. The bridge is at NaN, but
+// target is at -inf and therefore in range. Rejecting bridge from the candidate
+// queue must record the NaN and trigger the exhaustive scan, or target is lost.
+// Keeping every stored vector finite avoids the separate NaN-ingestion hazard.
+TEST_F(SearchRangeFp32, HnswFallsBackWhenNanCandidateBlocksGraphPath)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  auto created = VectorHNSW<float>::Create(
+      CreateHNSWVectorIndexProto(kDims, data_model::DISTANCE_METRIC_IP, 3,
+                                 /*m=*/2, 200, /*ef_runtime=*/1),
+      attribute_identifier, attribute_data_type, 0);
+  ASSERT_TRUE(created.ok()) << created.status();
+  auto &index = **created;
+  const std::pair<const char *, std::pair<float, float>> kKeys[] = {
+      {"start", {-0.9f, 0.0f}},
+      {"bridge", {0.0f, 1.2f}},
+      {"target", {0.9f, 0.0f}}};
+  for (const auto &[key, xy] : kKeys) {
+    std::vector<float> v(kDims, 0.0f);
+    v[0] = xy.first;
+    v[1] = xy.second;
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(
+        index, StringInternStore::Intern(key), Bytes(v)));
+  }
+  std::vector<float> q(kDims, 0.0f);
+  q[0] = scoring::PositiveInf();
+  const std::string query = Bytes(q);
+  constexpr float kRadius = 0.0f;
+  const auto expected = PerKeyReference(index, query, kRadius);
+  ASSERT_EQ(expected.size(), 1u);
+  ASSERT_TRUE(expected.contains("target"));
+
+  auto searched =
+      index.SearchRange(query, kRadius, CancelNever(), /*epsilon=*/0.01f);
+  ASSERT_TRUE(searched.ok()) << searched.status();
+  EXPECT_EQ(ToMap(*searched), expected);
+}
+
 // With allow-replace-deleted a new key takes a deleted key's hnswlib slot under
 // a fresh label, so slot ids and labels diverge; the range traversal must
 // report labels. Each new key is the only one near its own vector.

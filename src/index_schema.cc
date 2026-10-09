@@ -128,6 +128,7 @@ DEV_INTEGER_COUNTER(rdb_stats, rdb_save_sections);
 DEV_INTEGER_COUNTER(rdb_stats, rdb_load_sections);
 DEV_INTEGER_COUNTER(rdb_stats, rdb_load_sections_skipped);
 DEV_INTEGER_COUNTER(rdb_stats, rdb_save_multi_exec_entries);
+DEV_INTEGER_COUNTER(rdb_stats, rdb_save_multi_exec_orphans_skipped);
 DEV_INTEGER_COUNTER(rdb_stats, rdb_load_multi_exec_entries);
 DEV_INTEGER_COUNTER(rdb_stats, rdb_save_mutation_entries);
 DEV_INTEGER_COUNTER(rdb_stats, rdb_load_mutation_entries);
@@ -1693,15 +1694,32 @@ absl::Status IndexSchema::SaveIndexExtension(RDBChunkOutputStream out) const {
   }
   CHECK(count == 0);
   //
-  // Write out the multi/exec queued keys
+  // Write out the multi/exec queued keys.
   //
-  VMSDK_RETURN_IF_ERROR(
-      out.SaveObject<size_t>(multi_mutations_keys_.Get().size()));
-  rdb_save_multi_exec_entries.Increment(multi_mutations_keys_.Get().size());
-  VMSDK_LOG(DEBUG, nullptr) << "Writing Multi/Exec Queue, records = "
-                            << multi_mutations_keys_.Get().size();
+  // Queue keys can outlive their mutation records. Save only tracked keys;
+  // skipped keys are recovered from the saved key list or backfill on load.
+  std::vector<Key> live_multi_keys;
+  live_multi_keys.reserve(multi_mutations_keys_.Get().size());
+  size_t orphan_keys_skipped = 0;
   for (const auto &key : multi_mutations_keys_.Get()) {
-    CHECK(tracked_mutated_records_.find(key) != tracked_mutated_records_.end());
+    if (tracked_mutated_records_.find(key) ==
+        tracked_mutated_records_.end()) {
+      ++orphan_keys_skipped;
+      continue;
+    }
+    live_multi_keys.push_back(key);
+  }
+  if (orphan_keys_skipped != 0) {
+    rdb_save_multi_exec_orphans_skipped.Increment(orphan_keys_skipped);
+    VMSDK_LOG(WARNING, nullptr)
+        << "Skipped " << orphan_keys_skipped
+        << " orphan multi/exec keys not present in mutation map";
+  }
+  VMSDK_RETURN_IF_ERROR(out.SaveObject<size_t>(live_multi_keys.size()));
+  rdb_save_multi_exec_entries.Increment(live_multi_keys.size());
+  VMSDK_LOG(DEBUG, nullptr)
+      << "Writing Multi/Exec Queue, records = " << live_multi_keys.size();
+  for (const auto &key : live_multi_keys) {
     VMSDK_RETURN_IF_ERROR(out.SaveString(key->Str()));
   }
   return absl::OkStatus();

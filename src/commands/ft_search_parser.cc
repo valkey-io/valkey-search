@@ -15,6 +15,7 @@
 #include <utility>
 #include <vector>
 
+#include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/match.h"
@@ -159,6 +160,16 @@ std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructParamsParser() {
 std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructSortByParser() {
   return std::make_unique<vmsdk::ParamParser<SearchCommand>>(
       [](SearchCommand &parameters, vmsdk::ArgsIterator &itr) -> absl::Status {
+        if (parameters.sortby_parameter.has_value()) {
+          VMSDK_RETURN_IF_ERROR(VALKEY_SEARCH_COMPATIBILITY_FIX(
+              1, 3, 0, "ft_search_multiple_sortby",
+              [&]() {
+                return absl::InvalidArgumentError(
+                    "Multiple SORTBY steps are not allowed");
+              },
+              // Legacy: the last SORTBY wins.
+              [&]() { return absl::OkStatus(); }));
+        }
         vmsdk::UniqueValkeyString field;
         VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, field));
         query::SortByParameter sortbyparams;
@@ -209,6 +220,7 @@ std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructReturnParser() {
         if (cnt == 0) {
           return absl::OkStatus();
         }
+        absl::flat_hash_set<absl::string_view> output_names;
         for (uint32_t i = 0; i < cnt; ++i) {
           vmsdk::UniqueValkeyString identifier;
           VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, identifier));
@@ -221,6 +233,14 @@ std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructReturnParser() {
             if (i > cnt) {
               return absl::InvalidArgumentError("Unexpected parameter `AS` ");
             }
+          }
+          // The first entry with a given output name wins.
+          if (!output_names.insert(vmsdk::ToStringView(as_property.get()))
+                   .second &&
+              VALKEY_SEARCH_COMPATIBILITY_FIX(
+                  1, 3, 0, "ft_search_return_duplicate_field",
+                  [&]() { return true; }, [&]() { return false; })) {
+            continue;
           }
           auto schema_identifier = parameters.index_schema->GetIdentifier(
               vmsdk::ToStringView(identifier.get()));

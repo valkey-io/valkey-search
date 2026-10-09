@@ -1174,6 +1174,78 @@ class TestReturnClauseGate(ValkeySearchTestCaseDebugMode):
             assert result == id_only, f"emulate-release {release}"
 
 
+class TestRepeatedSortByAndReturnGate(ValkeySearchTestCaseDebugMode):
+    """
+        A second SORTBY is rejected and a RETURN clause names each output
+        once (issue #1521), gated on search.emulate-release.
+    """
+
+    def test_repeated_sortby_and_return_gate(self):
+        client: Valkey = self.server.get_new_client()
+        assert client.execute_command(
+            "FT.CREATE", "rsr_idx", "ON", "HASH", "PREFIX", "1", "rsr:",
+            "SCHEMA", "m", "TAG", "s", "TAG", "SORTABLE",
+            "p", "NUMERIC", "SORTABLE", "title", "TEXT") == b"OK"
+        assert client.execute_command(
+            "HSET", "rsr:1", "m", "all", "s", "c", "p", "20",
+            "title", "hello") == 4
+        assert client.execute_command(
+            "HSET", "rsr:2", "m", "all", "s", "a", "p", "30",
+            "title", "hello") == 4
+
+        def counters():
+            info = client.info("search")
+            return (info.get("search_compatibility-ft_search_multiple_sortby", 0),
+                    info.get("search_compatibility-ft_search_return_duplicate_field", 0))
+
+        two_sortby = ("FT.SEARCH", "rsr_idx", "@m:{all}", "SORTBY", "s", "ASC",
+                      "SORTBY", "p", "ASC", "RETURN", "1", "p", "DIALECT", "2")
+        dup_return = ("FT.SEARCH", "rsr_idx", "@m:{all}", "RETURN", "3",
+                      "p", "title", "p", "LIMIT", "0", "1", "DIALECT", "2")
+        same_output_name = ("FT.SEARCH", "rsr_idx", "@m:{all}", "RETURN", "4",
+                            "p", "AS", "title", "title", "LIMIT", "0", "1",
+                            "DIALECT", "2")
+
+        assert client.execute_command(
+            "CONFIG", "SET", "search.emulate-release", "1.2.1") == b"OK"
+        # Legacy: the last SORTBY wins (s ASC would put rsr:2 first) and
+        # duplicates are emitted.
+        assert client.execute_command(*two_sortby) == [
+            2, b"rsr:1", [b"p", b"20"], b"rsr:2", [b"p", b"30"]]
+        assert client.execute_command(*dup_return) == [
+            2, b"rsr:1", [b"p", b"20", b"title", b"hello", b"p", b"20"]]
+        assert client.execute_command(*same_output_name) == [
+            2, b"rsr:1", [b"title", b"20", b"title", b"hello"]]
+        assert counters() == (1, 2)
+        # Only the changed shapes count.
+        assert client.execute_command(
+            "FT.SEARCH", "rsr_idx", "@m:{all}", "SORTBY", "s", "ASC",
+            "RETURN", "2", "p", "title", "LIMIT", "0", "1", "DIALECT", "2") == [
+            2, b"rsr:2", [b"p", b"30", b"title", b"hello"]]
+        assert counters() == (1, 2)
+
+        assert client.execute_command(
+            "CONFIG", "SET", "search.emulate-release", "1.3.0") == b"OK"
+        with pytest.raises(ResponseError,
+                           match="Multiple SORTBY steps are not allowed"):
+            client.execute_command(*two_sortby)
+        assert client.execute_command(*dup_return) == [
+            2, b"rsr:1", [b"p", b"20", b"title", b"hello"]]
+        assert client.execute_command(*same_output_name) == [
+            2, b"rsr:1", [b"title", b"20"]]
+        # Two names for one field are two entries; a later clause still replaces.
+        assert client.execute_command(
+            "FT.SEARCH", "rsr_idx", "@m:{all}", "RETURN", "6",
+            "title", "AS", "a", "title", "AS", "b", "LIMIT", "0", "1",
+            "DIALECT", "2") == [
+            2, b"rsr:1", [b"a", b"hello", b"b", b"hello"]]
+        assert client.execute_command(
+            "FT.SEARCH", "rsr_idx", "@m:{all}", "RETURN", "1", "p",
+            "RETURN", "2", "title", "p", "LIMIT", "0", "1", "DIALECT", "2") == [
+            2, b"rsr:1", [b"title", b"hello", b"p", b"20"]]
+        assert counters() == (1, 2)
+
+
 class TestAggregateReducerAlias(ValkeySearchTestCaseDebugMode):
     """
         A REDUCE with no AS clause auto-generates its output name, and which form

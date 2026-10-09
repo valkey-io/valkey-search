@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "absl/container/flat_hash_set.h"
+#include "absl/strings/match.h"
 #include "absl/strings/string_view.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -30,6 +31,7 @@
 #include "src/indexes/vector_hnsw.h"
 #include "src/query/search.h"
 #include "src/schema_manager.h"
+#include "src/valkey_search_options.h"
 #include "testing/common.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/testing_infra/module.h"
@@ -464,6 +466,88 @@ TEST_F(MaxTimeoutConfigTest, AppliesToSearchAndAggregate) {
             "exceed 100.");
 
   VMSDK_EXPECT_OK(max_timeout_ms.SetValue(saved_max_timeout_ms));
+}
+
+class FTSearchParserGateTest : public ValkeySearchTest {
+ protected:
+  void TearDown() override {
+    SchemaManager::InitInstance(nullptr);
+    ValkeySearchTest::TearDown();
+  }
+};
+
+TEST_F(FTSearchParserGateTest, RepeatedSortByAndReturnFollowEmulateRelease) {
+  FTSearchParserTestCase non_vector{.vector_query = false};
+  auto index_schema = SetupIndexSchemaForTestCase(non_vector, &fake_ctx_);
+  auto parse = [&](absl::string_view tail)
+      -> absl::StatusOr<std::unique_ptr<SearchCommand>> {
+    const absl::string_view query = "@attribute_identifier_2:{x}";
+    auto argv = vmsdk::ToValkeyStringVector(tail);
+    vmsdk::ArgsIterator itr(argv.data(), argv.size());
+    auto cmd = std::make_unique<SearchCommand>(0);
+    cmd->index_schema = index_schema;
+    cmd->index_schema_name = "my_schema_name";
+    cmd->parse_vars.query_string = query;
+    auto status = cmd->ParseCommand(itr);
+    for (auto arg : argv) {
+      TestValkeyModule_FreeString(nullptr, arg);
+    }
+    if (!status.ok()) {
+      return status;
+    }
+    return cmd;
+  };
+  auto aliases = [](const SearchCommand &cmd) {
+    std::vector<std::string> out;
+    for (const auto &attribute : cmd.return_attributes) {
+      out.emplace_back(vmsdk::ToStringView(attribute.alias.get()));
+    }
+    return out;
+  };
+  const absl::string_view two_sortby =
+      "SORTBY attribute_identifier_1 SORTBY attribute_identifier_2 DESC";
+  const absl::string_view dup_return = "RETURN 3 r1 r2 r1";
+
+  const auto saved = options::GetEmulateRelease().GetValue();
+  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue({1, 2, 1}));
+  {
+    auto cmd = parse(two_sortby);
+    VMSDK_EXPECT_OK(cmd.status());
+    EXPECT_EQ((*cmd)->sortby_parameter->field, "attribute_identifier_2");
+    EXPECT_EQ((*cmd)->sortby_parameter->order, query::SortOrder::kDescending);
+    cmd = parse(dup_return);
+    VMSDK_EXPECT_OK(cmd.status());
+    EXPECT_THAT(aliases(**cmd), testing::ElementsAre("r1", "r2", "r1"));
+  }
+
+  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue({1, 3, 0}));
+  {
+    auto cmd = parse(two_sortby);
+    EXPECT_EQ(cmd.status().code(), absl::StatusCode::kInvalidArgument);
+    EXPECT_TRUE(absl::StrContains(cmd.status().message(),
+                                  "Multiple SORTBY steps are not allowed"));
+    VMSDK_EXPECT_OK(parse("SORTBY attribute_identifier_1 DESC").status());
+
+    cmd = parse(dup_return);
+    VMSDK_EXPECT_OK(cmd.status());
+    EXPECT_THAT(aliases(**cmd), testing::ElementsAre("r1", "r2"));
+    // Dedupe is by output name: a second source for the same name is dropped,
+    // one source under two names is kept twice.
+    cmd = parse("RETURN 6 r1 AS a r2 AS a");
+    VMSDK_EXPECT_OK(cmd.status());
+    EXPECT_THAT(aliases(**cmd), testing::ElementsAre("a"));
+    EXPECT_EQ(
+        vmsdk::ToStringView((*cmd)->return_attributes[0].identifier.get()),
+        "r1");
+    cmd = parse("RETURN 6 r1 AS a r1 AS b");
+    VMSDK_EXPECT_OK(cmd.status());
+    EXPECT_THAT(aliases(**cmd), testing::ElementsAre("a", "b"));
+    // Dedupe is per clause; a later clause still replaces an earlier one.
+    cmd = parse("RETURN 1 r1 RETURN 2 r2 r1");
+    VMSDK_EXPECT_OK(cmd.status());
+    EXPECT_THAT(aliases(**cmd), testing::ElementsAre("r2", "r1"));
+  }
+  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue(saved));
 }
 
 INSTANTIATE_TEST_SUITE_P(

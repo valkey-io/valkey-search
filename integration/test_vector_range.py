@@ -224,6 +224,19 @@ def delete_and_reinsert(client, rng, vectors):
     return np.array(list(stored.values()), dtype=np.float32)
 
 
+def check_saturated_epsilon_matches_flat(client, flat_index, hnsw_index):
+    """$epsilon values beyond float range (accepted as in Redis) widen the
+    HNSW walk to the whole graph, so the HNSW range result is the FLAT one.
+    Expects the 20 x 20 grid of integer points written by the caller."""
+    query = np.array([3.3, 4.7], dtype=np.float32)
+    radius = 20.5
+    flat = range_distances(client, flat_index, "v", query, radius)
+    assert 0 < len(flat) < 400
+    for epsilon in ("inf", "nan", "1e40"):
+        hnsw = range_distances(client, hnsw_index, "v", query, radius, epsilon)
+        assert hnsw == pytest.approx(flat), epsilon
+
+
 # ---------------------------------------------------------------------------
 # Vectors used across tests (3-dimensional, L2 distance metric)
 # ---------------------------------------------------------------------------
@@ -891,6 +904,18 @@ class TestVectorRange(ValkeySearchTestCaseBase):
             "NOCONTENT",
         )
         assert result[0] >= 1
+
+    def test_query_attr_epsilon_saturated(self):
+        """
+        $epsilon: inf, nan and 1e40 on an HNSW field return the FLAT result.
+        """
+        client = self.server.get_new_client()
+        flat_index, hnsw_index = create_range_indexes(client, "L2", dim=2)
+        grid = np.array([[i % 20, i // 20] for i in range(400)],
+                        dtype=np.float32)
+        write_vectors(client, range(400), grid)
+        wait_indexed([client], (flat_index, hnsw_index))
+        check_saturated_epsilon_matches_flat(client, flat_index, hnsw_index)
 
     # =================================================================
     # 13. Query attributes: both $yield_distance_as and $epsilon
@@ -2165,6 +2190,22 @@ class TestVectorRangeCluster(ValkeySearchClusterTestCase):
         flat = range_distances(primaries[0], flat_index, "v", query, radius)
         assert flat.keys() == expected
         assert hnsw == pytest.approx(flat)
+
+    def test_query_attr_epsilon_saturated_cluster(self):
+        """
+        $epsilon: inf, nan and 1e40 reach every shard through the coordinator
+        and return the FLAT result.
+        """
+        cluster_client = self.new_cluster_client()
+        flat_index, hnsw_index = create_range_indexes(
+            cluster_client, "L2", dim=2)
+        grid = np.array([[i % 20, i // 20] for i in range(400)],
+                        dtype=np.float32)
+        write_vectors(cluster_client, range(400), grid)
+        primaries = self._primaries()
+        wait_indexed(primaries, (flat_index, hnsw_index))
+        check_saturated_epsilon_matches_flat(
+            primaries[0], flat_index, hnsw_index)
 
 
 class TestVectorRangeBenchmark(ValkeySearchTestCaseBase):

@@ -7,8 +7,10 @@
 
 #include "src/commands/filter_parser.h"
 
+#include <bit>
 #include <cctype>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <memory>
 #include <string>
@@ -25,7 +27,6 @@
 #include "src/index_schema.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
-#include "src/indexes/scoring/scorer.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
 #include "src/indexes/text/language.h"
@@ -388,9 +389,11 @@ FilterParser::ParseVectorRangeQueryAttributes() {
         return absl::InvalidArgumentError(
             "$epsilon must be a valid non-negative number");
       }
-      const float epsilon_float = static_cast<float>(epsilon_val);
-      if (epsilon_val < 0 || indexes::scoring::IsNaN(epsilon_float) ||
-          indexes::scoring::IsInf(epsilon_float)) {
+      // Sign and zero are tested by bit: under -ffast-math NaN comparisons are
+      // unreliable and std::signbit can miss the sign of -nan and -0. Zeros are
+      // rejected by the HNSW check below.
+      const uint64_t epsilon_bits = std::bit_cast<uint64_t>(epsilon_val);
+      if ((epsilon_bits >> 63) != 0 && (epsilon_bits << 1) != 0) {
         return absl::InvalidArgumentError(
             "$epsilon must be a valid non-negative number");
       }
@@ -515,7 +518,7 @@ FilterParser::ParseVectorRangePredicate(const std::string& attribute_alias) {
           return absl::InvalidArgumentError(
               "Invalid option (Error parsing vector similarity parameters)");
         }
-        if (attrs.epsilon.value() <= 0) {
+        if ((std::bit_cast<uint64_t>(attrs.epsilon.value()) << 1) == 0) {
           return absl::InvalidArgumentError(
               "Invalid option (Error parsing vector similarity parameters)");
         }

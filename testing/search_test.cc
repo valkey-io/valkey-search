@@ -1579,6 +1579,88 @@ TEST_F(GetVrScoreFieldNameTest, SingleVrUnderComposedAnd) {
   EXPECT_EQ(query::GetVrScoreFieldName(params), "dist");
 }
 
+// $EPSILON reaches the HNSW range walk, alone and under AND. The layout is the
+// one of SearchRangeFp32.HnswRangeReachesKeysThroughTheEpsilonShell: the graph
+// is the path start - bridge - target (M 2), the walk enters at start, and with
+// EF_RUNTIME 1 it takes bridge, outside the radius (squared distance 1.44
+// against 1), as a candidate only when bridge is within radius * (1 + epsilon).
+// The query finds target with $EPSILON 0.5, and not with the default 0.01.
+// Under AND the walk's result is the candidate set only while it is smaller
+// than the tag's (all three keys); the default-epsilon AND query missing target
+// shows that it is.
+TEST_F(ValkeySearchTest, VectorRangeEpsilonReachesTheHnswWalk) {
+  auto schema = CreateIndexSchema(kIndexSchemaName).value();
+  EXPECT_CALL(*schema, GetIdentifier(::testing::_))
+      .Times(::testing::AnyNumber());
+  auto vector_index =
+      indexes::VectorHNSW<float>::Create(
+          CreateHNSWVectorIndexProto(kVectorDimensions,
+                                     data_model::DISTANCE_METRIC_L2, 3,
+                                     /*m=*/2, 200, /*ef_runtime=*/1),
+          "vector_attribute_identifier",
+          data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
+          .value();
+  VMSDK_EXPECT_OK(schema->AddIndex(kVectorAttributeAlias, kVectorAttributeAlias,
+                                   vector_index));
+  auto tag_index = std::make_shared<indexes::Tag>(
+      CreateTagIndexProto(/*separator=*/",", /*case_sensitive=*/false));
+  VMSDK_EXPECT_OK(schema->AddIndex("tag", "tag", tag_index));
+  // Inserted first, start is the entry point.
+  const std::pair<const char *, std::pair<float, float>> kKeys[] = {
+      {"start", {-0.9f, 0.0f}},
+      {"bridge", {0.0f, 1.2f}},
+      {"target", {0.9f, 0.0f}}};
+  for (const auto &[key, xy] : kKeys) {
+    std::vector<float> v(kVectorDimensions, 0.0f);
+    v[0] = xy.first;
+    v[1] = xy.second;
+    auto interned = StringInternStore::Intern(key);
+    schema->SetIndexMutationSequenceNumber(interned, 0);
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(*vector_index, interned,
+                                                   VectorToStr(v)));
+    VMSDK_EXPECT_OK(tag_index->AddRecord(
+        interned, AttributeData(vmsdk::MakeUniqueValkeyString("a"))));
+  }
+  const std::vector<float> query_vector(kVectorDimensions, 0.0f);
+  auto search = [&](absl::string_view filter) {
+    UnitTestSearchParameters params;
+    params.index_schema_name = kIndexSchemaName;
+    params.index_schema = schema;
+    params.dialect = kDialect;
+    TextParsingOptions options{};
+    params.filter_parse_results =
+        std::move(FilterParser(*schema, filter, options).Parse().value());
+    params.has_vector_range = true;
+    query::Predicate *vr = params.filter_parse_results.root_predicate.get();
+    if (vr->GetType() == query::PredicateType::kComposedAnd) {
+      for (const auto &child :
+           static_cast<query::ComposedPredicate *>(vr)->GetChildren()) {
+        if (child->GetType() == query::PredicateType::kVectorRange) {
+          vr = child.get();
+        }
+      }
+    }
+    static_cast<query::VectorRangePredicate *>(vr)->SetQueryVector(
+        std::string(VectorToStr(query_vector)));
+    VMSDK_EXPECT_OK(Search(params, query::SearchMode::kLocal));
+    std::vector<std::string> keys;
+    for (const auto &neighbor : params.search_result.neighbors) {
+      keys.emplace_back(neighbor.external_id->Str());
+    }
+    return keys;
+  };
+  EXPECT_THAT(search("@vector:[VECTOR_RANGE 1 $q]=>{$EPSILON: 0.5}"),
+              ::testing::ElementsAre("start", "target"));
+  EXPECT_THAT(search("@vector:[VECTOR_RANGE 1 $q]"), ::testing::SizeIs(1))
+      << "the walk entered at bridge rather than start, or did not stop";
+  EXPECT_THAT(search("@vector:[VECTOR_RANGE 1 $q]=>{$EPSILON: 0.5} @tag:{a}"),
+              ::testing::ElementsAre("start", "target"));
+  EXPECT_THAT(search("@vector:[VECTOR_RANGE 1 $q] @tag:{a}"),
+              ::testing::SizeIs(1))
+      << "the AND did not take the walk's result as its candidate set, the "
+         "walk entered at bridge rather than start, or it did not stop";
+}
+
 class ScoreTextQueryTestBase : public ValkeySearchTest {
  protected:
   // Schema with a text field "text", a case-insensitive tag field "color", and

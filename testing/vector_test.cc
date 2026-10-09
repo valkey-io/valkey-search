@@ -1142,6 +1142,57 @@ TEST_F(SearchRangeFp32, HnswRangeShellStaysFiniteAtFloatLimits) {
   }
 }
 
+// A key with an infinite component, at +inf from every query, can be the node
+// the level-0 walk starts from; the walk must still reach the finite keys. The
+// key takes every insertion position, so that some layouts start the walk on
+// it: the filter records the first label it is asked about, the start node.
+TEST_F(SearchRangeFp32, HnswRangeWalksPastInfiniteEntryPoint) {
+  constexpr auto kNone = std::numeric_limits<hnswlib::labeltype>::max();
+  struct FirstLabel : hnswlib::BaseFilterFunctor {
+    explicit FirstLabel(hnswlib::labeltype &first) : first(first) {}
+    bool operator()(hnswlib::labeltype id) override {
+      if (first == kNone) {
+        first = id;
+      }
+      return true;
+    }
+    hnswlib::labeltype &first;
+  };
+  std::vector<float> infinite(kDims, 0.0f);
+  infinite[0] = scoring::PositiveInf();
+  // Squared L2 between vectors in [-1, 1)^kDims is below 4 * kDims.
+  constexpr float kRadius = 4.0f * kDims;
+  int walks_from_infinite_key = 0;
+  for (int count : {3, 5, 8, 12, 20}) {
+    for (int infinite_at = 0; infinite_at < count; ++infinite_at) {
+      SCOPED_TRACE(absl::StrCat("keys ", count, " infinite at ", infinite_at));
+      auto index = MakeIndex(/*hnsw=*/true, data_model::DISTANCE_METRIC_L2,
+                             /*ef_runtime=*/10);
+      ASSERT_NE(index, nullptr);
+      uint64_t seed = 23;
+      for (int i = 0; i < count; ++i) {
+        VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(
+            *index, IndexToKey(i),
+            Bytes(i == infinite_at ? infinite : RandomVector(seed))));
+      }
+      const std::string query = Bytes(RandomVector(seed));
+      const auto expected = PerKeyReference(*index, query, kRadius);
+      ASSERT_EQ(expected.size(), static_cast<size_t>(count - 1));
+      hnswlib::labeltype start = kNone;
+      auto searched =
+          index->SearchRange(query, kRadius, CancelNever(), /*epsilon=*/0.01f,
+                             std::make_unique<FirstLabel>(start));
+      ASSERT_TRUE(searched.ok()) << searched.status();
+      EXPECT_EQ(ToMap(*searched), expected);
+      // A fresh index labels keys in insertion order.
+      if (start == static_cast<hnswlib::labeltype>(infinite_at)) {
+        ++walks_from_infinite_key;
+      }
+    }
+  }
+  EXPECT_GT(walks_from_infinite_key, 0);
+}
+
 // With allow-replace-deleted a new key takes a deleted key's hnswlib slot under
 // a fresh label, so slot ids and labels diverge; the range traversal must
 // report labels. Each new key is the only one near its own vector.

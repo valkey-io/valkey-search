@@ -51,6 +51,11 @@ on:
         required: false
         default: "1440"
         type: string
+      trigger_label:
+        description: "Benchmark label that triggered this run"
+        required: false
+        default: ""
+        type: string
   pull_request_target:
     types: [labeled]
 
@@ -98,11 +103,17 @@ jobs:
       - name: Resolve PR details
         id: pr
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          TRIGGER_LABEL_INPUT: ${{ github.event.inputs.trigger_label }}
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const {owner, repo} = context.repo;
             const noMerge = "The PR has no mergeable commit (likely conflicts with the base branch, or merge not yet computed - try again in a moment).";
+            const benchmarkLabels = new Set([
+              'run-search-benchmark',
+              'run-search-benchmark-skip-profiling',
+            ]);
 
             if (context.eventName === 'workflow_dispatch') {
               const prNumber = Number('${{ github.event.inputs.pr_number }}');
@@ -121,9 +132,11 @@ jobs:
               core.setOutput('base_sha', pr.data.base.sha);
               core.setOutput('pr_number', String(prNumber));
               const clusterInput = '${{ github.event.inputs.cluster_mode }}';
+              const triggerLabel = process.env.TRIGGER_LABEL_INPUT || '';
+              const normalizedTriggerLabel = benchmarkLabels.has(triggerLabel) ? triggerLabel : '';
               core.setOutput('cluster_filter', clusterInput || '');
               core.setOutput('skip_profiling', '${{ github.event.inputs.skip_profiling }}' === 'true' ? 'true' : 'false');
-              core.setOutput('label', '');
+              core.setOutput('label', normalizedTriggerLabel);
             } else {
               // pull_request_target: the PR context is already in the payload.
               const pr = context.payload.pull_request;
@@ -499,17 +512,58 @@ jobs:
                  "$MODULE_BASELINE_PATH" \
                  "$PERF_BENCHMARK_PATH"
 
-      # Only meaningful for the label path; resolve.outputs.label is empty for
-      # manual dispatch, so this step no-ops there.
+      # Only meaningful when the run knows which benchmark label to clean up:
+      # either the native label trigger or a workflow_dispatch forwarded from
+      # the /label slash command.
       - name: Remove benchmark label
         if: always() && needs.resolve.outputs.label != ''
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          TARGET_LABEL: ${{ needs.resolve.outputs.label }}
+          TARGET_PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const benchmarkLabels = new Set([
+              'run-search-benchmark',
+              'run-search-benchmark-skip-profiling',
+            ]);
+            const label = process.env.TARGET_LABEL || '';
+            const prNumber = Number(process.env.TARGET_PR_NUMBER);
+            if (!benchmarkLabels.has(label) || !Number.isInteger(prNumber) || prNumber <= 0) return;
+            await github.rest.issues.removeLabel({
+              issue_number: prNumber,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: label
+            }).catch(err => console.log('label not present', err.message));
+
+  cleanup-label-on-resolve-failure:
+    needs: resolve
+    if: always() && needs.resolve.result == 'failure'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    env:
+      TARGET_LABEL: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.trigger_label || github.event.label.name || '' }}
+      TARGET_PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number || github.event.pull_request.number || '' }}
+    steps:
+      - name: Remove benchmark label after resolve failure
+        if: env.TARGET_LABEL != '' && env.TARGET_PR_NUMBER != ''
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
+            const benchmarkLabels = new Set([
+              'run-search-benchmark',
+              'run-search-benchmark-skip-profiling',
+            ]);
+            const prNumber = Number(process.env.TARGET_PR_NUMBER);
+            const label = process.env.TARGET_LABEL || '';
+            if (!benchmarkLabels.has(label) || !Number.isInteger(prNumber) || prNumber <= 0) return;
             await github.rest.issues.removeLabel({
-              issue_number: Number('${{ needs.resolve.outputs.pr_number }}'),
+              issue_number: prNumber,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              name: '${{ needs.resolve.outputs.label }}'
+              name: label,
             }).catch(err => console.log('label not present', err.message));

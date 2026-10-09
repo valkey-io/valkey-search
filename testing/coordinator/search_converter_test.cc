@@ -7,19 +7,24 @@
 
 #include "src/coordinator/search_converter.h"
 
+#include <bit>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "absl/container/flat_hash_set.h"
+#include "absl/strings/str_cat.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/index_schema.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/text.h"
+#include "src/indexes/vector_hnsw.h"
 #include "src/query/predicate.h"
+#include "src/query/search.h"
 #include "testing/common.h"
 
 namespace valkey_search::coordinator {
@@ -284,6 +289,63 @@ TEST_F(SearchConverterTest, HybridPolicyRoundTrips) {
     VMSDK_EXPECT_OK(
         GRPCSearchRequestToParameters(*request, /*context=*/nullptr, &decoded));
     EXPECT_EQ(decoded.hybrid_policy, value);
+  }
+}
+
+// Older nodes accept $epsilon values such as inf, nan and 1e40 and forward them
+// unchecked. A shard decoding one must answer an HNSW range query exactly.
+TEST_F(SearchConverterTest, VectorRangeOutOfRangeEpsilonSearchesExactly) {
+  constexpr int kNumKeys = 200;
+  auto index = indexes::VectorHNSW<float>::Create(
+                   CreateHNSWVectorIndexProto(2, data_model::DISTANCE_METRIC_L2,
+                                              kNumKeys, 16, 200, 10),
+                   "vec", data_model::ATTRIBUTE_DATA_TYPE_HASH, 0)
+                   .value();
+  VMSDK_EXPECT_OK(index_schema_->AddIndex("vec", "vec", index));
+  // Squared L2 from the origin: k0..k10 (k10 at 1.0, k11 at 1.21) are within
+  // the radius 1.1.
+  std::vector<std::string> expected;
+  for (int i = 0; i < kNumKeys; ++i) {
+    const std::vector<float> vector = {0.1f * i, 0.0f};
+    const std::string key = absl::StrCat("k", i);
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(
+        *index, StringInternStore::Intern(key), VectorToStr(vector)));
+    if (i <= 10) {
+      expected.push_back(key);
+    }
+  }
+  const std::vector<float> query = {0.0f, 0.0f};
+  // Infinity and NaN are built from bits: -ffast-math may fold the
+  // std::numeric_limits ones.
+  for (const double epsilon :
+       {std::bit_cast<double>(uint64_t{0x7FF0000000000000}),
+        std::bit_cast<double>(uint64_t{0x7FF8000000000000}), 1e40}) {
+    SCOPED_TRACE(absl::StrCat("epsilon ", epsilon));
+    Predicate proto;
+    auto* vr = proto.mutable_vector_range();
+    vr->set_attribute_alias("vec");
+    vr->set_radius(1.1);
+    vr->set_vector_param_name("blob");
+    vr->set_epsilon(epsilon);
+    vr->set_query_vector(std::string(VectorToStr(query)));
+    absl::flat_hash_set<std::string> identifiers;
+    auto predicate =
+        GRPCPredicateToPredicate(proto, index_schema_, identifiers);
+    ASSERT_TRUE(predicate.ok()) << predicate.status();
+
+    UnitTestSearchParameters params;
+    params.index_schema = index_schema_;
+    params.filter_parse_results.root_predicate = std::move(predicate).value();
+    params.has_vector_range =
+        query::CountVectorRangePredicates(
+            params.filter_parse_results.root_predicate.get()) > 0;
+    auto neighbors = query::SearchVectorRangeQuery(params);
+    ASSERT_TRUE(neighbors.ok()) << neighbors.status();
+    std::vector<std::string> keys;
+    for (const auto& neighbor : *neighbors) {
+      keys.emplace_back(neighbor.external_id->Str());
+    }
+    EXPECT_THAT(keys, ::testing::UnorderedElementsAreArray(expected));
   }
 }
 

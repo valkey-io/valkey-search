@@ -326,7 +326,7 @@ class CancelCondition : public hnswlib::BaseCancellationFunctor {
 };
 
 // Compute the range traversal shell outside float arithmetic: FLT_MAX with
-// even the default epsilon overflows in float. Query parsing keeps epsilon
+// even the default epsilon overflows in float. GetSearchEpsilon() keeps epsilon
 // finite, and the double product of two finite floats cannot overflow double.
 float ComputeRangeShell(float radius, float epsilon) {
   CHECK(!scoring::IsNaN(radius));

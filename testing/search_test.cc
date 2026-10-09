@@ -804,6 +804,67 @@ TEST_F(ValkeySearchTest, HybridQueryRanksByTextScoreNotVectorDistance) {
   EXPECT_GT(neighbors[0].distance, neighbors[1].distance);
 }
 
+// A numeric SORTBY is trimmed in the background by the value the index holds,
+// so the main thread fetches content for the page (plus buffer) only. Keys the
+// index does not track -- a missing field or an unparsable value -- are kept
+// untrimmed, as is the offset. Any other SORTBY keeps every candidate.
+TEST_F(ValkeySearchTest, NumericSortByTrimsByIndexValue) {
+  auto schema = CreateIndexSchema(kIndexSchemaName).value();
+  auto price = std::make_shared<indexes::Numeric>(CreateNumericIndexProto());
+  VMSDK_EXPECT_OK(schema->AddIndex("price", "price", price));
+  auto color = std::make_shared<indexes::Tag>(
+      CreateTagIndexProto(/*separator=*/",", /*case_sensitive=*/false));
+  VMSDK_EXPECT_OK(schema->AddIndex("color", "color", color));
+  std::vector<InternedStringPtr> keys;
+  for (const auto &[key, value] :
+       std::vector<std::pair<std::string, std::string>>{{"d30", "30"},
+                                                        {"d10", "10"},
+                                                        {"dneg", "-5"},
+                                                        {"d20", "20"},
+                                                        {"bad", "N/A"}}) {
+    keys.push_back(StringInternStore::Intern(key));
+    VMSDK_EXPECT_OK(price->AddRecord(
+        keys.back(), AttributeData(vmsdk::MakeUniqueValkeyString(value))));
+  }
+  keys.push_back(StringInternStore::Intern("missing"));
+
+  auto trim = [&](const std::string &field, query::SortOrder order,
+                  uint64_t offset, uint64_t count) {
+    UnitTestSearchParameters params;
+    params.index_schema = schema;
+    params.sortby_parameter = query::SortByParameter{field, order};
+    params.limit = {offset, count};
+    std::vector<indexes::BorrowedNeighbor> candidates;
+    for (const auto &key : keys) {
+      candidates.push_back({BorrowedInternedStringPtr(key), 0.0f, 0.0f});
+    }
+    vmsdk::ReaderMutexLock lock(&schema->GetTimeSlicedMutex());
+    query::SearchResult result(candidates.size(), std::move(candidates),
+                               params);
+    // A numeric SORTBY keeps every candidate for the content-loading fallback.
+    EXPECT_EQ(result.sortby_candidates.size(),
+              field == "price" ? keys.size() : 0u);
+    std::vector<std::string> survivors;
+    for (const auto &neighbor : result.neighbors) {
+      survivors.emplace_back(neighbor.external_id->Str());
+    }
+    return survivors;
+  };
+  using ::testing::ElementsAre;
+  // LIMIT 0 2 keeps 2 x 1.5 (the default buffer multiplier) = 3 of the priced
+  // keys; the untracked ones go through untrimmed, for ApplySorting to order.
+  EXPECT_THAT(trim("price", query::SortOrder::kAscending, 0, 2),
+              ElementsAre("dneg", "d10", "d20", "bad", "missing"));
+  EXPECT_THAT(trim("price", query::SortOrder::kDescending, 0, 2),
+              ElementsAre("d30", "d20", "d10", "bad", "missing"));
+  // The offset is kept, to be applied after content loading: LIMIT 2 2 keeps
+  // (2 + 2) x 1.5 = 6, which is all 4 priced keys.
+  EXPECT_THAT(trim("price", query::SortOrder::kAscending, 2, 2),
+              ElementsAre("dneg", "d10", "d20", "d30", "bad", "missing"));
+  EXPECT_THAT(trim("color", query::SortOrder::kAscending, 0, 2),
+              ElementsAre("d30", "d10", "dneg", "d20", "bad", "missing"));
+}
+
 struct FetchFilteredKeysTestCase {
   std::string test_name;
   std::string filter;

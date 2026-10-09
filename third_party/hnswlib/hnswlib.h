@@ -1,10 +1,19 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 #include <cstdlib>
+#include <limits>
+#include <stdexcept>
+
+#ifdef __linux__
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
 
 #include "absl/status/status.h"
 #include "iostream.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 #ifdef VMSDK_ENABLE_MEMORY_ALLOCATION_OVERRIDES
 #include "vmsdk/src/memory_allocation_overrides.h"  // IWYU pragma: keep
@@ -257,9 +266,10 @@ AlgorithmInterface<dist_t, QueryVectorT, StoredVectorT>::searchKnnCloserFirst(
 class ChunkedArray {
  public:
   ChunkedArray(size_t element_byte_size, size_t elements_per_chunk,
-               size_t element_count)
+               size_t element_count, bool use_large_pages = false)
       : element_byte_size_(element_byte_size),
         elements_per_chunk_(elements_per_chunk),
+        use_large_pages_(use_large_pages && CanUseLargePages()),
         element_count_(0) {
     resize(element_count);
   }
@@ -279,6 +289,30 @@ class ChunkedArray {
     return elements_per_chunk_ * element_byte_size_;
   }
 
+  // Keeps large-page chunks fully covered by 2 MiB THP candidates without
+  // padding their allocation. The extra space holds more elements instead.
+  static size_t GetElementsPerChunkForLargePages(
+      size_t element_byte_size, size_t default_elements_per_chunk) {
+    if (!CanUseLargePages()) {
+      return default_elements_per_chunk;
+    }
+    if (element_byte_size == 0 || default_elements_per_chunk == 0 ||
+        default_elements_per_chunk >
+            std::numeric_limits<size_t>::max() / element_byte_size) {
+      throw std::overflow_error("Chunk allocation size overflow");
+    }
+    const size_t default_chunk_size =
+        default_elements_per_chunk * element_byte_size;
+    if (default_chunk_size >
+        std::numeric_limits<size_t>::max() - (kLargePageSize - 1)) {
+      throw std::overflow_error("Chunk allocation size overflow");
+    }
+    const size_t large_page_chunk_size =
+        ((default_chunk_size + kLargePageSize - 1) / kLargePageSize) *
+        kLargePageSize;
+    return large_page_chunk_size / element_byte_size;
+  }
+
   char *operator[](size_t i) const {
     assert(i < getCapacity());
     if (i >= getCapacity()) return nullptr;
@@ -289,7 +323,11 @@ class ChunkedArray {
 
   void clear() {
     for (auto chunk : chunks_) {
-      delete[] chunk;
+      if (use_large_pages_) {
+        FreeLargePageChunk(chunk);
+      } else {
+        delete[] chunk;
+      }
     }
     chunks_.clear();
     element_count_.store(0, std::memory_order_relaxed);
@@ -301,21 +339,120 @@ class ChunkedArray {
     size_t new_chunk_count = getChunkCount(new_element_count);
 
     chunks_.resize(new_chunk_count);
-    for (size_t i = chunk_count; i < new_chunk_count; i++) {
-      chunks_[i] = new char[elements_per_chunk_ * element_byte_size_];
-      // Note that we don't initialize the memory on purpose. The caller
-      // is expected to track the initialization state.
+    size_t allocated_chunk_count = chunk_count;
+    try {
+      for (size_t i = chunk_count; i < new_chunk_count; i++) {
+        chunks_[i] = use_large_pages_
+                         ? AllocateLargePageChunk()
+                         : new char[elements_per_chunk_ * element_byte_size_];
+        allocated_chunk_count = i + 1;
+        // Note that we don't initialize the memory on purpose. The caller
+        // is expected to track the initialization state.
+      }
+    } catch (...) {
+      for (size_t i = chunk_count; i < allocated_chunk_count; i++) {
+        if (use_large_pages_) {
+          FreeLargePageChunk(chunks_[i]);
+        } else {
+          delete[] chunks_[i];
+        }
+      }
+      chunks_.resize(chunk_count);
+      throw;
     }
     element_count_.store(new_element_count, std::memory_order_relaxed);
   }
 
  private:
+  static constexpr size_t kLargePageSize = 2 * 1024 * 1024;
+
+  static bool CanUseLargePages() {
+#ifdef __linux__
+    // On older Valkey versions these APIs are absent and the pointers remain
+    // null after ValkeyModule_Init. Preserve the ordinary allocation path.
+    return ValkeyModule_IncrExternalMemory != nullptr &&
+           ValkeyModule_DecrExternalMemory != nullptr;
+#else
+    return false;
+#endif
+  }
+
+// `getpagesize()` and the mapping helpers below are Linux-specific. Keep this
+// definition behind the same guard as their headers so non-Linux builds do not
+// need a transitive declaration for `getpagesize()`.
+#ifdef __linux__
+  size_t GetLargePageMappingSize() const {
+    if (elements_per_chunk_ != 0 &&
+        element_byte_size_ > std::numeric_limits<size_t>::max() /
+                                 elements_per_chunk_) {
+      throw std::overflow_error("Chunk allocation size overflow");
+    }
+    const size_t chunk_size = getSizePerChunk();
+    const size_t page_size = static_cast<size_t>(getpagesize());
+    if (chunk_size > std::numeric_limits<size_t>::max() - (page_size - 1)) {
+      throw std::overflow_error("Chunk allocation size overflow");
+    }
+    return ((chunk_size + page_size - 1) / page_size) * page_size;
+  }
+#endif
+
+  char *AllocateLargePageChunk() {
+#ifdef __linux__
+    const size_t mapping_size = GetLargePageMappingSize();
+    if (mapping_size > std::numeric_limits<size_t>::max() - kLargePageSize) {
+      throw std::overflow_error("Chunk allocation size overflow");
+    }
+    void *mapping = mmap(nullptr, mapping_size + kLargePageSize,
+                         PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS,
+                         -1, 0);
+    if (mapping == MAP_FAILED) {
+      throw std::bad_alloc();
+    }
+    const uintptr_t address = reinterpret_cast<uintptr_t>(mapping);
+    const uintptr_t aligned_address =
+        (address + kLargePageSize - 1) & ~(kLargePageSize - 1);
+    const size_t prefix_size = aligned_address - address;
+    const size_t suffix_size = kLargePageSize - prefix_size;
+    if (prefix_size != 0) {
+      munmap(mapping, prefix_size);
+    }
+    auto *chunk = reinterpret_cast<char *>(aligned_address);
+    if (suffix_size != 0) {
+      munmap(chunk + mapping_size, suffix_size);
+    }
+    // Fully covered 2 MiB ranges can be promoted to THP; the partial tail
+    // remains base-page backed, avoiding up to nearly 2 MiB of padding/chunk.
+    madvise(chunk, mapping_size, MADV_HUGEPAGE);
+    if (ValkeyModule_IncrExternalMemory(mapping_size) != VALKEYMODULE_OK) {
+      munmap(chunk, mapping_size);
+      throw std::bad_alloc();
+    }
+    return chunk;
+#else
+    throw std::bad_alloc();
+#endif
+  }
+
+  void FreeLargePageChunk(char *chunk) {
+#ifdef __linux__
+    if (chunk == nullptr) {
+      return;
+    }
+    const size_t mapping_size = GetLargePageMappingSize();
+    const int result = ValkeyModule_DecrExternalMemory(mapping_size);
+    assert(result == VALKEYMODULE_OK);
+    (void)result;
+    munmap(chunk, mapping_size);
+#endif
+  }
+
   size_t getChunkCount(size_t element_count) const {
     return (element_count + elements_per_chunk_ - 1) / elements_per_chunk_;
   }
 
   size_t element_byte_size_;
   size_t elements_per_chunk_;
+  bool use_large_pages_;
   std::atomic<size_t> element_count_;
   std::deque<char *> chunks_;
 };

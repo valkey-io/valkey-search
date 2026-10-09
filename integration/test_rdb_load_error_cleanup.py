@@ -180,7 +180,6 @@ class TestRdbLoadErrorCleanup(ValkeySearchTestCaseDebugMode):
         # worker thread, hits the main-thread CHECK, and aborts with SIGABRT.
         replica.client.execute_command(
             "FT._DEBUG", "PAUSEPOINT", "RESET", self.PAUSEPOINT_NAME)
-        time.sleep(2)  # let workers drain and run destructors
 
         crash_msg = (
             "Replica process died after RDB load error. IndexSchema "

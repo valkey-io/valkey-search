@@ -2215,7 +2215,7 @@ class TestVectorRangeBenchmark(ValkeySearchTestCaseBase):
     """Small-radius VECTOR_RANGE on HNSW against FLAT: the walk must match
     FLAT's recall while the test records comparative latency."""
 
-    def test_small_radius_hnsw_not_slower_than_flat(self):
+    def test_small_radius_hnsw_recall_with_latency_report(self):
         """
         Over 10k 16-d vectors, small-radius (~1, ~10 keys) HNSW range queries
         match FLAT key-for-key at MIN_RECALL. The HNSW and FLAT median latency

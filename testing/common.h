@@ -327,7 +327,7 @@ inline void SetDebugMode(bool enabled) {
   VMSDK_EXPECT_OK(
       vmsdk::config::ModuleConfigManager::Instance().ParseAndLoadArgv(
           nullptr, args.data(), args.size()));
-  for (auto *arg : args) {
+  for (auto* arg : args) {
     TestValkeyModule_FreeString(nullptr, arg);
   }
 }

@@ -2560,6 +2560,13 @@ absl::Status PostParseVectorParameters(query::SearchParameters &parameters) {
                      ") does not match index's expected size (",
                      vector_index->GetVectorDataSize(), ")."));
   }
+  // Only COSINE uses the magnitude, so other metrics pay nothing here.
+  if (vector_index->GetNormalize() &&
+      !indexes::IsValidReciprocalMagnitude(indexes::CalcReciprocalMagnitude(
+          parameters.query, vector_index->GetVectorDataType()))) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("query vector ", indexes::kInvalidQueryVectorError));
+  }
 
   if (!parameters.parse_vars.ef_string.empty()) {
     VMSDK_ASSIGN_OR_RETURN(
@@ -2642,6 +2649,14 @@ absl::Status PostParseVectorRangeParameters(
               absl::StrCat("Vector blob size (", resolved_blob.size(),
                            ") does not match index dimensions (",
                            vector_index->GetVectorDataSize(), ")"));
+        }
+        // Only COSINE uses the magnitude, so other metrics pay nothing here.
+        if (vector_index->GetNormalize() &&
+            !indexes::IsValidReciprocalMagnitude(
+                indexes::CalcReciprocalMagnitude(
+                    resolved_blob, vector_index->GetVectorDataType()))) {
+          return absl::InvalidArgumentError(
+              absl::StrCat("Vector blob ", indexes::kInvalidQueryVectorError));
         }
 
         vr_pred->SetQueryVector(std::string(resolved_blob));

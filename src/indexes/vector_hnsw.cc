@@ -125,6 +125,16 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
       // AlgoDeleteRecord), so restore them with a reciprocal magnitude of
       // exactly 1.0; the HNSW distance path relies on this invariant. For
       // other indexes the magnitude is not used.
+      // A tombstone is only a traversal waypoint, so one saved with a NaN/Inf
+      // or overflowing vector is restored as zeros to keep distances finite.
+      if (!IsValidReciprocalMagnitude(CalcReciprocalMagnitude(
+              reinterpret_cast<const T *>(vector_data.data()),
+              vector_data.size() / sizeof(T)))) {
+        const std::vector<char> zeros(vector_data.size(), 0);
+        return VectorRecord::Construct(
+            absl::string_view(zeros.data(), zeros.size()), 1.0f,
+            static_cast<FixedSizeAllocator *>(allocator));
+      }
       return VectorRecord::Construct(
           vector_data, 1.0f, static_cast<FixedSizeAllocator *>(allocator));
     };

@@ -112,6 +112,12 @@ class ValkeySearch {
   void SendMetadataBroadcast(ValkeyModuleCtx *ctx, void *data);
   void AtForkPrepare();
   void AfterForkParent();
+  // True in a fork child whose parent forked while a worker was still running
+  // a task, so index memory and locks may be mid-update in the child.
+  bool ForkedWithUnsuspendedWorkers() const {
+    return forked_with_unsuspended_workers_.load(std::memory_order_relaxed) &&
+           IsChildProcess();
+  }
   static ValkeySearch &Instance();
   static bool HasInstance();
   static void InitInstance(std::unique_ptr<ValkeySearch> instance);
@@ -181,6 +187,8 @@ class ValkeySearch {
   uint64_t inc_id_{0};
   ValkeyModuleCtx *ctx_{nullptr};
   std::optional<vmsdk::StopWatch> writer_thread_pool_suspend_watch_;
+  // Set by AtForkPrepare when a suspend timed out; the fork child inherits it.
+  std::atomic<bool> forked_with_unsuspended_workers_{false};
 
   std::unique_ptr<coordinator::Server> coordinator_;
   std::unique_ptr<coordinator::ClientPool> client_pool_;

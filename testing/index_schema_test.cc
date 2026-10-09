@@ -3363,8 +3363,9 @@ TEST_F(IndexSchemaScoreFieldTest, KeyspaceNotificationDeletesRegistryEntry) {
   auto key = StringInternStore::Intern("prefix:key");
   auto key_valkey_str = vmsdk::MakeUniqueValkeyString(key->Str());
 
-  // 1. Ingest vector into hnsw_index
-  std::string vec_data(dimensions * sizeof(float), 'a');
+  // 1. Ingest vector into hnsw_index. Each float is 0x3c3c3c3c (~0.0115), a
+  // finite value whose magnitude fits in float.
+  std::string vec_data(dimensions * sizeof(float), '\x3c');
   auto valkey_vec = vmsdk::MakeUniqueValkeyString(vec_data);
   auto vec = VectorRegistry::Instance().DedupOrConstruct(
       key, valkey_vec.get(),

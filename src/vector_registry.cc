@@ -97,6 +97,19 @@ indexes::VectorRecordWithSize VectorRegistry::DedupOrConstruct(
     result = it->second;
   } else {
     result = ConstructVectorRecord(vector_str, vector_base);
+    // The index rejects a NaN/Inf or overflowing vector, so handle it like a
+    // wrong-size one: neither tracked nor shared with Valkey.
+    if (!indexes::IsValidReciprocalMagnitude(
+            result.vector_record.GetReciprocalMagnitude())) {
+      if (it != db_tracked.end() &&
+          IsEraseTrackedRecordSafe(
+              db_num, key, vector_str,
+              vector_base->GetInternedAttributeIdentifier()->Str(),
+              attribute_data_type)) {
+        EraseTrackedRecord(db_num, search_key);
+      }
+      return result;
+    }
     if (it != db_tracked.end()) {
       it->second = result;
     } else {

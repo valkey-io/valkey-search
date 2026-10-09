@@ -55,6 +55,9 @@ class ValkeyServerUnderTest:
     def __init__(self, process_handle: subprocess.Popen[Any], port: int):
         self.process_handle = process_handle
         self.port = port
+        # Set by terminate() when SIGTERM was ignored; exit_code() cannot show
+        # this, since by then it reports the SIGKILL we sent.
+        self.needed_sigkill = False
 
     def terminate(self):
         try:
@@ -64,6 +67,7 @@ class ValkeyServerUnderTest:
         except ProcessLookupError:
             return
         except subprocess.TimeoutExpired:
+            self.needed_sigkill = True
             logging.warning(
                 "Process on port %d did not exit within 5s of SIGTERM; escalating to SIGKILL",
                 self.port,
@@ -93,8 +97,45 @@ class ValkeyServerUnderTest:
     def terminated(self):
         return self.process_handle.poll() is not None
 
-    def ping(self) -> Any:
-        return valkey.Valkey(port=self.port).ping()
+    def exit_code(self) -> int | None:
+        """Exit status, or None while still running.
+
+        Negative values are `-signum` (e.g. -11 for SIGSEGV, -6 for SIGABRT),
+        which is how a crashed node is distinguished from one that was asked to
+        shut down.
+        """
+        return self.process_handle.poll()
+
+    def ping(self, timeout_sec: float = 5.0) -> Any:
+        """PING this node directly, raising on failure.
+
+        Bounded because a wedged node still completes the TCP handshake (the
+        kernel backlog does that) and then never answers.
+        """
+        client = valkey.Valkey(
+            host="127.0.0.1",
+            port=self.port,
+            socket_timeout=timeout_sec,
+            socket_connect_timeout=timeout_sec,
+        )
+        try:
+            return client.ping()
+        finally:
+            try:
+                client.close()
+            except Exception:  # pylint: disable=broad-except
+                pass
+
+    def is_responsive(self, timeout_sec: float = 5.0) -> bool:
+        """True if this node answers PING, False for any failure.
+
+        Not the same as terminated(): a wedged node is a live process that
+        cannot serve.
+        """
+        try:
+            return bool(self.ping(timeout_sec=timeout_sec))
+        except Exception:  # pylint: disable=broad-except
+            return False
 
 
 def start_valkey_process(
@@ -255,6 +296,52 @@ class ValkeyClusterUnderTest:
                 result.append(server.port)
         return result
 
+    def get_unresponsive_servers(
+        self,
+        timeout_sec: float = 5.0,
+        attempts: int = 3,
+        retry_delay_sec: float = 2.0,
+    ) -> List[int]:
+        """Ports of nodes that are still running but no longer answer PING.
+
+        A wedged node is invisible to get_terminated_servers() (process still
+        alive), so without this the run is reported as whatever client errors
+        it caused.
+
+        Terminated nodes are skipped. A node must miss every attempt to be
+        reported, so a single slow PING under load is not enough.
+        """
+        suspects = [s for s in self.servers if not s.terminated()]
+        for attempt in range(attempts):
+            if not suspects:
+                return []
+            if attempt > 0:
+                time.sleep(retry_delay_sec)
+            still_mute = []
+            for server in suspects:
+                # Exited between rounds: terminated, not wedged.
+                if server.terminated():
+                    continue
+                if not server.is_responsive(timeout_sec=timeout_sec):
+                    still_mute.append(server)
+            suspects = still_mute
+            if suspects:
+                logging.warning(
+                    "Ports did not answer PING (attempt %d/%d): %s",
+                    attempt + 1,
+                    attempts,
+                    [s.port for s in suspects],
+                )
+        return sorted(s.port for s in suspects)
+
+    def get_servers_needing_sigkill(self) -> List[int]:
+        """Ports that ignored SIGTERM at teardown and had to be SIGKILLed.
+
+        Only meaningful after terminate(). Catches a wedge that started after
+        the in-run get_unresponsive_servers() check passed.
+        """
+        return sorted(s.port for s in self.servers if s.needed_sigkill)
+
     def ping_all(self):
         result = []
         for server in self.servers:
@@ -382,7 +469,9 @@ def start_valkey_cluster(
             cluster_args["cluster-config-file"] = os.path.join(
                 node_dir, "nodes.conf"
             )
-            cluster_args["cluster-node-timeout"] = "10000"
+            # setdefault: this used to overwrite the caller's value, so the
+            # cluster never ran the timeout the test asked for.
+            cluster_args.setdefault("cluster-node-timeout", "10000")
             if os.path.exists(node_dir):
                 shutil.rmtree(node_dir, ignore_errors=True)
             os.makedirs(node_dir, exist_ok=True)
@@ -476,6 +565,7 @@ class HNSWVectorDefinition(AttributeDefinition):
         distance_metric="COSINE",
         ef_construction=5,
         ef_runtime=10,
+        initial_cap=None,
     ):
         self.vector_dimensions = vector_dimensions
         self.m = m
@@ -483,12 +573,13 @@ class HNSWVectorDefinition(AttributeDefinition):
         self.distance_metric = distance_metric
         self.ef_construction = ef_construction
         self.ef_runtime = ef_runtime
+        # Omitted unless set, so the engine default still applies. A small value
+        # keeps the index near capacity, which is the only state in which
+        # VectorHNSW::AddRecordImpl takes its resize-retry path.
+        self.initial_cap = initial_cap
 
     def to_arguments(self) -> List[Any]:
-        return [
-            "VECTOR",
-            "HNSW",
-            12,
+        params: List[Any] = [
             "M",
             self.m,
             "TYPE",
@@ -502,6 +593,11 @@ class HNSWVectorDefinition(AttributeDefinition):
             "EF_RUNTIME",
             self.ef_runtime,
         ]
+        if self.initial_cap is not None:
+            params += ["INITIAL_CAP", self.initial_cap]
+        # Counted rather than hardcoded, so an optional parameter cannot desync
+        # the declared argument count from the list that follows it.
+        return ["VECTOR", "HNSW", len(params)] + params
 
 
 class FlatVectorDefinition(AttributeDefinition):

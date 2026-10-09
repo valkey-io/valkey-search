@@ -22,6 +22,7 @@
 #include "src/coordinator/client_pool.h"
 #include "src/expr/expr.h"
 #include "src/expr/value.h"
+#include "src/indexes/scoring/scorer.h"
 #include "src/metrics.h"
 #include "src/query/content_resolution.h"
 #include "src/query/fanout.h"
@@ -505,18 +506,25 @@ void RevalidateArmsBeforeFusion(MultiSearchParameters &params) {
     // Dropping preserves order, so only a fresh score can have put the arm out
     // of order.
     if (rescored) {
-      std::stable_sort(neighbors.begin(), neighbors.end(),
-                       [arm_score_is_distance](const indexes::Neighbor &a,
-                                               const indexes::Neighbor &b) {
-                         if (arm_score_is_distance) {
-                           if (a.distance != b.distance) {
-                             return a.distance < b.distance;
-                           }
-                         } else if (a.score != b.score) {
-                           return a.score > b.score;
-                         }
-                         return a.external_id->Str() < b.external_id->Str();
-                       });
+      // NaN sorts last, as in rank_fusion.cc: a plain `<` is not a strict weak
+      // ordering once an L2/IP query vector holding a NaN yields NaN
+      // distances, and std::stable_sort then runs outside the range.
+      std::stable_sort(
+          neighbors.begin(), neighbors.end(),
+          [arm_score_is_distance](const indexes::Neighbor &a,
+                                  const indexes::Neighbor &b) {
+            const float x = arm_score_is_distance ? a.distance : a.score;
+            const float y = arm_score_is_distance ? b.distance : b.score;
+            const bool x_nan = indexes::scoring::IsNaN(x);
+            const bool y_nan = indexes::scoring::IsNaN(y);
+            if (x_nan != y_nan) {
+              return y_nan;
+            }
+            if (!x_nan && x != y) {
+              return arm_score_is_distance ? x < y : x > y;
+            }
+            return a.external_id->Str() < b.external_id->Str();
+          });
     }
   }
 }

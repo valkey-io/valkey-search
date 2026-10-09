@@ -51,6 +51,16 @@ class IndexSchema;
 namespace valkey_search::indexes {
 
 constexpr float kDefaultMagnitude = 1.0f;
+// Returned by CalcReciprocalMagnitude for a vector with a NaN or Inf component
+// or a magnitude too large for float. A real reciprocal magnitude is never
+// negative, and a finite sentinel stays testable under -ffast-math.
+inline constexpr float kInvalidReciprocalMagnitude = -1.0f;
+inline constexpr uint32_t kFloatExponentMask = 0x7F800000u;
+inline constexpr bool IsValidReciprocalMagnitude(float reciprocal_magnitude) {
+  return reciprocal_magnitude >= 0.0f;
+}
+inline constexpr absl::string_view kInvalidQueryVectorError =
+    "contains a NaN or infinite value, or its magnitude is too large.";
 // Initial capacity of a range search's result vector.
 constexpr size_t kRangeReserve = 128;
 
@@ -216,6 +226,8 @@ struct VectorRecordWithSize {
 // FLOAT16/BFLOAT16 vectors are 2 bytes per element: reading them as float
 // would both walk off the end of the buffer and produce garbage magnitudes.
 // The accumulation is always done in float regardless of T.
+// Returns kInvalidReciprocalMagnitude if any element is NaN or Inf, or the
+// sum of squares overflows float.
 template <typename T>
 float CalcReciprocalMagnitude(const T *src, size_t size);
 
@@ -400,7 +412,8 @@ class VectorBase : public IndexBase {
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   absl::Status LoadTrackedKeys(ValkeyModuleCtx *ctx,
                                const AttributeDataType *attribute_data_type,
-                               SupplementalContentChunkIter &&iter);
+                               SupplementalContentChunkIter &&iter)
+      ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
 
   uint32_t GetMutationWeight() const override;
 
@@ -652,6 +665,13 @@ class VectorBase : public IndexBase {
 
   virtual VectorRecord &GetVectorLockFree(uint64_t internal_id) const = 0;
   virtual VectorRecord &GetVector(uint64_t internal_id) const = 0;
+
+  // LoadTrackedKeys body under key_to_metadata_mutex_. Collects the ids of
+  // keys whose vector is NaN/Inf or overflows into `rejected_ids`.
+  absl::Status LoadTrackedKeysLocked(
+      ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
+      SupplementalContentChunkIter &&iter, std::vector<uint64_t> &rejected_ids)
+      ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
 
   int db_num_;
   int dimensions_;

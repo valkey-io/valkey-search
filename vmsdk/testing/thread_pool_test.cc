@@ -57,6 +57,30 @@ TEST_F(ThreadPoolTest, StartAndJoin) {
   thread_pool.JoinWorkers();
 }
 
+class ThreadPoolShutdownTest : public vmsdk::ValkeyTest {};
+
+TEST_F(ThreadPoolShutdownTest,
+       JoinWorkersReturnsFalseWhenWorkerOutlivesDeadline) {
+  ThreadPool thread_pool("test-pool", 2, /*sample_queue_size=*/100,
+                         /*join_timeout=*/absl::Milliseconds(10));
+  thread_pool.StartWorkers();
+  absl::Notification started;
+  absl::Notification release;
+  ASSERT_TRUE(thread_pool.Schedule(
+      [&] {
+        started.Notify();
+        release.WaitForNotification();
+      },
+      ThreadPool::Priority::kHigh));
+  started.WaitForNotification();
+
+  // The busy worker misses the 5s deadline: report it instead of aborting.
+  EXPECT_FALSE(thread_pool.JoinWorkers());
+
+  release.Notify();
+  EXPECT_TRUE(thread_pool.JoinWorkers());
+}
+
 TEST_P(ThreadPoolTest, StartSuspendAndJoin) {
   auto priority = GetParam();
   ThreadPool thread_pool("test-pool", 10);

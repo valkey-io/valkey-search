@@ -409,9 +409,8 @@ class TestScoringRecomputeCluster(ValkeySearchClusterTestCaseDebugMode):
         assert sorted(k for k, _ in pairs) == sorted(DOCS)
         scores1 = [s for _, s in pairs]
         assert all(s > 0 for s in scores1)
-        # TODO: Uncomment after https://github.com/valkey-io/valkey-search/issues/1439 is fixed
-        # assert scores1 != scores0
-        # assert sorted(scores1) != sorted(scores0)
+        assert scores1 != scores0
+        assert sorted(scores1) != sorted(scores0)
 
         # LOAD __key doesn't resolve to a record attribute, so no content from
         # updated key is fetched and therefore no revalidation is needed.

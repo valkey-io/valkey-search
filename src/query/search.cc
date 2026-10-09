@@ -2669,7 +2669,11 @@ ContentProcessing SearchParameters::GetContentProcessing() const {
     return kNoContent;
   }
   // Currently, ContentAvailable isn't detected. Future use case.
-  if (query::QueryHasTextPredicate(*this)) {
+  // A non-vector query's score is recomputed on revalidation from text index
+  // state (e.g. document length) even without a text predicate, so it too must
+  // wait for in-flight mutations to be indexed.
+  if (query::QueryHasTextPredicate(*this) ||
+      (IsNonVectorQuery() && index_schema->GetTextIndexSchema())) {
     return kContentionCheckRequired;
   }
   return kContentRequired;

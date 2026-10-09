@@ -1702,8 +1702,8 @@ absl::Status IndexSchema::SaveIndexExtension(RDBChunkOutputStream out) const {
   live_multi_keys.reserve(multi_mutations_keys_.Get().size());
   size_t orphan_keys_skipped = 0;
   for (const auto &key : multi_mutations_keys_.Get()) {
-    if (ABSL_PREDICT_FALSE(tracked_mutated_records_.find(key) ==
-                           tracked_mutated_records_.end())) {
+    if (tracked_mutated_records_.find(key) ==
+        tracked_mutated_records_.end()) {
       ++orphan_keys_skipped;
       continue;
     }

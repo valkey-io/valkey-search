@@ -144,19 +144,11 @@ class TestEviction(ValkeySearchTestCaseBase):
             final_info.num_docs >= min_expected_docs
         ), f"Too many documents evicted: {final_info.num_docs} < {min_expected_docs}"
 
-        # Wait for eviction to stabilize before testing search
-        time.sleep(0.2)
-        
-        # Retry search operations if they fail due to OOM
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                self._verify_search_operations(client, index, expected_min_results=10)
-                break
-            except OutOfMemoryError:
-                if attempt == max_retries - 1:
-                    raise Exception(f"Search operations failed after {max_retries} OOM retries")
-                time.sleep(0.1)
+        # Disable eviction so the key picked for verification can't be evicted
+        # between reading it and searching for it (e.g. under allkeys-random).
+        client.config_set("maxmemory", 0)
+
+        self._verify_search_operations(client, index, expected_min_results=10)
 
     def _verify_search_operations(
         self, client: Valkey, index: Index, expected_min_results: int

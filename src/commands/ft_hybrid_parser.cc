@@ -1185,13 +1185,13 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
     // the arm later. Neighbor::score is a KNN distance only for a vector arm;
     // a text SEARCH arm carries a BM25-style relevance score instead. A VSIM
     // arm's score stays its distance whatever its pre-filter contains, which
-    // is what vector_score_only says; the QueryHasTextPredicate arm of the
+    // is what vector_score_only says; the QueryHasScoredPredicate arm of the
     // test guards the `text=>[KNN ...]` shape that ApplyHybridTextScore
     // overwrites with text relevance, which no FT.HYBRID arm can be written as
     // any more but which costs nothing to keep answering correctly.
     env.per_arm_score_is_distance.push_back(
         arm->IsVectorQuery() &&
-        (arm->vector_score_only || !QueryHasTextPredicate(*arm)));
+        (arm->vector_score_only || !QueryHasScoredPredicate(*arm)));
     // And which metric produced it: the similarity a distance maps to differs
     // by metric, and `arms` is emptied at dispatch.
     auto metric = data_model::DISTANCE_METRIC_UNSPECIFIED;

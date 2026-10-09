@@ -1183,7 +1183,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
             # range keep the coverage without that noise; 100 still covers
             # "everything".
             radii = [0.001, 0.5, 1.999, 100.0]
-        epsilons = [None, 0.0, 0.1]
+        epsilons = [None, 0.0, 0.01, 0.1]
         for x in vector_points:
             for y in vector_points:
                 for z in vector_points:
@@ -1242,11 +1242,13 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         """VECTOR_RANGE combined with numeric filter via AND."""
         self.setup_data("sortable numbers", key_type)
         for r in [5.0, 50.0]:
-            self.checkrange(
-                dialect,
-                f"ft.search {key_type}_idx1 * @n1:[0 +inf] NOCONTENT",
-                radius=r,
-            )
+            for eps in [None, 0.0, 0.01, 0.1]:
+                self.checkrange(
+                    dialect,
+                    f"ft.search {key_type}_idx1 * @n1:[0 +inf] NOCONTENT",
+                    radius=r,
+                    query_attrs=f"{{$epsilon: {eps}}}" if eps is not None else None,
+                )
 
     def test_vector_range_and_tag(self, key_type, dialect, vector_data_type):
         """VECTOR_RANGE combined with tag filter via AND."""
@@ -1260,11 +1262,13 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
     def test_vector_range_or_numeric(self, key_type, dialect, vector_data_type):
         """VECTOR_RANGE combined with numeric filter via OR."""
         self.setup_data("sortable numbers", key_type)
-        self.checkrange(
-            dialect,
-            f"ft.search {key_type}_idx1 * | @n1:[0 +inf] NOCONTENT",
-            radius=1,
-        )
+        for eps in [None, 0.0, 0.01, 0.1]:
+            self.checkrange(
+                dialect,
+                f"ft.search {key_type}_idx1 * | @n1:[0 +inf] NOCONTENT",
+                radius=1,
+                query_attrs=f"{{$epsilon: {eps}}}" if eps is not None else None,
+            )
 
     def test_vector_range_negate(self, key_type, dialect, vector_data_type):
         """Negated VECTOR_RANGE returns complement."""

@@ -7,7 +7,9 @@
 
 #ifndef VALKEYSEARCH_SRC_QUERY_PREDICATE_H_
 #define VALKEYSEARCH_SRC_QUERY_PREDICATE_H_
+#include <bit>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -231,11 +233,23 @@ class VectorRangePredicate : public Predicate {
   double GetRadius() const { return radius_; }
   absl::string_view GetVectorParamName() const { return vector_param_name_; }
   const std::optional<std::string>& GetScoreAs() const { return score_as_; }
-  // epsilon is parsed, validated, stored, and serialized on the wire, but it is
-  // not forwarded to the range traversal (see SearchVectorRangeQuery); the HNSW
-  // range search does not yet honor it. Kept so queries carrying $epsilon parse
-  // and round-trip unchanged.
+  // nullopt when the query gives no $epsilon; kept as given so the predicate
+  // round-trips on the wire.
   std::optional<double> GetEpsilon() const { return epsilon_; }
+  // The HNSW traversal shell factor: $epsilon, or 0.01 as in RediSearch.
+  // Anything outside [0, FLT_MAX] becomes the largest float, which saturates
+  // the shell: NaN, +inf and values beyond float range (which Redis accepts,
+  // and older nodes forward unchecked), and negative values (which only a
+  // hand-crafted request carries). Comparing the bits catches NaN under
+  // -ffast-math and keeps the narrowing cast in range.
+  float GetSearchEpsilon() const {
+    constexpr double kMaxEpsilon = std::numeric_limits<float>::max();
+    const double epsilon = epsilon_.value_or(0.01);
+    return std::bit_cast<uint64_t>(epsilon) >
+                   std::bit_cast<uint64_t>(kMaxEpsilon)
+               ? std::numeric_limits<float>::max()
+               : static_cast<float>(epsilon);
+  }
 
   void SetQueryVector(std::string query);
   absl::string_view GetQueryVector() const { return query_vector_; }

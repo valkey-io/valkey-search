@@ -7,8 +7,10 @@
 
 #include "src/commands/filter_parser.h"
 
+#include <bit>
 #include <cctype>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <memory>
 #include <string>
@@ -387,7 +389,11 @@ FilterParser::ParseVectorRangeQueryAttributes() {
         return absl::InvalidArgumentError(
             "$epsilon must be a valid non-negative number");
       }
-      if (epsilon_val < 0) {
+      // Sign and zero are tested by bit: under -ffast-math NaN comparisons are
+      // unreliable and std::signbit can miss the sign of -nan and -0. Zeros are
+      // rejected by the HNSW check below.
+      const uint64_t epsilon_bits = std::bit_cast<uint64_t>(epsilon_val);
+      if ((epsilon_bits >> 63) != 0 && (epsilon_bits << 1) != 0) {
         return absl::InvalidArgumentError(
             "$epsilon must be a valid non-negative number");
       }
@@ -507,14 +513,12 @@ FilterParser::ParseVectorRangePredicate(const std::string& attribute_alias) {
       }
       if (attrs.epsilon.has_value()) {
         // For compatibility, $epsilon is an HNSW-only knob and must be strictly
-        // positive: reject it on FLAT indexes and reject a value of 0. (The
-        // value is not yet forwarded to the range traversal; see
-        // SearchVectorRangeQuery.)
+        // positive: reject it on FLAT indexes and reject a value of 0.
         if (index.value()->GetIndexerType() != indexes::IndexerType::kHNSW) {
           return absl::InvalidArgumentError(
               "Invalid option (Error parsing vector similarity parameters)");
         }
-        if (attrs.epsilon.value() <= 0) {
+        if ((std::bit_cast<uint64_t>(attrs.epsilon.value()) << 1) == 0) {
           return absl::InvalidArgumentError(
               "Invalid option (Error parsing vector similarity parameters)");
         }

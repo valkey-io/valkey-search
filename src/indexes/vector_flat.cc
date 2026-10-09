@@ -279,7 +279,7 @@ float VectorFlat<T>::ComputeDistance(absl::string_view query,
 template <typename T>
 absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::SearchRange(
     absl::string_view query, float radius, cancel::Token &cancellation_token,
-    std::unique_ptr<hnswlib::BaseFilterFunctor> filter) {
+    float /*epsilon*/, std::unique_ptr<hnswlib::BaseFilterFunctor> filter) {
   auto nq = this->NormalizeQueryIfNeeded(query);
   const float query_magnitude =
       normalize_ ? CalcReciprocalMagnitude(nq.view, this->GetVectorDataType())

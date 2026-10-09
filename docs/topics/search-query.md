@@ -179,9 +179,9 @@ It can be combined with other matchers using AND, OR and negation.
   - `IP`: the distance is `1 - dot(X,Y)`, which is negative when the dot product is greater than 1, as it can be for unnormalized vectors. A radius of 0 matches every key whose dot product with the query vector is at least 1.
   - `COSINE`: because of floating-point rounding, the distance between identical vectors can be slightly greater than 0. To match identical vectors, for example to find duplicates, use a small positive radius rather than 0.
 - `parameter` (required): A `PARAMS` name whose value is the query vector, encoded as for a KNN query (see above).
-- `EF_RUNTIME <ef>` (optional): Parsed and ignored.
+- `EF_RUNTIME <ef>` (optional): Accepted for compatibility and ignored. HNSW range search uses the field's `EF_RUNTIME`, configured by `FT.CREATE`, for the initial search beam. A higher field value can improve recall when the matching region is far from the graph entry point, at the cost of additional distance computations.
 - `AS <name>` or `$YIELD_DISTANCE_AS: <name>` (optional): Returns the distance of each key within the radius under `<name>`. Without it, no distance is returned. When `RETURN` is used, the distance is returned only if `RETURN` lists `<name>`. `<name>` can be used by `SORTBY`, and as `@<name>` by the stages of `FT.AGGREGATE`. `FT.SEARCH` rejects a name that is an attribute of the index; `FT.AGGREGATE` accepts it, and `@<name>` then refers to the distance, not the attribute.
-- `$EPSILON: <epsilon>` (optional): Currently accepted on `HNSW` fields and ignored. It must be greater than 0. It is an error on `FLAT` fields.
+- `$EPSILON: <epsilon>` (optional): On `HNSW` fields, the search also walks through keys within `radius * (1 + epsilon)` of the query vector, to reach keys within the radius that are connected only through keys just outside it. A larger value raises recall and costs more distance computations. It must be greater than 0 and defaults to 0.01. It is an error on `FLAT` fields.
 
 The keyword and the attribute names are case-insensitive.
 
@@ -196,7 +196,7 @@ To get the closest keys first, yield the distance and sort on it, for example `S
 
 Non-finite distances: a NaN or `+inf` distance, from a NaN or infinite vector component, is within no radius, not even `inf`; a `-inf` distance, which only `IP` can produce, is within every radius.
 
-`HNSW` fields: the search examines at most `search.max-nonvector-search-results-fetched` (default 100000) candidates, so the result is approximate, as for a KNN query, and can miss keys within the radius; a query that matches at least that many keys is answered by scanning the whole index. `FLAT` fields are always searched exhaustively. In a cluster, each shard applies the setting to its own keys.
+`HNSW` fields: the search finds the keys nearest the query vector as a KNN query with the field's `EF_RUNTIME` does, then keeps expanding every key it reaches within `radius * (1 + epsilon)`, so the result is approximate, as for a KNN query, and can miss keys within the radius. It collects at most `search.max-nonvector-search-results-fetched` (default 100000) candidates within `radius * (1 + epsilon)`; a query that reaches that many is answered by scanning the whole index. `FLAT` fields are always searched exhaustively. In a cluster, each shard applies the setting to its own keys.
 
 OR: when a key matches through another branch of a `|` (OR), its distance is still computed. It is returned under `<name>` only if the key is within the radius.
 

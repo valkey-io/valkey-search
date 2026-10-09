@@ -9,10 +9,16 @@ query attributes, FT.SEARCH options, error handling, and dialect compatibility.
 
 import math
 import struct
+import time
+import numpy as np
 import pytest
 from valkey import ResponseError
 from valkey.client import Valkey
-from valkey_search_test_case import ValkeySearchTestCaseBase
+from valkey_search_test_case import (
+    ValkeySearchClusterTestCase,
+    ValkeySearchTestCaseBase,
+    ValkeySearchTestCaseDebugMode,
+)
 from valkeytestframework.conftest import resource_port_tracker
 from utils import IndexingTestHelper
 
@@ -44,6 +50,191 @@ def parse_result_with_fields(result):
         }
         parsed[key] = field_dict
     return parsed
+
+
+# ---------------------------------------------------------------------------
+# HNSW range search against FLAT at scale
+# ---------------------------------------------------------------------------
+# HNSW range search is approximate, FLAT is exact. On seeded clustered data,
+# every HNSW result must be a FLAT result at the same distance, and HNSW must
+# find most of the FLAT results. Radii lie midway between the FLAT distances
+# of the n-th and (n+1)-th nearest keys, so each holds exactly n keys.
+SCALE_KEYS = 10000
+SCALE_DIM = 16
+SCALE_QUERIES = 20
+RANGE_SIZES = (1, 10, 100)
+# None leaves $epsilon out of the query (default 0.01). $epsilon must be
+# positive, so 1e-6 stands for a traversal shell at the radius itself.
+EPSILONS = (None, 1e-6, 0.1)
+# Mean recall over every query, radius and epsilon, and the floor for the mean
+# of any one (range size, epsilon) cell.
+MIN_RECALL = 0.95
+MIN_CELL_RECALL = 0.9
+
+
+def clustered_vectors(rng, n, dim=SCALE_DIM, clusters=20):
+    """n float32 vectors around `clusters` random centers."""
+    centers = rng.normal(0.0, 4.0, (clusters, dim))
+    labels = rng.integers(0, clusters, n)
+    return (centers[labels] + rng.normal(0.0, 1.0, (n, dim))).astype(
+        np.float32)
+
+
+def unit_rows(vectors):
+    """Each row scaled to unit length, as float32 (a zero row stays zero)."""
+    norms = np.linalg.norm(vectors.astype(np.float64), axis=1, keepdims=True)
+    return (vectors / np.where(norms == 0.0, 1.0, norms)).astype(np.float32)
+
+
+def range_field(metric):
+    """Field holding the vectors for `metric`: IP uses the unit vectors."""
+    return "u" if metric == "IP" else "v"
+
+
+def create_range_indexes(client, metric, prefix="sc:", dim=SCALE_DIM,
+                         ef_runtime=None):
+    """Create FLAT and HNSW indexes over `prefix` for `metric`. Returns their
+    names (flat, hnsw)."""
+    names = []
+    for algo in ("FLAT", "HNSW"):
+        name = f"{algo.lower()}_{metric.lower()}"
+        extra = []
+        if algo == "HNSW" and ef_runtime is not None:
+            extra = ["EF_RUNTIME", str(ef_runtime)]
+        assert client.execute_command(
+            "FT.CREATE", name, "ON", "HASH", "PREFIX", "1", prefix,
+            "SCHEMA", range_field(metric), "VECTOR", algo, str(6 + len(extra)),
+            "TYPE", "FLOAT32", "DIM", str(dim), "DISTANCE_METRIC", metric,
+            *extra,
+        ) == b"OK"
+        names.append(name)
+    return tuple(names)
+
+
+def write_vectors(client, ids, vectors, prefix="sc:"):
+    """HSET key prefix+id with v = the vector and u = its unit vector."""
+    pipe = client.pipeline(transaction=False)
+    for i, vec, unit in zip(ids, vectors, unit_rows(vectors), strict=True):
+        pipe.hset(f"{prefix}{i}", mapping={
+            "v": vec.astype("<f4").tobytes(),
+            "u": unit.astype("<f4").tobytes(),
+        })
+    pipe.execute()
+
+
+def wait_indexed(clients, indexes, timeout=120):
+    """Wait until every index is fully indexed on every client's node."""
+    deadline = time.monotonic() + timeout
+    for client in clients:
+        for index in indexes:
+            while True:
+                try:
+                    if IndexingTestHelper.is_indexing_complete_on_node(
+                            client, index):
+                        break
+                except ResponseError:
+                    pass  # Not yet created on this node.
+                assert time.monotonic() < deadline, f"{index} not indexed"
+                time.sleep(0.1)
+
+
+def scale_queries(rng, vectors, metric, count=SCALE_QUERIES):
+    """Query vectors near `count` random stored vectors."""
+    picked = vectors[rng.choice(len(vectors), count, replace=False)]
+    queries = (picked + rng.normal(0.0, 0.3, picked.shape)).astype(np.float32)
+    return unit_rows(queries) if metric == "IP" else queries
+
+
+def range_distances(client, index, field, query, radius, epsilon=None):
+    """VECTOR_RANGE query yielding the distance. Returns {key: distance}."""
+    attrs = "$yield_distance_as: d"
+    if epsilon is not None:
+        attrs = f"$epsilon: {epsilon}; " + attrs
+    result = client.execute_command(
+        "FT.SEARCH", index, f"@{field}:[VECTOR_RANGE $r $BLOB]=>{{{attrs}}}",
+        "PARAMS", "4", "r", f"{radius:.9g}",
+        "BLOB", query.astype("<f4").tobytes(),
+        "RETURN", "1", "d", "LIMIT", "0", str(2 * SCALE_KEYS),
+        "DIALECT", "2",
+    )
+    parsed = {key: float(fields["d"])
+              for key, fields in parse_result_with_fields(result).items()}
+    assert result[0] == len(parsed)
+    return parsed
+
+
+def knn_radii(client, flat_index, field, query, sizes=RANGE_SIZES):
+    """[(n, radius holding the n nearest keys)] from a FLAT KNN query."""
+    k = max(sizes) + 1
+    result = client.execute_command(
+        "FT.SEARCH", flat_index, f"*=>[KNN {k} @{field} $BLOB AS d]",
+        "PARAMS", "2", "BLOB", query.astype("<f4").tobytes(),
+        "RETURN", "1", "d", "LIMIT", "0", str(k), "DIALECT", "2",
+    )
+    dists = sorted(float(fields["d"])
+                   for fields in parse_result_with_fields(result).values())
+    assert len(dists) == k
+    return [(n, (dists[n - 1] + dists[n]) / 2) for n in sizes]
+
+
+def check_hnsw_range_matches_flat(client, metric, queries, flat_index,
+                                  hnsw_index):
+    """Every HNSW range result is a FLAT result at the same distance, and
+    HNSW finds at least MIN_RECALL of the FLAT results on average. Returns
+    the mean recall per (range size, epsilon)."""
+    field = range_field(metric)
+    recalls = {(n, eps): [] for n in RANGE_SIZES for eps in EPSILONS}
+    for query in queries:
+        for n, radius in knn_radii(client, flat_index, field, query):
+            flat = range_distances(client, flat_index, field, query, radius)
+            assert len(flat) == n, (metric, n, radius)
+            for eps in EPSILONS:
+                hnsw = range_distances(
+                    client, hnsw_index, field, query, radius, eps)
+                extra = hnsw.keys() - flat.keys()
+                assert not extra, (metric, n, eps, extra)
+                for key, dist in hnsw.items():
+                    assert math.isclose(dist, flat[key], rel_tol=1e-5,
+                                        abs_tol=1e-5), (metric, key)
+                recalls[(n, eps)].append(len(hnsw) / n)
+    means = {cell: sum(r) / len(r) for cell, r in recalls.items()}
+    overall = sum(means.values()) / len(means)
+    assert overall >= MIN_RECALL, (metric, overall, means)
+    assert min(means.values()) >= MIN_CELL_RECALL, (metric, means)
+    return means
+
+
+def delete_and_reinsert(client, rng, vectors):
+    """Delete 30% of the SCALE_KEYS keys, add 2000 new keys and give 1000
+    surviving keys new vectors. Returns the vectors now stored."""
+    deleted = rng.choice(SCALE_KEYS, 3 * SCALE_KEYS // 10, replace=False)
+    pipe = client.pipeline(transaction=False)
+    for i in deleted:
+        pipe.delete(f"sc:{i}")
+    pipe.execute()
+    survivors = np.setdiff1d(np.arange(SCALE_KEYS), deleted)
+    updated = rng.choice(survivors, 1000, replace=False)
+    fresh = clustered_vectors(rng, 3000)
+    added = np.arange(SCALE_KEYS, SCALE_KEYS + 2000)
+    write_vectors(client, added, fresh[:2000])
+    write_vectors(client, updated, fresh[2000:])
+    stored = dict(zip(survivors, vectors[survivors]))
+    stored.update(zip(added, fresh[:2000]))
+    stored.update(zip(updated, fresh[2000:]))
+    return np.array(list(stored.values()), dtype=np.float32)
+
+
+def check_saturated_epsilon_matches_flat(client, flat_index, hnsw_index):
+    """$epsilon values beyond float range (accepted as in Redis) widen the
+    HNSW walk to the whole graph, so the HNSW range result is the FLAT one.
+    Expects the 20 x 20 grid of integer points written by the caller."""
+    query = np.array([3.3, 4.7], dtype=np.float32)
+    radius = 20.5
+    flat = range_distances(client, flat_index, "v", query, radius)
+    assert 0 < len(flat) < 400
+    for epsilon in ("inf", "nan", "1e40"):
+        hnsw = range_distances(client, hnsw_index, "v", query, radius, epsilon)
+        assert hnsw == pytest.approx(flat), epsilon
 
 
 # ---------------------------------------------------------------------------
@@ -252,9 +443,8 @@ class TestVectorRange(ValkeySearchTestCaseBase):
         An HNSW range query counts toward
         search_nonvector_results_fetched_limited_count only when the
         max-nonvector-search-results-fetched cap may have dropped in-radius
-        docs: the cap was hit and even the farthest candidate is in range.
-        Such a query falls back to an exhaustive scan and returns every doc
-        in range.
+        docs: the cap was hit within radius * (1 + epsilon). Such a query
+        falls back to an exhaustive scan and returns every doc in range.
         Each index holds fewer than M (16) vectors, so the HNSW graph is
         complete and the fetch returns exactly the `cap` nearest.
         """
@@ -296,9 +486,13 @@ class TestVectorRange(ValkeySearchTestCaseBase):
         # A distance equal to the radius is in range, as in the result
         # filter, so the cut-off distance-4 doc counts.
         assert search_and_count("idx", 4, QUERY_VEC, 3) == (4, 1)
-        # The farthest fetched candidate (distance 4) is out of range, so
-        # nothing in range was dropped.
+        # The distance-4 docs are beyond the shell (3.9 * 1.01), so the
+        # fetch is not full and nothing in range was dropped.
         assert search_and_count("idx", 3.9, QUERY_VEC, 3) == (2, 0)
+        # The shell (3.99 * 1.01) holds them, so the fetch fills with a
+        # distance-4 doc out of range; keys behind it could be missed, so it
+        # scans.
+        assert search_and_count("idx", 3.99, QUERY_VEC, 3) == (2, 1)
         assert search_and_count("idx", 0, QUERY_VEC, 3) == (1, 0)
         # The cap is above the index size.
         assert search_and_count("idx", 1000, QUERY_VEC, 100) == (6, 0)
@@ -309,7 +503,7 @@ class TestVectorRange(ValkeySearchTestCaseBase):
             "cidx", 0.5, [-1.0, -2.0, -3.0], 1) == (0, 0)
         # The self-distance of c:0 is usually not exactly 0 in float
         # arithmetic, so whether it is within radius 0 depends on the
-        # cosine clamping. The counter must clamp like the result filter.
+        # cosine clamping, and that decides both the scan and the result.
         count, delta = search_and_count("cidx", 0, [1.0, 2.0, 3.0], 1)
         assert delta == count
 
@@ -375,6 +569,84 @@ class TestVectorRange(ValkeySearchTestCaseBase):
                     assert parse_result_keys(result) == expected
         finally:
             client.execute_command("CONFIG", "SET", cap_config, original_cap)
+
+    @pytest.mark.parametrize("metric", ["L2", "IP", "COSINE"])
+    def test_hnsw_range_matches_flat_at_scale(self, metric):
+        """
+        On 10k clustered 16-d vectors, HNSW range results are FLAT results at
+        the same distance, and HNSW recall against FLAT is at least
+        MIN_RECALL, for radii holding ~1, ~10 and ~100 keys and $epsilon
+        omitted, 1e-6 and 0.1.
+        """
+        client = self.server.get_new_client()
+        rng = np.random.default_rng(41)
+        flat_index, hnsw_index = create_range_indexes(client, metric)
+        vectors = clustered_vectors(rng, SCALE_KEYS)
+        write_vectors(client, range(SCALE_KEYS), vectors)
+        wait_indexed([client], (flat_index, hnsw_index))
+        check_hnsw_range_matches_flat(
+            client, metric, scale_queries(rng, vectors, metric),
+            flat_index, hnsw_index)
+
+    @pytest.mark.parametrize("metric", ["L2", "IP", "COSINE"])
+    def test_hnsw_range_matches_flat_after_deletes(self, metric):
+        """
+        HNSW range results still match FLAT after 30% of the keys are
+        deleted, 2000 keys are added and 1000 keys get new vectors: no
+        deleted key and no stale distance is returned, and recall holds.
+        """
+        client = self.server.get_new_client()
+        rng = np.random.default_rng(42)
+        flat_index, hnsw_index = create_range_indexes(client, metric)
+        vectors = clustered_vectors(rng, SCALE_KEYS)
+        write_vectors(client, range(SCALE_KEYS), vectors)
+        wait_indexed([client], (flat_index, hnsw_index))
+        stored = delete_and_reinsert(client, rng, vectors)
+        wait_indexed([client], (flat_index, hnsw_index))
+        assert client.dbsize() == len(stored) == 9000
+        check_hnsw_range_matches_flat(
+            client, metric, scale_queries(rng, stored, metric),
+            flat_index, hnsw_index)
+
+    def test_hnsw_range_small_ball_far_from_entry_point(self):
+        """
+        A small ball around a tight cluster far from the rest of the data,
+        inserted after it so the graph entry point lies elsewhere, returns
+        the keys FLAT returns: all 20 keys of the cluster, or its 5 nearest.
+        The walk locates the ball with an EF_RUNTIME-wide beam, as KNN does;
+        with the default EF_RUNTIME of 10, KNN and range search both miss the
+        third cluster here, so the index uses 100.
+        """
+        client = self.server.get_new_client()
+        rng = np.random.default_rng(43)
+        flat_index, hnsw_index = create_range_indexes(
+            client, "L2", ef_runtime=100)
+        cloud = rng.normal(0.0, 1.0, (5000, SCALE_DIM)).astype(np.float32)
+        write_vectors(client, range(5000), cloud)
+        centers = [np.full(SCALE_DIM, 30.0 * sign, dtype=np.float32)
+                   for sign in (1, -1)]
+        centers.append(np.where(np.arange(SCALE_DIM) % 2, 30.0, -30.0)
+                       .astype(np.float32))
+        balls = []
+        for j, center in enumerate(centers):
+            ids = range(5000 + 20 * j, 5020 + 20 * j)
+            ball = (center + rng.normal(0.0, 0.05, (20, SCALE_DIM))).astype(
+                np.float32)
+            write_vectors(client, ids, ball)
+            balls.append(({f"sc:{i}" for i in ids}, center, ball))
+        wait_indexed([client], (flat_index, hnsw_index))
+
+        for keys, center, ball in balls:
+            # Squared distances from the center: the ball's keys lie within
+            # ~0.1, the nearest other key ~3000 away.
+            dists = np.sort(((ball.astype(np.float64) - center) ** 2).sum(1))
+            for radius, expected in ((1.0, 20), ((dists[4] + dists[5]) / 2, 5)):
+                flat = range_distances(client, flat_index, "v", center, radius)
+                assert len(flat) == expected and flat.keys() <= keys
+                for eps in EPSILONS:
+                    hnsw = range_distances(
+                        client, hnsw_index, "v", center, radius, eps)
+                    assert hnsw.keys() == flat.keys(), (radius, eps)
 
     # =================================================================
     # 5. Vector Range AND tag filter
@@ -635,6 +907,18 @@ class TestVectorRange(ValkeySearchTestCaseBase):
             "NOCONTENT",
         )
         assert result[0] >= 1
+
+    def test_query_attr_epsilon_saturated(self):
+        """
+        $epsilon: inf, nan and 1e40 on an HNSW field return the FLAT result.
+        """
+        client = self.server.get_new_client()
+        flat_index, hnsw_index = create_range_indexes(client, "L2", dim=2)
+        grid = np.array([[i % 20, i // 20] for i in range(400)],
+                        dtype=np.float32)
+        write_vectors(client, range(400), grid)
+        wait_indexed([client], (flat_index, hnsw_index))
+        check_saturated_epsilon_matches_flat(client, flat_index, hnsw_index)
 
     # =================================================================
     # 13. Query attributes: both $yield_distance_as and $epsilon
@@ -1813,3 +2097,159 @@ class TestVectorRange(ValkeySearchTestCaseBase):
                 "=>[KNN 5 @vec $kblob AS knn_dist]",
                 "PARAMS", "4", "vrblob", query_blob, "kblob", query_blob,
             )
+
+
+class TestVectorRangeReplaceDeleted(ValkeySearchTestCaseDebugMode):
+    """HNSW range search with search.hnsw-allow-replace-deleted, a developer
+    config, so new keys reuse deleted graph slots under fresh labels."""
+
+    @pytest.mark.parametrize("metric", ["L2", "IP", "COSINE"])
+    def test_hnsw_range_matches_flat_after_replaced_deletes(self, metric):
+        """
+        After deletes and re-inserts that reuse the deleted slots, HNSW range
+        results are FLAT results at the same distance and recall holds: a
+        result reported by slot id instead of label names the wrong key.
+        """
+        client = self.server.get_new_client()
+        client.config_set("search.hnsw-allow-replace-deleted", "yes")
+        rng = np.random.default_rng(44)
+        flat_index, hnsw_index = create_range_indexes(client, metric)
+        vectors = clustered_vectors(rng, SCALE_KEYS)
+        write_vectors(client, range(SCALE_KEYS), vectors)
+        wait_indexed([client], (flat_index, hnsw_index))
+        stored = delete_and_reinsert(client, rng, vectors)
+        wait_indexed([client], (flat_index, hnsw_index))
+        assert client.dbsize() == len(stored)
+        check_hnsw_range_matches_flat(
+            client, metric, scale_queries(rng, stored, metric),
+            flat_index, hnsw_index)
+
+
+class TestVectorRangeCluster(ValkeySearchClusterTestCase):
+    """VECTOR_RANGE through the coordinator on 3 primaries."""
+
+    def _primaries(self):
+        return [self.client_for_primary(i)
+                for i in range(len(self.replication_groups))]
+
+    def test_hnsw_range_matches_flat_cluster(self):
+        """
+        On 10k L2 vectors spread over 3 shards, HNSW range results through
+        the coordinator are FLAT results at the same distance, with recall of
+        at least MIN_RECALL.
+        """
+        cluster_client = self.new_cluster_client()
+        rng = np.random.default_rng(45)
+        flat_index, hnsw_index = create_range_indexes(cluster_client, "L2")
+        vectors = clustered_vectors(rng, SCALE_KEYS)
+        write_vectors(cluster_client, range(SCALE_KEYS), vectors)
+        primaries = self._primaries()
+        wait_indexed(primaries, (flat_index, hnsw_index))
+        assert sum(p.dbsize() for p in primaries) == SCALE_KEYS
+        check_hnsw_range_matches_flat(
+            primaries[0], "L2", scale_queries(rng, vectors, "L2"),
+            flat_index, hnsw_index)
+
+    def test_hnsw_range_complete_past_shard_fetch_cap(self):
+        """
+        With max-nonvector-search-results-fetched lowered on every primary
+        below each shard's count of keys in range, an HNSW range query still
+        returns every key in range, as FLAT does, and each shard counts the
+        exhaustive scan in search_nonvector_results_fetched_limited_count.
+        """
+        cluster_client = self.new_cluster_client()
+        flat_index, hnsw_index = create_range_indexes(
+            cluster_client, "L2", dim=2)
+        # A 60 x 50 grid of integer points: squared L2 distances from the
+        # origin are exact, and 2011 of them are within the radius.
+        grid = np.array([[i % 60, i // 60] for i in range(3000)],
+                        dtype=np.float32)
+        write_vectors(cluster_client, range(3000), grid)
+        primaries = self._primaries()
+        wait_indexed(primaries, (flat_index, hnsw_index))
+        radius = 2500.5
+        expected = {f"sc:{i}" for i, p in enumerate(grid)
+                    if float(p[0]) ** 2 + float(p[1]) ** 2 <= radius}
+        assert len(expected) == 2011
+
+        # Each shard holds about 1000 keys, about 670 of them in range: more
+        # than the cap of 300.
+        counter = "search_nonvector_results_fetched_limited_count"
+        for primary in primaries:
+            primary.execute_command(
+                "CONFIG", "SET", "search.info-developer-visible", "yes")
+            primary.execute_command(
+                "CONFIG", "SET", "search.max-nonvector-search-results-fetched",
+                "300")
+
+        def counts():
+            return [p.info("search").get(counter, 0) for p in primaries]
+
+        before = counts()
+        query = np.zeros(2, dtype=np.float32)
+        hnsw = range_distances(primaries[0], hnsw_index, "v", query, radius)
+        assert hnsw.keys() == expected
+        assert [a - b for a, b in zip(counts(), before)] == [1, 1, 1]
+        flat = range_distances(primaries[0], flat_index, "v", query, radius)
+        assert flat.keys() == expected
+        assert hnsw == pytest.approx(flat)
+
+    def test_query_attr_epsilon_saturated_cluster(self):
+        """
+        $epsilon: inf, nan and 1e40 reach every shard through the coordinator
+        and return the FLAT result.
+        """
+        cluster_client = self.new_cluster_client()
+        flat_index, hnsw_index = create_range_indexes(
+            cluster_client, "L2", dim=2)
+        grid = np.array([[i % 20, i // 20] for i in range(400)],
+                        dtype=np.float32)
+        write_vectors(cluster_client, range(400), grid)
+        primaries = self._primaries()
+        wait_indexed(primaries, (flat_index, hnsw_index))
+        check_saturated_epsilon_matches_flat(
+            primaries[0], flat_index, hnsw_index)
+
+
+class TestVectorRangeBenchmark(ValkeySearchTestCaseBase):
+    """Small-radius VECTOR_RANGE on HNSW against FLAT: the walk must match
+    FLAT's recall while the test records comparative latency."""
+
+    def test_small_radius_hnsw_recall_with_latency_report(self):
+        """
+        Over 10k 16-d vectors, small-radius (~1, ~10 keys) HNSW range queries
+        match FLAT key-for-key at MIN_RECALL. The HNSW and FLAT median latency
+        is measured and reported without making shared CI timing a gate.
+        """
+        client = self.server.get_new_client()
+        rng = np.random.default_rng(47)
+        flat_index, hnsw_index = create_range_indexes(client, "L2")
+        vectors = clustered_vectors(rng, SCALE_KEYS)
+        write_vectors(client, range(SCALE_KEYS), vectors)
+        wait_indexed([client], (flat_index, hnsw_index))
+        queries = scale_queries(rng, vectors, "L2", count=SCALE_QUERIES)
+
+        def timed(index, query, radius):
+            """(latency in seconds, result key set) for one range query."""
+            start = time.perf_counter()
+            got = range_distances(client, index, "v", query, radius)
+            return time.perf_counter() - start, got.keys()
+
+        flat_latencies, hnsw_latencies, recalls = [], [], []
+        for query in queries:
+            for _, radius in knn_radii(client, flat_index, "v", query,
+                                       sizes=(1, 10)):
+                flat_dt, flat_keys = timed(flat_index, query, radius)
+                hnsw_dt, hnsw_keys = timed(hnsw_index, query, radius)
+                assert hnsw_keys <= flat_keys, (radius, hnsw_keys - flat_keys)
+                flat_latencies.append(flat_dt)
+                hnsw_latencies.append(hnsw_dt)
+                recalls.append(len(hnsw_keys) / max(len(flat_keys), 1))
+
+        flat_median = sorted(flat_latencies)[len(flat_latencies) // 2]
+        hnsw_median = sorted(hnsw_latencies)[len(hnsw_latencies) // 2]
+        recall = sum(recalls) / len(recalls)
+        print(f"\nVECTOR_RANGE small-radius latency over {len(recalls)} "
+              f"queries: FLAT median {flat_median * 1e3:.3f} ms, "
+              f"HNSW median {hnsw_median * 1e3:.3f} ms, HNSW recall {recall:.3f}")
+        assert recall >= MIN_RECALL, recall

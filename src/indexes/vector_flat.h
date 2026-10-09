@@ -91,7 +91,7 @@ class VectorFlat : public VectorType<T> {
   // tracked-key maps under the phase lock only.
   absl::StatusOr<std::vector<Neighbor>> SearchRange(
       absl::string_view query, float radius, cancel::Token &cancellation_token,
-      float epsilon = 0.0f,
+      float epsilon,
       std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr) override
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
 

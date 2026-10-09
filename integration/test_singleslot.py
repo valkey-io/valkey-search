@@ -120,12 +120,16 @@ class TestSingleSlot(ValkeySearchClusterTestCaseDebugMode):
                 "HSET", f"doc:{{shard0}}:{i}", "price", str(i * 10)
             )
 
-        # Wait for backfill
-        waiters.wait_for_true(
-            lambda: primary.execute_command(
-                "FT.SEARCH", "idx{shard0}", "@price:[0 100]"
-            )[0] == 10
-        )
+        # {shard0} hashes to slot 14398, owned by the third shard.
+        # Wait for both its primary and replicas to finish indexing. A normal
+        # search can fan out to either, so one successful query is not enough.
+        owning_shard = self.get_replication_group(2)
+        for node in [owning_shard.primary, *owning_shard.replicas]:
+            waiters.wait_for_true(
+                lambda client=node.client: client.execute_command(
+                    "FT.SEARCH", "idx{shard0}", "@price:[0 100]", "LOCALONLY"
+                )[0] == 10
+            )
 
         # Verify query works before ForceReplicasOnly (uses kRandom → handled)
         result = primary.execute_command(

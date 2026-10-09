@@ -10,6 +10,7 @@
 #include <memory>
 #include <vector>
 
+#include "absl/synchronization/mutex.h"
 #include "fanout.h"
 #include "ft_create_parser.h"
 #include "src/acl.h"
@@ -61,20 +62,20 @@ int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
       ValkeyModule_GetBlockedClientPrivateData(ctx));
   CHECK(parameters != nullptr);
 
-  // Check if operation failed first to get the actual error message
-  if (!parameters->search_result.status.ok()) {
-    ++Metrics::GetStats().query_failed_requests_cnt;
-    return ValkeyModule_ReplyWithError(
-        ctx, parameters->search_result.status.message().data());
+  if (parameters->reply_generated_in_background.load(
+          std::memory_order_acquire)) {
+    // Reply generation itself happened on a reader thread. Keep these
+    // main-thread-only counters on the reply callback, as before.
+    if (!parameters->search_result.status.ok() ||
+        (!parameters->enable_partial_results &&
+         parameters->cancellation_token->IsCancelled())) {
+      ++Metrics::GetStats().query_failed_requests_cnt;
+    } else {
+      ++Metrics::GetStats().query_successful_requests_cnt;
+    }
+    return VALKEYMODULE_OK;
   }
-  // Check if operation was cancelled and partial results are disabled
-  if (!parameters->enable_partial_results &&
-      parameters->cancellation_token->IsCancelled()) {
-    ++Metrics::GetStats().query_failed_requests_cnt;
-    return ValkeyModule_ReplyWithError(ctx, query::kTimeoutMsg.data());
-  }
-  parameters->SendReply(ctx, parameters->search_result);
-  return VALKEYMODULE_OK;
+  return parameters->GenerateReply(ctx);
 }
 
 void Free([[maybe_unused]] ValkeyModuleCtx *ctx, void *privdata) {
@@ -90,6 +91,26 @@ void Free([[maybe_unused]] ValkeyModuleCtx *ctx, void *privdata) {
 }
 
 }  // namespace async
+
+int QueryCommand::GenerateReply(ValkeyModuleCtx *ctx) {
+  // Check if operation failed first to get the actual error message
+  if (!search_result.status.ok()) {
+    if (vmsdk::IsMainThread()) {
+      ++Metrics::GetStats().query_failed_requests_cnt;
+    }
+    return ValkeyModule_ReplyWithError(ctx,
+                                       search_result.status.message().data());
+  }
+  // Check if operation was cancelled and partial results are disabled
+  if (!enable_partial_results && cancellation_token->IsCancelled()) {
+    if (vmsdk::IsMainThread()) {
+      ++Metrics::GetStats().query_failed_requests_cnt;
+    }
+    return ValkeyModule_ReplyWithError(ctx, query::kTimeoutMsg.data());
+  }
+  SendReply(ctx, search_result);
+  return VALKEYMODULE_OK;
+}
 
 CONTROLLED_BOOLEAN(ForceReplicasOnly, false);
 DEV_INTEGER_COUNTER(stats, single_slot_queries);
@@ -323,6 +344,31 @@ void QueryCommand::QueryCompleteImpl(
 void QueryCommand::QueryCompleteBackground(
     std::unique_ptr<SearchParameters> parameters) {
   CHECK(!vmsdk::IsMainThread());
+  auto *command = static_cast<QueryCommand *>(parameters.get());
+  CHECK(command == this);
+  // kNoContent normally skips ResolveContent(), which performs this check on
+  // the main thread. Preserve its dropped-index behavior before a background
+  // thread materializes a reply. Hold the gate until the client is unblocked,
+  // so the query either completes before MarkAsDestructing() or sees it.
+  // Keep only the mutex alive locally: once unblocked, async::Free may drop
+  // command->index_schema before the lock is released, and the schema must
+  // not be destroyed on this thread.
+  auto destructing_mutex = command->index_schema->GetDestructingMutex();
+  absl::ReaderMutexLock destructing_lock(destructing_mutex.get());
+  if (command->index_schema->IsMarkedDestructing()) {
+    command->search_result.status = GenerateIndexNotFoundError(
+        command->index_schema->GetDBNum(), command->index_schema->GetName());
+  }
+  if (command->CanGenerateReplyInBackground()) {
+    // A context associated with a blocked client can accumulate ReplyWith*
+    // output from a background thread without taking the server lock. Valkey
+    // delivers the accumulated reply when UnblockClient runs below.
+    auto ctx =
+        vmsdk::MakeUniqueValkeyThreadSafeContext(*command->blocked_client);
+    command->GenerateReply(ctx.get());
+    command->reply_generated_in_background.store(true,
+                                                 std::memory_order_release);
+  }
   QueryCompleteImpl(std::move(parameters));
 }
 

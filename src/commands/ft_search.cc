@@ -498,7 +498,11 @@ void SearchCommand::ReplyRows(ValkeyModuleCtx *ctx,
 void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
                               query::SearchResult &search_result) {
   // Increment success counter.
-  ++Metrics::GetStats().query_successful_requests_cnt;
+  // Background-generated replies are accounted for by async::Reply on the
+  // main thread after the blocked client is unblocked.
+  if (vmsdk::IsMainThread()) {
+    ++Metrics::GetStats().query_successful_requests_cnt;
+  }
 
   if (query::ShouldReturnNoResults(*this)) {
     ValkeyModule_ReplyWithArray(ctx, cursor_options ? 3 : 1);
@@ -517,7 +521,9 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
   if (!skip_content) {
     auto status = ProcessNeighborsForQuery(ctx, search_result, *this);
     if (!status.ok()) {
-      ++Metrics::GetStats().query_failed_requests_cnt;
+      if (vmsdk::IsMainThread()) {
+        ++Metrics::GetStats().query_failed_requests_cnt;
+      }
       ValkeyModule_ReplyWithError(ctx, status.message().data());
       return;
     }
@@ -562,6 +568,16 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
   auto id =
       CursorTable::Instance().Insert(std::move(cursor), db_num, absl::Now());
   ValkeyModule_ReplyWithLongLong(ctx, static_cast<long long>(id));
+}
+
+bool SearchCommand::CanGenerateReplyInBackground() const {
+  // LIMIT 0 (and a vector offset past K) returns only the count. NOCONTENT
+  // avoids database access unless SORTBY requires loading values to order the
+  // result set. WITHCURSOR may insert into the main-thread-only CursorTable,
+  // except for the count-only reply. QueryCompleteBackground preserves
+  // dropped-index validation before generating these replies.
+  return query::ShouldReturnNoResults(*this) ||
+         (NoProcessingRequired() && !cursor_options.has_value());
 }
 
 absl::Status FTSearchCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,

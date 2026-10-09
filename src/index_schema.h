@@ -325,6 +325,12 @@ class IndexSchema : public KeyspaceEventSubscription,
   }
   void MarkAsDestructing();
   bool IsMarkedDestructing() const { return is_destructing_.load(); }
+  // Held shared by a background query from its dropped-index check until it
+  // unblocks the client, so MarkAsDestructing() cannot land in between. Shared
+  // so the query can release it without keeping the schema alive.
+  std::shared_ptr<absl::Mutex> GetDestructingMutex() const {
+    return destructing_mutex_;
+  }
   void ProcessMultiQueue();
   uint64_t GetBackfillScannedKeyCount() const;
   uint64_t GetBackfillDbSize() const;
@@ -524,6 +530,8 @@ class IndexSchema : public KeyspaceEventSubscription,
   InternedStringHashMap<DocumentMutation> tracked_mutated_records_
       ABSL_GUARDED_BY(mutated_records_mutex_);
   std::atomic<bool> is_destructing_{false};
+  std::shared_ptr<absl::Mutex> destructing_mutex_ =
+      std::make_shared<absl::Mutex>();
   mutable absl::Mutex mutated_records_mutex_;
 
   MutationSequenceNumber schema_mutation_sequence_number_{0};

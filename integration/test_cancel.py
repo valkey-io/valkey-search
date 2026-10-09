@@ -509,6 +509,24 @@ class TestCancelCME(ValkeySearchClusterTestCaseDebugMode):
           lambda: self._check_info_sum(name),
           sum_value
         )
+
+    def check_cancel_sum(self, sum_value: int):
+        """Total cancellations across the cluster, regardless of how each shard
+        observed the cancellation.
+
+        With cooperative fan-out cancellation (issue #1284), when the
+        coordinator aborts an unrecoverable ALLSHARDS query it calls
+        TryCancel() on the outstanding remote RPCs. A remote shard that sees
+        its gRPC context cancelled before its own ForceTimeout poll fires
+        records the cancellation as gRPCCancels rather than ForceCancels.
+        Which counter a shard increments is therefore a race, but exactly one
+        of them moves per shard, so their sum is deterministic.
+        """
+        waiters.wait_for_equal(
+            lambda: self._check_info_sum("search_test-counter-ForceCancels")
+            + self._check_info_sum("search_test-counter-gRPCCancels"),
+            sum_value,
+        )
     
     def sum_docs(self, index: Index) -> int:
         return sum([index.info(self.client_for_primary(i)).num_docs for i in range(len(self.replication_groups))])
@@ -551,13 +569,13 @@ class TestCancelCME(ValkeySearchClusterTestCaseDebugMode):
         # Normal HNSW path
         #
         hnsw_result = search(client, "hnsw", True, None, enable_partial_results=False)
-        self.check_info_sum("search_test-counter-ForceCancels", 3)
+        self.check_cancel_sum(3)
 
         #
         # Pre-filtering FLAT path (flat always uses pre-filtering)
         #
         flat_result = search(client, "flat", True, 10, enable_partial_results=False)
-        self.check_info_sum("search_test-counter-ForceCancels", 6)
+        self.check_cancel_sum(6)
         self.check_info_sum("search_prefiltering_requests_count", 3)
 
         #
@@ -567,7 +585,7 @@ class TestCancelCME(ValkeySearchClusterTestCaseDebugMode):
         self.config_set("search.prefiltering-threshold-ratio", "0.5")
         hnsw_result = search(client, "hnsw", True, 10, enable_partial_results=False)
         self.check_info_sum("search_prefiltering_requests_count", 6)
-        self.check_info_sum("search_test-counter-ForceCancels", 9)
+        self.check_cancel_sum(9)
 
     @wait_for_background_tasks()
     def test_aggregate_timeout_cluster(self):
@@ -602,3 +620,112 @@ class TestCancelCME(ValkeySearchClusterTestCaseDebugMode):
         aggregate(client, "hnsw", True, stages=["FILTER", "@n > 0"])
         self.check_info_sum("search_test-counter-ForceTimeoutAggregateCancels", 4)
         self.control_set("ForceTimeoutAggregate", "no")
+
+    @wait_for_background_tasks()
+    def test_coordinator_cancel_propagates_to_remote_shards(self):
+        """Test cancellation from the coordinator to remote shards.
+
+        The remotes must see gRPC cancellation, not a timeout.
+        """
+        self.execute_primaries(["flushall sync"])
+        self.config_set("search.info-developer-visible", "yes")
+
+        client: Valkey = self.new_cluster_client()
+        hnsw_index = Index("hnsw_cancel", [Vector("v", 3, type="HNSW"), Numeric("n")])
+        hnsw_index.create(client)
+        hnsw_index.load_data(client, 100)
+        waiters.wait_for_equal(lambda: self.sum_docs(hnsw_index), 100)
+
+        num_remotes = len(self.replication_groups) - 1
+        base_grpc_cancels = self._check_info_sum("search_test-counter-gRPCCancels")
+        base_fanout_cancels = self._check_info_sum("search_fanout-cancels")
+
+        coordinator = self.client_for_primary(0)
+        remotes = [
+            self.client_for_primary(i)
+            for i in range(1, len(self.replication_groups))
+        ]
+
+        def force_cancels(client) -> int:
+            info = client.execute_command("INFO", "SEARCH")
+            return int(info.get("search_test-counter-ForceCancels", 0))
+
+        base_force_cancels = force_cancels(coordinator)
+
+        # Use a long timeout to rule out a local timeout.
+        cmd = [
+            "FT.SEARCH",
+            "hnsw_cancel",
+            "*=>[KNN 10 @v $BLOB]",
+            "PARAMS",
+            "2",
+            "BLOB",
+            float_to_bytes([10.0, 10.0, 10.0]),
+            "TIMEOUT",
+            "60000",
+            "ALLSHARDS",
+        ]
+        error = [None]
+
+        def run_search():
+            tc = self.get_primary(0).get_new_client()
+            try:
+                tc.execute_command(*cmd)
+            except ResponseError as e:
+                error[0] = str(e)
+            finally:
+                tc.close()
+
+        thread = threading.Thread(target=run_search)
+        try:
+            # Poll often so all shards reach Cancel.
+            self.control_set("TimeoutPollFrequency", "1")
+            # Pause local and remote searches.
+            for node in [coordinator] + remotes:
+                assert node.execute_command("FT._DEBUG", "PAUSEPOINT", "SET", "Cancel") == b"OK"
+
+            thread.start()
+
+            # Wait until all searches reach the pausepoint.
+            for node in [coordinator] + remotes:
+                waiters.wait_for_true(lambda n=node: pausepoint_hit(n, "Cancel"))
+
+            # Force cancellation on the coordinator, then release local search.
+            assert coordinator.execute_command(
+                "ft._debug", "CONTROLLED_VARIABLE", "set", "ForceTimeout", "yes") == b"OK"
+            coordinator.execute_command("FT._DEBUG", "PAUSEPOINT", "RESET", "Cancel")
+            waiters.wait_for_true(
+                lambda: force_cancels(coordinator) > base_force_cancels
+            )
+
+            # Release remotes. They must see gRPC cancellation.
+            for remote in remotes:
+                remote.execute_command("FT._DEBUG", "PAUSEPOINT", "RESET", "Cancel")
+            thread.join(timeout=60)
+            assert not thread.is_alive(), "Search thread did not complete"
+
+            assert error[0] is not None, "Expected the fanout search to fail"
+            assert "cancelled" in error[0].lower(), f"Expected cancellation error, got: {error[0]}"
+            # Each remote must see TryCancel.
+            self.check_info_sum(
+                "search_test-counter-gRPCCancels", base_grpc_cancels + num_remotes
+            )
+            # Exactly one shard (the coordinator's local search) initiated the
+            # fanout-wide cancellation.
+            self.check_info_sum(
+                "search_fanout-cancels", base_fanout_cancels + 1
+            )
+        finally:
+            # Always release pausepoints and restore controls.
+            for node in [coordinator] + remotes:
+                try:
+                    node.execute_command("FT._DEBUG", "PAUSEPOINT", "RESET", "Cancel")
+                except Exception:
+                    pass
+            try:
+                self.control_set("ForceTimeout", "no")
+                self.control_set("TimeoutPollFrequency", "100")
+            except Exception:
+                pass
+            if thread.is_alive():
+                thread.join(timeout=60)

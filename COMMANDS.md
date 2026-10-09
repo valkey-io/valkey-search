@@ -93,7 +93,7 @@ Detailed information about the specified index is returned.
 
 - **\<index-name\>** (required): The name of the index to return information about.
 - **\<info-scope\>** (optional): LOCAL, PRIMARY or CLUSTER. The scope to return the information about. LOCAL returns information only from local node. PRIMARY returns information from all primary nodes. CLUSTER returns information from all primary and replica nodes. Default is LOCAL.
-- **\<partition-control\>** (optional): ALLSHARDS or SOMESHARDS. Returns information only if all shards respond in ALLSHARDS mode. Returns information regardless of how many shards respond in SOMESHARDS mode. Default to ALLSHARDS.
+- **\<partition-control\>** (optional): ALLSHARDS or SOMESHARDS. Returns information only if all shards respond in ALLSHARDS mode. Returns information regardless of how many shards respond in SOMESHARDS mode. If omitted, the behavior follows `search.enable-partial-results`, which defaults to `true` (equivalent to SOMESHARDS).
 - **\<consistency-control\>** (optional): CONSISTENT or INCONSISTENT. Returns information only if the cluster is consistent in CONSISTENT mode. Returns information regardless of consistency in INCONSISTENT mode. Default to CONSISTENT.
 
 **RESPONSE**

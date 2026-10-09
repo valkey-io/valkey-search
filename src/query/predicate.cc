@@ -185,10 +185,11 @@ EvaluationResult SuffixPredicate::Evaluate(Evaluator &evaluator) const {
 void SuffixPredicate::ForEachMatch(
     const valkey_search::indexes::text::TextIndex &text_index,
     MatchSink sink) const {
-  // The suffix tree stores reversed words; without WITHSUFFIXTRIE there are no
-  // matched terms.
+  // The suffix tree stores reversed words. The parser only builds a suffix
+  // predicate for a schema WITHSUFFIXTRIE, and every tree of such a schema has
+  // one.
   auto suffix = text_index.GetSuffix();
-  if (!suffix.has_value()) return;
+  CHECK(suffix.has_value()) << "Text index does not have suffix trie enabled.";
   const uint32_t max_words = options::GetMaxTermExpansions().GetValue();
   auto it =
       suffix->get().GetWordIterator(std::string(term_.rbegin(), term_.rend()));

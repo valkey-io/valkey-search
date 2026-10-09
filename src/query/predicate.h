@@ -404,10 +404,6 @@ class SuffixPredicate : public ExpansionPredicate {
   EvaluationResult Evaluate(Evaluator& evaluator) const override;
   void ForEachMatch(const valkey_search::indexes::text::TextIndex& text_index,
                     MatchSink sink) const override;
-  std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
-      const std::shared_ptr<indexes::text::TextIndex>& text_index,
-      FieldMaskPredicate field_mask, bool require_positions,
-      float or_weight_multiplier) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
   size_t EstimateSize(bool is_vec_query) const override;
 
@@ -430,10 +426,6 @@ class InfixPredicate : public ExpansionPredicate {
   EvaluationResult Evaluate(Evaluator& evaluator) const override;
   void ForEachMatch(const valkey_search::indexes::text::TextIndex& text_index,
                     MatchSink sink) const override;
-  std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
-      const std::shared_ptr<indexes::text::TextIndex>& text_index,
-      FieldMaskPredicate field_mask, bool require_positions,
-      float or_weight_multiplier) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
   size_t EstimateSize(bool is_vec_query) const override;
 

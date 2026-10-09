@@ -280,23 +280,6 @@ ExpansionPredicate::BuildTextIterator(
           .per_term_dt = std::move(per_term_dt)});
 }
 
-std::unique_ptr<indexes::text::TextIterator> SuffixPredicate::BuildTextIterator(
-    const std::shared_ptr<indexes::text::TextIndex> &text_index,
-    FieldMaskPredicate field_mask, bool require_positions,
-    float or_weight_multiplier) const {
-  CHECK(text_index->GetSuffix().has_value())
-      << "Text index does not have suffix trie enabled.";
-  return ExpansionPredicate::BuildTextIterator(
-      text_index, field_mask, require_positions, or_weight_multiplier);
-}
-
-std::unique_ptr<indexes::text::TextIterator> InfixPredicate::BuildTextIterator(
-    const std::shared_ptr<indexes::text::TextIndex> &text_index,
-    FieldMaskPredicate field_mask, bool require_positions,
-    float or_weight_multiplier) const {
-  CHECK(false) << "Unsupported TextPredicate type";
-}
-
 /*
  * Size APIs for pre-filter or inline filter planning.
  *

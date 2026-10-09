@@ -449,7 +449,8 @@ class VectorBase : public IndexBase {
   // every vector and ignores `epsilon`. HNSW also walks through nodes within
   // radius * (1 + epsilon), without emitting them; it falls back to
   // SearchRangeExhaustive when its fetch of
-  // search.max-nonvector-search-results-fetched candidates is all in range.
+  // search.max-nonvector-search-results-fetched candidates fills within
+  // radius * (1 + epsilon).
   virtual absl::StatusOr<std::vector<Neighbor>> SearchRange(
       absl::string_view query, float radius, cancel::Token &cancellation_token,
       float epsilon = 0.0f,

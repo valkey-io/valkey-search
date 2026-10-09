@@ -196,7 +196,7 @@ To get the closest keys first, yield the distance and sort on it, for example `S
 
 Non-finite distances: a NaN or `+inf` distance, from a NaN or infinite vector component, is within no radius, not even `inf`; a `-inf` distance, which only `IP` can produce, is within every radius.
 
-`HNSW` fields: the search finds the keys nearest the query vector as a KNN query with the field's `EF_RUNTIME` does, then keeps expanding every key it reaches within `radius * (1 + epsilon)`, so the result is approximate, as for a KNN query, and can miss keys within the radius. It collects at most `search.max-nonvector-search-results-fetched` (default 100000) candidates; a query that matches at least that many keys is answered by scanning the whole index. `FLAT` fields are always searched exhaustively. In a cluster, each shard applies the setting to its own keys.
+`HNSW` fields: the search finds the keys nearest the query vector as a KNN query with the field's `EF_RUNTIME` does, then keeps expanding every key it reaches within `radius * (1 + epsilon)`, so the result is approximate, as for a KNN query, and can miss keys within the radius. It collects at most `search.max-nonvector-search-results-fetched` (default 100000) candidates within `radius * (1 + epsilon)`; a query that reaches that many is answered by scanning the whole index. `FLAT` fields are always searched exhaustively. In a cluster, each shard applies the setting to its own keys.
 
 OR: when a key matches through another branch of a `|` (OR), its distance is still computed. It is returned under `<name>` only if the key is within the radius.
 

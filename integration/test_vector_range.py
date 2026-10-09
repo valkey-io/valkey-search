@@ -430,9 +430,8 @@ class TestVectorRange(ValkeySearchTestCaseBase):
         An HNSW range query counts toward
         search_nonvector_results_fetched_limited_count only when the
         max-nonvector-search-results-fetched cap may have dropped in-radius
-        docs: the cap was hit and even the farthest candidate is in range.
-        Such a query falls back to an exhaustive scan and returns every doc
-        in range.
+        docs: the cap was hit within radius * (1 + epsilon). Such a query
+        falls back to an exhaustive scan and returns every doc in range.
         Each index holds fewer than M (16) vectors, so the HNSW graph is
         complete and the fetch returns exactly the `cap` nearest.
         """
@@ -474,9 +473,13 @@ class TestVectorRange(ValkeySearchTestCaseBase):
         # A distance equal to the radius is in range, as in the result
         # filter, so the cut-off distance-4 doc counts.
         assert search_and_count("idx", 4, QUERY_VEC, 3) == (4, 1)
-        # The farthest fetched candidate (distance 4) is out of range, so
-        # nothing in range was dropped.
+        # The distance-4 docs are beyond the shell (3.9 * 1.01), so the
+        # fetch is not full and nothing in range was dropped.
         assert search_and_count("idx", 3.9, QUERY_VEC, 3) == (2, 0)
+        # The shell (3.99 * 1.01) holds them, so the fetch fills with a
+        # distance-4 doc out of range; keys behind it could be missed, so it
+        # scans.
+        assert search_and_count("idx", 3.99, QUERY_VEC, 3) == (2, 1)
         assert search_and_count("idx", 0, QUERY_VEC, 3) == (1, 0)
         # The cap is above the index size.
         assert search_and_count("idx", 1000, QUERY_VEC, 100) == (6, 0)
@@ -487,7 +490,7 @@ class TestVectorRange(ValkeySearchTestCaseBase):
             "cidx", 0.5, [-1.0, -2.0, -3.0], 1) == (0, 0)
         # The self-distance of c:0 is usually not exactly 0 in float
         # arithmetic, so whether it is within radius 0 depends on the
-        # cosine clamping. The counter must clamp like the result filter.
+        # cosine clamping, and that decides both the scan and the result.
         count, delta = search_and_count("cidx", 0, [1.0, 2.0, 3.0], 1)
         assert delta == count
 

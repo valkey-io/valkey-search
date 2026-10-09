@@ -1073,8 +1073,8 @@ TEST_F(SearchRangeBf16, HnswScanMatchesPerKeyReferenceAndBruteForce) {
 }
 
 // HNSW range search fetches at most max-nonvector-search-results-fetched
-// candidates. Once they are all in range, the rest of the radius is covered by
-// an exhaustive scan, so every live key in range is returned.
+// candidates. Once they fill within radius * (1 + epsilon), the radius is
+// covered by an exhaustive scan, so every live key in range is returned.
 TEST_F(SearchRangeFp32, HnswReturnsEveryMatchPastTheFetchCap)
 ABSL_NO_THREAD_SAFETY_ANALYSIS {
   auto &fetch_cap = options::GetMaxNonVectorSearchResultsFetched();
@@ -1116,6 +1116,61 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
       }
     }
   }
+}
+
+// A fetch that fills within radius * (1 + epsilon) is answered by the
+// exhaustive scan even when its farthest result is outside the radius: the walk
+// expands no node past that result, so keys in range behind it can be missed.
+// With M 2, hnswlib's neighbor heuristic drops start as target's neighbor
+// (start is nearer to bridge than to target), so the graph is the path start -
+// bridge - target, and start, inserted first, is the entry point (the level
+// generator is seeded). Squared distances from the query: start 1.44, in the
+// shell of radius 1.43 and the default epsilon; bridge 1.53, beyond it; target
+// 0.36, in the ball. A cap of 1 fills with start, so the walk never reaches
+// target.
+TEST_F(SearchRangeFp32, HnswScansWhenTheFetchFillsWithinTheShell)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  auto created = VectorHNSW<float>::Create(
+      CreateHNSWVectorIndexProto(kDims, data_model::DISTANCE_METRIC_L2, 3,
+                                 /*m=*/2, 200, /*ef_runtime=*/1),
+      attribute_identifier, attribute_data_type, 0);
+  ASSERT_TRUE(created.ok()) << created.status();
+  auto &index = **created;
+  const std::pair<const char *, std::pair<float, float>> kKeys[] = {
+      {"start", {-0.9f, 0.0f}},
+      {"bridge", {0.0f, 1.2f}},
+      {"target", {0.9f, 0.0f}}};
+  for (const auto &[key, xy] : kKeys) {
+    std::vector<float> v(kDims, 0.0f);
+    v[0] = xy.first;
+    v[1] = xy.second;
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(
+        index, StringInternStore::Intern(key), Bytes(v)));
+  }
+  std::vector<float> q(kDims, 0.0f);
+  q[0] = 0.3f;
+  const std::string query = Bytes(q);
+  constexpr float kRadius = 1.43f;
+  constexpr float kEpsilon = 0.01f;
+  const auto expected = PerKeyReference(index, query, kRadius);
+  ASSERT_EQ(expected.size(), 1u);
+  ASSERT_TRUE(expected.contains("target"));
+
+  // Below the cap the walk's result stands; this layout hides target from it.
+  auto walked = index.SearchRange(query, kRadius, CancelNever(), kEpsilon);
+  ASSERT_TRUE(walked.ok()) << walked.status();
+  ASSERT_TRUE(walked->empty())
+      << "the walk reached target: start is not the entry point";
+
+  auto &fetch_cap = options::GetMaxNonVectorSearchResultsFetched();
+  const auto saved_cap = fetch_cap.GetValue();
+  absl::Cleanup restore = [&] {
+    VMSDK_EXPECT_OK(fetch_cap.SetValue(saved_cap));
+  };
+  VMSDK_EXPECT_OK(fetch_cap.SetValue(1));
+  auto searched = index.SearchRange(query, kRadius, CancelNever(), kEpsilon);
+  ASSERT_TRUE(searched.ok()) << searched.status();
+  EXPECT_EQ(ToMap(*searched), expected);
 }
 
 // The shell calculation remains finite when either multiplication would

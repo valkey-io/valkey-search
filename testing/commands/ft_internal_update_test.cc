@@ -39,9 +39,10 @@ TEST_F(FTInternalUpdateTest, WrongArguments) {
       TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.INTERNAL_UPDATE");
   argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_id");
 
-  VMSDK_EXPECT_DEATH(
-      [[maybe_unused]] auto res = FTInternalUpdateCmd(&fake_ctx_, argv, 2),
-      "FT.INTERNAL_UPDATE called with wrong argument count: 2");
+  auto status = FTInternalUpdateCmd(&fake_ctx_, argv, 2);
+  EXPECT_FALSE(status.ok());
+  EXPECT_TRUE(absl::IsInvalidArgument(status));
+  EXPECT_THAT(status.message(), testing::HasSubstr("wrong argument count"));
 
   TestValkeyModule_FreeString(&fake_ctx_, argv[0]);
   TestValkeyModule_FreeString(&fake_ctx_, argv[1]);
@@ -171,6 +172,9 @@ TEST_F(FTInternalUpdateTest, WithoutCoordinatorWhileLoadingSkippable) {
 }
 
 TEST_F(FTInternalUpdateTest, TooManyArguments) {
+  EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx_))
+      .WillRepeatedly(testing::Return(0));
+
   ValkeyModuleString* argv[5];
   argv[0] =
       TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.INTERNAL_UPDATE");
@@ -179,9 +183,10 @@ TEST_F(FTInternalUpdateTest, TooManyArguments) {
   argv[3] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "data2");
   argv[4] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "extra");
 
-  VMSDK_EXPECT_DEATH(
-      [[maybe_unused]] auto res = FTInternalUpdateCmd(&fake_ctx_, argv, 5),
-      "FT.INTERNAL_UPDATE called with wrong argument count: 5");
+  // The new keyword/value format accepts extra args (parsed as optional
+  // keyword args). With invalid keyword format it returns an error.
+  auto status = FTInternalUpdateCmd(&fake_ctx_, argv, 5);
+  EXPECT_FALSE(status.ok());
 
   for (int i = 0; i < 5; i++) {
     TestValkeyModule_FreeString(&fake_ctx_, argv[i]);

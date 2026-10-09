@@ -1288,7 +1288,8 @@ IndexSchema::GetSortedAttributes() const {
   return sorted;
 }
 
-void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
+void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx,
+                                  std::vector<std::string> aliases) const {
   // The index_definition block gained the score_field pair and switched
   // default_score from a hardcoded "1" bulk string to the configured score as
   // a double in 1.3.0. Pre-1.3.0: a 6-element array with no score_field and a
@@ -1301,7 +1302,7 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
       1, 3, 0, "ft_info_score_field", [] { return true; },
       [] { return false; });
 
-  int arrSize = 30;  // includes the filter_rejected_keys counter
+  int arrSize = 32;  // includes the aliases and filter_rejected_keys pairs
   // Text-attribute info fields
   if (text_index_schema_) {
     arrSize += 8;  // punctuation, stop_words, with_offsets, min_stem_size (4
@@ -1310,6 +1311,13 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithArray(ctx, arrSize);
   ValkeyModule_ReplyWithSimpleString(ctx, "index_name");
   ValkeyModule_ReplyWithSimpleString(ctx, name_.data());
+
+  ValkeyModule_ReplyWithSimpleString(ctx, "aliases");
+  std::sort(aliases.begin(), aliases.end());
+  ValkeyModule_ReplyWithArray(ctx, aliases.size());
+  for (const auto &alias : aliases) {
+    ValkeyModule_ReplyWithSimpleString(ctx, alias.c_str());
+  }
 
   ValkeyModule_ReplyWithSimpleString(ctx, "index_definition");
   int index_def_size = score_info_fixed ? 8 : 6;
@@ -1419,7 +1427,8 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
           .c_str());
 }
 
-std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {
+std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto(
+    std::vector<data_model::IndexSchema::Alias> aliases) const {
   auto index_schema_proto = std::make_unique<data_model::IndexSchema>();
   index_schema_proto->set_name(this->name_);
   index_schema_proto->set_db_num(db_num_);
@@ -1435,6 +1444,9 @@ std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {
   index_schema_proto->mutable_stop_words()->Assign(stop_words_.begin(),
                                                    stop_words_.end());
   index_schema_proto->set_skip_initial_scan(skip_initial_scan_);
+  std::sort(aliases.begin(), aliases.end(),
+            [](const auto &a, const auto &b) { return a.name() < b.name(); });
+  index_schema_proto->mutable_aliases()->Assign(aliases.begin(), aliases.end());
   index_schema_proto->set_score(score_);
   if (score_field_.has_value()) {
     index_schema_proto->set_score_field(score_field_.value());
@@ -1468,7 +1480,8 @@ static absl::Status SaveSupplementalSection(
   return write_section(RDBChunkOutputStream(rdb));
 }
 
-absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
+absl::Status IndexSchema::RDBSave(
+    SafeRDB *rdb, std::vector<data_model::IndexSchema::Alias> aliases) const {
   // Drain mutation queue before save if configured and queue is non-empty.
   // In forked child (BGSave), the queue is a frozen snapshot that will never
   // drain, so skip it instead.
@@ -1494,7 +1507,7 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
       << vmsdk::config::RedactIfNeeded(name_) << " Saving in version "
       << (RDBWriteV2() ? "2" : "1") << " format";
 
-  auto index_schema_proto = ToProto();
+  auto index_schema_proto = ToProto(std::move(aliases));
   auto rdb_section = std::make_unique<data_model::RDBSection>();
   rdb_section->set_type(data_model::RDB_SECTION_INDEX_SCHEMA);
   rdb_section->set_allocated_index_schema_contents(

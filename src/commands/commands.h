@@ -51,6 +51,10 @@ constexpr absl::string_view kAggregateCommand{"FT.AGGREGATE"};
 constexpr absl::string_view kHybridCommand{"FT.HYBRID"};
 constexpr absl::string_view kInternalUpdateCommand{"FT.INTERNAL_UPDATE"};
 constexpr absl::string_view kCursorCommand{"FT.CURSOR"};
+constexpr absl::string_view kAliasAddCommand{"FT.ALIASADD"};
+constexpr absl::string_view kAliasDelCommand{"FT.ALIASDEL"};
+constexpr absl::string_view kAliasUpdateCommand{"FT.ALIASUPDATE"};
+constexpr absl::string_view kAliasListCommand{"FT.ALIASLIST"};
 
 const absl::flat_hash_set<absl::string_view> kCreateCmdPermissions{
     kSearchCategory, kWriteCategory, kFastCategory};
@@ -68,6 +72,14 @@ const absl::flat_hash_set<absl::string_view> kCursorCmdPermissions{
     kSearchCategory, kReadCategory, kSlowCategory};
 const absl::flat_hash_set<absl::string_view> kDebugCmdPermissions{
     kSearchCategory, kSlowCategory, kAdminCategory, kDangerousCategory};
+const absl::flat_hash_set<absl::string_view> kAliasAddCmdPermissions{
+    kSearchCategory, kWriteCategory, kFastCategory};
+const absl::flat_hash_set<absl::string_view> kAliasDelCmdPermissions{
+    kSearchCategory, kWriteCategory, kFastCategory};
+const absl::flat_hash_set<absl::string_view> kAliasUpdateCmdPermissions{
+    kSearchCategory, kWriteCategory, kFastCategory};
+const absl::flat_hash_set<absl::string_view> kAliasListCmdPermissions{
+    kSearchCategory, kReadCategory, kFastCategory};
 
 inline absl::flat_hash_set<absl::string_view> PrefixACLPermissions(
     const absl::flat_hash_set<absl::string_view> &cmd_permissions,
@@ -98,6 +110,14 @@ absl::Status FTInternalUpdateCmd(ValkeyModuleCtx *ctx,
 absl::Status FTCursorCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                          int argc);
 absl::Status ShowCursorsCmd(ValkeyModuleCtx *ctx);
+absl::Status FTAliasAddCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
+                           int argc);
+absl::Status FTAliasDelCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
+                           int argc);
+absl::Status FTAliasUpdateCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
+                              int argc);
+absl::Status FTAliasListCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
+                            int argc);
 
 // Generic dispatch entry shared by FT.SEARCH, FT.AGGREGATE, FT.HYBRID. The
 // `Cmd` type must satisfy the duck-typed contract documented in commands.cc:

@@ -345,8 +345,9 @@ float ComputeRangeShell(float radius, float epsilon) {
 // within `shell` of the query or could still improve the `ef` nearest results,
 // so the walk first homes in on the query as an ef-bounded KNN search does,
 // whatever the radius, and then covers the ball. Results within the shell are
-// kept, at most `max_results` of the nearest; once that many are held, the walk
-// only looks for nearer ones.
+// kept, at most `max_results` of the nearest. Once that many are held within
+// the shell the walk stops (SearchRange then scans); while the farthest held
+// result is beyond the shell, it only looks for nearer ones.
 class RangeStopCondition : public hnswlib::BaseSearchStopCondition<float> {
  public:
   RangeStopCondition(float shell, size_t ef, size_t max_results)
@@ -372,7 +373,10 @@ class RangeStopCondition : public hnswlib::BaseSearchStopCondition<float> {
     --num_results_;
   }
   bool should_stop_search(float candidate_dist, float lower_bound) override {
-    if (num_results_ >= max_results_ && candidate_dist > lower_bound) {
+    // Once the fetch is full within the shell it stays so (later results only
+    // displace farther ones), and SearchRange then scans exhaustively.
+    if (num_results_ >= max_results_ &&
+        (candidate_dist > lower_bound || lower_bound <= shell_)) {
       return true;
     }
     return candidate_dist > shell_ && candidate_dist > EfBound();
@@ -488,10 +492,10 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
   // scan do; the reply is a timeout error unless partial results are enabled.
   const bool cancelled = cancellation_token->IsCancelled();
 
-  // A full fetch whose farthest result is still in range may have left keys
-  // in range unvisited; scan exhaustively, as FLAT does.
-  if (!cancelled && raw_results.size() >= max_candidates &&
-      this->ClampCosineDistance(raw_results.back().first) <= radius) {
+  // A full fetch holds only results within the shell, and the walk stops once
+  // it is full, so keys in range may be unvisited; scan exhaustively, as FLAT
+  // does.
+  if (!cancelled && raw_results.size() >= max_candidates) {
     query::RecordNonVectorResultsFetchedLimited();
     return this->SearchRangeExhaustive(query, radius, cancellation_token,
                                        filter.get());

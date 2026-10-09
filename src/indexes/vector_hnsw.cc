@@ -9,7 +9,6 @@
 
 #include <algorithm>
 #include <atomic>
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -375,13 +374,16 @@ class RangeStopCondition : public hnswlib::BaseSearchStopCondition<float> {
     if (num_results_ >= max_results_ && candidate_dist > lower_bound) {
       return true;
     }
-    return candidate_dist > shell_ && candidate_dist > EfBound();
+    return candidate_dist > shell_ && EfFull() &&
+           candidate_dist > nearest_.top();
   }
   bool should_consider_candidate(float dist, float lower_bound) override {
     if (num_results_ >= max_results_ && dist >= lower_bound) {
       return false;
     }
-    return dist <= shell_ || dist < EfBound();
+    // Filling the beam skips NaN, which breaks the candidate queue's order.
+    return dist <= shell_ ||
+           (EfFull() ? dist < nearest_.top() : !scoring::IsNaN(dist));
   }
   bool should_remove_extra() override { return num_results_ > max_results_; }
   void filter_results(
@@ -392,10 +394,10 @@ class RangeStopCondition : public hnswlib::BaseSearchStopCondition<float> {
   }
 
  private:
-  float EfBound() const {
-    return nearest_.size() < ef_ ? std::numeric_limits<float>::max()
-                                 : nearest_.top();
-  }
+  // Compares the count, not a distance against a sentinel: a stored vector
+  // with an infinite component is at +inf, beyond FLT_MAX, and -ffast-math
+  // may fold comparisons with an infinite constant.
+  bool EfFull() const { return nearest_.size() >= ef_; }
 
   const float shell_;
   const size_t ef_;
@@ -500,12 +502,12 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
   std::vector<Neighbor> neighbors;
   neighbors.reserve(raw_results.size());
   for (const auto &[dist, label] : raw_results) {
-    // NaN breaks the traversal's ordering, and +inf can stand for an
-    // unnormalized infinite stored vector, so the walk cannot be trusted to
-    // have reached every key in range. An IP -inf is an ordinary distance,
-    // within every radius. IsNaN/IsInf/signbit read the bits, unaffected by
-    // -ffast-math.
-    if (scoring::IsNaN(dist) || (scoring::IsInf(dist) && !std::signbit(dist))) {
+    // NaN breaks the traversal's ordering, so the walk cannot be trusted to
+    // have reached every key in range. A +inf distance is within no radius
+    // and, without a NaN, ranks last, so filter_results has already trimmed
+    // it; an IP -inf is an ordinary distance, within every radius. IsNaN reads
+    // the bits, unaffected by -ffast-math.
+    if (scoring::IsNaN(dist)) {
       if (cancelled) {
         continue;
       }

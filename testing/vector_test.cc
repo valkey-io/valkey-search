@@ -1339,6 +1339,55 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   }
 }
 
+// The range walk reaches keys in range through nodes in the shell between
+// radius and radius * (1 + epsilon). With M 2, hnswlib's neighbor heuristic
+// keeps bridge and drops start as target's neighbor (start is nearer to bridge
+// than to target), so the graph is the path start - bridge - target. hnswlib's
+// level generator, seeded with 100, draws level 2 for the first insert (start)
+// and level 0 for the other two (libstdc++'s default_random_engine), so start
+// is the entry point. With ef_runtime 1 the beam, holding start, does not take
+// bridge, outside the radius, as a candidate: the walk reaches target only when
+// epsilon puts bridge in the shell.
+TEST_F(SearchRangeFp32, HnswRangeReachesKeysThroughTheEpsilonShell)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  auto created = VectorHNSW<float>::Create(
+      CreateHNSWVectorIndexProto(kDims, data_model::DISTANCE_METRIC_L2, 3,
+                                 /*m=*/2, 200, /*ef_runtime=*/1),
+      attribute_identifier, attribute_data_type, 0);
+  ASSERT_TRUE(created.ok()) << created.status();
+  auto &index = **created;
+  // Squared distances from the query, the origin: start and target 0.81,
+  // bridge 1.44; radius 1.
+  const std::pair<const char *, std::pair<float, float>> kKeys[] = {
+      {"start", {-0.9f, 0.0f}},
+      {"bridge", {0.0f, 1.2f}},
+      {"target", {0.9f, 0.0f}}};
+  for (const auto &[key, xy] : kKeys) {
+    std::vector<float> v(kDims, 0.0f);
+    v[0] = xy.first;
+    v[1] = xy.second;
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(
+        index, StringInternStore::Intern(key), Bytes(v)));
+  }
+  const std::string query = Bytes(std::vector<float>(kDims, 0.0f));
+  constexpr float kRadius = 1.0f;
+  const auto expected = PerKeyReference(index, query, kRadius);
+  ASSERT_EQ(expected.size(), 2u);
+
+  auto wide =
+      index.SearchRange(query, kRadius, CancelNever(), /*epsilon=*/0.5f);
+  ASSERT_TRUE(wide.ok()) << wide.status();
+  EXPECT_EQ(ToMap(*wide), expected);
+  // Without the shell, the walk returns only the key it enters at.
+  auto narrow =
+      index.SearchRange(query, kRadius, CancelNever(), /*epsilon=*/0.0f);
+  ASSERT_TRUE(narrow.ok()) << narrow.status();
+  EXPECT_EQ(narrow->size(), 1u)
+      << "with epsilon 0 the walk reached both keys: either the beam does not "
+         "stop it, or its entry point is bridge rather than start (the level "
+         "generator draws differently), which reaches both at any epsilon";
+}
+
 // A full HNSW fetch that holds a NaN or infinite distance also takes the
 // exhaustive scan, so a small cap cuts off no key in range and HNSW returns the
 // keys FLAT returns. Keys at a NaN or +inf distance are left out of the
@@ -1597,6 +1646,36 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   ASSERT_TRUE(stopped.ok()) << stopped.status();
   EXPECT_GT(stopped->size(), 0u);
   EXPECT_LT(stopped->size(), static_cast<size_t>(kVectors));
+}
+
+// The range walk stops once neither the radius nor the ef_runtime beam admits
+// a node: a query whose ball holds one key expands about as many nodes as a
+// KNN search with that ef_runtime, not the whole graph. The walk polls once per
+// expanded node (plus once when it stops), so a whole-graph walk polls more
+// than kVectors times.
+TEST_F(SearchRangeFp32, HnswRangeTraversalStaysBounded)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  constexpr int kEf = 20;
+  static_assert(4 * kEf < kVectors);
+  auto index = MakeIndex(/*hnsw=*/true, data_model::DISTANCE_METRIC_L2, kEf);
+  ASSERT_NE(index, nullptr);
+  uint64_t seed = 9;
+  std::vector<std::string> stored;
+  for (int i = 0; i < kVectors; ++i) {
+    stored.push_back(Bytes(RandomVector(seed)));
+    VMSDK_EXPECT_OK(
+        testing_infra::AddVectorRecord(*index, IndexToKey(i), stored.back()));
+  }
+  for (int i = 0; i < kVectors; i += 30) {
+    SCOPED_TRACE(absl::StrCat("query ", i));
+    auto counting = std::make_shared<CountingToken>();
+    cancel::Token token = counting;
+    auto searched = index->SearchRange(stored[i], /*radius=*/1e-3f, token,
+                                       /*epsilon=*/0.01f);
+    ASSERT_TRUE(searched.ok()) << searched.status();
+    EXPECT_EQ(searched->size(), 1u);
+    EXPECT_LT(counting->polls, 4 * kEf);
+  }
 }
 
 // A FLAT range search in progress must not block another range search on the

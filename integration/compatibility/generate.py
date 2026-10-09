@@ -1701,3 +1701,74 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         )
 
 
+    def test_aggregate_quantile_basic(self, key_type, dialect, vector_data_type):
+        """Test basic QUANTILE functionality with common quantile values."""
+        self.setup_data("sortable numbers", key_type)
+        
+        # Test common quantiles: min, quartiles, median, 99th percentile, max
+        quantiles = ["0.0", "0.25", "0.5", "0.75", "0.99", "1.0"]
+        for q in quantiles:
+            self.check(dialect, 
+                f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1 groupby 0 reduce quantile 2 @n1 {q} as q{q.replace('.', '_')}"
+            )
+            self.check(dialect, 
+                f"ft.aggregate {key_type}_idx1 * load 2 @__key @n2 groupby 0 reduce quantile 2 @n2 {q} as q{q.replace('.', '_')}"
+            )
+        
+        # Test with groupby to verify odd/even number of values in groups
+        self.check(dialect, 
+            f"ft.aggregate {key_type}_idx1 * load 3 @__key @n1 @t1 groupby 1 @t1 reduce quantile 2 @n1 0.5 as median"
+        )
+        self.check(dialect, 
+            f"ft.aggregate {key_type}_idx1 * load 3 @__key @n2 @t3 groupby 1 @t3 reduce quantile 2 @n2 0.5 as median"
+        )
+
+    def test_aggregate_quantile_multiple(self, key_type, dialect, vector_data_type):
+        """Test multiple QUANTILE reducers in same query."""
+        self.setup_data("sortable numbers", key_type)
+        
+        # Two quantiles on same property
+        self.check(dialect, 
+            f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1 groupby 0 reduce quantile 2 @n1 0.5 as median reduce quantile 2 @n1 0.99 as p99"
+        )
+        
+        # Three quantiles on same property
+        self.check(dialect, 
+            f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1 groupby 0 reduce quantile 2 @n1 0.25 as q1 reduce quantile 2 @n1 0.5 as q2 reduce quantile 2 @n1 0.75 as q3"
+        )
+        
+        # Multiple quantiles on different properties
+        self.check(dialect, 
+            f"ft.aggregate {key_type}_idx1 * load 3 @__key @n1 @n2 groupby 0 reduce quantile 2 @n1 0.5 as median_n1 reduce quantile 2 @n2 0.5 as median_n2"
+        )
+        
+        # Multiple quantiles with groupby
+        self.check(dialect, 
+            f"ft.aggregate {key_type}_idx1 * load 3 @__key @n1 @t1 groupby 1 @t1 reduce quantile 2 @n1 0.5 as p50 reduce quantile 2 @n1 0.95 as p95 reduce quantile 2 @n1 0.99 as p99"
+        )
+
+    def test_aggregate_quantile_edge_cases(self, key_type, dialect, vector_data_type):
+        """Test QUANTILE with edge cases: nil values, duplicates, negatives."""
+        self.setup_data("hard numbers", key_type)
+        
+        # Test with hard numbers dataset which includes nil, negative, inf values
+        for q in ["0.0", "0.5", "1.0"]:
+            self.check(dialect, 
+                f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1 groupby 0 reduce quantile 2 @n1 {q} as q{q.replace('.', '_')}"
+            )
+            self.check(dialect, 
+                f"ft.aggregate {key_type}_idx1 * load 2 @__key @n2 groupby 0 reduce quantile 2 @n2 {q} as q{q.replace('.', '_')}"
+            )
+            self.check(dialect, 
+                f"ft.aggregate {key_type}_idx1 * load 2 @__key @n3 groupby 0 reduce quantile 2 @n3 {q} as q{q.replace('.', '_')}"
+            )
+        
+        # Test with groupby to get groups with different characteristics
+        self.check(dialect, 
+            f"ft.aggregate {key_type}_idx1 * load 3 @__key @n1 @t1 groupby 1 @t1 reduce quantile 2 @n1 0.5 as median"
+        )
+        
+        # Test single value groups and small groups
+        self.check(dialect, 
+            f"ft.aggregate {key_type}_idx1 * load 3 @__key @n1 @t3 groupby 1 @t3 reduce quantile 2 @n1 0.5 as median"
+        )

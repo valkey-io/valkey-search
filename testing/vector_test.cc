@@ -1921,15 +1921,15 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   std::vector<float> v(kDimensions, 1.0f);
   absl::string_view v_bytes(reinterpret_cast<const char *>(v.data()),
                             v.size() * sizeof(float));
-  auto vector_allocator = CREATE_UNIQUE_PTR(
-      FixedSizeAllocator,
-      VectorRecord::kStorageHeaderSize + kDimensions * sizeof(float), true);
+  auto *vector_allocator = VectorPoolRegistry::Global().Get(
+      data_model::VECTOR_DATA_TYPE_FLOAT32,
+      VectorRecord::kStorageHeaderSize + kDimensions * sizeof(float));
 
   float magnitude = kDefaultMagnitude;
   for (int t = 0; t < kThreads; ++t) {
     algo.addPoint(
         QueryVector(
-            VectorRecord::Construct(v_bytes, magnitude, vector_allocator.get()),
+            VectorRecord::Construct(v_bytes, magnitude, vector_allocator),
             v_bytes.size(), false, data_model::VECTOR_DATA_TYPE_FLOAT32),
         t);
   }
@@ -2084,9 +2084,9 @@ ChunkStream BuildGoldenChunks(const std::vector<int> &force_levels,
                                     /*allow_replace_deleted=*/false,
                                     /*random_seed=*/100);
 
-  auto vector_allocator = CREATE_UNIQUE_PTR(
-      FixedSizeAllocator,
-      VectorRecord::kStorageHeaderSize + kDimensions * sizeof(float), true);
+  auto *vector_allocator = VectorPoolRegistry::Global().Get(
+      data_model::VECTOR_DATA_TYPE_FLOAT32,
+      VectorRecord::kStorageHeaderSize + kDimensions * sizeof(float));
 
   for (size_t i = 0; i < force_levels.size(); i++) {
     std::vector<float> v(kDimensions, 0.1f);
@@ -2097,7 +2097,7 @@ ChunkStream BuildGoldenChunks(const std::vector<int> &force_levels,
 
     algo.addPoint(
         QueryVector(VectorRecord::Construct(v_bytes, reciprocal_magnitude,
-                                            vector_allocator.get()),
+                                            vector_allocator),
                     v_bytes.size(), false,
                     data_model::VECTOR_DATA_TYPE_FLOAT32),
         /*label=*/i, force_levels[i]);
@@ -2170,19 +2170,18 @@ ChunkStream DuplicateLabelGolden(size_t num_slots,
                                     kM, kEFConstruction,
                                     /*allow_replace_deleted=*/true,
                                     /*random_seed=*/100);
-  auto vector_allocator = CREATE_UNIQUE_PTR(
-      FixedSizeAllocator,
-      VectorRecord::kStorageHeaderSize + kDimensions * sizeof(float), true);
+  auto *vector_allocator = VectorPoolRegistry::Global().Get(
+      data_model::VECTOR_DATA_TYPE_FLOAT32,
+      VectorRecord::kStorageHeaderSize + kDimensions * sizeof(float));
   auto vectors = DeterministicallyGenerateVectors(num_slots, kDimensions, 10.0);
   for (size_t i = 0; i < num_slots; ++i) {
     absl::string_view v_bytes(reinterpret_cast<const char *>(vectors[i].data()),
                               kDimensions * sizeof(float));
-    algo.addPoint(
-        QueryVector(VectorRecord::Construct(v_bytes, kDefaultMagnitude,
-                                            vector_allocator.get()),
-                    v_bytes.size(), false,
-                    data_model::VECTOR_DATA_TYPE_FLOAT32),
-        /*label=*/i);
+    algo.addPoint(QueryVector(VectorRecord::Construct(
+                                  v_bytes, kDefaultMagnitude, vector_allocator),
+                              v_bytes.size(), false,
+                              data_model::VECTOR_DATA_TYPE_FLOAT32),
+                  /*label=*/i);
   }
   for (size_t t : tombstones) {
     algo.markDelete(t);
@@ -2217,9 +2216,9 @@ TEST_F(VectorIndexTest, LoadDuplicateLabelRebuildsLiveMapping) {
     size_t num_slots;
     std::vector<size_t> tombstones;
   };
-  auto vector_allocator = CREATE_UNIQUE_PTR(
-      FixedSizeAllocator,
-      VectorRecord::kStorageHeaderSize + kDimensions * sizeof(float), true);
+  auto *vector_allocator = VectorPoolRegistry::Global().Get(
+      data_model::VECTOR_DATA_TYPE_FLOAT32,
+      VectorRecord::kStorageHeaderSize + kDimensions * sizeof(float));
   for (const Case &c : std::vector<Case>{{2, {1}}, {2, {0}}, {3, {0, 2}}}) {
     size_t live_slot = c.num_slots;
     for (size_t i = 0; i < c.num_slots; i++) {
@@ -2235,12 +2234,10 @@ TEST_F(VectorIndexTest, LoadDuplicateLabelRebuildsLiveMapping) {
     hnswlib::L2Space space{kDimensions};
     VectorHNSW<float>::HNSWIndex algo;
     algo.allow_replace_deleted_ = true;
-    auto generator = [allocator = vector_allocator.get()](
+    auto generator = [allocator = vector_allocator](
                          absl::string_view vector_data,
                          bool is_marked_deleted) {
-      return VectorRecord::Construct(
-          vector_data, kDefaultMagnitude,
-          static_cast<FixedSizeAllocator *>(allocator));
+      return VectorRecord::Construct(vector_data, kDefaultMagnitude, allocator);
     };
     golden.Rewind();
     VMSDK_EXPECT_OK(algo.LoadIndex(golden, &space, kGoldenMax, kM,
@@ -2261,9 +2258,9 @@ TEST_F(VectorIndexTest, LoadDuplicateLabelRebuildsLiveMapping) {
         reinterpret_cast<const char *>(vectors[live_slot].data()),
         kDimensions * sizeof(float));
     algo.addPoint(
-        QueryVector(VectorRecord::Construct(new_v, kDefaultMagnitude,
-                                            vector_allocator.get()),
-                    new_v.size(), false, data_model::VECTOR_DATA_TYPE_FLOAT32),
+        QueryVector(
+            VectorRecord::Construct(new_v, kDefaultMagnitude, vector_allocator),
+            new_v.size(), false, data_model::VECTOR_DATA_TYPE_FLOAT32),
         /*label=*/1000, /*replace_deleted=*/true);
     EXPECT_EQ(algo.label_lookup_[live_slot], live_slot);
     EXPECT_FALSE(algo.isMarkedDeleted(live_slot));
@@ -2307,16 +2304,16 @@ TEST_F(VectorIndexTest, HnswAddPointReplaceDeletedDoesNotDuplicateLabel) {
 
   // Labels 0,1 land at slots 0,1
   auto vectors = DeterministicallyGenerateVectors(2, kDimensions, 10.0);
-  auto vector_allocator = CREATE_UNIQUE_PTR(
-      FixedSizeAllocator,
-      VectorRecord::kStorageHeaderSize + kDimensions * sizeof(float), true);
+  auto *vector_allocator = VectorPoolRegistry::Global().Get(
+      data_model::VECTOR_DATA_TYPE_FLOAT32,
+      VectorRecord::kStorageHeaderSize + kDimensions * sizeof(float));
   std::vector<VectorRecord> records;
   records.reserve(vectors.size());
   for (size_t i = 0; i < vectors.size(); ++i) {
     absl::string_view v_bytes(reinterpret_cast<const char *>(vectors[i].data()),
                               kDimensions * sizeof(float));
-    records.push_back(VectorRecord::Construct(v_bytes, kDefaultMagnitude,
-                                              vector_allocator.get()));
+    records.push_back(
+        VectorRecord::Construct(v_bytes, kDefaultMagnitude, vector_allocator));
     algo.addPoint(QueryVector(records.back(), v_bytes.size(), false,
                               data_model::VECTOR_DATA_TYPE_FLOAT32),
                   /*label=*/i);
@@ -2349,16 +2346,16 @@ TEST_F(VectorIndexTest, HnswSelfHealsTombstoneRoot) {
                                     /*random_seed=*/100);
 
   auto vectors = DeterministicallyGenerateVectors(2, kDimensions, 10.0);
-  auto vector_allocator = CREATE_UNIQUE_PTR(
-      FixedSizeAllocator,
-      VectorRecord::kStorageHeaderSize + kDimensions * sizeof(float), true);
+  auto *vector_allocator = VectorPoolRegistry::Global().Get(
+      data_model::VECTOR_DATA_TYPE_FLOAT32,
+      VectorRecord::kStorageHeaderSize + kDimensions * sizeof(float));
   std::vector<VectorRecord> records;
   records.reserve(vectors.size());
   for (const auto &vector : vectors) {
     absl::string_view v_bytes(reinterpret_cast<const char *>(vector.data()),
                               kDimensions * sizeof(float));
-    records.push_back(VectorRecord::Construct(v_bytes, kDefaultMagnitude,
-                                              vector_allocator.get()));
+    records.push_back(
+        VectorRecord::Construct(v_bytes, kDefaultMagnitude, vector_allocator));
   }
 
   // Insert label 0 at level 2 so it establishes maxlevel_ = 2 and becomes the
@@ -2394,9 +2391,9 @@ TEST_F(VectorIndexTest, HnswSelfHealsTombstoneRoot) {
 }
 
 TEST_F(VectorIndexTest, ConcurrentRootDeletionAndInsertionHealsRoot) {
-  auto vector_allocator = CREATE_UNIQUE_PTR(
-      FixedSizeAllocator,
-      VectorRecord::kStorageHeaderSize + kDimensions * sizeof(float), true);
+  auto *vector_allocator = VectorPoolRegistry::Global().Get(
+      data_model::VECTOR_DATA_TYPE_FLOAT32,
+      VectorRecord::kStorageHeaderSize + kDimensions * sizeof(float));
 
   auto vectors = DeterministicallyGenerateVectors(2, kDimensions, 10.0);
   std::vector<VectorRecord> records;
@@ -2404,8 +2401,8 @@ TEST_F(VectorIndexTest, ConcurrentRootDeletionAndInsertionHealsRoot) {
   for (const auto &vector : vectors) {
     absl::string_view v_bytes(reinterpret_cast<const char *>(vector.data()),
                               kDimensions * sizeof(float));
-    records.push_back(VectorRecord::Construct(v_bytes, kDefaultMagnitude,
-                                              vector_allocator.get()));
+    records.push_back(
+        VectorRecord::Construct(v_bytes, kDefaultMagnitude, vector_allocator));
   }
 
   std::atomic<bool> hook_enabled = false;
@@ -2479,15 +2476,14 @@ TEST_F(VectorIndexTest, ConcurrentRootDeletionAndInsertionHealsRoot) {
 // reference. Replacing such a vector concurrently must not release it until
 // the reading writer finishes.
 TEST_F(VectorIndexTest, HnswReplacedVectorOutlivesConcurrentReader) {
-  auto vector_allocator = CREATE_UNIQUE_PTR(
-      FixedSizeAllocator,
-      VectorRecord::kStorageHeaderSize + kDimensions * sizeof(float), true);
+  auto *vector_allocator = VectorPoolRegistry::Global().Get(
+      data_model::VECTOR_DATA_TYPE_FLOAT32,
+      VectorRecord::kStorageHeaderSize + kDimensions * sizeof(float));
   auto vectors = DeterministicallyGenerateVectors(3, kDimensions, 10.0);
   auto make_record = [&](const std::vector<float> &v) {
     absl::string_view bytes(reinterpret_cast<const char *>(v.data()),
                             kDimensions * sizeof(float));
-    return VectorRecord::Construct(bytes, kDefaultMagnitude,
-                                   vector_allocator.get());
+    return VectorRecord::Construct(bytes, kDefaultMagnitude, vector_allocator);
   };
   auto query = [](const VectorRecord &record) {
     return QueryVector(record, kDimensions * sizeof(float), false,
@@ -2565,16 +2561,16 @@ TEST_F(VectorIndexTest, HnswTombstoneClusterFallbackDoesNotThrow) {
                                     /*random_seed=*/100);
 
   auto vectors = DeterministicallyGenerateVectors(3, kDimensions, 10.0);
-  auto vector_allocator = CREATE_UNIQUE_PTR(
-      FixedSizeAllocator,
-      VectorRecord::kStorageHeaderSize + kDimensions * sizeof(float), true);
+  auto *vector_allocator = VectorPoolRegistry::Global().Get(
+      data_model::VECTOR_DATA_TYPE_FLOAT32,
+      VectorRecord::kStorageHeaderSize + kDimensions * sizeof(float));
   std::vector<VectorRecord> records;
   records.reserve(vectors.size());
   for (const auto &vector : vectors) {
     absl::string_view v_bytes(reinterpret_cast<const char *>(vector.data()),
                               kDimensions * sizeof(float));
-    records.push_back(VectorRecord::Construct(v_bytes, kDefaultMagnitude,
-                                              vector_allocator.get()));
+    records.push_back(
+        VectorRecord::Construct(v_bytes, kDefaultMagnitude, vector_allocator));
   }
 
   // Insert label 0 at level 1 and label 1 at level 0.
@@ -2608,9 +2604,9 @@ TEST_F(VectorIndexTest, HnswTombstoneClusterFallbackWithAliveRootDoesNotThrow) {
                                     /*allow_replace_deleted=*/false,
                                     /*random_seed=*/100);
 
-  auto vector_allocator = CREATE_UNIQUE_PTR(
-      FixedSizeAllocator,
-      VectorRecord::kStorageHeaderSize + kDimensions * sizeof(float), true);
+  auto *vector_allocator = VectorPoolRegistry::Global().Get(
+      data_model::VECTOR_DATA_TYPE_FLOAT32,
+      VectorRecord::kStorageHeaderSize + kDimensions * sizeof(float));
 
   // Define distinct vectors:
   // v0 at origin, v1 far away, v2 very close to v0.
@@ -2621,8 +2617,7 @@ TEST_F(VectorIndexTest, HnswTombstoneClusterFallbackWithAliveRootDoesNotThrow) {
   auto make_record = [&](const std::vector<float> &v) {
     absl::string_view bytes(reinterpret_cast<const char *>(v.data()),
                             kDimensions * sizeof(float));
-    return VectorRecord::Construct(bytes, kDefaultMagnitude,
-                                   vector_allocator.get());
+    return VectorRecord::Construct(bytes, kDefaultMagnitude, vector_allocator);
   };
 
   auto rec0 = make_record(v0);

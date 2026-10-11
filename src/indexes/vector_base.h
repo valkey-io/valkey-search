@@ -39,6 +39,7 @@
 #include "src/utils/allocator.h"
 #include "src/utils/cancel.h"
 #include "src/utils/string_interning.h"
+#include "src/utils/vector_pool.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -128,9 +129,10 @@ class VectorRecord {
     }
   }
 
+  // Allocates from `pool` when given, falling back to operator new if it is
+  // null or exhausted.
   static VectorRecord Construct(absl::string_view vector,
-                                float reciprocal_magnitude,
-                                Allocator *allocator);
+                                float reciprocal_magnitude, VectorPool *pool);
 
   const char *GetRawVector() const noexcept {
     return data_.load(std::memory_order_relaxed);
@@ -185,7 +187,11 @@ class VectorRecord {
   static void Release(const char *data_ptr) noexcept {
     Header *h = GetHeader(data_ptr);
     if (h->ref_count_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-      Allocator::Free(reinterpret_cast<char *>(h));
+      if (auto *pool = VectorPoolRegistry::GlobalPoolOf(h)) {
+        pool->Free(reinterpret_cast<char *>(h));
+      } else {
+        Allocator::Free(reinterpret_cast<char *>(h));
+      }
     }
   }
 
@@ -489,9 +495,7 @@ class VectorBase : public IndexBase {
   bool IsVectorIndex() const override { return true; }
   virtual uint64_t GetMaxLoadedLabel() const { return 0; }
   virtual size_t GetLabelCount() const { return 0; }
-  FixedSizeAllocator *GetVectorAllocator() const {
-    return vector_allocator_.get();
-  }
+  VectorPool *GetVectorPool() const { return vector_pool_; }
   int GetDimensions() const { return dimensions_; }
   // Provided by VectorType<T> so the per-element byte width and format
   // conversion come from sizeof(T) + if-constexpr on T instead of a
@@ -547,6 +551,7 @@ class VectorBase : public IndexBase {
 
  protected:
   VectorBase(IndexerType indexer_type, int dimensions, size_t element_size,
+             data_model::VectorDataType vector_data_type,
              data_model::AttributeDataType attribute_data_type,
              absl::string_view attribute_identifier, int db_num)
       : IndexBase(indexer_type),
@@ -558,9 +563,9 @@ class VectorBase : public IndexBase {
         attribute_data_type_(attribute_data_type)
 #ifndef SAN_BUILD
         ,
-        vector_allocator_(CREATE_UNIQUE_PTR(
-            FixedSizeAllocator,
-            VectorRecord::kStorageHeaderSize + dimensions * element_size, true))
+        vector_pool_(VectorPoolRegistry::Global().Get(
+            vector_data_type,
+            VectorRecord::kStorageHeaderSize + dimensions * element_size))
 #endif  // !SAN_BUILD
   {
   }
@@ -568,7 +573,8 @@ class VectorBase : public IndexBase {
   VectorBase(IndexerType indexer_type, int dimensions,
              data_model::AttributeDataType attribute_data_type,
              absl::string_view attribute_identifier, int db_num)
-      : VectorBase(indexer_type, dimensions, sizeof(float), attribute_data_type,
+      : VectorBase(indexer_type, dimensions, sizeof(float),
+                   data_model::VECTOR_DATA_TYPE_FLOAT32, attribute_data_type,
                    attribute_identifier, db_num) {}
   void RemoveRecordDueToError(const InternedStringPtr &key,
                               std::optional<uint64_t> internal_id)
@@ -695,7 +701,7 @@ class VectorBase : public IndexBase {
   ComputeDistanceFromRecord(const InternedStringPtr &key,
                             absl::string_view query,
                             float query_magnitude) const;
-  UniqueFixedSizeAllocatorPtr vector_allocator_{nullptr, nullptr};
+  VectorPool *vector_pool_{nullptr};
 };
 
 class PrefilterEvaluator : public query::Evaluator {

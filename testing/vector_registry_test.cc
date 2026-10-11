@@ -14,6 +14,7 @@
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "src/utils/string_interning.h"
+#include "src/utils/vector_pool.h"
 #include "testing/common.h"
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -65,6 +66,47 @@ TEST_F(VectorRegistryTest, DedupOrConstructBasicAndDedup) {
       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &index2);
   EXPECT_EQ(rec1, rec2);
   EXPECT_EQ(registry.GetStats().entry_cnt, 1);
+  EXPECT_EQ(registry.GetStats().dedup_cnt, 1);
+}
+
+// Regression test for #1559: equal bytes read as a different element type are
+// a different vector, so the record (and its cached magnitude) is not shared.
+TEST_F(VectorRegistryTest, DedupDoesNotShareAcrossElementTypes) {
+  auto &registry = VectorRegistry::Instance();
+  auto key = StringInternStore::Intern("key1");
+  auto attr = StringInternStore::Intern("attr1");
+  MockIndex f32(data_model::VECTOR_DATA_TYPE_FLOAT32, sizeof(float), 4,
+                attr->Str(), 0);
+  MockIndex f16(data_model::VECTOR_DATA_TYPE_FLOAT16, 2, 8, attr->Str(), 0);
+  ASSERT_NE(f32.GetVectorPool(), f16.GetVectorPool());
+
+  std::vector<float> vec_data = {1.0f, 2.0f, 3.0f, 4.0f};
+  std::string vec_str(reinterpret_cast<const char *>(vec_data.data()),
+                      vec_data.size() * sizeof(float));
+  auto valkey_vec = vmsdk::MakeUniqueValkeyString(vec_str);
+
+  auto rec_f32 = registry.DedupOrConstruct(
+      key, valkey_vec.get(),
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &f32);
+  auto rec_f16 = registry.DedupOrConstruct(
+      key, valkey_vec.get(),
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &f16);
+  EXPECT_NE(rec_f32, rec_f16);
+  EXPECT_EQ(rec_f16, vec_str);
+  EXPECT_EQ(
+      VectorPoolRegistry::GlobalPoolOf(rec_f32.vector_record.GetRawVector()),
+      f32.GetVectorPool());
+  EXPECT_EQ(
+      VectorPoolRegistry::GlobalPoolOf(rec_f16.vector_record.GetRawVector()),
+      f16.GetVectorPool());
+  EXPECT_EQ(registry.GetStats().dedup_cnt, 0);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 1);
+
+  // The tracked record is still the first index's, and still dedups for it.
+  auto rec_f32_again = registry.DedupOrConstruct(
+      key, valkey_vec.get(),
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &f32);
+  EXPECT_EQ(rec_f32_again, rec_f32);
   EXPECT_EQ(registry.GetStats().dedup_cnt, 1);
 }
 

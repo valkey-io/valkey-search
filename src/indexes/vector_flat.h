@@ -41,7 +41,7 @@ class VectorFlat : public VectorType<T> {
   using VectorType<T>::CreateReply;
   using VectorType<T>::GetCapacity;
   using VectorType<T>::GetDataTypeSize;
-  using VectorType<T>::GetVectorAllocator;
+  using VectorType<T>::GetVectorPool;
   using VectorType<T>::GetVectorDataSize;
   using VectorType<T>::IsValidSizeVector;
   using VectorType<T>::EmitDataTypeInfo;

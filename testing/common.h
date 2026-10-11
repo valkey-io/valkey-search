@@ -199,6 +199,17 @@ class MockIndex : public indexes::VectorBase {
     ON_CALL(*this, GetDataTypeSize)
         .WillByDefault(testing::Return(sizeof(float)));
   }
+  MockIndex(data_model::VectorDataType vector_data_type, size_t element_size,
+            int dimensions, absl::string_view attribute_name = "vec",
+            int db_num = 0)
+      : indexes::VectorBase(indexes::IndexerType::kVector, dimensions,
+                            element_size, vector_data_type,
+                            data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                            attribute_name, db_num),
+        vector_data_type_(vector_data_type) {
+    ON_CALL(*this, GetDataTypeSize)
+        .WillByDefault(testing::Return(element_size));
+  }
   MOCK_METHOD(absl::StatusOr<indexes::RecordResult>, AddRecord,
               (const InternedStringPtr &key, AttributeData &&data), (override));
   MOCK_METHOD(absl::StatusOr<bool>, RemoveRecord,
@@ -261,7 +272,7 @@ class MockIndex : public indexes::VectorBase {
     return std::nullopt;
   }
   data_model::VectorDataType GetVectorDataType() const override {
-    return data_model::VECTOR_DATA_TYPE_FLOAT32;
+    return vector_data_type_;
   }
   float ComputeReciprocalMagnitude(absl::string_view) const override {
     return 1.0f;
@@ -281,6 +292,10 @@ class MockIndex : public indexes::VectorBase {
       std::unique_ptr<hnswlib::BaseFilterFunctor> = nullptr) override {
     return std::vector<indexes::Neighbor>{};
   }
+
+ private:
+  data_model::VectorDataType vector_data_type_{
+      data_model::VECTOR_DATA_TYPE_FLOAT32};
 };
 
 class MockKeyspaceEventSubscription : public KeyspaceEventSubscription {

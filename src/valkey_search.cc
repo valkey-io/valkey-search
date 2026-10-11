@@ -31,8 +31,8 @@
 #include "src/metrics.h"
 #include "src/rdb_serialization.h"
 #include "src/schema_manager.h"
-#include "src/utils/allocator.h"
 #include "src/utils/string_interning.h"
+#include "src/utils/vector_pool.h"
 #include "src/valkey_search_options.h"
 #include "src/vector_registry.h"
 #include "vmsdk/src/info.h"
@@ -41,6 +41,7 @@
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/memory_allocation.h"
 #include "vmsdk/src/module_config.h"
+#include "vmsdk/src/numa_slab.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/utils.h"
@@ -424,13 +425,15 @@ static vmsdk::info_field::Integer vector_registry_pending_unshare_cnt(
 static vmsdk::info_field::Integer vector_registry_active_allocations(
     "vector_registry", "vector_registry_active_allocations",
     vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
-      return FixedSizeAllocator::GlobalActiveAllocations();
+      return VectorPoolRegistry::GlobalActiveAllocations();
     }));
 
+// Materialized 2 MiB vector pool pages.
 static vmsdk::info_field::Integer vector_registry_chunk_count(
     "vector_registry", "vector_registry_chunk_count",
     vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
-      return FixedSizeAllocator::GlobalChunkCount();
+      return VectorPoolRegistry::GlobalMaterializedBytes() /
+             vmsdk::numa_slab::kHugePageBytes;
     }));
 
 static vmsdk::info_field::Integer ft_internal_update_process_failures_cnt(

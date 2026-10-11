@@ -223,7 +223,8 @@ set(UTILS_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/utils/patricia_tree_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/utils/scanner_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/utils/numeric_btree_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/utils/string_interning_test.cc)
+    ${CMAKE_CURRENT_LIST_DIR}/utils/string_interning_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/utils/vector_pool_test.cc)
 
 
 add_executable(valkey_utils_test ${UTILS_TEST_SOURCES})

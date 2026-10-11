@@ -685,10 +685,12 @@ absl::Status CheckSimsimdBf16Capability() {
 
 VectorRecord VectorRecord::Construct(absl::string_view vector,
                                      float reciprocal_magnitude,
-                                     Allocator *allocator) {
+                                     VectorPool *pool) {
   size_t total_size = sizeof(VectorRecord::Header) + vector.size();
-  void *mem = allocator ? allocator->Allocate(allocator->ChunkSize())
-                        : ::operator new(total_size);
+  void *mem = pool ? pool->Allocate() : nullptr;
+  if (!mem) {
+    mem = ::operator new(total_size);
+  }
   float mag = reciprocal_magnitude == 0.0f ? 1.0f : reciprocal_magnitude;
   new (mem)
       VectorRecord::Header{/*ref_count_=*/{1}, /*reciprocal_magnitude_=*/mag};

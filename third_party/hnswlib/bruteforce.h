@@ -31,7 +31,6 @@ class BruteforceSearch
   DISTFUNC<dist_t> fstdistfunc_;
   void *dist_func_param_;
   std::mutex index_lock;
-  const size_t k_elements_per_chunk{10 * 1024};
 
   bool normalized_{false};
 
@@ -53,8 +52,7 @@ class BruteforceSearch
     dist_func_param_ = s->get_dist_func_param();
     if (maxElements > 0) {
       data_ = std::make_unique<ChunkedArray>(
-          sizeof(VectorRecordT) + sizeof(labeltype), k_elements_per_chunk,
-          maxElements);
+          sizeof(VectorRecordT) + sizeof(labeltype), maxElements);
     }
   }
 
@@ -285,8 +283,7 @@ class BruteforceSearch
     }
 
     data_ = std::make_unique<ChunkedArray>(
-        sizeof(VectorRecordT) + sizeof(labeltype), k_elements_per_chunk,
-        header->max_elements());
+        sizeof(VectorRecordT) + sizeof(labeltype), header->max_elements());
 
     for (size_t i = 0; i < saved_element_count; i++) {
       VMSDK_ASSIGN_OR_RETURN(auto chunk, input.LoadChunk());

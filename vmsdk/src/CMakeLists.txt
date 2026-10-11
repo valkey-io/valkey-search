@@ -44,6 +44,10 @@ set(VMSDKLIB_SRCS
     ${CMAKE_CURRENT_LIST_DIR}/managed_pointers.h
     ${CMAKE_CURRENT_LIST_DIR}/blocked_client.cc
     ${CMAKE_CURRENT_LIST_DIR}/blocked_client.h
+    ${CMAKE_CURRENT_LIST_DIR}/chunked_array.cc
+    ${CMAKE_CURRENT_LIST_DIR}/chunked_array.h
+    ${CMAKE_CURRENT_LIST_DIR}/numa_slab.cc
+    ${CMAKE_CURRENT_LIST_DIR}/numa_slab.h
     ${CMAKE_CURRENT_LIST_DIR}/memory_tracker.cc
     ${CMAKE_CURRENT_LIST_DIR}/memory_tracker.h
     ${CMAKE_CURRENT_LIST_DIR}/status/status_builder.cc

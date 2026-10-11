@@ -5,6 +5,13 @@ target_link_libraries(blocked_client_test PUBLIC vmsdklib)
 target_link_libraries(blocked_client_test PUBLIC vmsdk_testing_infra)
 finalize_test_flags(blocked_client_test)
 
+set(SRCS_CHUNKED_ARRAY_TEST ${CMAKE_CURRENT_LIST_DIR}/chunked_array_test.cc)
+add_executable(chunked_array_test ${SRCS_CHUNKED_ARRAY_TEST})
+target_include_directories(chunked_array_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(chunked_array_test PUBLIC vmsdklib)
+target_link_libraries(chunked_array_test PUBLIC vmsdk_testing_infra)
+finalize_test_flags(chunked_array_test)
+
 set(SRCS_COMMAND_PARSER_TEST ${CMAKE_CURRENT_LIST_DIR}/command_parser_test.cc)
 add_executable(command_parser_test ${SRCS_COMMAND_PARSER_TEST})
 target_include_directories(command_parser_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})

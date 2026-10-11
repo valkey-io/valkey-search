@@ -58,7 +58,6 @@ class HierarchicalNSW
   size_t maxM0_{0};
   size_t ef_construction_{0};
   size_t ef_{0};
-  const size_t k_elements_per_chunk{10 * 1024};
 
   double mult_{0.0}, revSize_{0.0};
   std::atomic<int> maxlevel_{0};
@@ -160,8 +159,8 @@ class HierarchicalNSW
     label_offset_ = offsetData_ + sizeof(StoredVectorT);
     offsetLevel0_ = 0;
 
-    data_level0_memory_ = std::make_unique<ChunkedArray>(
-        size_data_per_element_, k_elements_per_chunk, max_elements);
+    data_level0_memory_ =
+        std::make_unique<ChunkedArray>(size_data_per_element_, max_elements);
 
     cur_element_count_ = 0;
 
@@ -173,8 +172,7 @@ class HierarchicalNSW
                            std::memory_order_relaxed);
     maxlevel_.store(-1, std::memory_order_relaxed);
 
-    linkLists_ = std::make_unique<ChunkedArray>(
-        sizeof(void *), k_elements_per_chunk, max_elements);
+    linkLists_ = std::make_unique<ChunkedArray>(sizeof(void *), max_elements);
     size_links_per_element_ =
         maxM_ * sizeof(tableint) + sizeof(linklistsizeint);
     mult_ = 1 / log(1.0 * M_);
@@ -1217,8 +1215,8 @@ class HierarchicalNSW
                 "element_levels allocation size overflows");
     }
 
-    data_level0_memory_ = std::make_unique<ChunkedArray>(
-        size_data_per_element_, k_elements_per_chunk, max_elements);
+    data_level0_memory_ =
+        std::make_unique<ChunkedArray>(size_data_per_element_, max_elements);
 
     for (size_t i = 0; i < target_element_count; i++) {
       VMSDK_ASSIGN_OR_RETURN(auto chunk, input.LoadChunk());
@@ -1256,8 +1254,7 @@ class HierarchicalNSW
 
     visited_list_pool_ = std::make_unique<VisitedListPool>(1, max_elements);
 
-    linkLists_ = std::make_unique<ChunkedArray>(
-        sizeof(void *), k_elements_per_chunk, max_elements);
+    linkLists_ = std::make_unique<ChunkedArray>(sizeof(void *), max_elements);
 
     element_levels_ = std::vector<int>(max_elements);
     revSize_ = 1.0 / mult_;

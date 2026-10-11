@@ -99,7 +99,19 @@ char *VectorPool::Allocate() {
               registry_->base_ + slab * registry_->slab_bytes_);
     }
     page = unmaterialized_.Front();
-    vmsdk::numa_slab::Materialize(page->base, kHugePage);
+    try {
+      vmsdk::numa_slab::Materialize(page->base, kHugePage);
+    } catch (const std::bad_alloc &) {
+      // E.g. mprotect hitting vm.max_map_count. Let the caller fall back to
+      // operator new rather than throwing out of an insert on the main thread.
+      static std::atomic<bool> logged{false};
+      if (!logged.exchange(true)) {
+        VMSDK_LOG(WARNING, nullptr)
+            << "Could not materialize vector pool memory; falling back to "
+               "the default allocator";
+      }
+      return nullptr;
+    }
     unmaterialized_.Remove(page);
     page->materialized = true;
     global_materialized_bytes.fetch_add(kHugePage, std::memory_order_relaxed);

@@ -193,6 +193,12 @@ class VectorHNSW : public VectorType<T> {
                           << internal_id;
     return *ptr;
   }
+  // Also sets the slot's copy of the reciprocal magnitude.
+  void SetLoadedVector(uint64_t internal_id, VectorRecord &&record) override
+      ABSL_NO_THREAD_SAFETY_ANALYSIS {
+    CHECK(algo_->SetPointLockFree(internal_id, std::move(record)))
+        << "Internal ID not found in label_lookup: " << internal_id;
+  }
   // Lock-free search optimization: Phase-based locking guarantees that queries
   // and resizes/mutations are strictly mutually exclusive. Therefore, no data
   // races can occur during the search phase.

@@ -44,12 +44,50 @@ class VectorPoolTest : public vmsdk::ValkeyTest {
 
 TEST_F(VectorPoolTest, PoolsAreKeyedByTypeAndRoundedSize) {
   VectorPoolRegistry registry(4 * kHugePage, 2 * kHugePage);
-  auto *a = registry.Get(1, 512);
-  EXPECT_EQ(registry.Get(1, 512), a);
-  EXPECT_EQ(registry.Get(1, 510), a);
-  EXPECT_NE(registry.Get(2, 512), a);
-  EXPECT_EQ(a->EntrySize(), 512);
+  auto *a = registry.Get(1, 520);
+  EXPECT_EQ(registry.Get(1, 520), a);
+  EXPECT_EQ(registry.Get(1, 513), a);
+  EXPECT_NE(registry.Get(1, 512), a);
+  EXPECT_NE(registry.Get(2, 520), a);
+  EXPECT_EQ(a->EntrySize(), 576);
   EXPECT_EQ(a->TypeTag(), 1);
+}
+
+// Data (after the 8-byte prefix) starts on a cache line, entries do not
+// overlap or straddle pages, and a page holds (2 MiB - 56) / stride entries.
+TEST_F(VectorPoolTest, DataIsCacheLineAligned) {
+  VectorPoolRegistry registry(8 * kHugePage, 2 * kHugePage);
+  // Data sizes congruent to 0, 8, 56 and 60 mod 64.
+  for (size_t data_bytes : {3072u, 3080u, 3128u, 3132u, 256u}) {
+    SCOPED_TRACE(data_bytes);
+    auto *pool = registry.Get(1, VectorPool::kPrefixBytes + data_bytes);
+    size_t stride = pool->EntrySize();
+    EXPECT_EQ(stride % 64, 0u);
+    EXPECT_GE(stride, VectorPool::kPrefixBytes + data_bytes);
+    size_t per_page = (kHugePage - 56) / stride;
+    std::vector<char *> ptrs;
+    ptrs.reserve(per_page + 1);
+    for (size_t i = 0; i <= per_page; ++i) {
+      ptrs.push_back(pool->Allocate());
+    }
+    for (size_t i = 0; i < ptrs.size(); ++i) {
+      char *data = ptrs[i] + VectorPool::kPrefixBytes;
+      EXPECT_EQ(reinterpret_cast<uintptr_t>(data) % 64, 0u) << i;
+      auto page = reinterpret_cast<uintptr_t>(ptrs[i]) / kHugePage;
+      EXPECT_EQ(reinterpret_cast<uintptr_t>(data + data_bytes - 1) / kHugePage,
+                page)
+          << i;
+      if (i > 0 && i < per_page) {
+        EXPECT_EQ(ptrs[i] - ptrs[i - 1], stride);
+      }
+    }
+    // Entry per_page did not fit and went to a second page.
+    EXPECT_NE(reinterpret_cast<uintptr_t>(ptrs[per_page]) / kHugePage,
+              reinterpret_cast<uintptr_t>(ptrs[0]) / kHugePage);
+    for (auto *p : ptrs) {
+      pool->Free(p);
+    }
+  }
 }
 
 TEST_F(VectorPoolTest, PoolOfIdentifiesOwner) {
@@ -69,8 +107,8 @@ TEST_F(VectorPoolTest, PoolOfIdentifiesOwner) {
 TEST_F(VectorPoolTest, EntriesDoNotStraddlePagesAndAreReused) {
   VectorPoolRegistry registry(4 * kHugePage, 2 * kHugePage);
   constexpr size_t kEntry = 3080;  // 768 floats + 8-byte header.
-  constexpr size_t kPerPage = kHugePage / kEntry;
   auto *pool = registry.Get(1, kEntry);
+  const size_t kPerPage = (kHugePage - 56) / pool->EntrySize();
   std::vector<char *> ptrs;
   for (size_t i = 0; i < 2 * kPerPage; ++i) {
     char *p = pool->Allocate();
@@ -94,17 +132,16 @@ TEST_F(VectorPoolTest, EntriesDoNotStraddlePagesAndAreReused) {
 
 TEST_F(VectorPoolTest, EmptyPageIsReleased) {
   VectorPoolRegistry registry(4 * kHugePage, 2 * kHugePage);
-  constexpr size_t kEntry = kHugePage / 4;
-  auto *pool = registry.Get(1, kEntry);
+  auto *pool = registry.Get(1, kHugePage / 8);  // 7 entries per page.
   std::vector<char *> ptrs;
-  for (int i = 0; i < 5; ++i) {  // One full page plus one entry on a second.
+  for (int i = 0; i < 8; ++i) {  // One full page plus one entry on a second.
     ptrs.push_back(pool->Allocate());
   }
   EXPECT_EQ(external_, 2 * kHugePage);
   EXPECT_EQ(VectorPoolRegistry::GlobalMaterializedBytes(), 2 * kHugePage);
-  pool->Free(ptrs[4]);
+  pool->Free(ptrs[7]);
   EXPECT_EQ(external_, kHugePage);
-  for (int i = 0; i < 4; ++i) {
+  for (int i = 0; i < 7; ++i) {
     pool->Free(ptrs[i]);
   }
   EXPECT_EQ(external_, 0);
@@ -117,7 +154,7 @@ TEST_F(VectorPoolTest, EmptyPageIsReleased) {
 
 TEST_F(VectorPoolTest, ExhaustedRegionReturnsNull) {
   VectorPoolRegistry registry(2 * kHugePage, 2 * kHugePage);
-  auto *pool = registry.Get(1, kHugePage);
+  auto *pool = registry.Get(1, kHugePage / 2);  // One entry per page.
   char *a = pool->Allocate();
   char *b = pool->Allocate();
   ASSERT_NE(a, nullptr);

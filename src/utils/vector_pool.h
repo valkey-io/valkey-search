@@ -30,11 +30,19 @@ NUMA-interleaved and materialized one 2 MiB huge page at a time. Entries never
 straddle a huge page. A huge page is released back to the OS once its last
 entry is freed.
 
+Each entry starts with a kPrefixBytes prefix (the VectorRecord header) and is
+placed so the bytes after the prefix start on a cache line: entries are spaced
+by the entry size rounded up to a cache line, and the first cache line of each
+page holds only the first entry's prefix.
+
 Allocation prefers the materialized page with the fewest free entries, so
 lightly used pages drain and can be released.
 */
 class VectorPool {
  public:
+  static constexpr size_t kPrefixBytes = 8;
+  static constexpr size_t kCacheLineBytes = 64;
+
   VectorPool(const VectorPool &) = delete;
   VectorPool &operator=(const VectorPool &) = delete;
 
@@ -43,6 +51,7 @@ class VectorPool {
   void Free(char *ptr) ABSL_LOCKS_EXCLUDED(mutex_);
 
   uint32_t TypeTag() const { return type_tag_; }
+  // Distance between consecutive entries: a multiple of kCacheLineBytes.
   size_t EntrySize() const { return entry_size_; }
   size_t ActiveAllocations() const ABSL_LOCKS_EXCLUDED(mutex_);
 
@@ -67,6 +76,9 @@ class VectorPool {
   VectorPool(VectorPoolRegistry *registry, uint32_t type_tag,
              size_t entry_size);
 
+  char *EntryAt(const Page &page, uint32_t entry) const {
+    return page.base + kCacheLineBytes - kPrefixBytes + entry * entry_size_;
+  }
   void AddSlab(Page *pages, char *base) ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
   // Group of a materialized page by free entries; -1 for a full page.
   int FreeGroup(const Page &page) const;
@@ -103,8 +115,9 @@ class VectorPoolRegistry {
   // physical memory and slabs of "chunked-array-slab-size".
   static VectorPoolRegistry &Global();
 
-  // The pool for `type_tag` entries of `entry_size` bytes (rounded up to a
-  // multiple of 8). Created on first request.
+  // The pool for `type_tag` entries of `entry_size` bytes, including the
+  // kPrefixBytes prefix. Sizes that round up to the same multiple of a cache
+  // line share a pool. Created on first request.
   VectorPool *Get(uint32_t type_tag, size_t entry_size)
       ABSL_LOCKS_EXCLUDED(mutex_);
 

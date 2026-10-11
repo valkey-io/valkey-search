@@ -1577,6 +1577,11 @@ TEST_F(VectorIndexTest, SaveAndLoadHnsw) {
       records[i] = new ValkeyModuleString{
           std::string((char *)&vectors[i][0], kDimensions * sizeof(float))};
     }
+    // Search results from the populated index, compared after reload: the
+    // reloaded index attaches vectors via SetLoadedVector, which must also
+    // restore the slot magnitudes that search uses.
+    constexpr size_t kQueries = 20;
+    std::vector<std::vector<indexes::Neighbor>> results_before_reload;
 
     EXPECT_CALL(*kMockValkeyModule, OpenKey(testing::_, testing::_, testing::_))
         .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
@@ -1612,6 +1617,12 @@ TEST_F(VectorIndexTest, SaveAndLoadHnsw) {
           CalcRecall(index_flat->get(), loaded_index_hnsw->get(), k,
                      kDimensions, kEFRuntime);
       EXPECT_GE(default_ef_runtime_recall, 0.96f);
+      for (size_t q = 0; q < kQueries; ++q) {
+        auto res = (*loaded_index_hnsw)
+                       ->Search(VectorToStr(vectors[q * 37]), k, CancelNever());
+        VMSDK_EXPECT_OK(res);
+        results_before_reload.push_back(std::move(res.value()));
+      }
       VMSDK_EXPECT_OK(
           (*loaded_index_hnsw)->SaveIndex(RDBChunkOutputStream(&rdb)));
       VMSDK_EXPECT_OK(
@@ -1633,6 +1644,17 @@ TEST_F(VectorIndexTest, SaveAndLoadHnsw) {
           CalcRecall(index_flat->get(), loaded_index_hnsw->get(), k,
                      kDimensions, kEFRuntime);
       EXPECT_GE(default_ef_runtime_recall, 0.96f);
+      for (size_t q = 0; q < kQueries; ++q) {
+        auto res = (*loaded_index_hnsw)
+                       ->Search(VectorToStr(vectors[q * 37]), k, CancelNever());
+        VMSDK_EXPECT_OK(res);
+        const auto &before = results_before_reload[q];
+        ASSERT_EQ(res->size(), before.size());
+        for (size_t r = 0; r < before.size(); ++r) {
+          EXPECT_EQ((*res)[r].external_id->Str(), before[r].external_id->Str());
+          EXPECT_FLOAT_EQ((*res)[r].distance, before[r].distance);
+        }
+      }
     }
     for (size_t i = 0; i < vectors.size(); ++i) {
       delete records[i];
@@ -2208,6 +2230,59 @@ ChunkStream DuplicateLabelGolden(size_t num_slots,
   return golden;
 }
 }  // namespace
+
+// Every way a slot is written keeps its copy of the reciprocal magnitude equal
+// to the record's: add, replace, and RDB load (including tombstones).
+TEST_F(VectorIndexTest, SlotMagnitudeTracksRecord) {
+  hnswlib::InnerProductSpace space{kDimensions};
+  auto *pool = VectorPoolRegistry::Global().Get(
+      data_model::VECTOR_DATA_TYPE_FLOAT32,
+      VectorRecord::kStorageHeaderSize + kDimensions * sizeof(float));
+  auto vectors = DeterministicallyGenerateVectors(8, kDimensions, 10.0);
+  auto record = [&](size_t i, float magnitude) {
+    return VectorRecord::Construct(VectorToStr(vectors[i]), magnitude, pool);
+  };
+  auto expect_slots_match = [](const auto &index, size_t n) {
+    for (size_t i = 0; i < n; ++i) {
+      EXPECT_FLOAT_EQ(index.SearchReciprocalMagnitude(i),
+                      index.GetDataByInternalId(i).GetReciprocalMagnitude())
+          << i;
+    }
+  };
+  VectorHNSW<float>::HNSWIndex algo(&space, /*max_elements=*/8,
+                                    /*normalized=*/true, kM, kEFConstruction,
+                                    /*allow_replace_deleted=*/false,
+                                    /*random_seed=*/100);
+  for (size_t i = 0; i < 4; ++i) {
+    algo.addPoint(QueryVector(record(i, 0.5f + i), kDimensions * sizeof(float),
+                              true, data_model::VECTOR_DATA_TYPE_FLOAT32),
+                  i);
+  }
+  expect_slots_match(algo, 4);
+  algo.SetDataByInternalId(2, record(5, 7.25f));
+  EXPECT_FLOAT_EQ(algo.SearchReciprocalMagnitude(2), 7.25f);
+  algo.markDelete(1);
+  expect_slots_match(algo, 4);
+
+  ChunkStream saved;
+  VMSDK_EXPECT_OK(
+      algo.SaveIndex(saved, [](const VectorRecord &r, bool is_marked_deleted) {
+        return std::vector<char>(
+            r.GetRawVector(), r.GetRawVector() + kDimensions * sizeof(float));
+      }));
+  VectorHNSW<float>::HNSWIndex loaded;
+  VMSDK_EXPECT_OK(loaded.LoadIndex(
+      saved, &space, 8, kM, /*validate=*/true,
+      [&](absl::string_view data, bool is_marked_deleted) {
+        return is_marked_deleted ? VectorRecord::Construct(data, 3.0f, pool)
+                                 : VectorRecord(nullptr);
+      }));
+  expect_slots_match(loaded, 4);
+  EXPECT_FLOAT_EQ(loaded.SearchReciprocalMagnitude(1), 3.0f);
+  EXPECT_TRUE(loaded.SetPointLockFree(0, record(0, 9.5f)));
+  EXPECT_FLOAT_EQ(loaded.SearchReciprocalMagnitude(0), 9.5f);
+  EXPECT_FALSE(loaded.SetPointLockFree(1, record(1, 1.0f)));  // Deleted.
+}
 
 // Loading a dup-label RDB must rebuild label_lookup_ to point to the live slot.
 // Covers both 2-slot orderings and a 3-slot group (two tombstones, one live).

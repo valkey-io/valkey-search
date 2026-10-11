@@ -507,8 +507,8 @@ absl::Status VectorBase::LoadTrackedKeys(
     auto vector_record_with_size = VectorRegistry::Instance().DedupOrConstruct(
         interned_key, attribute_val.get(), attribute_data_type->ToProto(),
         db_num_, this);
-    auto &save_vector = GetVectorLockFree(tracked_key_metadata.internal_id());
-    save_vector = std::move(vector_record_with_size.vector_record);
+    SetLoadedVector(tracked_key_metadata.internal_id(),
+                    std::move(vector_record_with_size.vector_record));
   }
   inc_id_ = GetMaxLoadedLabel() + 1;
   return absl::OkStatus();

@@ -31,7 +31,10 @@ std::atomic<VectorPoolRegistry *> global_registry{nullptr};
 std::atomic<int64_t> global_active_allocations{0};
 std::atomic<int64_t> global_materialized_bytes{0};
 
-size_t RoundUpToMultipleOf8(size_t n) { return (n + 7) & ~size_t(7); }
+size_t RoundUpToCacheLine(size_t n) {
+  return (n + VectorPool::kCacheLineBytes - 1) &
+         ~(VectorPool::kCacheLineBytes - 1);
+}
 
 }  // namespace
 
@@ -40,7 +43,9 @@ VectorPool::VectorPool(VectorPoolRegistry *registry, uint32_t type_tag,
     : registry_(registry),
       type_tag_(type_tag),
       entry_size_(entry_size),
-      entries_per_page_(kHugePage / entry_size) {}
+      // Entry k occupies [line - prefix + k * size, ... + size) in its page.
+      entries_per_page_((kHugePage - (kCacheLineBytes - kPrefixBytes)) /
+                        entry_size) {}
 
 size_t VectorPool::ActiveAllocations() const {
   absl::MutexLock lock(&mutex_);
@@ -120,8 +125,7 @@ char *VectorPool::Allocate() {
   uint32_t entry;
   if (page->free_head != kNoEntry) {
     entry = page->free_head;
-    std::memcpy(&page->free_head, page->base + entry * entry_size_,
-                sizeof(uint32_t));
+    std::memcpy(&page->free_head, EntryAt(*page, entry), sizeof(uint32_t));
   } else {
     entry = page->initialized++;
   }
@@ -129,13 +133,13 @@ char *VectorPool::Allocate() {
   Regroup(page, old_group);
   ++active_allocations_;
   global_active_allocations.fetch_add(1, std::memory_order_relaxed);
-  return page->base + entry * entry_size_;
+  return EntryAt(*page, entry);
 }
 
 void VectorPool::Free(char *ptr) {
   Page *page = registry_->PageOf(ptr);
   absl::MutexLock lock(&mutex_);
-  size_t offset = ptr - page->base;
+  size_t offset = ptr - EntryAt(*page, 0);
   DCHECK_EQ(offset % entry_size_, 0u);
   auto entry = static_cast<uint32_t>(offset / entry_size_);
   int old_group = FreeGroup(*page);
@@ -209,9 +213,9 @@ VectorPoolRegistry &VectorPoolRegistry::Global() {
 }
 
 VectorPool *VectorPoolRegistry::Get(uint32_t type_tag, size_t entry_size) {
-  entry_size = RoundUpToMultipleOf8(entry_size);
-  CHECK_GE(entry_size, sizeof(uint32_t));
-  CHECK_LE(entry_size, kHugePage);
+  CHECK_GE(entry_size, VectorPool::kPrefixBytes);
+  entry_size = RoundUpToCacheLine(entry_size);
+  CHECK_LE(entry_size, kHugePage - VectorPool::kCacheLineBytes);
   absl::MutexLock lock(&mutex_);
   auto &pool = pools_[{type_tag, entry_size}];
   if (!pool) {

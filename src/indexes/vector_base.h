@@ -69,6 +69,8 @@ class VectorRecord {
   static constexpr size_t kStorageHeaderSize = sizeof(Header);
   static_assert(kStorageHeaderSize == 8,
                 "VectorRecord::Header must be exactly 8 bytes");
+  static_assert(kStorageHeaderSize == VectorPool::kPrefixBytes,
+                "VectorPool places the header just before a cache line");
 
   VectorRecord() noexcept : data_(nullptr) {}
   VectorRecord(std::nullptr_t) noexcept : data_(nullptr) {}
@@ -141,12 +143,6 @@ class VectorRecord {
   float GetReciprocalMagnitude() const noexcept {
     const char *ptr = data_.load(std::memory_order_relaxed);
     return ptr ? GetHeader(ptr)->reciprocal_magnitude_ : 1.0f;
-  }
-
-  // Reciprocal magnitude of the record whose (non-null) vector data starts at
-  // data_ptr. Lets hot loops that hold only the raw vector pointer read it.
-  static float ReciprocalMagnitudeOf(const char *data_ptr) noexcept {
-    return GetHeader(data_ptr)->reciprocal_magnitude_;
   }
 
   uint32_t RefCount() const noexcept {
@@ -658,6 +654,10 @@ class VectorBase : public IndexBase {
 
   virtual VectorRecord &GetVectorLockFree(uint64_t internal_id) const = 0;
   virtual VectorRecord &GetVector(uint64_t internal_id) const = 0;
+  // Attaches the record of a key loaded from RDB to its empty slot.
+  virtual void SetLoadedVector(uint64_t internal_id, VectorRecord &&record) {
+    GetVectorLockFree(internal_id) = std::move(record);
+  }
 
   int db_num_;
   int dimensions_;

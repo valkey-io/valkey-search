@@ -98,17 +98,7 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
                 "schema_type": self.schema_type,
                 "testname": os.environ.get('PYTEST_CURRENT_TEST').split(':')[-1].split(' ')[0],
                 "traceback": "".join(traceback.format_stack())}
-        try:
-            print("Cmd:", *cmd)
-            answer["result"] = self.client.execute_command(*cmd)
-            answer["exception"] = False
-            if answer["result"] != [0]:
-                self.__class__.replied_count += 1
-            print(f"replied: {answer['result']} (count: {self.__class__.replied_count})")
-        except Exception as exc:
-            print(f"Got exception for Error: '{exc}', Cmd:{cmd}")
-            answer["result"] = {}
-            answer["exception"] = True
+        self.record_results(answer, cmd)
         self.answers.append(answer)
 
     def parse_explaincli_to_query(self, index_name: str, query: str, dialect: int = 2) -> tuple[str, bool]:

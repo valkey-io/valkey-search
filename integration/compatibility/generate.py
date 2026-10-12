@@ -53,6 +53,10 @@ class BaseCompatibilityTest:
         # add reply count to check redis non-empty answer
         cls.replied_count = 0
         cls.client = ClientRSystem()
+        # The same commands are recorded over RESP3 to check RESP3 replies.
+        cls.client_resp3 = valkey.Valkey(
+            host=SYSTEM_R_ADDRESS[0], port=SYSTEM_R_ADDRESS[1], protocol=3
+        )
         while True:
             try:
                 cls.client.execute_command("PING")
@@ -89,19 +93,23 @@ class BaseCompatibilityTest:
                   "data_set_name": self.data_set_name,
                   "testname": os.environ.get('PYTEST_CURRENT_TEST').split(':')[-1].split(' ')[0],
                   "traceback": "".join(traceback.format_stack())}
-        try:
-            print("Cmd:", *cmd)
-            answer["result"] = self.client.execute_command(*cmd)
-            answer["exception"] = False
-            if answer["result"] != [0]:
-                self.__class__.replied_count += 1  # ADD THIS LINE
-            print(f"replied: {answer['result']} (count: {self.__class__.replied_count})")
-            # print(f"replied: {answer['result']}")
-        except Exception as exc:
-            print(f"Got exception for Error: '{exc}', Cmd:{cmd}")
-            answer["result"] = {}
-            answer["exception"] = True
+        self.record_results(answer, cmd)
         self.answers.append(answer)
+
+    def record_results(self, answer, cmd):
+        """Runs cmd over RESP2 ("result") and RESP3 ("result_resp3")."""
+        print("Cmd:", *cmd)
+        for suffix, client in (("", self.client), ("_resp3", self.client_resp3)):
+            try:
+                answer["result" + suffix] = client.execute_command(*cmd)
+                answer["exception" + suffix] = False
+            except Exception as exc:
+                print(f"Got exception for Error: '{exc}', Cmd:{cmd}")
+                answer["result" + suffix] = {}
+                answer["exception" + suffix] = True
+        if not answer["exception"] and answer["result"] != [0]:
+            self.__class__.replied_count += 1
+        print(f"replied: {answer['result']} (count: {self.__class__.replied_count})")
 
     def check(self, *orig_cmd):
         """Non-vector command."""

@@ -158,8 +158,21 @@ def unpack_agg_result(rs, key_type):
         raise
     return rows
 
-def unpack_result(cmd, key_type, rs, sortkeys):
-    if "ft.search" in cmd[0].lower():
+def unpack_resp3_result(rs, key_type):
+    """Unpacks a RESP3 envelope into the same rows as the RESP2 unpackers:
+    FT.SEARCH results carry their id as __key, FT.AGGREGATE results don't."""
+    rows = []
+    for result in rs[b"results"]:
+        row = {"__key": result[b"id"]} if b"id" in result else {}
+        for field, value in result.get(b"extra_attributes", {}).items():
+            row[parse_field(field, key_type)] = parse_value(value, key_type)
+        rows.append(row)
+    return rows
+
+def unpack_result(cmd, key_type, rs, sortkeys, resp3=False):
+    if resp3:
+        out = unpack_resp3_result(rs, key_type)
+    elif "ft.search" in cmd[0].lower():
         # Detect if the result actually has sort keys by checking the format,
         # not just whether WITHSORTKEYS is in the command. This handles cases
         # where the expected result (from pickle) may not have sort keys even
@@ -268,7 +281,7 @@ def compare_row(l, r, key_type):
             return False
     return True            
     
-def compare_results(expected, results):
+def compare_results(expected, results, resp3=False):
     print("CMD:", printable_cmd(expected["cmd"]))
     cmd = expected["cmd"]
     key_type = expected["key_type"]
@@ -317,10 +330,10 @@ def compare_results(expected, results):
 
     # Output raw results
     # print("Raw expected result:", expected["result"])
-    rl = unpack_result(cmd, expected["key_type"], expected["result"], sortkeys)
+    rl = unpack_result(cmd, expected["key_type"], expected["result"], sortkeys, resp3)
     # print("Unpack of expected result:", rl)
     # print("Raw actual result:", results["result"])
-    vk = unpack_result(cmd, expected["key_type"], results["result"], sortkeys)
+    vk = unpack_result(cmd, expected["key_type"], results["result"], sortkeys, resp3)
     # print("Unpack of actual result:", vk)
 
     # Process failures
@@ -385,8 +398,48 @@ def mark_as_failed(testname):
     wrong_answers += 1
     assert not StopOnFailure, "Test failed, stopping execution"
 
-def do_answer(client, expected, data_set):
+def resp3_shape(reply):
+    """The parts of a RESP3 envelope that the row comparison doesn't cover:
+    key names, value types, and the constant fields. Rows are compared as a
+    multiset since compare_results doesn't check result order either."""
+    if not isinstance(reply, dict):
+        return type(reply).__name__
+    rows = sorted(
+        (sorted(row.keys()), type(row.get(b"extra_attributes")).__name__,
+         repr(row.get(b"values")))
+        for row in reply.get(b"results", [])
+    )
+    return {
+        "types": sorted((k, type(v).__name__) for k, v in reply.items()),
+        "format": reply.get(b"format"),
+        "attributes": reply.get(b"attributes"),
+        "warning": reply.get(b"warning"),
+        "rows": rows,
+    }
+
+def compare_results_resp3(expected, result):
+    """Compares a RESP3 reply with the recorded Redis Search RESP3 reply: the
+    envelope shape exactly, and the rows with compare_results."""
+    expected = dict(expected, result=expected["result_resp3"],
+                    exception=expected["exception_resp3"])
+    if not expected["exception"] and not result["exception"]:
+        expected_shape = resp3_shape(expected["result"])
+        actual_shape = resp3_shape(result["result"])
+        if expected_shape != actual_shape:
+            print(f"CMD: {expected['cmd']}")
+            print("RESP3 shape mismatch")
+            print("RL:", expected_shape)
+            print("VK:", actual_shape)
+            return False
+    return compare_results(expected, result, resp3=True)
+
+def do_answer(client, expected, data_set, run_query=None,
+              compare=compare_results):
+    """Runs one answer. Data is loaded with client; the query itself runs
+    through run_query(cmd) and is checked with compare when given."""
     global correct_answers, failed_tests, passed_tests
+    if run_query is None:
+        run_query = lambda cmd: client.execute_command(*cmd)
     if (expected['data_set_name'], expected['key_type'], expected.get('schema_type')) != data_set:
         print("Loading data set:", expected['data_set_name'], "key type:", expected['key_type'])
         client.execute_command("FLUSHALL SYNC")
@@ -399,7 +452,7 @@ def do_answer(client, expected, data_set):
     if expected.get('excluded'):
         try:
             print(f"Running excluded query (no-crash check): {expected['cmd']}")
-            client.execute_command(*expected['cmd'])
+            run_query(expected['cmd'])
             print(f"Excluded query completed without crash")
         except Exception as e:
             print(f"Excluded query raised: {e} for cmd {expected['cmd']}")
@@ -417,16 +470,16 @@ def do_answer(client, expected, data_set):
     try:
         print(f">>>>>> Starting Test {expected['testname']} So Far: Correct:{correct_answers} Wrong:{wrong_answers} <<<<<<<<<")
         result["cmd"] = expected['cmd']
-        result["result"] = client.execute_command(*expected['cmd'])
+        result["result"] = run_query(expected['cmd'])
         result["exception"] = False
-        if compare_results(expected, result):
+        if compare(expected, result):
             mark_as_passed(expected['testname'])
         else:
             mark_as_failed(expected['testname'])
     except valkey.ResponseError as e:
         print(f"Got ResponseError: {e} for command {expected['cmd']}")
         result["exception"] = True
-        if compare_results(expected, result):
+        if compare(expected, result):
             mark_as_passed(expected['testname'])
         else:
             mark_as_failed(expected['testname'])
@@ -594,6 +647,44 @@ class TestAnswersCMD(ValkeySearchTestCaseBase):
         for k, v in passed_tests.items():
             print(f"Passed test {k:60}: {v} times")
     '''
+
+class TestAnswersCMDResp3(ValkeySearchTestCaseBase):
+    """Checks RESP3 replies against the Redis Search RESP3 answers."""
+
+    @pytest.mark.parametrize("answers", ALL_ANSWER_FILES)
+    def test_answers(self, answers):
+        global correct_answers, wrong_answers, failed_tests, passed_tests
+
+        correct_answers = 0
+        wrong_answers = 0
+        failed_tests = {}
+        passed_tests = {}
+
+        print("Running RESP3 test_answers with answers file:", answers)
+        answers = _load_answers_with_hash_check(answers)
+
+        client = self.server.get_new_client()
+        kwargs = dict(client.connection_pool.connection_kwargs)
+        kwargs["protocol"] = 3
+        pool = valkey.ConnectionPool(**kwargs)
+        resp3_client = valkey.Valkey(connection_pool=pool)
+        run_query = lambda cmd: resp3_client.execute_command(*cmd)
+        try:
+            data_set = None
+            for expected in answers:
+                data_set = do_answer(client, expected, data_set, run_query,
+                                     compare_results_resp3)
+        finally:
+            pool.disconnect()
+
+        expected_count = sum(1 for a in answers if not a.get('excluded'))
+        if correct_answers != expected_count:
+            print(f"Correct answers: {correct_answers} out of {len(answers)}")
+            if len(failed_tests) != 0:
+                print(">>>>>>>>> Failed Tests <<<<<<<<<")
+                for k, v in failed_tests.items():
+                    print(f"Failed test {k:60}: {v} times")
+            assert False
 
 # TODO: fix cluster mode test failures
 class TestAnswersCME(ValkeySearchClusterTestCase):

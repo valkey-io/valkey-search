@@ -174,7 +174,8 @@ class ClusterMapTest : public vmsdk::ValkeyTest {
   }
 
   // Helper: Mock CLUSTER SLOTS command
-  void MockClusterSlotsCall(const std::vector<SlotRangeConfig>& slot_ranges) {
+  void MockClusterSlotsCall(const std::vector<SlotRangeConfig>& slot_ranges,
+                            const std::string& cluster_nodes = DefaultNodes()) {
     auto reply = CreateClusterSlotsReply(slot_ranges);
 
     EXPECT_CALL(*kMockValkeyModule,
@@ -186,6 +187,27 @@ class ClusterMapTest : public vmsdk::ValkeyTest {
         .WillOnce([](ValkeyModuleCallReply* r) { delete r; });
 
     SetupCallReplyMocks(reply, slot_ranges.size());
+    MockClusterNodesCall(cluster_nodes);
+  }
+
+  // A CLUSTER NODES "myself" line with no open slots.
+  static std::string DefaultNodes() {
+    return std::string(VALKEYMODULE_NODE_ID_LEN, 'a') +
+           " 127.0.0.1:30001@40001 myself,master - 0 0 1 connected\n";
+  }
+
+  // Helper: Mock CLUSTER NODES, read by CreateNewClusterMap for the importing
+  // slots.
+  void MockClusterNodesCall(const std::string& nodes) {
+    auto* reply = new ValkeyModuleCallReply();
+    reply->type = VALKEYMODULE_REPLY_STRING;
+    reply->val = CallReplyString(nodes);
+    EXPECT_CALL(*kMockValkeyModule,
+                Call(&fake_ctx, testing::StrEq("CLUSTER"), testing::StrEq("c"),
+                     testing::StrEq("NODES")))
+        .WillOnce(testing::Return(reply));
+    EXPECT_CALL(*kMockValkeyModule, FreeCallReply(reply))
+        .WillOnce([](ValkeyModuleCallReply* r) { delete r; });
   }
 
   // Helper: Mock GetMyClusterID
@@ -286,6 +308,7 @@ class ClusterMapTest : public vmsdk::ValkeyTest {
         .WillOnce([](ValkeyModuleCallReply* r) { delete r; });
 
     SetupCallReplyMocks(reply, slot_ranges.size());
+    MockClusterNodesCall(DefaultNodes());
   }
 
   // Helper: Setup cluster with map metadata and create map
@@ -394,6 +417,84 @@ TEST_F(ClusterMapTest, MultipleShards) {
   EXPECT_FALSE(cluster_map->IOwnSlot(10000));
 
   VerifyTargetListConsistency(cluster_map.get(), 3, 2);
+}
+
+// Importing slots are read from the "myself" line of CLUSTER NODES: a slot this
+// node is importing is answered for, one it is migrating away or one another
+// node is importing is not, and owned slots are unaffected.
+TEST_F(ClusterMapTest, ImportingSlotsFromClusterNodes) {
+  std::vector<SlotRangeConfig> ranges = {
+      {.start_slot = 0,
+       .end_slot = 8191,
+       .primary = NodeConfig{"127.0.0.1", 30001, primary_ids.at(0), {}},
+       .replicas = {}},
+      {.start_slot = 8192,
+       .end_slot = 16383,
+       .primary = NodeConfig{"127.0.0.1", 30002, primary_ids.at(1), {}},
+       .replicas = {}}};
+  const std::string nodes =
+      primary_ids.at(1) +
+      " 127.0.0.1:30002@40002 master - 0 1 2 connected 8192-16383 "
+      "[9000-<-" +
+      primary_ids.at(0) + "]\n" + primary_ids.at(0) +
+      " 127.0.0.1:30001@40001 myself,master - 0 0 1 connected 0-8191 "
+      "[100->-" +
+      primary_ids.at(1) + "] [12000-<-" + primary_ids.at(1) + "] [16383-<-" +
+      primary_ids.at(1) + "]\n";
+  MockGetMyClusterID(primary_ids.at(0));
+  MockClusterSlotsCall(ranges, nodes);
+  auto cluster_map = ClusterMap::CreateNewClusterMap(&fake_ctx);
+
+  ASSERT_NE(cluster_map, nullptr);
+  EXPECT_TRUE(cluster_map->KnowsImportingSlots());
+  EXPECT_TRUE(cluster_map->IOwnOrImportSlot(12000));
+  EXPECT_TRUE(cluster_map->IOwnOrImportSlot(16383));
+  EXPECT_FALSE(cluster_map->IOwnSlot(12000));
+  // Migrating away: still owned until SETSLOT NODE, but not "importing".
+  EXPECT_TRUE(cluster_map->IOwnOrImportSlot(100));
+  // Importing on another node's line does not count for this node.
+  EXPECT_FALSE(cluster_map->IOwnOrImportSlot(9000));
+  EXPECT_FALSE(cluster_map->IOwnOrImportSlot(12001));
+}
+
+// Without a usable CLUSTER NODES reply the importing slots are unknown, and
+// IOwnOrImportSlot reduces to IOwnSlot.
+TEST_F(ClusterMapTest, ImportingSlotsUnknownWithoutClusterNodes) {
+  std::vector<SlotRangeConfig> ranges = {
+      {.start_slot = 0,
+       .end_slot = 16383,
+       .primary = NodeConfig{"127.0.0.1", 30001, primary_ids.at(0), {}},
+       .replicas = {}}};
+  MockGetMyClusterID(primary_ids.at(0));
+  // A table that has no "myself" line.
+  MockClusterSlotsCall(ranges,
+                       primary_ids.at(1) +
+                           " 127.0.0.1:30002@40002 master - 0 1 2 connected "
+                           "[5-<-" +
+                           primary_ids.at(0) + "]\n");
+  auto cluster_map = ClusterMap::CreateNewClusterMap(&fake_ctx);
+
+  ASSERT_NE(cluster_map, nullptr);
+  EXPECT_FALSE(cluster_map->KnowsImportingSlots());
+  EXPECT_TRUE(cluster_map->IOwnOrImportSlot(5));
+}
+
+TEST(ParseImportingSlotsTest, ParsesOnlyMyselfImportingEntries) {
+  std::bitset<kNumSlots> importing;
+  EXPECT_TRUE(ParseImportingSlots(
+      "id1 1.1.1.1:1@2 master - 0 0 1 connected [7-<-id0]\n"
+      "id0 1.1.1.1:2@3 myself,master - 0 0 1 connected 0-10 [3-<-id1] "
+      "[4->-id1] [16383-<-id1] [x-<-id1] [99999-<-id1] [-<-id1]\n",
+      importing));
+  EXPECT_EQ(importing.count(), 2u);
+  EXPECT_TRUE(importing[3]);
+  EXPECT_TRUE(importing[16383]);
+
+  std::bitset<kNumSlots> none;
+  EXPECT_FALSE(ParseImportingSlots("", none));
+  EXPECT_FALSE(
+      ParseImportingSlots("id1 1.1.1.1:1@2 master - 0 0 1 connected\n", none));
+  EXPECT_TRUE(none.none());
 }
 
 TEST_F(ClusterMapTest, PartialCoverage) {

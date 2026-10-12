@@ -924,16 +924,40 @@ class SlotOwnershipSearchTest : public ValkeySearchTest {
         std::make_unique<coordinator::MockServer>());
   }
 
-  // Mocks CLUSTER SLOTS to return `reply` and wires the reply accessors, then
+  // CLUSTER NODES "myself" line for this node, optionally importing slots.
+  std::string MyselfNodesLine(const std::vector<uint16_t> &importing = {}) {
+    std::string line = my_node_id_ +
+                       " 127.0.0.1:7000@17000 myself,master - 0 0 1 connected "
+                       "0-8191";
+    for (auto slot : importing) {
+      absl::StrAppend(&line, " [", slot, "-<-", other_node_id_, "]");
+    }
+    return line + "\n";
+  }
+
+  // Mocks CLUSTER SLOTS to return `slots_reply` and CLUSTER NODES to return
+  // `nodes` (a failed call when nullopt), wires the reply accessors, then
   // populates the stored cluster-map snapshot that DropUnownedSlotHits reads.
   std::shared_ptr<vmsdk::cluster_map::ClusterMap> InstallClusterMap(
-      ValkeyModuleCallReply *reply) {
+      ValkeyModuleCallReply *slots_reply, std::optional<std::string> nodes) {
     EXPECT_CALL(*kMockValkeyModule,
                 Call(&fake_ctx_, testing::StrEq("CLUSTER"), testing::StrEq("c"),
                      testing::StrEq("SLOTS")))
-        .WillOnce(testing::Return(reply));
-    EXPECT_CALL(*kMockValkeyModule, FreeCallReply(reply))
+        .WillOnce(testing::Return(slots_reply));
+    EXPECT_CALL(*kMockValkeyModule, FreeCallReply(slots_reply))
         .WillOnce([](ValkeyModuleCallReply *r) { delete r; });
+    ValkeyModuleCallReply *nodes_reply = nullptr;
+    if (nodes.has_value()) {
+      nodes_reply = new ValkeyModuleCallReply();
+      nodes_reply->type = VALKEYMODULE_REPLY_STRING;
+      nodes_reply->val = CallReplyString(*nodes);
+      EXPECT_CALL(*kMockValkeyModule, FreeCallReply(nodes_reply))
+          .WillOnce([](ValkeyModuleCallReply *r) { delete r; });
+    }
+    EXPECT_CALL(*kMockValkeyModule,
+                Call(&fake_ctx_, testing::StrEq("CLUSTER"), testing::StrEq("c"),
+                     testing::StrEq("NODES")))
+        .WillOnce(testing::Return(nodes_reply));
     EXPECT_CALL(*kMockValkeyModule, CallReplyType(_))
         .WillRepeatedly(&TestValkeyModule_CallReplyTypeImpl);
     EXPECT_CALL(*kMockValkeyModule, CallReplyLength(_))
@@ -952,14 +976,17 @@ class SlotOwnershipSearchTest : public ValkeySearchTest {
   }
 
   // The common case: cluster + coordinator + a consistent map in which this
-  // node owns the lower half of the slot space.
-  void InstallConsistentCoordinatorMap() {
+  // node owns the lower half of the slot space, optionally importing slots.
+  void InstallConsistentCoordinatorMap(
+      const std::vector<uint16_t> &importing = {}) {
     EnableCluster();
     EnableCoordinator();
     auto cluster_map = InstallClusterMap(
-        BuildTwoShardClusterSlotsReply(my_node_id_, other_node_id_));
+        BuildTwoShardClusterSlotsReply(my_node_id_, other_node_id_),
+        MyselfNodesLine(importing));
     ASSERT_NE(cluster_map, nullptr);
     ASSERT_TRUE(cluster_map->IsConsistent());
+    ASSERT_TRUE(cluster_map->KnowsImportingSlots());
     ASSERT_TRUE(cluster_map->IOwnSlot(vmsdk::KeyHashSlot(kOwnedKey1)));
     ASSERT_TRUE(cluster_map->IOwnSlot(vmsdk::KeyHashSlot(kOwnedKey2)));
     ASSERT_FALSE(cluster_map->IOwnSlot(vmsdk::KeyHashSlot(kUnownedKey)));
@@ -1080,9 +1107,51 @@ TEST_F(SlotOwnershipSearchTest, InconsistentMapKeepsAllHits) {
   EnableCluster();
   EnableCoordinator();
   auto cluster_map = InstallClusterMap(
-      BuildInconsistentClusterSlotsReply(my_node_id_, other_node_id_));
+      BuildInconsistentClusterSlotsReply(my_node_id_, other_node_id_),
+      MyselfNodesLine());
   ASSERT_NE(cluster_map, nullptr);
   ASSERT_FALSE(cluster_map->IsConsistent());
+
+  UnitTestSearchParameters params;
+  params.limit = {.first_index = 0, .number = 0};
+  TextParsingOptions options{};
+  FilterParser parser(*schema_, "@text:cat", options);
+  params.filter_parse_results = std::move(parser.Parse().value());
+
+  EXPECT_THAT(SearchKeys(params), testing::IsEmpty());
+  EXPECT_EQ(params.search_result.total_count, 3u);
+}
+
+// A legacy reshard moves keys without COPY: until SETSLOT NODE, a moved key
+// exists only on the node importing its slot, which doesn't own the slot yet.
+// That node must keep the hit, or no shard returns it.
+TEST_F(SlotOwnershipSearchTest, ImportingSlotHitsKept) {
+  InstallConsistentCoordinatorMap({vmsdk::KeyHashSlot(kUnownedKey)});
+  UnitTestSearchParameters params;
+  params.attribute_alias = kVectorAttributeAlias;
+  params.score_as = vmsdk::MakeUniqueValkeyString(kScoreAs);
+  params.k = 3;
+  params.ef = kEfRuntime;
+  params.no_content = true;
+  std::vector<float> query_vector(kVectorDimensions, 1.0f);
+  params.query = VectorToStr(query_vector);
+
+  EXPECT_THAT(SearchKeys(params),
+              testing::ElementsAre(kUnownedKey, kOwnedKey1, kOwnedKey2));
+  EXPECT_EQ(params.search_result.total_count, 3u);
+}
+
+// Gate: if CLUSTER NODES could not be read, the importing slots are unknown
+// and filtering would drop keys already moved here, so the filter fails open.
+TEST_F(SlotOwnershipSearchTest, UnknownImportingSlotsKeepsAllHits) {
+  EnableCluster();
+  EnableCoordinator();
+  auto cluster_map = InstallClusterMap(
+      BuildTwoShardClusterSlotsReply(my_node_id_, other_node_id_),
+      std::nullopt);
+  ASSERT_NE(cluster_map, nullptr);
+  ASSERT_TRUE(cluster_map->IsConsistent());
+  ASSERT_FALSE(cluster_map->KnowsImportingSlots());
 
   UnitTestSearchParameters params;
   params.limit = {.first_index = 0, .number = 0};
@@ -1100,7 +1169,8 @@ TEST_F(SlotOwnershipSearchTest, InconsistentMapKeepsAllHits) {
 TEST_F(SlotOwnershipSearchTest, NoCoordinatorSkipsFilter) {
   EnableCluster();  // Cluster, but no coordinator server installed.
   auto cluster_map = InstallClusterMap(
-      BuildTwoShardClusterSlotsReply(my_node_id_, other_node_id_));
+      BuildTwoShardClusterSlotsReply(my_node_id_, other_node_id_),
+      MyselfNodesLine());
   ASSERT_NE(cluster_map, nullptr);
   ASSERT_TRUE(cluster_map->IsConsistent());
   ASSERT_FALSE(ValkeySearch::Instance().UsingCoordinator());
@@ -1119,7 +1189,8 @@ TEST_F(SlotOwnershipSearchTest, NoCoordinatorSkipsFilter) {
 TEST_F(SlotOwnershipSearchTest, StandaloneSkipsFilter) {
   EnableCoordinator();  // Coordinator present, but not a cluster.
   auto cluster_map = InstallClusterMap(
-      BuildTwoShardClusterSlotsReply(my_node_id_, other_node_id_));
+      BuildTwoShardClusterSlotsReply(my_node_id_, other_node_id_),
+      MyselfNodesLine());
   ASSERT_NE(cluster_map, nullptr);
   ASSERT_TRUE(cluster_map->IsConsistent());
   ASSERT_FALSE(ValkeySearch::Instance().IsCluster());

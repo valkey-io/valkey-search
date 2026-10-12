@@ -121,12 +121,15 @@ DEV_INTEGER_COUNTER(query_stats, query_tag_count);
 DEV_INTEGER_COUNTER(query_stats, nonvector_results_fetched_limited_count);
 DEV_INTEGER_COUNTER(query_stats, unowned_slot_results_dropped_count);
 
-// Drops the hits whose slot this node does not own, in place and preserving
-// order. Runs on the reader thread against the lock-free cluster-map snapshot,
-// so it covers the reply modes that never reach the main-thread content fetch
-// (NOCONTENT, LIMIT 0 0, indexed RETURN, FT.AGGREGATE) and corrects total_count
-// before it is read. Gated on the coordinator because only that configuration
-// keeps the snapshot fresh and has a fan-out merge to back it up.
+// Drops the hits whose slot this node neither owns nor is importing, in place
+// and preserving order. Runs on the reader thread against the lock-free
+// cluster-map snapshot, so it covers the reply modes that never reach the
+// main-thread content fetch (NOCONTENT, LIMIT 0 0, indexed RETURN,
+// FT.AGGREGATE) and corrects total_count before it is read. Importing slots are
+// kept because a legacy reshard moves keys without COPY: until SETSLOT NODE
+// they exist only on the importing node. Gated on the coordinator because only
+// that configuration keeps the snapshot fresh and has a fan-out merge, which
+// removes the duplicate rows when a key briefly exists on both nodes.
 template <typename NeighborT>
 void DropUnownedSlotHits(std::vector<NeighborT> &hits) {
   if (hits.empty() || !ValkeySearch::Instance().UsingCoordinator() ||
@@ -134,13 +137,14 @@ void DropUnownedSlotHits(std::vector<NeighborT> &hits) {
     return;
   }
   auto cluster_map = ValkeySearch::Instance().GetClusterMap();
-  // Fail open on a missing or inconsistent snapshot. An inconsistent map can
-  // lack the local shard's ranges entirely (ProcessSlotRange returns before
-  // marking owned slots when a node in the range fails to parse), so filtering
-  // against it would drop every local hit. The fan-out merge's by-key dedup
-  // covers what is skipped here; GetOrRefreshClusterMap rebuilds inconsistent
-  // maps, so the main-thread CheckSlotOwnership remains exact.
-  if (!cluster_map || !cluster_map->IsConsistent()) {
+  // Fail open on a missing or inconsistent snapshot, or one whose importing
+  // slots are unknown. An inconsistent map can lack the local shard's ranges
+  // entirely (ProcessSlotRange returns before marking owned slots when a node
+  // in the range fails to parse), and without the importing slots the filter
+  // would drop keys already moved here; either way it would lose hits. The
+  // fan-out merge's by-key dedup covers what is skipped here.
+  if (!cluster_map || !cluster_map->IsConsistent() ||
+      !cluster_map->KnowsImportingSlots()) {
     return;
   }
   auto key_of = [](const NeighborT &hit) -> absl::string_view {
@@ -152,7 +156,7 @@ void DropUnownedSlotHits(std::vector<NeighborT> &hits) {
   };
   auto unowned =
       std::remove_if(hits.begin(), hits.end(), [&](const NeighborT &hit) {
-        return !cluster_map->IOwnSlot(vmsdk::KeyHashSlot(key_of(hit)));
+        return !cluster_map->IOwnOrImportSlot(vmsdk::KeyHashSlot(key_of(hit)));
       });
   if (unowned == hits.end()) {
     return;

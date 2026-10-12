@@ -11,6 +11,9 @@
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/random/random.h"
+#include "absl/strings/numbers.h"
+#include "absl/strings/str_split.h"
+#include "absl/strings/string_view.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/module_config.h"
@@ -521,6 +524,69 @@ bool ClusterMap::CheckClusterMapFull() {
   return expected_next == kNumSlots;
 }
 
+bool ParseImportingSlots(std::string_view cluster_nodes,
+                         std::bitset<kNumSlots>& importing) {
+  // Line format: <id> <ip:port@cport> <flags> <primary> <ping> <pong> <epoch>
+  // <link> <slot>...; only the "myself" line lists open slots, as
+  // "[<slot>->-<id>]" (migrating) or "[<slot>-<-<id>]" (importing).
+  for (absl::string_view line : absl::StrSplit(cluster_nodes, '\n')) {
+    std::vector<absl::string_view> fields =
+        absl::StrSplit(line, ' ', absl::SkipEmpty());
+    if (fields.size() < 3) {
+      continue;
+    }
+    bool is_myself = false;
+    for (absl::string_view flag : absl::StrSplit(fields[2], ',')) {
+      is_myself |= flag == "myself";
+    }
+    if (!is_myself) {
+      continue;
+    }
+    for (size_t i = 8; i < fields.size(); ++i) {
+      absl::string_view field = fields[i];
+      if (field.size() < 2 || field.front() != '[') {
+        continue;
+      }
+      auto marker = field.find("-<-");
+      uint32_t slot = 0;
+      if (marker == absl::string_view::npos ||
+          !absl::SimpleAtoi(field.substr(1, marker - 1), &slot) ||
+          slot >= kNumSlots) {
+        continue;
+      }
+      importing[slot] = true;
+    }
+    return true;
+  }
+  return false;
+}
+
+void ClusterMap::LoadImportingSlots(ValkeyModuleCtx* ctx) {
+  auto reply = vmsdk::UniquePtrValkeyCallReply(
+      ValkeyModule_Call(ctx, "CLUSTER", "c", "NODES"));
+  if (!reply) {
+    VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 10)
+        << "CLUSTER NODES failed; importing slots are unknown";
+    return;
+  }
+  // ValkeyModule_Call without the "3" flag replies in RESP2, so the node table
+  // is a plain bulk string.
+  int type = ValkeyModule_CallReplyType(reply.get());
+  if (type != VALKEYMODULE_REPLY_STRING) {
+    VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 10)
+        << "Unexpected CLUSTER NODES reply type " << type
+        << "; importing slots are unknown";
+    return;
+  }
+  size_t len = 0;
+  const char* text = ValkeyModule_CallReplyStringPtr(reply.get(), &len);
+  if (!text) {
+    return;
+  }
+  importing_slots_known_ =
+      ParseImportingSlots(std::string_view(text, len), importing_slots_);
+}
+
 std::shared_ptr<ClusterMap> ClusterMap::CreateNewClusterMap(
     ValkeyModuleCtx* ctx) {
   auto new_map = std::shared_ptr<ClusterMap>(new ClusterMap());
@@ -608,6 +674,10 @@ std::shared_ptr<ClusterMap> ClusterMap::CreateNewClusterMap(
 
   // Compute cluster-level fingerprint
   new_map->cluster_slots_fingerprint_ = new_map->ComputeClusterFingerprint();
+
+  // Read in the same main-thread step as CLUSTER SLOTS, so both describe the
+  // same cluster state.
+  new_map->LoadImportingSlots(ctx);
 
   // Set expiration time
   new_map->expiration_tp_ =

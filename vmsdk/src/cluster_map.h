@@ -46,6 +46,12 @@ enum class FanoutTargetMode {
 
 const size_t kNumSlots = 16384;
 
+// Parses CLUSTER NODES output and sets, in `importing`, the slots the "myself"
+// node is importing ("[<slot>-<-<node-id>]" entries). Returns false when there
+// is no "myself" line, i.e. the importing state is unknown.
+bool ParseImportingSlots(std::string_view cluster_nodes,
+                         std::bitset<kNumSlots>& importing);
+
 // forward declaration to solve circular dependency
 struct ShardInfo;
 
@@ -117,6 +123,18 @@ class ClusterMap {
   // do I own this slot
   bool IOwnSlot(uint16_t slot) const { return owned_slots_[slot]; }
 
+  // do I own this slot, or am I importing it (CLUSTER SETSLOT ... IMPORTING).
+  // During a legacy migration keys moved without COPY exist only on the
+  // importing node, so it is the node that must answer for them. Same as
+  // IOwnSlot when the importing slots are unknown.
+  bool IOwnOrImportSlot(uint16_t slot) const {
+    return owned_slots_[slot] || importing_slots_[slot];
+  }
+
+  // false when CLUSTER NODES could not be read; IOwnOrImportSlot then knows
+  // only ownership
+  bool KnowsImportingSlots() const { return importing_slots_known_; }
+
   // shard lookups, will return nullptr if shard not found
   const ShardInfo* GetShardById(std::string_view shard_id) const;
 
@@ -139,6 +157,13 @@ class ClusterMap {
 
   // 1: slot is owned by this cluster, 0: slot is not owned by this cluster
   std::bitset<kNumSlots> owned_slots_;
+
+  // 1: this node is importing the slot from another node
+  std::bitset<kNumSlots> importing_slots_;
+  bool importing_slots_known_ = false;
+
+  // reads the importing slots off the "myself" line of CLUSTER NODES
+  void LoadImportingSlots(ValkeyModuleCtx* ctx);
 
   absl::btree_map<std::string, ShardInfo> shards_;
 

@@ -2290,6 +2290,59 @@ TEST_F(VectorIndexTest, SlotMagnitudeTracksRecord) {
   EXPECT_FALSE(loaded.SetPointLockFree(1, record(1, 1.0f)));  // Deleted.
 }
 
+// The FLAT element's magnitude copy follows its record through add, replace,
+// modify, the delete swap and save/load.
+TEST_F(VectorIndexTest, FlatElementMagnitudeTracksRecord) {
+  hnswlib::InnerProductSpace space{kDimensions};
+  auto *pool = VectorPoolRegistry::Global().Get(
+      data_model::VECTOR_DATA_TYPE_FLOAT32,
+      VectorRecord::kStorageHeaderSize + kDimensions * sizeof(float));
+  auto vectors = DeterministicallyGenerateVectors(8, kDimensions, 10.0);
+  auto record = [&](size_t i, float magnitude) {
+    return VectorRecord::Construct(VectorToStr(vectors[i]), magnitude, pool);
+  };
+  auto expect_elements_match = [](const VectorFlat<float>::FlatIndex &index) {
+    for (size_t i = 0; i < index.cur_element_count_; ++i) {
+      const VectorRecord *stored = index.GetDataPtrByInternalId(i);
+      EXPECT_FLOAT_EQ(index.GetReciprocalMagnitude(stored),
+                      stored->GetReciprocalMagnitude())
+          << i;
+    }
+  };
+  VectorFlat<float>::FlatIndex algo(&space, /*normalized=*/true,
+                                    /*maxElements=*/8);
+  for (size_t i = 0; i < 4; ++i) {
+    algo.addPoint(record(i, 0.5f + i), i);
+  }
+  expect_elements_match(algo);
+  algo.addPoint(record(4, 6.5f), 1);  // Replace through addPoint.
+  EXPECT_TRUE(algo.ReplacePoint(2, record(5, 7.25f)));
+  EXPECT_FALSE(algo.ReplacePoint(42, record(6, 1.0f)));
+  expect_elements_match(algo);
+  algo.removePoint(0);  // Moves label 3 into element 0.
+  EXPECT_EQ(algo.GetLabel(size_t{0}), 3u);
+  EXPECT_FLOAT_EQ(algo.GetReciprocalMagnitude(algo.GetDataPtrByInternalId(0)),
+                  3.5f);
+  expect_elements_match(algo);
+
+  ChunkStream saved;
+  VMSDK_EXPECT_OK(algo.SaveIndex(saved, [](const VectorRecord &r) {
+    return std::vector<char>(r.GetRawVector(),
+                             r.GetRawVector() + kDimensions * sizeof(float));
+  }));
+  VectorFlat<float>::FlatIndex loaded(&space, /*normalized=*/true);
+  VMSDK_EXPECT_OK(loaded.LoadIndex(saved, &space, [&](absl::string_view data) {
+    return VectorRecord::Construct(data, 2.5f, pool);
+  }));
+  EXPECT_EQ(loaded.cur_element_count_, 3u);
+  for (size_t i = 0; i < loaded.cur_element_count_; ++i) {
+    EXPECT_FLOAT_EQ(
+        loaded.GetReciprocalMagnitude(loaded.GetDataPtrByInternalId(i)), 2.5f);
+  }
+  EXPECT_TRUE(loaded.ReplacePointLockFree(1, record(7, 4.0f)));
+  expect_elements_match(loaded);
+}
+
 // A mutation reading a slot while another replaces it must see a matching
 // (vector, magnitude) pair, never one record's vector with the other's
 // magnitude.

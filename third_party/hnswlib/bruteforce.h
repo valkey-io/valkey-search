@@ -51,8 +51,7 @@ class BruteforceSearch
     fstdistfunc_ = s->get_dist_func();
     dist_func_param_ = s->get_dist_func_param();
     if (maxElements > 0) {
-      data_ = std::make_unique<ChunkedArray>(
-          sizeof(VectorRecordT) + sizeof(labeltype), maxElements);
+      data_ = std::make_unique<ChunkedArray>(kElementSize, maxElements);
     }
   }
 
@@ -69,6 +68,29 @@ class BruteforceSearch
     return GetLabel(GetDataPtrByInternalId(internal_id));
   }
 
+  // Each element is [record | label | reciprocal magnitude | pad]. The
+  // magnitude is a copy of the record's, so the scan does not look it up.
+  static constexpr size_t kMagnitudeOffset =
+      sizeof(VectorRecordT) + sizeof(labeltype);
+  static constexpr size_t kElementSize =
+      (kMagnitudeOffset + sizeof(float) + alignof(VectorRecordT) - 1) &
+      ~(alignof(VectorRecordT) - 1);
+
+  float GetReciprocalMagnitude(const VectorRecordT *stored_vector) const {
+    float magnitude;
+    memcpy(&magnitude,
+           reinterpret_cast<const char *>(stored_vector) + kMagnitudeOffset,
+           sizeof(float));
+    return magnitude;
+  }
+
+  void SetReciprocalMagnitude(size_t internal_id) {
+    VectorRecordT *stored_vector = GetDataPtrByInternalId(internal_id);
+    float magnitude = stored_vector->GetReciprocalMagnitude();
+    memcpy(reinterpret_cast<char *>(stored_vector) + kMagnitudeOffset,
+           &magnitude, sizeof(float));
+  }
+
   // Computes the distance between a query and a stored vector.
   // When normalized_ is true (e.g. Cosine metric), both vectors
   // are unnormalized and their reciprocal magnitudes are applied in float.
@@ -79,11 +101,11 @@ class BruteforceSearch
   template <bool kNormalized>
   inline dist_t EvaluateDistance(const VectorRecordT &query,
                                  float query_reciprocal_magnitude,
-                                 const VectorRecordT &stored) const {
+                                 const VectorRecordT *stored) const {
     return fstdistfunc_(
-        query.GetRawVector(), stored.GetRawVector(), dist_func_param_,
+        query.GetRawVector(), stored->GetRawVector(), dist_func_param_,
         kNormalized
-            ? query_reciprocal_magnitude * stored.GetReciprocalMagnitude()
+            ? query_reciprocal_magnitude * GetReciprocalMagnitude(stored)
             : 1.0f);
   }
 
@@ -122,6 +144,24 @@ class BruteforceSearch
     memcpy(reinterpret_cast<char *>(GetDataPtrByInternalId(idx)) +
                sizeof(VectorRecordT),
            &label, sizeof(labeltype));
+    SetReciprocalMagnitude(idx);
+  }
+
+  // Replaces the record of `label`, keeping the element's magnitude copy in
+  // sync. False if the label is unknown.
+  bool ReplacePointLockFree(labeltype label, VectorRecordT &&record) {
+    auto found = dict_external_to_internal.find(label);
+    if (found == dict_external_to_internal.end()) {
+      return false;
+    }
+    *GetDataPtrByInternalId(found->second) = std::move(record);
+    SetReciprocalMagnitude(found->second);
+    return true;
+  }
+
+  bool ReplacePoint(labeltype label, VectorRecordT &&record) {
+    std::unique_lock<std::mutex> lock(index_lock);
+    return ReplacePointLockFree(label, std::move(record));
   }
 
   VectorRecordT *GetPointLockFree(labeltype cur_external) const {
@@ -165,7 +205,7 @@ class BruteforceSearch
            reinterpret_cast<const char *>(
                GetDataPtrByInternalId(cur_element_count_ - 1)) +
                sizeof(VectorRecordT),
-           sizeof(labeltype));
+           kElementSize - sizeof(VectorRecordT));
     std::destroy_at(GetDataPtrByInternalId(cur_element_count_ - 1));
     cur_element_count_--;
   }
@@ -196,7 +236,7 @@ class BruteforceSearch
          i++) {
       const VectorRecordT *stored_vector = GetDataPtrByInternalId(i);
       dist_t dist =
-          EvaluateDistance<kNormalized>(query_data, query_rm, *stored_vector);
+          EvaluateDistance<kNormalized>(query_data, query_rm, stored_vector);
       labeltype label = GetLabel(stored_vector);
       if ((!isIdAllowed) || (*isIdAllowed)(label)) {
         topResults.emplace(dist, label);
@@ -212,7 +252,7 @@ class BruteforceSearch
          i++) {
       const VectorRecordT *stored_vector = GetDataPtrByInternalId(i);
       dist_t dist =
-          EvaluateDistance<kNormalized>(query_data, query_rm, *stored_vector);
+          EvaluateDistance<kNormalized>(query_data, query_rm, stored_vector);
       if (topResults.size() < k || dist <= lastdist) {
         labeltype label = GetLabel(stored_vector);
         if ((!isIdAllowed) || (*isIdAllowed)(label)) {
@@ -282,8 +322,8 @@ class BruteforceSearch
           "Persisted size_per_element does not match expectation.");
     }
 
-    data_ = std::make_unique<ChunkedArray>(
-        sizeof(VectorRecordT) + sizeof(labeltype), header->max_elements());
+    data_ =
+        std::make_unique<ChunkedArray>(kElementSize, header->max_elements());
 
     for (size_t i = 0; i < saved_element_count; i++) {
       VMSDK_ASSIGN_OR_RETURN(auto chunk, input.LoadChunk());
@@ -295,6 +335,7 @@ class BruteforceSearch
       memcpy(reinterpret_cast<char *>(GetDataPtrByInternalId(i)) +
                  sizeof(VectorRecordT),
              (char *)&id, sizeof(labeltype));
+      SetReciprocalMagnitude(i);
       dict_external_to_internal[id] = i;
       cur_element_count_++;
     }

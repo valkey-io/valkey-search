@@ -7,8 +7,6 @@
 
 #include "src/utils/vector_pool.h"
 
-#include <unistd.h>
-
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -27,7 +25,6 @@ namespace {
 
 constexpr size_t kHugePage = vmsdk::numa_slab::kHugePageBytes;
 
-std::atomic<VectorPoolRegistry *> global_registry{nullptr};
 std::atomic<int64_t> global_active_allocations{0};
 std::atomic<int64_t> global_materialized_bytes{0};
 
@@ -38,18 +35,65 @@ size_t RoundUpToCacheLine(size_t n) {
 
 }  // namespace
 
+VectorPool::PageHeader *VectorPool::HeaderOf(const char *data) {
+  return reinterpret_cast<PageHeader *>(reinterpret_cast<uintptr_t>(data) &
+                                        ~(kHugePage - 1));
+}
+
+namespace {
+
+// Bytes before the first entry of a page holding `entries` entries.
+size_t FirstEntryOffset(size_t header_bytes, size_t entries) {
+  return RoundUpToCacheLine(header_bytes +
+                            entries * sizeof(VectorPool::EntryMeta));
+}
+
+// The most entries of `stride` bytes that fit in a page with their metadata.
+uint32_t MaxEntriesPerPage(size_t header_bytes, size_t stride) {
+  size_t n =
+      (kHugePage - header_bytes) / (stride + sizeof(VectorPool::EntryMeta));
+  while (FirstEntryOffset(header_bytes, n) + n * stride > kHugePage) {
+    --n;
+  }
+  return static_cast<uint32_t>(n);
+}
+
+}  // namespace
+
 VectorPool::VectorPool(VectorPoolRegistry *registry, uint32_t type_tag,
                        size_t entry_size)
     : registry_(registry),
       type_tag_(type_tag),
       entry_size_(entry_size),
-      // Entry k occupies [line - prefix + k * size, ... + size) in its page.
-      entries_per_page_((kHugePage - (kCacheLineBytes - kPrefixBytes)) /
-                        entry_size) {}
+      entries_per_page_(MaxEntriesPerPage(sizeof(PageHeader), entry_size)),
+      first_entry_offset_(
+          FirstEntryOffset(sizeof(PageHeader), entries_per_page_)) {
+  CHECK_GT(entries_per_page_, 0u);
+}
+
+VectorPool::~VectorPool() {
+  absl::MutexLock lock(&mutex_);
+  size_t pages_per_slab = registry_->slab_bytes_ / kHugePage;
+  for (auto &[_, slab] : slabs_) {
+    for (size_t p = 0; p < pages_per_slab; ++p) {
+      if (slab->pages[p].materialized) {
+        vmsdk::numa_slab::Release(slab->pages[p].base, kHugePage);
+        global_materialized_bytes.fetch_sub(kHugePage,
+                                            std::memory_order_relaxed);
+      }
+    }
+    vmsdk::numa_slab::UnreserveRegion(slab->base, registry_->slab_bytes_);
+  }
+}
 
 size_t VectorPool::ActiveAllocations() const {
   absl::MutexLock lock(&mutex_);
   return active_allocations_;
+}
+
+size_t VectorPool::SlabCount() const {
+  absl::MutexLock lock(&mutex_);
+  return slabs_.size();
 }
 
 int VectorPool::FreeGroup(const Page &page) const {
@@ -74,12 +118,30 @@ void VectorPool::Regroup(Page *page, int old_group) {
   }
 }
 
-void VectorPool::AddSlab(Page *pages, char *base) {
-  size_t pages_per_slab = registry_->slab_bytes_ / kHugePage;
-  for (size_t i = 0; i < pages_per_slab; ++i) {
-    pages[i].base = base + i * kHugePage;
-    unmaterialized_.PushBack(&pages[i]);
+bool VectorPool::AddSlab() {
+  char *base;
+  try {
+    base = vmsdk::numa_slab::ReserveRegion(registry_->slab_bytes_);
+  } catch (const std::bad_alloc &) {
+    static std::atomic<bool> logged{false};
+    if (!logged.exchange(true)) {
+      VMSDK_LOG(WARNING, nullptr)
+          << "Could not map vector pool memory; falling back to the default "
+             "allocator";
+    }
+    return false;
   }
+  size_t pages_per_slab = registry_->slab_bytes_ / kHugePage;
+  auto slab = std::make_unique<Slab>();
+  slab->base = base;
+  slab->pages = std::make_unique<Page[]>(pages_per_slab);
+  for (size_t i = 0; i < pages_per_slab; ++i) {
+    slab->pages[i].base = base + i * kHugePage;
+    slab->pages[i].slab = slab.get();
+    unmaterialized_.PushBack(&slab->pages[i]);
+  }
+  slabs_[slab.get()] = std::move(slab);
+  return true;
 }
 
 char *VectorPool::Allocate() {
@@ -95,13 +157,8 @@ char *VectorPool::Allocate() {
   if (page) {
     old_group = FreeGroup(*page);
   } else {
-    if (unmaterialized_.Empty()) {
-      auto slab = registry_->ClaimSlab(this);
-      if (slab < 0) {
-        return nullptr;
-      }
-      AddSlab(registry_->slabs_[slab].pages.get(),
-              registry_->base_ + slab * registry_->slab_bytes_);
+    if (unmaterialized_.Empty() && !AddSlab()) {
+      return nullptr;
     }
     page = unmaterialized_.Front();
     try {
@@ -119,13 +176,19 @@ char *VectorPool::Allocate() {
     }
     unmaterialized_.Remove(page);
     page->materialized = true;
+    ++page->slab->materialized_pages;
+    new (page->base) PageHeader{.pool = this,
+                                .page = page,
+                                .stride = static_cast<uint32_t>(entry_size_),
+                                .first_entry_offset = first_entry_offset_};
     global_materialized_bytes.fetch_add(kHugePage, std::memory_order_relaxed);
   }
 
   uint32_t entry;
+  EntryMeta *meta = MetaTable(reinterpret_cast<PageHeader *>(page->base));
   if (page->free_head != kNoEntry) {
     entry = page->free_head;
-    std::memcpy(&page->free_head, EntryAt(*page, entry), sizeof(uint32_t));
+    page->free_head = meta[entry].ref_count.load(std::memory_order_relaxed);
   } else {
     entry = page->initialized++;
   }
@@ -136,14 +199,16 @@ char *VectorPool::Allocate() {
   return EntryAt(*page, entry);
 }
 
-void VectorPool::Free(char *ptr) {
-  Page *page = registry_->PageOf(ptr);
+void VectorPool::Free(char *data) {
+  PageHeader *header = HeaderOf(data);
+  Page *page = header->page;
   absl::MutexLock lock(&mutex_);
-  size_t offset = ptr - EntryAt(*page, 0);
+  size_t offset = data - EntryAt(*page, 0);
   DCHECK_EQ(offset % entry_size_, 0u);
   auto entry = static_cast<uint32_t>(offset / entry_size_);
   int old_group = FreeGroup(*page);
-  std::memcpy(ptr, &page->free_head, sizeof(uint32_t));
+  MetaTable(header)[entry].ref_count.store(page->free_head,
+                                           std::memory_order_relaxed);
   page->free_head = entry;
   --page->used;
   --active_allocations_;
@@ -155,87 +220,46 @@ void VectorPool::Free(char *ptr) {
   if (old_group >= 0) {
     groups_[old_group].Remove(page);
   }
+  ReleasePage(page);
+}
+
+void VectorPool::ReleasePage(Page *page) {
   vmsdk::numa_slab::Release(page->base, kHugePage);
   page->materialized = false;
   page->initialized = 0;
   page->free_head = kNoEntry;
   unmaterialized_.PushBack(page);
   global_materialized_bytes.fetch_sub(kHugePage, std::memory_order_relaxed);
-}
-
-VectorPoolRegistry::VectorPoolRegistry(size_t region_bytes, size_t slab_bytes)
-    : slab_bytes_(vmsdk::numa_slab::RoundUpToHugePage(slab_bytes)),
-      region_bytes_((region_bytes + slab_bytes_ - 1) / slab_bytes_ *
-                    slab_bytes_),
-      base_(nullptr) {
-  if (region_bytes_ > 0) {
-    try {
-      base_ = vmsdk::numa_slab::ReserveRegion(region_bytes_);
-    } catch (const std::bad_alloc &) {
-      VMSDK_LOG(WARNING, nullptr)
-          << "Could not reserve " << region_bytes_
-          << " bytes of address space for vector pools; vectors will use the "
-             "default allocator";
-    }
-  }
-  slabs_ = std::make_unique<Slab[]>(base_ ? region_bytes_ / slab_bytes_ : 0);
-}
-
-VectorPoolRegistry::~VectorPoolRegistry() {
-  if (!base_) {
+  Slab *slab = page->slab;
+  if (--slab->materialized_pages > 0) {
     return;
   }
-  absl::MutexLock lock(&mutex_);
-  size_t pages_per_slab = slab_bytes_ / kHugePage;
-  for (size_t s = 0; s < next_slab_; ++s) {
-    for (size_t p = 0; p < pages_per_slab; ++p) {
-      auto &page = slabs_[s].pages[p];
-      if (page.materialized) {
-        vmsdk::numa_slab::Release(page.base, kHugePage);
-        global_materialized_bytes.fetch_sub(kHugePage,
-                                            std::memory_order_relaxed);
-      }
-    }
+  size_t pages_per_slab = registry_->slab_bytes_ / kHugePage;
+  for (size_t i = 0; i < pages_per_slab; ++i) {
+    unmaterialized_.Remove(&slab->pages[i]);
   }
-  vmsdk::numa_slab::UnreserveRegion(base_, region_bytes_);
+  vmsdk::numa_slab::UnreserveRegion(slab->base, registry_->slab_bytes_);
+  slabs_.erase(slab);
 }
 
+VectorPoolRegistry::VectorPoolRegistry(size_t slab_bytes)
+    : slab_bytes_(vmsdk::numa_slab::RoundUpToHugePage(slab_bytes)) {}
+
 VectorPoolRegistry &VectorPoolRegistry::Global() {
-  static VectorPoolRegistry *registry = [] {
-    size_t phys_bytes = static_cast<size_t>(sysconf(_SC_PHYS_PAGES)) *
-                        static_cast<size_t>(sysconf(_SC_PAGESIZE));
-    auto *r = new VectorPoolRegistry(
-        phys_bytes, vmsdk::GetChunkedArraySlabSize().GetValue());
-    global_registry.store(r, std::memory_order_release);
-    return r;
-  }();
+  static VectorPoolRegistry *registry =
+      new VectorPoolRegistry(vmsdk::GetChunkedArraySlabSize().GetValue());
   return *registry;
 }
 
-VectorPool *VectorPoolRegistry::Get(uint32_t type_tag, size_t entry_size) {
-  CHECK_GE(entry_size, VectorPool::kPrefixBytes);
-  entry_size = RoundUpToCacheLine(entry_size);
-  CHECK_LE(entry_size, kHugePage - VectorPool::kCacheLineBytes);
+VectorPool *VectorPoolRegistry::Get(uint32_t type_tag, size_t data_bytes) {
+  CHECK_GT(data_bytes, 0u);
+  size_t entry_size = RoundUpToCacheLine(data_bytes);
   absl::MutexLock lock(&mutex_);
   auto &pool = pools_[{type_tag, entry_size}];
   if (!pool) {
     pool.reset(new VectorPool(this, type_tag, entry_size));
   }
   return pool.get();
-}
-
-VectorPool *VectorPoolRegistry::PoolOf(const void *ptr) const {
-  auto p = static_cast<const char *>(ptr);
-  if (!base_ || p < base_ || p >= base_ + region_bytes_) {
-    return nullptr;
-  }
-  return slabs_[(p - base_) / slab_bytes_].owner.load(
-      std::memory_order_acquire);
-}
-
-VectorPool *VectorPoolRegistry::GlobalPoolOf(const void *ptr) {
-  auto *registry = global_registry.load(std::memory_order_acquire);
-  return registry ? registry->PoolOf(ptr) : nullptr;
 }
 
 uint64_t VectorPoolRegistry::GlobalActiveAllocations() {
@@ -246,30 +270,6 @@ uint64_t VectorPoolRegistry::GlobalActiveAllocations() {
 uint64_t VectorPoolRegistry::GlobalMaterializedBytes() {
   return std::max<int64_t>(
       0, global_materialized_bytes.load(std::memory_order_relaxed));
-}
-
-int64_t VectorPoolRegistry::ClaimSlab(VectorPool *pool) {
-  absl::MutexLock lock(&mutex_);
-  if (next_slab_ * slab_bytes_ >= (base_ ? region_bytes_ : 0)) {
-    static std::atomic<bool> logged{false};
-    if (!logged.exchange(true)) {
-      VMSDK_LOG(WARNING, nullptr)
-          << "Vector pool address space exhausted; further vectors will use "
-             "the default allocator";
-    }
-    return -1;
-  }
-  auto slab = static_cast<int64_t>(next_slab_++);
-  slabs_[slab].pages =
-      std::make_unique<VectorPool::Page[]>(slab_bytes_ / kHugePage);
-  slabs_[slab].owner.store(pool, std::memory_order_release);
-  return slab;
-}
-
-VectorPool::Page *VectorPoolRegistry::PageOf(const char *ptr) const {
-  size_t offset = ptr - base_;
-  return &slabs_[offset / slab_bytes_]
-              .pages[(offset % slab_bytes_) / kHugePage];
 }
 
 }  // namespace valkey_search

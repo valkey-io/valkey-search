@@ -93,12 +93,8 @@ TEST_F(VectorRegistryTest, DedupDoesNotShareAcrossElementTypes) {
       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &f16);
   EXPECT_NE(rec_f32, rec_f16);
   EXPECT_EQ(rec_f16, vec_str);
-  EXPECT_EQ(
-      VectorPoolRegistry::GlobalPoolOf(rec_f32.vector_record.GetRawVector()),
-      f32.GetVectorPool());
-  EXPECT_EQ(
-      VectorPoolRegistry::GlobalPoolOf(rec_f16.vector_record.GetRawVector()),
-      f16.GetVectorPool());
+  EXPECT_EQ(rec_f32.vector_record.GetPool(), f32.GetVectorPool());
+  EXPECT_EQ(rec_f16.vector_record.GetPool(), f16.GetVectorPool());
   EXPECT_EQ(registry.GetStats().dedup_cnt, 0);
   EXPECT_EQ(registry.GetStats().entry_cnt, 1);
 

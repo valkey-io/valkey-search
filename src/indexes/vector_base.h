@@ -36,7 +36,6 @@
 #include "src/indexes/index_base.h"
 #include "src/query/predicate.h"
 #include "src/rdb_serialization.h"
-#include "src/utils/allocator.h"
 #include "src/utils/cancel.h"
 #include "src/utils/string_interning.h"
 #include "src/utils/vector_pool.h"
@@ -59,6 +58,11 @@ inline constexpr size_t UpperBoundToMultipleOf64(size_t num) {
   return (num + 63) & ~size_t(63);
 }
 
+// A refcounted pointer to a vector's data. Pooled data (see VectorPool) keeps
+// its reference count and reciprocal magnitude in its page's metadata table.
+// Data from the default allocator (no pool, or the pool could not allocate)
+// keeps them in a Header just before the data. Pooled data is cache-line
+// aligned and the other data is 8 mod 16, so the address says which.
 class VectorRecord {
  public:
   struct Header {
@@ -69,8 +73,7 @@ class VectorRecord {
   static constexpr size_t kStorageHeaderSize = sizeof(Header);
   static_assert(kStorageHeaderSize == 8,
                 "VectorRecord::Header must be exactly 8 bytes");
-  static_assert(kStorageHeaderSize == VectorPool::kPrefixBytes,
-                "VectorPool places the header just before a cache line");
+  static constexpr size_t kUnpooledAlignment = 16;
 
   VectorRecord() noexcept : data_(nullptr) {}
   VectorRecord(std::nullptr_t) noexcept : data_(nullptr) {}
@@ -79,7 +82,7 @@ class VectorRecord {
       : data_(other.data_.load(std::memory_order_relaxed)) {
     const char *ptr = data_.load(std::memory_order_relaxed);
     if (ptr) {
-      GetHeader(ptr)->ref_count_.fetch_add(1, std::memory_order_relaxed);
+      RefCountOf(ptr).fetch_add(1, std::memory_order_relaxed);
     }
   }
 
@@ -90,7 +93,7 @@ class VectorRecord {
     if (this != &other) {
       const char *new_ptr = other.data_.load(std::memory_order_relaxed);
       if (new_ptr) {
-        GetHeader(new_ptr)->ref_count_.fetch_add(1, std::memory_order_relaxed);
+        RefCountOf(new_ptr).fetch_add(1, std::memory_order_relaxed);
       }
       const char *old_ptr = data_.exchange(new_ptr, std::memory_order_acq_rel);
       if (old_ptr) {
@@ -150,12 +153,23 @@ class VectorRecord {
 
   float GetReciprocalMagnitude() const noexcept {
     const char *ptr = data_.load(std::memory_order_relaxed);
-    return ptr ? GetHeader(ptr)->reciprocal_magnitude_ : 1.0f;
+    if (!ptr) {
+      return 1.0f;
+    }
+    return IsPooled(ptr) ? VectorPool::MetaOf(ptr).reciprocal_magnitude
+                         : GetHeader(ptr)->reciprocal_magnitude_;
+  }
+
+  // The pool the data came from; nullptr for an empty record or data from the
+  // default allocator.
+  VectorPool *GetPool() const noexcept {
+    const char *ptr = data_.load(std::memory_order_relaxed);
+    return ptr && IsPooled(ptr) ? VectorPool::PoolOf(ptr) : nullptr;
   }
 
   uint32_t RefCount() const noexcept {
     const char *ptr = data_.load(std::memory_order_relaxed);
-    return ptr ? GetHeader(ptr)->ref_count_.load(std::memory_order_relaxed) : 0;
+    return ptr ? RefCountOf(ptr).load(std::memory_order_relaxed) : 0;
   }
 
   bool empty() const noexcept {
@@ -188,13 +202,23 @@ class VectorRecord {
     return const_cast<Header *>(reinterpret_cast<const Header *>(data_ptr) - 1);
   }
 
+  static bool IsPooled(const char *data_ptr) noexcept {
+    return (reinterpret_cast<uintptr_t>(data_ptr) & (kUnpooledAlignment - 1)) ==
+           0;
+  }
+
+  static std::atomic<uint32_t> &RefCountOf(const char *data_ptr) noexcept {
+    return IsPooled(data_ptr) ? VectorPool::MetaOf(data_ptr).ref_count
+                              : GetHeader(data_ptr)->ref_count_;
+  }
+
   static void Release(const char *data_ptr) noexcept {
-    Header *h = GetHeader(data_ptr);
-    if (h->ref_count_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-      if (auto *pool = VectorPoolRegistry::GlobalPoolOf(h)) {
-        pool->Free(reinterpret_cast<char *>(h));
+    if (RefCountOf(data_ptr).fetch_sub(1, std::memory_order_acq_rel) == 1) {
+      if (IsPooled(data_ptr)) {
+        VectorPool::PoolOf(data_ptr)->Free(const_cast<char *>(data_ptr));
       } else {
-        Allocator::Free(reinterpret_cast<char *>(h));
+        ::operator delete(GetHeader(data_ptr),
+                          std::align_val_t{kUnpooledAlignment});
       }
     }
   }
@@ -568,8 +592,7 @@ class VectorBase : public IndexBase {
 #ifndef SAN_BUILD
         ,
         vector_pool_(VectorPoolRegistry::Global().Get(
-            vector_data_type,
-            VectorRecord::kStorageHeaderSize + dimensions * element_size))
+            vector_data_type, dimensions * element_size))
 #endif  // !SAN_BUILD
   {
   }

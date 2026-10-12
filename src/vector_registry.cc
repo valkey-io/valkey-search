@@ -98,8 +98,7 @@ indexes::VectorRecordWithSize VectorRegistry::DedupOrConstruct(
     // Pools are per type, so a record from another index's pool was built
     // (and its magnitude computed) for a different type. Give this index its
     // own untracked record; the tracked one stays shared with the hash.
-    auto *record_pool = VectorPoolRegistry::GlobalPoolOf(
-        it->second.vector_record.GetRawVector());
+    auto *record_pool = it->second.vector_record.GetPool();
     if (record_pool && record_pool != vector_base->GetVectorPool()) {
       return ConstructVectorRecord(vector_str, vector_base);
     }

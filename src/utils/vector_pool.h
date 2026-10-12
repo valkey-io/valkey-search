@@ -24,51 +24,91 @@ namespace valkey_search {
 class VectorPoolRegistry;
 
 /*
-VectorPool hands out fixed-size entries for one (vector type, entry size)
-pair. Its memory comes from slabs of its registry's reserved region, which are
-NUMA-interleaved and materialized one 2 MiB huge page at a time. Entries never
-straddle a huge page. A huge page is released back to the OS once its last
-entry is freed.
+VectorPool hands out fixed-size vector entries for one (vector type, data size)
+pair. Its memory comes from slabs mapped on demand, which are NUMA-interleaved,
+materialized one 2 MiB huge page at a time, and unmapped once all their pages
+are released. A huge page is released back to the OS once its last entry is
+freed.
 
-Each entry starts with a kPrefixBytes prefix (the VectorRecord header) and is
-placed so the bytes after the prefix start on a cache line: entries are spaced
-by the entry size rounded up to a cache line, and the first cache line of each
-page holds only the first entry's prefix.
+Each page holds its own metadata, so an entry's metadata is found from the
+entry's address alone, without a lock:
+
+  [PageHeader][EntryMeta x n][pad to 64 B][entry 0][entry 1]...[entry n-1]
+
+Entries are spaced by the data size rounded up to a cache line and start on a
+cache line, with no per-entry prefix. EntryMeta holds the reference count and
+reciprocal magnitude that VectorRecord would otherwise keep in a header.
 
 Allocation prefers the materialized page with the fewest free entries, so
 lightly used pages drain and can be released.
 */
 class VectorPool {
  public:
-  static constexpr size_t kPrefixBytes = 8;
   static constexpr size_t kCacheLineBytes = 64;
+
+  struct EntryMeta {
+    // While the entry is free, holds the index of the next free entry.
+    std::atomic<uint32_t> ref_count;
+    float reciprocal_magnitude;
+  };
 
   VectorPool(const VectorPool &) = delete;
   VectorPool &operator=(const VectorPool &) = delete;
+  ~VectorPool();
 
-  // Returns nullptr when the registry's region is exhausted.
+  // Returns the entry's data, aligned to a cache line, or nullptr when no
+  // memory can be mapped or materialized. The entry's EntryMeta is
+  // uninitialized.
   char *Allocate() ABSL_LOCKS_EXCLUDED(mutex_);
-  void Free(char *ptr) ABSL_LOCKS_EXCLUDED(mutex_);
+  void Free(char *data) ABSL_LOCKS_EXCLUDED(mutex_);
+
+  // For a `data` pointer returned by Allocate, while it is allocated.
+  static EntryMeta &MetaOf(const char *data) {
+    auto *header = HeaderOf(data);
+    size_t entry = (data - reinterpret_cast<const char *>(header) -
+                    header->first_entry_offset) /
+                   header->stride;
+    return MetaTable(header)[entry];
+  }
+  static VectorPool *PoolOf(const char *data) { return HeaderOf(data)->pool; }
 
   uint32_t TypeTag() const { return type_tag_; }
   // Distance between consecutive entries: a multiple of kCacheLineBytes.
   size_t EntrySize() const { return entry_size_; }
+  uint32_t EntriesPerPage() const { return entries_per_page_; }
   size_t ActiveAllocations() const ABSL_LOCKS_EXCLUDED(mutex_);
+  size_t SlabCount() const ABSL_LOCKS_EXCLUDED(mutex_);
 
  private:
   friend class VectorPoolRegistry;
+  struct Slab;
 
   struct Page {
     uint32_t used{0};
     // Entries [0, initialized) have been handed out at least once; freed ones
-    // are on the intrusive free list starting at free_head.
+    // are on the free list starting at free_head, linked through EntryMeta.
     uint32_t initialized{0};
     uint32_t free_head{kNoEntry};
     bool materialized{false};
     char *base{nullptr};
+    Slab *slab{nullptr};
     // Intrusive list links.
     Page *next{nullptr};
     Page *prev{nullptr};
+  };
+
+  struct Slab {
+    char *base;
+    std::unique_ptr<Page[]> pages;
+    size_t materialized_pages{0};
+  };
+
+  // At the start of every materialized page.
+  struct PageHeader {
+    VectorPool *pool;
+    Page *page;
+    uint32_t stride;
+    uint32_t first_entry_offset;
   };
   static constexpr uint32_t kNoEntry = UINT32_MAX;
   static constexpr size_t kFreeGroups = 7;
@@ -76,10 +116,15 @@ class VectorPool {
   VectorPool(VectorPoolRegistry *registry, uint32_t type_tag,
              size_t entry_size);
 
-  char *EntryAt(const Page &page, uint32_t entry) const {
-    return page.base + kCacheLineBytes - kPrefixBytes + entry * entry_size_;
+  static PageHeader *HeaderOf(const char *data);
+  static EntryMeta *MetaTable(PageHeader *header) {
+    return reinterpret_cast<EntryMeta *>(header + 1);
   }
-  void AddSlab(Page *pages, char *base) ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+  char *EntryAt(const Page &page, uint32_t entry) const {
+    return page.base + first_entry_offset_ + entry * entry_size_;
+  }
+  bool AddSlab() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+  void ReleasePage(Page *page) ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
   // Group of a materialized page by free entries; -1 for a full page.
   int FreeGroup(const Page &page) const;
   void Regroup(Page *page, int old_group) ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
@@ -88,44 +133,37 @@ class VectorPool {
   const uint32_t type_tag_;
   const size_t entry_size_;
   const uint32_t entries_per_page_;
+  const uint32_t first_entry_offset_;
   mutable absl::Mutex mutex_;
   // Materialized, non-full pages grouped by ceil(log2(free entries)).
   IntrusiveList<Page> groups_[kFreeGroups] ABSL_GUARDED_BY(mutex_);
-  // Pages of owned slabs with no memory behind them.
+  // Pages of mapped slabs with no memory behind them.
   IntrusiveList<Page> unmaterialized_ ABSL_GUARDED_BY(mutex_);
+  absl::flat_hash_map<Slab *, std::unique_ptr<Slab>> slabs_
+      ABSL_GUARDED_BY(mutex_);
   size_t active_allocations_ ABSL_GUARDED_BY(mutex_){0};
 };
 
 /*
-VectorPoolRegistry owns one reserved address region, carved into slabs that
-pools claim on demand, and the pools themselves (one per type tag and entry
-size, never destroyed). The owner of any address in the region is found
-without locking, so freeing needs no global lookup structure.
+VectorPoolRegistry owns the pools, one per type tag and entry size, which are
+never destroyed while the registry lives.
 */
 class VectorPoolRegistry {
  public:
-  // `region_bytes` and `slab_bytes` are rounded up to whole huge pages.
-  VectorPoolRegistry(size_t region_bytes, size_t slab_bytes);
-  ~VectorPoolRegistry();
+  // `slab_bytes` is rounded up to whole huge pages.
+  explicit VectorPoolRegistry(size_t slab_bytes);
 
   VectorPoolRegistry(const VectorPoolRegistry &) = delete;
   VectorPoolRegistry &operator=(const VectorPoolRegistry &) = delete;
 
-  // The process-wide registry, reserved on first use with a region the size of
-  // physical memory and slabs of "chunked-array-slab-size".
+  // The process-wide registry, with slabs of "chunked-array-slab-size".
   static VectorPoolRegistry &Global();
 
-  // The pool for `type_tag` entries of `entry_size` bytes, including the
-  // kPrefixBytes prefix. Sizes that round up to the same multiple of a cache
-  // line share a pool. Created on first request.
-  VectorPool *Get(uint32_t type_tag, size_t entry_size)
+  // The pool for `type_tag` entries of `data_bytes` bytes. Sizes that round up
+  // to the same multiple of a cache line share a pool. Created on first
+  // request.
+  VectorPool *Get(uint32_t type_tag, size_t data_bytes)
       ABSL_LOCKS_EXCLUDED(mutex_);
-
-  // The pool that owns `ptr`, or nullptr if `ptr` is not in this region.
-  VectorPool *PoolOf(const void *ptr) const;
-
-  // PoolOf on the global registry; nullptr if it was never created.
-  static VectorPool *GlobalPoolOf(const void *ptr);
 
   static uint64_t GlobalActiveAllocations();
   static uint64_t GlobalMaterializedBytes();
@@ -133,21 +171,8 @@ class VectorPoolRegistry {
  private:
   friend class VectorPool;
 
-  struct Slab {
-    std::atomic<VectorPool *> owner{nullptr};
-    std::unique_ptr<VectorPool::Page[]> pages;
-  };
-
-  // Gives `pool` an unclaimed slab and returns its index; -1 if none is left.
-  int64_t ClaimSlab(VectorPool *pool) ABSL_LOCKS_EXCLUDED(mutex_);
-  VectorPool::Page *PageOf(const char *ptr) const;
-
   const size_t slab_bytes_;
-  const size_t region_bytes_;
-  char *base_;
-  std::unique_ptr<Slab[]> slabs_;
   absl::Mutex mutex_;
-  size_t next_slab_ ABSL_GUARDED_BY(mutex_){0};
   absl::flat_hash_map<std::pair<uint32_t, size_t>, std::unique_ptr<VectorPool>>
       pools_ ABSL_GUARDED_BY(mutex_);
 };

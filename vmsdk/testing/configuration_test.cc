@@ -403,6 +403,20 @@ TEST_F(ConfigTest, DevConfigFromArgvRequiresDebugMode) {
                   .ParseAndLoadArgv(&fake_ctx, args.data(), args.size())
                   .ok());
   FreeValkeyArgs(args);
+
+  // debug-mode is applied first, so it may come after the dev config.
+  args = vmsdk::ToValkeyStringVector("--my-argv-dev-bool no --debug-mode yes");
+  EXPECT_TRUE(ModuleConfigManager::Instance()
+                  .ParseAndLoadArgv(&fake_ctx, args.data(), args.size())
+                  .ok());
+  EXPECT_FALSE(dev_config->GetValue());
+  FreeValkeyArgs(args);
+
+  args = vmsdk::ToValkeyStringVector("--debug-mode no");
+  EXPECT_TRUE(ModuleConfigManager::Instance()
+                  .ParseAndLoadArgv(&fake_ctx, args.data(), args.size())
+                  .ok());
+  FreeValkeyArgs(args);
 }
 
 // Dev() configs from the config file (applied between Init and

@@ -44,9 +44,16 @@ FT.AGGREGATE <index-name> <query>
 
 # Result
 
-The output is an array. The first element of this array is a scalar number with no particular meaning and should be ignored. The remainder of the array is one element for each record output by the final processing stage.
+With RESP2, the output is an array. The first element of this array is a scalar number with no particular meaning and should be ignored. The remainder of the array is one element for each record output by the final processing stage.
 
 Each record is represented by an array which contains the field/value pairs of each record.
+
+With RESP3 (`HELLO 3`), the output is a Redis Search compatible map containing
+`attributes: []`, `warning: []`, `format: "STRING"`, `total_results`, and
+`results`. `total_results` is the number of output records. Each entry in
+`results` is a map containing `extra_attributes` (the record's field/value
+pairs) and `values: []`. Field values retain their string representation.
+An empty result has `total_results: 0` and `results: []`.
 
 # Processing Stages
 

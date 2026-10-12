@@ -8,6 +8,7 @@
 #ifndef VALKEYSEARCH_SRC_QUERY_RESPONSE_GENERATOR_H_
 #define VALKEYSEARCH_SRC_QUERY_RESPONSE_GENERATOR_H_
 
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -30,6 +31,11 @@ vmsdk::config::Number &GetMaxSearchResultFieldsCount();
 
 }  // namespace valkey_search::options
 namespace valkey_search::query {
+
+// Starts the Redis Search RESP3 envelope and its results array. The caller
+// must append exactly result_count result maps.
+void ReplyWithSearchEnvelope(ValkeyModuleCtx *ctx, size_t total_results,
+                             size_t result_count);
 
 // Check if this node owns the slot for the given key in cluster mode
 bool CheckSlotOwnership(ValkeyModuleCtx *ctx, absl::string_view key);

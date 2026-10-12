@@ -330,12 +330,26 @@ absl::Status ExecuteAggregationStages(AggregateParameters &parameters,
 absl::Status GenerateResponse(ValkeyModuleCtx *ctx,
                               AggregateParameters &parameters,
                               RecordSet &records) {
-  ValkeyModule_ReplyWithArray(ctx, 1 + records.size());
-  ValkeyModule_ReplyWithLongLong(ctx, static_cast<long long>(records.size()));
+  const bool resp3 =
+      ValkeyModule_GetContextFlags(ctx) & VALKEYMODULE_CTX_FLAGS_RESP3;
+  if (resp3) {
+    query::ReplyWithSearchEnvelope(ctx, records.size(), records.size());
+  } else {
+    ValkeyModule_ReplyWithArray(ctx, 1 + records.size());
+    ValkeyModule_ReplyWithLongLong(ctx, static_cast<long long>(records.size()));
+  }
 
   while (!records.empty()) {
     auto rec = records.pop_front();
-    ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_ARRAY_LEN);
+    if (resp3) {
+      ValkeyModule_ReplyWithMap(ctx, 2);
+      ValkeyModule_ReplyWithSimpleString(ctx, "values");
+      ValkeyModule_ReplyWithArray(ctx, 0);
+      ValkeyModule_ReplyWithSimpleString(ctx, "extra_attributes");
+      ValkeyModule_ReplyWithMap(ctx, VALKEYMODULE_POSTPONED_LEN);
+    } else {
+      ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_ARRAY_LEN);
+    }
 
     size_t array_count = 0;
 
@@ -360,7 +374,11 @@ absl::Status GenerateResponse(ValkeyModuleCtx *ctx,
       }
     }
 
-    ValkeyModule_ReplySetArrayLength(ctx, array_count);
+    if (resp3) {
+      ValkeyModule_ReplySetMapLength(ctx, array_count / 2);
+    } else {
+      ValkeyModule_ReplySetArrayLength(ctx, array_count);
+    }
   }
 
   return absl::OkStatus();

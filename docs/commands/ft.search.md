@@ -38,7 +38,7 @@ FT.SEARCH <index> <query>
 Response
 
 The shape and contents of the response depend on the options specified in the command.
-In all cases, the response is an array with the first element being a count of the number of keys which match the query.
+With RESP2, the response is an array with the first element being a count of the number of keys which match the query.
 The value of this count is unaffected by the presence of the `LIMIT` clause.
 
 The `LIMIT` clause trims the list of matched keys to generate a list of returned keys. The remainder of the response array is for the returned keys.
@@ -60,6 +60,32 @@ If the index is on `HASH` keys, then the result is the same as if a `RETURN` cla
 
 If the index is on `JSON` keys, then one name/value pair is inserted with name `$` and the value being the entire JSON key as a string.
 In addition, if this is a vector search, then one additional name/value pair will be included which is the computed vector distance for this returned key -- see [Search - query language](../topics/search-query.md) for details on how to control the name of that field.
+
+### RESP3
+
+Clients using `HELLO 3` receive a Redis Search compatible map:
+
+```text
+{
+  attributes: [],
+  warning: [],
+  total_results: 1,
+  format: "STRING",
+  results: [
+    {id: "key1", extra_attributes: {color: "blue"}, values: []}
+  ]
+}
+```
+
+`total_results` is the match count before pagination (capped at K for KNN
+queries). `results` contains only the requested page. `LIMIT 0 0` returns an
+empty `results` array with the match count intact. Field values, including
+vector distances and JSON documents, retain their string representation.
+`RETURN` aliases become keys in `extra_attributes`; missing fields are omitted.
+`NOCONTENT` and `RETURN 0` omit `extra_attributes`, leaving `id` and `values`.
+`WITHSORTKEYS` adds `sortkey`, or null when no sort key is available.
+`attributes`, `warning`, and each result's `values` are currently empty arrays.
+RESP2 replies are unchanged.
 
 # Examples
 

@@ -71,6 +71,58 @@ void ReplyScore(ValkeyModuleCtx *ctx, ValkeyModuleString &score_as,
       ctx, vmsdk::MakeUniqueValkeyString(score_value).get());
 }
 
+// Replies with the field/value pairs of a result and returns the number of
+// pairs. The caller wraps them in a RESP2 array or a RESP3 map. A map keeps
+// only one value per name, so with unique_names a field named like the score
+// is omitted and the score wins, as in Redis Search.
+size_t ReplyAttributes(ValkeyModuleCtx *ctx, const indexes::Neighbor &neighbor,
+                       const query::SearchParameters &parameters,
+                       bool unique_names = false) {
+  const auto &contents = neighbor.attribute_contents.value();
+  size_t cnt = 0;
+  if (parameters.return_attributes.empty()) {
+    absl::string_view score_as;
+    if (parameters.IsVectorQuery()) {
+      ReplyScore(ctx, *parameters.score_as, neighbor);
+      ++cnt;
+      if (unique_names) {
+        score_as = vmsdk::ToStringView(parameters.score_as.get());
+      }
+    }
+    for (const auto &attribute_content : contents) {
+      if (!score_as.empty() && attribute_content.first == score_as) {
+        continue;
+      }
+      ValkeyModule_ReplyWithString(ctx,
+                                   attribute_content.second.GetIdentifier());
+      ValkeyModule_ReplyWithString(ctx, attribute_content.second.value.get());
+      ++cnt;
+    }
+    return cnt;
+  }
+  for (const auto &return_attribute : parameters.return_attributes) {
+    auto identifier = vmsdk::ToStringView(return_attribute.identifier.get());
+    if (parameters.IsVectorQuery() &&
+        identifier == vmsdk::ToStringView(parameters.score_as.get())) {
+      ReplyScore(ctx, *parameters.score_as, neighbor);
+      ++cnt;
+    } else if (auto it = contents.find(identifier); it != contents.end()) {
+      ValkeyModule_ReplyWithString(ctx, return_attribute.alias.get());
+      ValkeyModule_ReplyWithString(ctx, it->second.value.get());
+      ++cnt;
+    }
+  }
+  return cnt;
+}
+
+void ReplyAttributesArray(ValkeyModuleCtx *ctx,
+                          const indexes::Neighbor &neighbor,
+                          const query::SearchParameters &parameters) {
+  ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_LEN);
+  ValkeyModule_ReplySetArrayLength(
+      ctx, 2 * ReplyAttributes(ctx, neighbor, parameters));
+}
+
 void SerializeNeighbors(ValkeyModuleCtx *ctx,
                         const query::SearchResult &search_result,
                         const query::SearchParameters &parameters) {
@@ -84,35 +136,7 @@ void SerializeNeighbors(ValkeyModuleCtx *ctx,
   for (auto i = range.start_index; i < range.end_index; ++i) {
     ValkeyModule_ReplyWithString(
         ctx, vmsdk::MakeUniqueValkeyString(*neighbors[i].external_id).get());
-    if (parameters.return_attributes.empty()) {
-      ValkeyModule_ReplyWithArray(
-          ctx, 2 * neighbors[i].attribute_contents.value().size() + 2);
-      ReplyScore(ctx, *parameters.score_as, neighbors[i]);
-      for (auto &attribute_content : neighbors[i].attribute_contents.value()) {
-        ValkeyModule_ReplyWithString(ctx,
-                                     attribute_content.second.GetIdentifier());
-        ValkeyModule_ReplyWithString(ctx, attribute_content.second.value.get());
-      }
-    } else {
-      ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_LEN);
-      size_t cnt = 0;
-      for (const auto &return_attribute : parameters.return_attributes) {
-        if (vmsdk::ToStringView(parameters.score_as.get()) ==
-            vmsdk::ToStringView(return_attribute.identifier.get())) {
-          ReplyScore(ctx, *parameters.score_as, neighbors[i]);
-          ++cnt;
-          continue;
-        }
-        auto it = neighbors[i].attribute_contents.value().find(
-            vmsdk::ToStringView(return_attribute.identifier.get()));
-        if (it != neighbors[i].attribute_contents.value().end()) {
-          ValkeyModule_ReplyWithString(ctx, return_attribute.alias.get());
-          ValkeyModule_ReplyWithString(ctx, it->second.value.get());
-          ++cnt;
-        }
-      }
-      ValkeyModule_ReplySetArrayLength(ctx, 2 * cnt);
-    }
+    ReplyAttributesArray(ctx, neighbors[i], parameters);
   }
 }
 
@@ -158,29 +182,72 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
           ctx, vmsdk::MakeUniqueValkeyString(prefixed_value).get());
     }
 
-    const auto &contents = neighbors[i].attribute_contents.value();
+    ReplyAttributesArray(ctx, neighbors[i], command);
+  }
+}
 
-    if (command.return_attributes.empty()) {
-      ValkeyModule_ReplyWithArray(ctx, 2 * contents.size());
-      for (const auto &attribute_content : contents) {
-        ValkeyModule_ReplyWithString(ctx,
-                                     attribute_content.second.GetIdentifier());
-        ValkeyModule_ReplyWithString(ctx, attribute_content.second.value.get());
-      }
-    } else {
-      ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_LEN);
-      size_t cnt = 0;
-      for (const auto &return_attribute : command.return_attributes) {
-        auto it = contents.find(
-            vmsdk::ToStringView(return_attribute.identifier.get()));
-        if (it != contents.end()) {
-          ValkeyModule_ReplyWithString(ctx, return_attribute.alias.get());
-          ValkeyModule_ReplyWithString(ctx, it->second.value.get());
-          ++cnt;
-        }
-      }
-      ValkeyModule_ReplySetArrayLength(ctx, 2 * cnt);
+void ReplySortKeyResp3(ValkeyModuleCtx *ctx, const indexes::Neighbor &neighbor,
+                       const SearchCommand &command) {
+  ValkeyModule_ReplyWithSimpleString(ctx, "sortkey");
+  if (!command.sortby_parameter || !neighbor.attribute_contents) {
+    ValkeyModule_ReplyWithNull(ctx);
+    return;
+  }
+  const auto &field = command.sortby_parameter->field;
+  const auto &contents = *neighbor.attribute_contents;
+  auto it = contents.find(field);
+  if (it == contents.end()) {
+    auto identifier = command.index_schema->GetIdentifier(field);
+    if (identifier.ok()) {
+      it = contents.find(*identifier);
     }
+  }
+  if (it == contents.end()) {
+    ValkeyModule_ReplyWithNull(ctx);
+    return;
+  }
+  auto index = command.index_schema->GetIndex(field);
+  bool numeric = index.ok() &&
+                 (*index)->GetIndexerType() == indexes::IndexerType::kNumeric;
+  std::string value = numeric ? "#" : "$";
+  value.append(vmsdk::ToStringView(it->second.value.get()));
+  ValkeyModule_ReplyWithStringBuffer(ctx, value.data(), value.size());
+}
+
+void SerializeNeighborsResp3(ValkeyModuleCtx *ctx,
+                             const query::SearchResult &search_result,
+                             const SearchCommand &command) {
+  const auto total =
+      command.IsNonVectorQuery()
+          ? search_result.total_count
+          : std::min(search_result.total_count, static_cast<size_t>(command.k));
+  if (query::ShouldReturnNoResults(command)) {
+    query::ReplyWithSearchEnvelope(ctx, total, 0);
+    return;
+  }
+  const auto range = search_result.GetSerializationRange(command);
+  query::ReplyWithSearchEnvelope(ctx, total, range.count());
+  for (auto i = range.start_index; i < range.end_index; ++i) {
+    const auto &neighbor = search_result.neighbors[i];
+    ValkeyModule_ReplyWithMap(ctx, 2 + (command.with_sort_keys ? 1 : 0) +
+                                       (command.no_content ? 0 : 1));
+    ValkeyModule_ReplyWithSimpleString(ctx, "id");
+    auto id = neighbor.external_id->Str();
+    ValkeyModule_ReplyWithStringBuffer(ctx, id.data(), id.size());
+    if (command.with_sort_keys) {
+      ReplySortKeyResp3(ctx, neighbor, command);
+    }
+    if (command.no_content) {
+      ValkeyModule_ReplyWithSimpleString(ctx, "values");
+      ValkeyModule_ReplyWithArray(ctx, 0);
+      continue;
+    }
+    ValkeyModule_ReplyWithSimpleString(ctx, "extra_attributes");
+    ValkeyModule_ReplyWithMap(ctx, VALKEYMODULE_POSTPONED_LEN);
+    ValkeyModule_ReplySetMapLength(
+        ctx, ReplyAttributes(ctx, neighbor, command, /*unique_names=*/true));
+    ValkeyModule_ReplyWithSimpleString(ctx, "values");
+    ValkeyModule_ReplyWithArray(ctx, 0);
   }
 }
 
@@ -294,7 +361,7 @@ absl::Status ProcessNeighborsForQuery(ValkeyModuleCtx *ctx,
   return absl::OkStatus();
 }
 
-// The reply structure is an array which consists of:
+// RESP3 uses the Redis Search map envelope. The RESP2 reply is an array of:
 // 1. The amount of response elements
 // 2. Per response entry:
 //   1. The cache entry Hash key
@@ -309,8 +376,16 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
   // Increment success counter.
   ++Metrics::GetStats().query_successful_requests_cnt;
 
+  const bool resp3 =
+      ValkeyModule_GetContextFlags(ctx) & VALKEYMODULE_CTX_FLAGS_RESP3;
+  if (resp3 && (query::ShouldReturnNoResults(*this) ||
+                (no_content && !sortby_parameter))) {
+    SerializeNeighborsResp3(ctx, search_result, *this);
+    return;
+  }
+
   // 1. Handle early reply scenarios
-  if (HandleEarlyReplyScenarios(ctx, search_result, *this)) {
+  if (!resp3 && HandleEarlyReplyScenarios(ctx, search_result, *this)) {
     return;
   }
 
@@ -325,7 +400,9 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
   ApplySorting(search_result.neighbors, *this);
 
   // 3. Serialize neighbors based on query type
-  if (IsNonVectorQuery()) {
+  if (resp3) {
+    SerializeNeighborsResp3(ctx, search_result, *this);
+  } else if (IsNonVectorQuery()) {
     SerializeNonVectorNeighbors(ctx, search_result, *this);
   } else {
     SerializeNeighbors(ctx, search_result, *this);

@@ -156,9 +156,13 @@ struct SearchPartitionResultsTracker {
                                              vmsdk::MakeUniqueValkeyString(
                                                  attribute_content.content())));
       }
+      // A shard sends distance_fp64 and score_fp64 only when the float fields
+      // lost precision; a shard that predates them never sends them.
       indexes::Neighbor neighbor{
           StringInternStore::Intern(neighbor_entry->key()),
-          neighbor_entry->distance(), std::move(attribute_contents)};
+          neighbor_entry->has_distance_fp64() ? neighbor_entry->distance_fp64()
+                                              : neighbor_entry->distance(),
+          std::move(attribute_contents)};
       // Single-VR model: the VR distance is carried in Neighbor::distance
       // above. Cluster merge concatenates per-shard matches; the merged set is
       // ordered like any non-vector result.
@@ -168,10 +172,12 @@ struct SearchPartitionResultsTracker {
       // marker, since no radius includes a +inf distance; an IP distance of
       // -inf is a VR distance and is kept. Compare the bits: -ffast-math makes
       // float comparisons with infinity unreliable.
-      neighbor.has_vr_distance =
-          std::bit_cast<uint32_t>(neighbor_entry->distance()) !=
-          std::bit_cast<uint32_t>(indexes::scoring::PositiveInf());
-      neighbor.score = neighbor_entry->score();
+      neighbor.has_vr_distance = std::bit_cast<uint64_t>(neighbor.distance) !=
+                                 std::bit_cast<uint64_t>(static_cast<double>(
+                                     indexes::scoring::PositiveInf()));
+      neighbor.score = neighbor_entry->has_score_fp64()
+                           ? neighbor_entry->score_fp64()
+                           : neighbor_entry->score();
       AddResult(neighbor);
     }
   }

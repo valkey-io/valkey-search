@@ -895,7 +895,10 @@ TEST_P(VectorRangeRevalidationTest, CosineVerdictMatchesTheIndex) {
   for (const std::vector<float> &query : {*self, near}) {
     auto raw = probe.value()->RecomputeDistance(Floats(*self), Floats(query));
     ASSERT_TRUE(raw.ok());
-    for (float radius : {0.0f, std::nextafter(*raw, 0.0f), *raw, 2.0f}) {
+    // A float index yields a float distance; the radii probe around it.
+    const float raw_distance = static_cast<float>(*raw);
+    for (float radius :
+         {0.0f, std::nextafter(raw_distance, 0.0f), raw_distance, 2.0f}) {
       auto in_index =
           probe.value()->IsWithinVectorRange(key, Floats(query), radius);
       ASSERT_TRUE(in_index.ok());
@@ -903,7 +906,7 @@ TEST_P(VectorRangeRevalidationTest, CosineVerdictMatchesTheIndex) {
                          /*indexed=*/{-1.0f, 0.0f, 0.0f, 0.0f}, Stored(*self),
                          query, radius);
       EXPECT_EQ(keeps, in_index->has_value())
-          << "raw distance " << *raw << ", radius " << radius;
+          << "raw distance " << raw_distance << ", radius " << radius;
       saw_keep |= keeps;
       saw_drop |= !keeps;
     }

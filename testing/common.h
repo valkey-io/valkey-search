@@ -253,9 +253,9 @@ class MockIndex : public indexes::VectorBase {
     static indexes::VectorRecord p;
     return p;
   }
-  float ComputeDistance(absl::string_view, const indexes::VectorRecord &,
-                        float) const override {
-    return 0.0f;
+  double ComputeDistance(absl::string_view, const indexes::VectorRecord &,
+                         double) const override {
+    return 0.0;
   }
   std::optional<hnswlib::tableint> GetAlgoIdLockFree(uint64_t) const override {
     return std::nullopt;
@@ -263,8 +263,9 @@ class MockIndex : public indexes::VectorBase {
   data_model::VectorDataType GetVectorDataType() const override {
     return data_model::VECTOR_DATA_TYPE_FLOAT32;
   }
-  float ComputeReciprocalMagnitude(absl::string_view) const override {
-    return 1.0f;
+  indexes::VectorRecord ConstructRecord(absl::string_view record,
+                                        Allocator *allocator) const override {
+    return indexes::VectorRecord::Construct(record, 1.0f, allocator);
   }
   vmsdk::UniqueValkeyString NormalizeStringAttribute(
       vmsdk::UniqueValkeyString attribute) const override {
@@ -277,7 +278,7 @@ class MockIndex : public indexes::VectorBase {
     return std::vector<indexes::Neighbor>{};
   }
   absl::StatusOr<std::vector<indexes::Neighbor>> SearchRange(
-      absl::string_view, float, cancel::Token &,
+      absl::string_view, double, cancel::Token &,
       std::unique_ptr<hnswlib::BaseFilterFunctor> = nullptr) override {
     return std::vector<indexes::Neighbor>{};
   }

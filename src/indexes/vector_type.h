@@ -25,12 +25,12 @@ namespace valkey_search::indexes {
 // state and behavior that depends on the element type T but not on the
 // choice of ANN algorithm:
 //
-//   * the hnswlib::SpaceInterface<float> owned by the index (both
+//   * the hnswlib::SpaceInterface<DistanceT> owned by the index (both
 //     algorithms construct it the same way, from dimensions + distance
 //     metric via CreateSpace<T>),
 //   * GetDataTypeSize() = sizeof(T),
 //   * GetVectorDataType() = the compile-time-mapped enum for T,
-//   * ComputeReciprocalMagnitude() over T-width elements,
+//   * ConstructRecord() over T-width elements, with the header for T,
 //   * the FT.INFO data_type label and the vector_data_type proto value,
 //   * NormalizeStringRecord's per-T byte width + format conversion for
 //     the ASCII-to-binary query encoder path (float direct, float16 via
@@ -39,13 +39,21 @@ namespace valkey_search::indexes {
 // Downstream callers keep talking to VectorBase* -- the type-erased
 // seam is preserved.
 //
-// Note the space is templated on the *distance* dtype, which is always
-// float, never on T. Only the concrete space class chosen by CreateSpace<T>
-// knows the storage layout. Templating the space on T (as upstream's
-// float-only code did) conflates the two and breaks for 2-byte storage.
+// Note the space is templated on the *distance* dtype (double for FLOAT64,
+// float otherwise), never on T. Only the concrete space class chosen by
+// CreateSpace<T> knows the storage layout. Templating the space on T (as
+// upstream's float-only code did) conflates the two and breaks for 2-byte
+// storage.
 template <typename T>
 class VectorType : public VectorBase {
  public:
+  // Type of the reciprocal magnitude kept in each record's header.
+  using MagnitudeT = MagnitudeOf<T>;
+  // Type the ANN algorithms compute and compare distances in.
+  using DistanceT = MagnitudeOf<T>;
+  // Record type the ANN algorithms store.
+  using StoredVector = TypedVectorRecord<MagnitudeT>;
+
   ~VectorType() override = default;
 
   data_model::VectorDataType GetVectorDataType() const override;
@@ -54,13 +62,15 @@ class VectorType : public VectorBase {
   // sizeof(T) per element, with the format conversion appropriate to T.
   vmsdk::UniqueValkeyString NormalizeStringAttribute(
       vmsdk::UniqueValkeyString attribute) const override;
-  float ComputeReciprocalMagnitude(absl::string_view record) const override;
+  VectorRecord ConstructRecord(absl::string_view record,
+                               Allocator* allocator) const override;
 
  protected:
   VectorType(IndexerType indexer_type, int dimensions,
              data_model::AttributeDataType attribute_data_type,
              absl::string_view attribute_identifier, int db_num)
-      : VectorBase(indexer_type, dimensions, sizeof(T), attribute_data_type,
+      : VectorBase(indexer_type, dimensions, sizeof(T),
+                   StoredVector::kStorageHeaderSize, attribute_data_type,
                    attribute_identifier, db_num) {}
 
   size_t GetDataTypeSize() const override { return sizeof(T); }
@@ -82,7 +92,7 @@ class VectorType : public VectorBase {
   // pointer via space_.get(); since C++ destroys derived-class members
   // before base-class members, algo_ is torn down first -- the
   // destruction order is correct without any extra scaffolding.
-  std::unique_ptr<hnswlib::SpaceInterface<float>> space_;
+  std::unique_ptr<hnswlib::SpaceInterface<DistanceT>> space_;
 };
 
 }  // namespace valkey_search::indexes

@@ -2,7 +2,7 @@
 Save+restore parity matrix across the full vector data-type cartesian product.
 
 Covers
-    data_type ∈ {FLOAT32, FLOAT16, BFLOAT16}
+    data_type ∈ {FLOAT32, FLOAT16, BFLOAT16, FLOAT64}
     algorithm ∈ {HNSW, FLAT}
     key_kind  ∈ {HASH, JSON}
 
@@ -41,13 +41,14 @@ from indexes import (
     Vector,
     KeyDataType,
     float_to_bytes,
+    float64_to_bytes,
     float16_to_bytes,
     bfloat16_to_bytes,
 )
 from util import waiters
 
 
-DATA_TYPES = ["FLOAT32", "FLOAT16", "BFLOAT16"]
+DATA_TYPES = ["FLOAT32", "FLOAT16", "BFLOAT16", "FLOAT64"]
 ALGORITHMS = ["HNSW", "FLAT"]
 KEY_KINDS = [KeyDataType.HASH, KeyDataType.JSON]
 
@@ -63,6 +64,8 @@ def _encode_query(values: List[float], data_type: str) -> bytes:
         return float16_to_bytes(values)
     if data_type == "BFLOAT16":
         return bfloat16_to_bytes(values)
+    if data_type == "FLOAT64":
+        return float64_to_bytes(values)
     return float_to_bytes(values)
 
 
@@ -82,6 +85,8 @@ def _write_one(client: Valkey, index: Index, row: int, vec: List[float],
             payload = {"v": float16_to_bytes(vec)}
         elif data_type == "BFLOAT16":
             payload = {"v": bfloat16_to_bytes(vec)}
+        elif data_type == "FLOAT64":
+            payload = {"v": float64_to_bytes(vec)}
         else:
             payload = {"v": float_to_bytes(vec)}
         client.hset(key, mapping=payload)

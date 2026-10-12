@@ -499,8 +499,7 @@ size_t EvaluateFilterAsPrimary(
             dynamic_cast<indexes::VectorBase *>(index_result.value().get());
         if (vector_index != nullptr && !vr_pred->GetQueryVector().empty()) {
           auto range_result = vector_index->SearchRange(
-              vr_pred->GetQueryVector(),
-              static_cast<float>(vr_pred->GetRadius()),
+              vr_pred->GetQueryVector(), vr_pred->GetRadius(),
               parameters.cancellation_token);
           if (range_result.ok()) {
             auto fetcher =
@@ -606,13 +605,13 @@ void EvaluatePrefilteredKeys(
   }
 }
 
-std::priority_queue<std::pair<float, hnswlib::labeltype>>
+std::priority_queue<std::pair<double, hnswlib::labeltype>>
 CalcBestMatchingPrefilteredKeys(
     const SearchParameters &parameters,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
     indexes::VectorBase *vector_index, size_t qualified_entries) {
-  std::priority_queue<std::pair<float, hnswlib::labeltype>> results;
-  float query_magnitude = indexes::kDefaultMagnitude;
+  std::priority_queue<std::pair<double, hnswlib::labeltype>> results;
+  double query_magnitude = indexes::kDefaultMagnitude;
   if (vector_index->GetNormalize()) {
     query_magnitude = indexes::CalcReciprocalMagnitude(
         parameters.query, vector_index->GetVectorDataType());
@@ -634,12 +633,12 @@ CalcBestMatchingPrefilteredKeys(
 // For pure-vector queries with INKEYS: compute K nearest within the set,
 // not the global top-K filtered by INKEYS (which silently drops in-set docs
 // outside the global top-K).
-std::priority_queue<std::pair<float, hnswlib::labeltype>>
+std::priority_queue<std::pair<double, hnswlib::labeltype>>
 CalcBestMatchingInkeys(const SearchParameters &parameters,
                        indexes::VectorBase *vector_index) {
-  std::priority_queue<std::pair<float, hnswlib::labeltype>> results;
+  std::priority_queue<std::pair<double, hnswlib::labeltype>> results;
   CHECK(parameters.inkeys.has_value());
-  float query_magnitude = indexes::kDefaultMagnitude;
+  double query_magnitude = indexes::kDefaultMagnitude;
   if (vector_index->GetNormalize()) {
     query_magnitude = indexes::CalcReciprocalMagnitude(
         parameters.query, vector_index->GetVectorDataType());
@@ -817,7 +816,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
         VMSDK_ASSIGN_OR_RETURN(
             auto raw_neighbors,
             vector_index->SearchRange(vr_pred->GetQueryVector(),
-                                      static_cast<float>(vr_pred->GetRadius()),
+                                      vr_pred->GetRadius(),
                                       parameters.cancellation_token));
         // Key order keeps SORTBY ties and FT.AGGREGATE working sets
         // deterministic regardless of scan order.
@@ -930,16 +929,16 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
         // that is outside the radius (or not tracked in the vector index) has
         // no VR distance: mark has_vr_distance=false so it sorts after all
         // genuine VR matches and carries no yielded distance, matching a
-        // text-only match with no vdist. The +inf sentinel in the float is the
-        // cross-shard marker (fanout.cc); other readers use has_vr_distance.
-        float distance;
+        // text-only match with no vdist. The +inf sentinel in the distance is
+        // the cross-shard marker (fanout.cc); other readers use
+        // has_vr_distance.
+        double distance;
         bool has_vr_distance = true;
         if (eval_result.HasVrScore()) {
           distance = eval_result.vr_distance;
         } else if (vr_vector_index != nullptr) {
           auto within = vr_vector_index->IsWithinVectorRange(
-              key, vr_predicate->GetQueryVector(),
-              static_cast<float>(vr_predicate->GetRadius()));
+              key, vr_predicate->GetQueryVector(), vr_predicate->GetRadius());
           if (within.ok() && within->has_value()) {
             distance = within->value();
           } else {
@@ -1844,7 +1843,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> DoSearchVector(
         << qualified_entries;
     // Do an exact nearest neighbour search on the reduced search space.
     ++Metrics::GetStats().query_prefiltering_requests_cnt;
-    std::priority_queue<std::pair<float, hnswlib::labeltype>> results;
+    std::priority_queue<std::pair<double, hnswlib::labeltype>> results;
     if (has_filter) {
       results = CalcBestMatchingPrefilteredKeys(
           parameters, entries_fetchers, vector_index, qualified_entries);

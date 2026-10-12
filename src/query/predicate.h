@@ -75,7 +75,7 @@ struct EvaluationResult {
   // has_vr_distance is true only when this result came from a VR predicate
   // that matched (single-VR model: at most one VR distance per document).
   bool has_vr_distance{false};
-  float vr_distance{0.0f};
+  double vr_distance{0.0};
 
   // Constructor 1: For non-text predicates (no iterator)
   explicit EvaluationResult(bool result)
@@ -88,7 +88,7 @@ struct EvaluationResult {
       : matches(result), filter_iterator(std::move(iterator)) {}
 
   // Constructor 3: For VectorRange predicates (carries the matched distance)
-  EvaluationResult(bool result, float distance)
+  EvaluationResult(bool result, double distance)
       : matches(result),
         filter_iterator(nullptr),
         has_vr_distance(true),
@@ -244,12 +244,11 @@ class VectorRangePredicate : public Predicate {
     score_as_ = std::move(score_as);
   }
   void SetEpsilon(std::optional<double> epsilon) { epsilon_ = epsilon; }
-  // An infinite radius, or one too large for a float, is stored as the
-  // largest float. It matches every finite distance, while the +inf that
-  // VectorBase::ClampCosineDistance reports for a NaN or +inf distance stays
-  // outside it.
+  // An infinite radius is stored as the largest double. It matches every
+  // finite distance, while the +inf that VectorBase::ClampCosineDistance
+  // reports for a NaN or +inf distance stays outside it.
   void SetRadius(double radius) {
-    constexpr double kMaxRadius = std::numeric_limits<float>::max();
+    constexpr double kMaxRadius = std::numeric_limits<double>::max();
     radius_ = radius > kMaxRadius ? kMaxRadius : radius;
   }
 

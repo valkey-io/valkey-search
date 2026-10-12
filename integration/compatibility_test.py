@@ -240,6 +240,22 @@ def unpack_agg_result(rs, key_type):
         raise
     return rows
 
+def unpack_resp3_result(rs, key_type):
+    """Unpack a Redis Search RESP3 envelope into the rows the RESP2 unpackers
+    produce: FT.SEARCH results carry their id as __key and a WITHSCORES score
+    as __score, FT.AGGREGATE results carry only their fields."""
+    rows = []
+    for result in rs[b"results"]:
+        row = {}
+        if b"id" in result:
+            row["__key"] = result[b"id"]
+        if b"score" in result:
+            row["__score"] = result[b"score"]
+        for field, value in result.get(b"extra_attributes", {}).items():
+            row[parse_field(field, key_type)] = parse_value(value, key_type)
+        rows.append(row)
+    return rows
+
 def unpack_hybrid_result(rs, key_type):
     """Unpack an FT.HYBRID reply into a list of row dicts.
 
@@ -247,6 +263,8 @@ def unpack_hybrid_result(rs, key_type):
 
       Redis   [b"total_results", N, b"results", [row, ...],
                b"warnings", [...], b"execution_time", b"..."]
+      Redis   {b"total_results": N, b"results": [{field: value}, ...], ...}
+              under RESP3
       Valkey  [N, row, row, ...]                       (the FT.AGGREGATE shape)
 
     Only the rows are comparable. Redis's `total_results` is the size of the
@@ -254,7 +272,10 @@ def unpack_hybrid_result(rs, key_type):
     actually returned, and `execution_time` is wall-clock noise, so both are
     dropped here rather than compared.
     """
-    if len(rs) >= 2 and unbytes(rs[0]) == "total_results":
+    if isinstance(rs, dict):
+        rows = [list(chain.from_iterable(row.items()))
+                for row in rs[b"results"]]
+    elif len(rs) >= 2 and unbytes(rs[0]) == "total_results":
         fields = {unbytes(rs[i]): rs[i + 1] for i in range(0, len(rs), 2)}
         rows = fields.get("results", [])
     else:
@@ -348,9 +369,11 @@ def canonicalize_ties(rows, sortkeys):
     return out
 
 
-def unpack_result(cmd, key_type, rs, sortkeys, ordered=False):
+def unpack_result(cmd, key_type, rs, sortkeys, ordered=False, resp3=False):
     if "ft.hybrid" in cmd[0].lower():
         out = unpack_hybrid_result(rs, key_type)
+    elif resp3:
+        out = unpack_resp3_result(rs, key_type)
     elif "ft.search" in cmd[0].lower():
         # Detect if the result actually has sort keys by checking the format,
         # not just whether WITHSORTKEYS is in the command. This handles cases
@@ -546,7 +569,7 @@ def compare_row(l, r, key_type, tol=DEFAULT_TOLERANCE):
             return False
     return True
     
-def compare_results(expected, results):
+def compare_results(expected, results, resp3=False):
     print("CMD:", printable_cmd(expected["cmd"]))
     cmd = expected["cmd"]
     key_type = expected["key_type"]
@@ -660,11 +683,11 @@ def compare_results(expected, results):
     # Output raw results
     # print("Raw expected result:", expected["result"])
     rl = unpack_result(cmd, expected["key_type"], expected["result"], sortkeys,
-                       ordered)
+                       ordered, resp3)
     # print("Unpack of expected result:", rl)
     # print("Raw actual result:", results["result"])
     vk = unpack_result(cmd, expected["key_type"], results["result"], sortkeys,
-                       ordered)
+                       ordered, resp3)
     # print("Unpack of actual result:", vk)
 
     # Process failures
@@ -749,8 +772,71 @@ def mark_as_xpassed(testname):
     correct_answers += 1
     xpassed_tests[testname] = xpassed_tests.get(testname, 0) + 1
 
-def do_answer(client, expected, data_set):
+# The generator runs the reference engine with search-workers disabled, which
+# makes it warn about the capped query timeout on every reply.
+REFERENCE_SETUP_WARNING = b"Query TIMEOUT exceeded the configured maximum"
+
+def resp3_warnings(reply):
+    return [w for w in reply.get(b"warning", [])
+            if not w.startswith(REFERENCE_SETUP_WARNING)]
+
+def resp3_shape(reply):
+    """The parts of a RESP3 envelope the row comparison doesn't cover: key
+    names, value types, and the constant fields. Rows are compared as a
+    multiset; their order is compare_results' business. Warnings are
+    compared separately (see compare_results_resp3)."""
+    if not isinstance(reply, dict):
+        return type(reply).__name__
+    rows = sorted(
+        (sorted(row.keys()), type(row.get(b"score")).__name__,
+         type(row.get(b"extra_attributes")).__name__, repr(row.get(b"values")))
+        for row in reply.get(b"results", [])
+    )
+    return {
+        "types": sorted((k, type(v).__name__) for k, v in reply.items()),
+        "format": reply.get(b"format"),
+        "attributes": reply.get(b"attributes"),
+        "rows": rows,
+    }
+
+def compare_results_resp3(expected, results):
+    """Compares a RESP3 reply with the recorded Redis Search RESP3 reply: the
+    envelope shape exactly, and the rows with compare_results. FT.HYBRID keeps
+    its RESP2 reply shape, so only its rows are compared."""
+    expected = dict(expected, result=expected["result_resp3"],
+                    exception=expected["exception_resp3"])
+    if (not expected["exception"] and not results["exception"]
+            and "ft.hybrid" not in str(expected["cmd"][0]).lower()):
+        expected_shape = resp3_shape(expected["result"])
+        actual_shape = resp3_shape(results["result"])
+        if expected_shape != actual_shape:
+            print(f"CMD: {printable_cmd(expected['cmd'])}")
+            print("RESP3 shape mismatch")
+            print("RL:", expected_shape)
+            print("VK:", actual_shape)
+            return False
+        # Valkey doesn't report warnings yet, so a warning only the reference
+        # engine gave is a known gap rather than a failure.
+        if resp3_warnings(expected["result"]) != resp3_warnings(results["result"]):
+            print(f"WARNING: RESP3 warning differs (known gap). "
+                  f"CMD: {printable_cmd(expected['cmd'])}")
+            print("RL:", resp3_warnings(expected["result"]))
+            print("VK:", resp3_warnings(results["result"]))
+        # Checked above, so the raw comparisons in compare_results skip them.
+        expected["result"] = {k: v for k, v in expected["result"].items()
+                              if k != b"warning"}
+        results = dict(results, result={k: v for k, v in
+                                        results["result"].items()
+                                        if k != b"warning"})
+    return compare_results(expected, results, resp3=True)
+
+def do_answer(client, expected, data_set, run_query=None,
+              compare=compare_results):
+    """Runs one answer. Data is loaded with client; the query itself runs
+    through run_query(cmd) and is checked with compare when given."""
     global correct_answers, failed_tests, passed_tests
+    if run_query is None:
+        run_query = lambda cmd: client.execute_command(*cmd)
     next_data_set = (expected['data_set_name'], expected['key_type'],
                      expected.get('schema_type'),
                      expected.get('vector_data_type', 'FLOAT32'))
@@ -769,7 +855,7 @@ def do_answer(client, expected, data_set):
     if expected.get('excluded'):
         try:
             print(f"Running excluded query (no-crash check): {expected['cmd']}")
-            client.execute_command(*expected['cmd'])
+            run_query(expected['cmd'])
             print(f"Excluded query completed without crash")
         except Exception as e:
             print(f"Excluded query raised: {e} for cmd {expected['cmd']}")
@@ -800,13 +886,13 @@ def do_answer(client, expected, data_set):
     try:
         print(f">>>>>> Starting Test {expected['testname']} So Far: Correct:{correct_answers} Wrong:{wrong_answers} <<<<<<<<<")
         result["cmd"] = expected['cmd']
-        result["result"] = client.execute_command(*expected['cmd'])
+        result["result"] = run_query(expected['cmd'])
         result["exception"] = False
-        record(compare_results(expected, result))
+        record(compare(expected, result))
     except valkey.ResponseError as e:
         print(f"Got ResponseError: {e} for command {expected['cmd']}")
         result["exception"] = True
-        record(compare_results(expected, result))
+        record(compare(expected, result))
     return data_set
 
 def cluster_routing(cmd):
@@ -961,6 +1047,9 @@ def _load_answers_with_hash_check(answer_file_name):
 
 
 class TestAnswersCMD(ValkeySearchTestCaseDebugMode):
+    # Query over RESP3 and compare with the recorded Redis Search RESP3 replies.
+    RESP3 = False
+
     @pytest.mark.parametrize("answers", BASE_ANSWER_FILES)
     def test_answers(self, answers):
         global client, data_set
@@ -983,8 +1072,16 @@ class TestAnswersCMD(ValkeySearchTestCaseDebugMode):
         client.execute_command(
             "CONFIG", "SET", "search.emulate-release", COMPAT_EMULATE_RELEASE
         )
+        run_query, compare = None, compare_results
+        if self.RESP3:
+            kwargs = dict(client.connection_pool.connection_kwargs)
+            kwargs["protocol"] = 3
+            resp3_client = valkey.Valkey(**kwargs)
+            run_query = lambda cmd: resp3_client.execute_command(*cmd)
+            compare = compare_results_resp3
         for i in range(len(answers)):
-            data_set = do_answer(client, answers[i], data_set)
+            data_set = do_answer(client, answers[i], data_set, run_query,
+                                 compare)
 
         if xfailed_tests:
             print(">>>>>>>>> Expected Failures (known gaps) <<<<<<<<<")
@@ -1039,6 +1136,10 @@ class TestAnswersCMD(ValkeySearchTestCaseDebugMode):
         for k, v in passed_tests.items():
             print(f"Passed test {k:60}: {v} times")
     '''
+
+
+class TestAnswersCMDResp3(TestAnswersCMD):
+    RESP3 = True
 
 
 class TestAnswersMultiLang(ValkeySearchTestCaseBase):

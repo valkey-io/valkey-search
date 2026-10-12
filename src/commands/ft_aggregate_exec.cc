@@ -23,6 +23,7 @@
 #include "absl/time/clock.h"
 #include "src/attribute_data_type.h"
 #include "src/commands/ft_aggregate_parser.h"
+#include "src/commands/results_reply.h"
 #include "src/cursor.h"
 #include "src/indexes/index_base.h"
 #include "src/query/response_generator.h"
@@ -1305,7 +1306,7 @@ class CursorAggregateResult : public Cursor {
                  const std::shared_ptr<IndexSchema> &index_schema,
                  size_t count) override {
     parameters_->index_schema = index_schema;
-    // Like Redis Search, a read reports no total_results.
+    // Like Redis Search, a read reports no total under RESP3.
     parameters_->ReplyRecords(ctx, records_, std::min(count, records_.size()),
                               0);
     parameters_->index_schema = nullptr;
@@ -1323,57 +1324,41 @@ class CursorAggregateResult : public Cursor {
 
 void AggregateParameters::ReplyRecords(ValkeyModuleCtx *ctx, RecordSet &records,
                                        size_t count, size_t total_results) {
-  auto &parameters = *this;
-  const bool resp3 = search_envelope_reply && query::IsResp3(ctx);
-  if (resp3) {
-    query::ReplyWithSearchEnvelope(ctx, total_results, count);
-  } else {
-    ValkeyModule_ReplyWithArray(ctx, 1 + count);
-    ValkeyModule_ReplyWithLongLong(ctx, static_cast<long long>(count));
-  }
-
+  auto reply = ResultsReply::Create(ctx, ResultsReply::Layout::kRows,
+                                    search_envelope_reply);
+  reply->Begin(total_results, count);
   for (size_t n = 0; n < count; ++n) {
     auto rec = records.pop_front();
-    if (resp3) {
-      ValkeyModule_ReplyWithMap(ctx, 2);
-      ValkeyModule_ReplyWithSimpleString(ctx, "extra_attributes");
-      ValkeyModule_ReplyWithMap(ctx, VALKEYMODULE_POSTPONED_LEN);
-    } else {
-      ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_ARRAY_LEN);
+    ResultsReply::Row row;
+    row.fields = [&](bool) { return ReplyRecordFields(ctx, *rec); };
+    reply->AddRow(row);
+  }
+  reply->End();
+}
+
+size_t AggregateParameters::ReplyRecordFields(ValkeyModuleCtx *ctx,
+                                              const Record &rec) const {
+  const auto data_type = index_schema->GetAttributeDataType().ToProto();
+  size_t pairs = 0;
+  CHECK(rec.fields_.size() <= record_info_by_index_.size());
+  for (size_t i = 0; i < rec.fields_.size(); ++i) {
+    if (suppressed_reply_column_ == i) {
+      continue;
     }
-
-    size_t array_count = 0;
-
-    CHECK(rec->fields_.size() <= parameters.record_info_by_index_.size());
-    for (size_t i = 0; i < rec->fields_.size(); ++i) {
-      if (parameters.suppressed_reply_column_ == i) {
-        continue;
-      }
-      if (ReplyWithValue(
-              ctx, parameters.index_schema->GetAttributeDataType().ToProto(),
-              parameters.record_info_by_index_[i].output_name_,
-              parameters.record_info_by_index_[i].data_type_, rec->fields_[i],
-              parameters.dialect)) {
-        array_count += 2;
-      }
-    }
-
-    for (const auto &[name, value] : rec->extra_fields_) {
-      if (ReplyWithValue(
-              ctx, parameters.index_schema->GetAttributeDataType().ToProto(),
-              name, indexes::IndexerType::kNone, value, parameters.dialect)) {
-        array_count += 2;
-      }
-    }
-
-    if (resp3) {
-      ValkeyModule_ReplySetMapLength(ctx, array_count / 2);
-      ValkeyModule_ReplyWithSimpleString(ctx, "values");
-      ValkeyModule_ReplyWithArray(ctx, 0);
-    } else {
-      ValkeyModule_ReplySetArrayLength(ctx, array_count);
+    if (ReplyWithValue(ctx, data_type, record_info_by_index_[i].output_name_,
+                       record_info_by_index_[i].data_type_, rec.fields_[i],
+                       dialect)) {
+      ++pairs;
     }
   }
+
+  for (const auto &[name, value] : rec.extra_fields_) {
+    if (ReplyWithValue(ctx, data_type, name, indexes::IndexerType::kNone, value,
+                       dialect)) {
+      ++pairs;
+    }
+  }
+  return pairs;
 }
 
 absl::Status RunAggregatePipeline(ValkeyModuleCtx *ctx,
@@ -1397,8 +1382,7 @@ absl::Status RunAggregatePipeline(ValkeyModuleCtx *ctx,
     parameters.ReplyRecords(ctx, records, records.size(), records.size());
     return absl::OkStatus();
   }
-  // WITHCURSOR: [[count, row...], cursor_id], or [envelope, cursor_id] under
-  // RESP3.
+  // WITHCURSOR: [rows, cursor_id], the rows as ReplyRecords replies them.
   ValkeyModule_ReplyWithArray(ctx, 2);
   const size_t total_results = records.size();
   parameters.ReplyRecords(

@@ -23,6 +23,7 @@
 #include "absl/time/clock.h"
 #include "src/commands/commands.h"
 #include "src/commands/ft_search_parser.h"
+#include "src/commands/results_reply.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
@@ -50,6 +51,8 @@ inline bool HasVrDistance(const indexes::Neighbor &neighbor) {
 // FT.SEARCH idx "*=>[KNN 10 @vec $BLOB AS score]" PARAMS 2 BLOB
 // "\x12\xa9\xf5\x6c" DIALECT 2
 
+// The number of matches a reply reports. A fanout sums each shard's count, so
+// a vector query's is capped at K.
 size_t TotalResults(const query::SearchResult &search_result,
                     const query::SearchParameters &parameters) {
   if (parameters.IsNonVectorQuery()) {
@@ -57,14 +60,6 @@ size_t TotalResults(const query::SearchResult &search_result,
   }
   return std::min(search_result.total_count, static_cast<size_t>(parameters.k));
 }
-
-void ReplyAvailNeighbors(ValkeyModuleCtx *ctx,
-                         const query::SearchResult &search_result,
-                         const query::SearchParameters &parameters) {
-  ValkeyModule_ReplyWithLongLong(ctx, TotalResults(search_result, parameters));
-}
-
-void ReplyScoreTopLevel(ValkeyModuleCtx *ctx, float score);
 
 bool HasTextRelevance(const SearchCommand &parameters) {
   return parameters.IsNonVectorQuery() ||
@@ -78,14 +73,6 @@ void ReplyScore(ValkeyModuleCtx *ctx, ValkeyModuleString &score_as,
   // For pure vector queries Neighbor.score == distance; for hybrid text=>[KNN]
   // queries Neighbor.score is the text relevance while distance stays here.
   auto score_value = expr::FormatDouble(neighbor.distance);
-  ValkeyModule_ReplyWithString(
-      ctx, vmsdk::MakeUniqueValkeyString(score_value).get());
-}
-
-// Reply with just the score value as a top-level element (Redis WITHSCORES
-// format: score appears between document ID and attributes array).
-void ReplyScoreTopLevel(ValkeyModuleCtx *ctx, float score) {
-  auto score_value = expr::FormatDouble(score);
   ValkeyModule_ReplyWithString(
       ctx, vmsdk::MakeUniqueValkeyString(score_value).get());
 }
@@ -325,16 +312,13 @@ class CursorSearchResult : public Cursor {
                  const std::shared_ptr<IndexSchema> &index_schema,
                  size_t count) override {
     size_t n = std::min(count, RemainingRows());
-    if (query::IsResp3(ctx)) {
-      // Like Redis Search, a read reports no total_results.
-      query::ReplyWithSearchEnvelope(ctx, 0, n);
-    } else {
-      ValkeyModule_ReplyWithArray(ctx, n + 1);
-      ValkeyModule_ReplyWithLongLong(ctx, static_cast<long long>(n));
-    }
+    // Like Redis Search, a read reports no total under RESP3.
+    auto reply = ResultsReply::Create(ctx, ResultsReply::Layout::kRows);
+    reply->Begin(0, n);
     command_->index_schema = index_schema;
-    command_->ReplyRows(ctx, command_->search_result, next_, next_ + n);
+    command_->ReplyRows(ctx, *reply, command_->search_result, next_, next_ + n);
     command_->index_schema = nullptr;
+    reply->End();
     // Hand back what the rows just replied were holding, rather than keeping
     // it until the whole cursor is destroyed.
     ReleaseRows(next_, next_ + n);
@@ -365,9 +349,10 @@ SearchCommand::RowFormat SearchCommand::GetRowFormat(bool resp3) const {
   format.sort_by_vec_score =
       !IsNonVectorQuery() && sortby_parameter.has_value() && score_as &&
       sortby_parameter->field == vmsdk::ToStringView(score_as.get());
-  // RESP2 rows drop the sort key with NOCONTENT (ReplyRowElements); RESP3
-  // rows keep it, as Redis Search does.
-  if (with_sort_keys) {
+  // RESP2 rows drop the sort key under NOCONTENT; RESP3 rows keep it, as
+  // Redis Search does. Resp2ResultsReply already leaves it out, but skipping
+  // here keeps the compatibility-fix counters below unchanged for RESP2.
+  if (with_sort_keys && (resp3 || !no_content)) {
     auto type_prefix = [&]() -> std::string {
       return IsSortByFieldNumeric(*this, format.sort_by_vec_score) ? "#" : "$";
     };
@@ -390,9 +375,8 @@ SearchCommand::RowFormat SearchCommand::GetRowFormat(bool resp3) const {
   return format;
 }
 
-void SearchCommand::ReplySortKey(ValkeyModuleCtx *ctx,
-                                 const indexes::Neighbor &neighbor,
-                                 const RowFormat &format) const {
+std::optional<std::string> SearchCommand::SortKey(
+    const indexes::Neighbor &neighbor, const RowFormat &format) const {
   // Prefix the sort key: '#' for NUMERIC fields, '$' for string fields
   // (RediSearch-compatible). A SORTBY on the VR distance alias must emit the
   // formatted distance (Neighbor::distance) with the numeric '#' prefix; it
@@ -410,11 +394,9 @@ void SearchCommand::ReplySortKey(ValkeyModuleCtx *ctx,
     value = GetSortKeyValue(neighbor, *this);
   }
   if (!value.has_value() && format.nil_absent_sort_key) {
-    ValkeyModule_ReplyWithNull(ctx);
-  } else {
-    ValkeyModule_ReplyWithString(
-        ctx, vmsdk::MakeUniqueValkeyString(prefix + value.value_or("")).get());
+    return std::nullopt;
   }
+  return prefix + value.value_or("");
 }
 
 size_t SearchCommand::ReplyAttributes(ValkeyModuleCtx *ctx,
@@ -437,16 +419,13 @@ size_t SearchCommand::ReplyAttributes(ValkeyModuleCtx *ctx,
       ++cnt;
     }
     if (emit_vr_field) {
-      ValkeyModule_ReplyWithString(
-          ctx, vmsdk::MakeUniqueValkeyString(format.vr_field).get());
-      auto score_value = expr::FormatDouble(neighbor.distance);
-      ValkeyModule_ReplyWithString(
-          ctx, vmsdk::MakeUniqueValkeyString(score_value).get());
+      ReplyScore(ctx, *vmsdk::MakeUniqueValkeyString(format.vr_field),
+                 neighbor);
       ++cnt;
     }
     for (const auto &attribute_content : contents) {
-      // A map keeps one value per name, so there the distance hides a field
-      // of the same name, as in Redis Search.
+      // Unique names leave out a field the distance is named like, as Redis
+      // Search does.
       if (unique_names &&
           ((is_vector &&
             attribute_content.first == vmsdk::ToStringView(score_as.get())) ||
@@ -470,10 +449,7 @@ size_t SearchCommand::ReplyAttributes(ValkeyModuleCtx *ctx,
     }
     if (!format.vr_field.empty() && ret_id == format.vr_field) {
       if (HasVrDistance(neighbor)) {
-        ValkeyModule_ReplyWithString(ctx, return_attribute.alias.get());
-        auto score_value = expr::FormatDouble(neighbor.distance);
-        ValkeyModule_ReplyWithString(
-            ctx, vmsdk::MakeUniqueValkeyString(score_value).get());
+        ReplyScore(ctx, *return_attribute.alias, neighbor);
         ++cnt;
       }
       continue;
@@ -488,105 +464,42 @@ size_t SearchCommand::ReplyAttributes(ValkeyModuleCtx *ctx,
   return cnt;
 }
 
-size_t SearchCommand::ReplyRowElements(ValkeyModuleCtx *ctx,
-                                       const indexes::Neighbor &neighbor,
-                                       const RowFormat &format) const {
-  // Document ID
-  ValkeyModule_ReplyWithString(
-      ctx, vmsdk::MakeUniqueValkeyString(*neighbor.external_id).get());
-  size_t elements = 1;
-
-  // Score as top-level element when WITHSCORES is specified
-  if (with_scores) {
-    ReplyScoreTopLevel(ctx, format.has_relevance ? neighbor.score : 0.0f);
-    ++elements;
-  }
-  if (no_content) {
-    return elements;
-  }
-  if (with_sort_keys) {
-    ReplySortKey(ctx, neighbor, format);
-    ++elements;
-  }
-  ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_LEN);
-  ValkeyModule_ReplySetArrayLength(
-      ctx, 2 * ReplyAttributes(ctx, neighbor, format, /*unique_names=*/false));
-  return elements + 1;
-}
-
-void SearchCommand::ReplyRowMap(ValkeyModuleCtx *ctx,
-                                const indexes::Neighbor &neighbor,
-                                const RowFormat &format) const {
-  ValkeyModule_ReplyWithMap(ctx, 2 + (with_scores ? 1 : 0) +
-                                     (with_sort_keys ? 1 : 0) +
-                                     (no_content ? 0 : 1));
-  ValkeyModule_ReplyWithSimpleString(ctx, "id");
-  ValkeyModule_ReplyWithString(
-      ctx, vmsdk::MakeUniqueValkeyString(*neighbor.external_id).get());
-  if (with_scores) {
-    ValkeyModule_ReplyWithSimpleString(ctx, "score");
-    ValkeyModule_ReplyWithDouble(ctx,
-                                 format.has_relevance ? neighbor.score : 0.0);
-  }
-  if (with_sort_keys) {
-    ValkeyModule_ReplyWithSimpleString(ctx, "sortkey");
-    ReplySortKey(ctx, neighbor, format);
-  }
-  if (!no_content) {
-    ValkeyModule_ReplyWithSimpleString(ctx, "extra_attributes");
-    ValkeyModule_ReplyWithMap(ctx, VALKEYMODULE_POSTPONED_LEN);
-    ValkeyModule_ReplySetMapLength(
-        ctx, ReplyAttributes(ctx, neighbor, format, /*unique_names=*/true));
-  }
-  ValkeyModule_ReplyWithSimpleString(ctx, "values");
-  ValkeyModule_ReplyWithArray(ctx, 0);
-}
-
-void SearchCommand::ReplyRows(ValkeyModuleCtx *ctx,
+void SearchCommand::ReplyRows(ValkeyModuleCtx *ctx, ResultsReply &reply,
                               const query::SearchResult &search_result,
                               size_t start, size_t end) const {
-  const bool resp3 = query::IsResp3(ctx);
-  auto format = GetRowFormat(resp3);
+  auto format = GetRowFormat(reply.IsResp3());
   for (auto i = start; i < end; ++i) {
-    if (resp3) {
-      ReplyRowMap(ctx, search_result.neighbors[i], format);
-      continue;
+    const auto &neighbor = search_result.neighbors[i];
+    ResultsReply::Row row;
+    row.id = neighbor.external_id->Str();
+    if (with_scores) {
+      row.score = format.has_relevance ? neighbor.score : 0.0;
     }
-    ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_LEN);
-    ValkeyModule_ReplySetArrayLength(
-        ctx, ReplyRowElements(ctx, search_result.neighbors[i], format));
+    if (with_sort_keys) {
+      row.sort_key = SortKey(neighbor, format);
+    }
+    if (!no_content) {
+      row.fields = [&](bool unique_names) {
+        return ReplyAttributes(ctx, neighbor, format, unique_names);
+      };
+    }
+    reply.AddRow(row);
   }
 }
 
-// Without a cursor the RESP2 reply is [total, row elements...], with each
-// row's elements inline. With WITHCURSOR it is [total, [row...], cursor_id].
-// RESP3 replies the Redis Search envelope, or [envelope, cursor_id] with
-// WITHCURSOR.
+// Replies through ResultsReply, see there for the RESP2 and RESP3 layouts.
 // SendReply respects the Limit, see https://valkey.io/commands/ft.search/
 void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
                               query::SearchResult &search_result) {
   // Increment success counter.
   ++Metrics::GetStats().query_successful_requests_cnt;
 
-  const bool resp3 = query::IsResp3(ctx);
+  auto reply = ResultsReply::Create(
+      ctx, cursor_options ? ResultsReply::Layout::kSearchCursor
+                          : ResultsReply::Layout::kSearch);
   if (query::ShouldReturnNoResults(*this)) {
-    if (resp3) {
-      if (cursor_options) {
-        ValkeyModule_ReplyWithArray(ctx, 2);
-      }
-      // Capped at K like the other replies: a fanout sums each shard's count.
-      query::ReplyWithSearchEnvelope(ctx, TotalResults(search_result, *this),
-                                     0);
-    } else {
-      ValkeyModule_ReplyWithArray(ctx, cursor_options ? 3 : 1);
-      ValkeyModule_ReplyWithLongLong(ctx, search_result.total_count);
-      if (cursor_options) {
-        ValkeyModule_ReplyWithArray(ctx, 0);
-      }
-    }
-    if (cursor_options) {
-      ValkeyModule_ReplyWithLongLong(ctx, 0);
-    }
+    reply->Begin(TotalResults(search_result, *this), 0);
+    reply->End();
     return;
   }
 
@@ -612,38 +525,16 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
   }
 
   auto range = search_result.GetSerializationRange(*this);
-  if (!cursor_options && resp3) {
-    query::ReplyWithSearchEnvelope(ctx, TotalResults(search_result, *this),
-                                   range.count());
-    ReplyRows(ctx, search_result, range.start_index, range.end_index);
-    return;
-  }
-  if (!cursor_options) {
-    ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_LEN);
-    ReplyAvailNeighbors(ctx, search_result, *this);
-    auto format = GetRowFormat(/*resp3=*/false);
-    size_t elements = 1;
-    for (auto i = range.start_index; i < range.end_index; ++i) {
-      elements += ReplyRowElements(ctx, search_result.neighbors[i], format);
-    }
-    ValkeyModule_ReplySetArrayLength(ctx, elements);
-    return;
-  }
-
+  // WITHCURSOR replies at most COUNT rows now and keeps the rest in a cursor.
   const size_t count =
-      std::min(static_cast<size_t>(cursor_options->count), range.count());
-  if (resp3) {
-    ValkeyModule_ReplyWithArray(ctx, 2);
-    query::ReplyWithSearchEnvelope(ctx, TotalResults(search_result, *this),
-                                   count);
-  } else {
-    ValkeyModule_ReplyWithArray(ctx, 3);
-    ReplyAvailNeighbors(ctx, search_result, *this);
-    ValkeyModule_ReplyWithArray(ctx, count);
-  }
-  ReplyRows(ctx, search_result, range.start_index, range.start_index + count);
+      cursor_options
+          ? std::min(static_cast<size_t>(cursor_options->count), range.count())
+          : range.count();
+  reply->Begin(TotalResults(search_result, *this), count);
+  ReplyRows(ctx, *reply, search_result, range.start_index,
+            range.start_index + count);
   if (count == range.count()) {
-    ValkeyModule_ReplyWithLongLong(ctx, 0);
+    reply->End();
     return;
   }
   // The cursor keeps this command, including its search_result.
@@ -653,7 +544,7 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
       range.end_index);
   auto id =
       CursorTable::Instance().Insert(std::move(cursor), db_num, absl::Now());
-  ValkeyModule_ReplyWithLongLong(ctx, static_cast<long long>(id));
+  reply->End(id);
 }
 
 absl::Status FTSearchCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,

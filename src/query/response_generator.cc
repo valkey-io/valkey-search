@@ -82,25 +82,6 @@ vmsdk::config::Number &GetMaxSearchResultFieldsCount() {
 
 namespace valkey_search::query {
 
-bool IsResp3(ValkeyModuleCtx *ctx) {
-  return ValkeyModule_GetContextFlags(ctx) & VALKEYMODULE_CTX_FLAGS_RESP3;
-}
-
-void ReplyWithSearchEnvelope(ValkeyModuleCtx *ctx, size_t total_results,
-                             size_t result_count) {
-  ValkeyModule_ReplyWithMap(ctx, 5);
-  ValkeyModule_ReplyWithSimpleString(ctx, "attributes");
-  ValkeyModule_ReplyWithArray(ctx, 0);
-  ValkeyModule_ReplyWithSimpleString(ctx, "warning");
-  ValkeyModule_ReplyWithArray(ctx, 0);
-  ValkeyModule_ReplyWithSimpleString(ctx, "total_results");
-  ValkeyModule_ReplyWithLongLong(ctx, total_results);
-  ValkeyModule_ReplyWithSimpleString(ctx, "format");
-  ValkeyModule_ReplyWithSimpleString(ctx, "STRING");
-  ValkeyModule_ReplyWithSimpleString(ctx, "results");
-  ValkeyModule_ReplyWithArray(ctx, result_count);
-}
-
 class PredicateEvaluator : public query::Evaluator {
  public:
   PredicateEvaluator(const RecordsMap &records,

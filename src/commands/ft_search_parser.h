@@ -9,6 +9,7 @@
 #define VALKEYSEARCH_SRC_COMMANDS_FT_SEARCH_PARSER_H_
 
 #include <optional>
+#include <string>
 
 #include "src/commands/commands.h"
 #include "src/query/search.h"
@@ -21,6 +22,8 @@ vmsdk::config::Number &GetMaxTimeoutMs();
 }  // namespace options
 
 absl::Status VerifyQueryString(query::SearchParameters &parameters);
+
+class ResultsReply;
 
 //
 // Data Unique to the FT.SEARCH command
@@ -40,10 +43,10 @@ struct SearchCommand : public QueryCommand {
 
   query::SerializationRange GetSerializationRange() const;
 
-  // Replies one row per document in search_result.neighbors[start, end): an
-  // array under RESP2, a map under RESP3.
-  void ReplyRows(ValkeyModuleCtx *ctx, const query::SearchResult &search_result,
-                 size_t start, size_t end) const;
+  // Adds a row to reply per document in search_result.neighbors[start, end).
+  void ReplyRows(ValkeyModuleCtx *ctx, ResultsReply &reply,
+                 const query::SearchResult &search_result, size_t start,
+                 size_t end) const;
 
   bool with_sort_keys{false};
   bool with_scores{false};
@@ -71,19 +74,12 @@ struct SearchCommand : public QueryCommand {
     // Empty unless the query named the distance ($yield_distance_as or AS).
     std::string vr_field;
   };
+  // RESP3 sort keys always follow Redis Search (see GetRowFormat).
   RowFormat GetRowFormat(bool resp3) const;
-  // Replies a document's elements: key, [score], [sort key], fields. Returns
-  // the number of elements replied.
-  size_t ReplyRowElements(ValkeyModuleCtx *ctx,
-                          const indexes::Neighbor &neighbor,
-                          const RowFormat &format) const;
-  // Replies a document as a RESP3 map: id, [score], [sortkey],
-  // [extra_attributes], values.
-  void ReplyRowMap(ValkeyModuleCtx *ctx, const indexes::Neighbor &neighbor,
-                   const RowFormat &format) const;
-  void ReplySortKey(ValkeyModuleCtx *ctx, const indexes::Neighbor &neighbor,
-                    const RowFormat &format) const;
-  // Replies a document's field/value pairs and returns their number. With
+  // The document's sort key, or nullopt to reply nil.
+  std::optional<std::string> SortKey(const indexes::Neighbor &neighbor,
+                                     const RowFormat &format) const;
+  // Replies the document's field/value pairs and returns their number. With
   // unique_names, a field named like the reported distance is left out.
   size_t ReplyAttributes(ValkeyModuleCtx *ctx,
                          const indexes::Neighbor &neighbor,

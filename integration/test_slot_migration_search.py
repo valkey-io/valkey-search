@@ -15,10 +15,14 @@ without LOAD):
 3. The hand-over: the nodes' cluster-map snapshots refresh independently, so
    only the weaker invariants of _assert_handover_invariants are checked until
    every node has caught up, then every reply must be exact again.
+
+test_slot_migration_served_by_replicas_CME repeats the reshard with one replica
+per shard and every shard search forced onto a replica (ForceReplicasOnly).
 """
 
 import time
 
+import pytest
 from valkey_search_test_case import ValkeySearchClusterTestCaseDebugMode
 from valkeytestframework.conftest import resource_port_tracker
 from valkeytestframework.util import waiters
@@ -152,6 +156,26 @@ class TestSlotMigrationSearchCME(ValkeySearchClusterTestCaseDebugMode):
                     raise
                 time.sleep(0.1)
 
+    def _create_index_and_load(self, source, clients):
+        source.execute_command(
+            "FT.CREATE", INDEX, "ON", "HASH", "PREFIX", "1", "vec:", "SCHEMA",
+            "vec", "VECTOR", "HNSW", "6", "TYPE", "FLOAT32", "DIM", "4",
+            "DISTANCE_METRIC", "L2", "n", "NUMERIC")
+        for client in clients:
+            waiters.wait_for_true(
+                lambda c=client: INDEX.encode() in c.execute_command("FT._LIST"))
+        # A node builds its cluster-map snapshot when it coordinates a query
+        # or on its next cron tick; make sure every node has one before keys
+        # move, so the reader-thread ownership filter is active.
+        for client in clients:
+            client.execute_command("FT.SEARCH", INDEX, "*", "LIMIT", "0", "0")
+        for i, key in enumerate(KEYS):
+            source.hset(key, mapping={
+                "vec": float_to_bytes([float(i + 1), 0.0, 0.0, 0.0]),
+                "n": str(i % NUM_BUCKETS),
+            })
+        waiters.wait_for_equal(lambda: _num_docs(source), NUM_DOCS)
+
     def test_slot_migration_no_duplicate_results_CME(self):
         probe = self.new_client_for_primary(0)
         slot = probe.execute_command("CLUSTER KEYSLOT", f"{{{TAG}}}")
@@ -166,24 +190,7 @@ class TestSlotMigrationSearchCME(ValkeySearchClusterTestCaseDebugMode):
         dest_id = dest.execute_command("CLUSTER MYID").decode()
         dest_server = self.get_primary(dst_idx)
 
-        source.execute_command(
-            "FT.CREATE", INDEX, "ON", "HASH", "PREFIX", "1", "vec:", "SCHEMA",
-            "vec", "VECTOR", "HNSW", "6", "TYPE", "FLOAT32", "DIM", "4",
-            "DISTANCE_METRIC", "L2", "n", "NUMERIC")
-        for _, client in nodes:
-            waiters.wait_for_true(
-                lambda c=client: INDEX.encode() in c.execute_command("FT._LIST"))
-        # A node builds its cluster-map snapshot when it coordinates a query
-        # or on its next cron tick; make sure every node has one before keys
-        # move, so the reader-thread ownership filter is active.
-        for _, client in nodes:
-            client.execute_command("FT.SEARCH", INDEX, "*", "LIMIT", "0", "0")
-        for i, key in enumerate(KEYS):
-            source.hset(key, mapping={
-                "vec": float_to_bytes([float(i + 1), 0.0, 0.0, 0.0]),
-                "n": str(i % NUM_BUCKETS),
-            })
-        waiters.wait_for_equal(lambda: _num_docs(source), NUM_DOCS)
+        self._create_index_and_load(source, [c for _, c in nodes])
 
         dest.execute_command("CLUSTER SETSLOT", slot, "IMPORTING", source_id)
         source.execute_command("CLUSTER SETSLOT", slot, "MIGRATING", dest_id)
@@ -231,3 +238,81 @@ class TestSlotMigrationSearchCME(ValkeySearchClusterTestCaseDebugMode):
         # Once the source's copies are gone and the snapshots have refreshed,
         # every reply mode must be exact again.
         self._wait_for_reply_consistent(nodes, "after migration")
+
+    @pytest.mark.parametrize("setup_test", [{"replica_count": 1}], indirect=True)
+    def test_slot_migration_served_by_replicas_CME(self):
+        """A reshard (MIGRATE without COPY) while every shard is searched
+        through its replica. The importing state set on the destination
+        primary is replicated to its replica (CLUSTER SETSLOT is propagated to
+        replicas before the primary applies it), so the replica holds the moved
+        keys and must answer for them like its primary would."""
+        probe = self.new_client_for_primary(0)
+        slot = probe.execute_command("CLUSTER KEYSLOT", f"{{{TAG}}}")
+        src_idx = self._owner_index(slot)
+        dst_idx = (src_idx + 1) % self.CLUSTER_SIZE
+        other_idx = (src_idx + 2) % self.CLUSTER_SIZE
+        source = self.new_client_for_primary(src_idx)
+        dest = self.new_client_for_primary(dst_idx)
+        other = self.new_client_for_primary(other_idx)
+        primaries = (("source", source), ("dest", dest), ("other", other))
+        source_replica = self.get_replication_group(src_idx).replicas[0].client
+        dest_replica = self.get_replication_group(dst_idx).replicas[0].client
+        replicas = [rg.replicas[0].client for rg in self.replication_groups]
+        source_id = source.execute_command("CLUSTER MYID").decode()
+        dest_id = dest.execute_command("CLUSTER MYID").decode()
+        dest_server = self.get_primary(dst_idx)
+
+        self._create_index_and_load(
+            source, [c for _, c in primaries] + replicas)
+        waiters.wait_for_equal(lambda: _num_docs(source_replica), NUM_DOCS)
+
+        # Every query is answered by one replica per shard, never a primary.
+        for node in self.nodes:
+            assert node.client.execute_command(
+                "FT._DEBUG", "CONTROLLED_VARIABLE", "SET",
+                "ForceReplicasOnly", "yes") == b"OK"
+
+        def partition_requests(clients):
+            return sum(c.info("search")[
+                "search_coordinator_server_search_index_partition_success_count"]
+                for c in clients)
+
+        dest.execute_command("CLUSTER SETSLOT", slot, "IMPORTING", source_id)
+        source.execute_command("CLUSTER SETSLOT", slot, "MIGRATING", dest_id)
+
+        def replica_importing():
+            for info in dest_replica.cluster("NODES").values():
+                if "myself" in info["flags"]:
+                    return any(int(m["slot"]) == slot and m["state"] == "importing"
+                               for m in info["migrations"])
+            return False
+        waiters.wait_for_true(replica_importing)
+
+        # Reshard the first half without COPY: the moved keys now exist only
+        # on the destination shard, which is still importing the slot.
+        source.execute_command(
+            "MIGRATE", dest_server.bind_ip, dest_server.port, "", 0, 5000,
+            "KEYS", *MOVED)
+        waiters.wait_for_equal(lambda: _num_docs(dest_replica), len(MOVED))
+        waiters.wait_for_equal(
+            lambda: _num_docs(source_replica), NUM_DOCS - len(MOVED))
+        primary_clients = [c for _, c in primaries]
+        before = (partition_requests(primary_clients),
+                  partition_requests(replicas))
+        self._wait_for_reply_consistent(primaries, "moved, via replicas")
+        after = (partition_requests(primary_clients),
+                 partition_requests(replicas))
+        assert after[0] == before[0], "a primary served a shard search"
+        assert after[1] > before[1], "no replica served a shard search"
+
+        # Move the rest without COPY and finalize on every primary; the source
+        # holds no keys of the slot any more, so it accepts SETSLOT NODE too.
+        source.execute_command(
+            "MIGRATE", dest_server.bind_ip, dest_server.port, "", 0, 5000,
+            "KEYS", *COPIED)
+        waiters.wait_for_equal(lambda: _num_docs(dest_replica), NUM_DOCS)
+        waiters.wait_for_equal(lambda: _num_docs(source_replica), 0)
+        self._wait_for_reply_consistent(primaries, "all moved, via replicas")
+        for _, client in (("dest", dest), ("source", source), ("other", other)):
+            client.execute_command("CLUSTER SETSLOT", slot, "NODE", dest_id)
+        self._wait_for_reply_consistent(primaries, "finalized, via replicas")

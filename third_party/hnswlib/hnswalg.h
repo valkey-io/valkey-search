@@ -288,9 +288,19 @@ class HierarchicalNSW
   // Vector data is at least 8-byte aligned, so the bit is otherwise clear.
   static constexpr uintptr_t kSlotBusy = 1;
 
-  // Seqlock read of a slot, for mutation paths. A retired record stays
-  // allocated while the reading mutation's epoch is active, so an unchanged
-  // pointer means an unchanged record and therefore an unchanged magnitude.
+  // Seqlock read of a slot, for mutation paths. The pointer is the sequence:
+  // the read is accepted when the pointer is the same, and not busy, before
+  // and after the magnitude is read. That pairs the magnitude with the
+  // pointer only if a record is never put back into the slot it left while a
+  // mutation may be reading the slot (an A -> B -> A replacement in the
+  // window would pair A with B's magnitude). That holds because:
+  // - A replaced record is retired, and stays allocated while any mutation
+  //   epoch that could have read it is active, so a new record cannot reuse
+  //   its address in that time.
+  // - Every caller of ReplaceDataByInternalId passes a different record than
+  //   the slot's: a new one, or the key's tracked record from the
+  //   VectorRegistry, which is the one in the slot or newer.
+  // A caller that could reinstall a previous record would break this.
   SlotView ReadSlot(tableint internal_id) const {
     const std::atomic<const char *> &raw =
         GetDataByInternalId(internal_id).RawPointer();

@@ -49,6 +49,7 @@
 #include "third_party/hnswlib/iostream.h"
 #include "third_party/hnswlib/space_ip.h"
 #include "third_party/hnswlib/space_l2.h"
+#include "vmsdk/src/epoch_reclamation.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/type_conversions.h"
 
@@ -2344,21 +2345,24 @@ TEST_F(VectorIndexTest, FlatElementMagnitudeTracksRecord) {
 }
 
 // A mutation reading a slot while another replaces it must see a matching
-// (vector, magnitude) pair, never one record's vector with the other's
-// magnitude.
+// (vector, magnitude) pair. As in the index, every replacement installs a
+// new record and the reader holds a mutation epoch (see ReadSlot).
 TEST_F(VectorIndexTest, ReadSlotIsConsistentUnderReplace) {
   hnswlib::InnerProductSpace space{kDimensions};
   auto *pool = VectorPoolRegistry::Global().Get(
       data_model::VECTOR_DATA_TYPE_FLOAT32,
       VectorRecord::kStorageHeaderSize + kDimensions * sizeof(float));
   auto vectors = DeterministicallyGenerateVectors(2, kDimensions, 10.0);
-  VectorRecord a = VectorRecord::Construct(VectorToStr(vectors[0]), 2.0f, pool);
-  VectorRecord b = VectorRecord::Construct(VectorToStr(vectors[1]), 5.0f, pool);
+  const float magnitudes[] = {2.0f, 5.0f};
+  auto record = [&](int i) {
+    return VectorRecord::Construct(VectorToStr(vectors[i]), magnitudes[i],
+                                   pool);
+  };
   VectorHNSW<float>::HNSWIndex algo(&space, /*max_elements=*/1,
                                     /*normalized=*/true, kM, kEFConstruction,
                                     /*allow_replace_deleted=*/false,
                                     /*random_seed=*/100);
-  algo.addPoint(QueryVector(a, kDimensions * sizeof(float), true,
+  algo.addPoint(QueryVector(record(0), kDimensions * sizeof(float), true,
                             data_model::VECTOR_DATA_TYPE_FLOAT32),
                 0);
   constexpr int kReplacements = 200000;
@@ -2366,18 +2370,19 @@ TEST_F(VectorIndexTest, ReadSlotIsConsistentUnderReplace) {
   std::atomic<int> torn{0};
   std::thread reader([&] {
     while (!done.load(std::memory_order_relaxed)) {
+      vmsdk::epoch::EpochGuard guard;
       auto view = algo.ReadSlot(0);
-      bool is_a =
-          view.vec == a.GetRawVector() && view.reciprocal_magnitude == 2.0f;
-      bool is_b =
-          view.vec == b.GetRawVector() && view.reciprocal_magnitude == 5.0f;
-      if (!is_a && !is_b) {
+      int i = std::memcmp(view.vec, vectors[0].data(),
+                          kDimensions * sizeof(float)) == 0
+                  ? 0
+                  : 1;
+      if (view.reciprocal_magnitude != magnitudes[i]) {
         torn.fetch_add(1, std::memory_order_relaxed);
       }
     }
   });
   for (int i = 0; i < kReplacements; ++i) {
-    algo.SetDataByInternalId(0, VectorRecord(i % 2 ? a : b));
+    algo.SetDataByInternalId(0, record((i + 1) % 2));
   }
   done.store(true, std::memory_order_relaxed);
   reader.join();

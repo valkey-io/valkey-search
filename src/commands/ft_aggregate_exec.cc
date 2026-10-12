@@ -1305,7 +1305,9 @@ class CursorAggregateResult : public Cursor {
                  const std::shared_ptr<IndexSchema> &index_schema,
                  size_t count) override {
     parameters_->index_schema = index_schema;
-    parameters_->ReplyRecords(ctx, records_, std::min(count, records_.size()));
+    // Like Redis Search, a read reports no total_results.
+    parameters_->ReplyRecords(ctx, records_, std::min(count, records_.size()),
+                              0);
     parameters_->index_schema = nullptr;
   }
   void ReleaseMainThreadState() override {
@@ -1319,16 +1321,26 @@ class CursorAggregateResult : public Cursor {
 
 }  // namespace
 
-// Replies [count, row...] with the first `count` records, removing them.
 void AggregateParameters::ReplyRecords(ValkeyModuleCtx *ctx, RecordSet &records,
-                                       size_t count) {
+                                       size_t count, size_t total_results) {
   auto &parameters = *this;
-  ValkeyModule_ReplyWithArray(ctx, 1 + count);
-  ValkeyModule_ReplyWithLongLong(ctx, static_cast<long long>(count));
+  const bool resp3 = search_envelope_reply && query::IsResp3(ctx);
+  if (resp3) {
+    query::ReplyWithSearchEnvelope(ctx, total_results, count);
+  } else {
+    ValkeyModule_ReplyWithArray(ctx, 1 + count);
+    ValkeyModule_ReplyWithLongLong(ctx, static_cast<long long>(count));
+  }
 
   for (size_t n = 0; n < count; ++n) {
     auto rec = records.pop_front();
-    ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_ARRAY_LEN);
+    if (resp3) {
+      ValkeyModule_ReplyWithMap(ctx, 2);
+      ValkeyModule_ReplyWithSimpleString(ctx, "extra_attributes");
+      ValkeyModule_ReplyWithMap(ctx, VALKEYMODULE_POSTPONED_LEN);
+    } else {
+      ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_ARRAY_LEN);
+    }
 
     size_t array_count = 0;
 
@@ -1354,7 +1366,13 @@ void AggregateParameters::ReplyRecords(ValkeyModuleCtx *ctx, RecordSet &records,
       }
     }
 
-    ValkeyModule_ReplySetArrayLength(ctx, array_count);
+    if (resp3) {
+      ValkeyModule_ReplySetMapLength(ctx, array_count / 2);
+      ValkeyModule_ReplyWithSimpleString(ctx, "values");
+      ValkeyModule_ReplyWithArray(ctx, 0);
+    } else {
+      ValkeyModule_ReplySetArrayLength(ctx, array_count);
+    }
   }
 }
 
@@ -1376,15 +1394,18 @@ absl::Status RunAggregatePipeline(ValkeyModuleCtx *ctx,
 
   // 4. Generate the response
   if (!parameters.cursor_options.has_value()) {
-    parameters.ReplyRecords(ctx, records, records.size());
+    parameters.ReplyRecords(ctx, records, records.size(), records.size());
     return absl::OkStatus();
   }
-  // WITHCURSOR: [[count, row...], cursor_id]
+  // WITHCURSOR: [[count, row...], cursor_id], or [envelope, cursor_id] under
+  // RESP3.
   ValkeyModule_ReplyWithArray(ctx, 2);
+  const size_t total_results = records.size();
   parameters.ReplyRecords(
       ctx, records,
       std::min(static_cast<size_t>(parameters.cursor_options->count),
-               records.size()));
+               records.size()),
+      total_results);
   if (records.empty()) {
     ValkeyModule_ReplyWithLongLong(ctx, 0);
     return absl::OkStatus();

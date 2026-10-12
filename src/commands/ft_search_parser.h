@@ -40,7 +40,8 @@ struct SearchCommand : public QueryCommand {
 
   query::SerializationRange GetSerializationRange() const;
 
-  // Replies one array per document in search_result.neighbors[start, end).
+  // Replies one row per document in search_result.neighbors[start, end): an
+  // array under RESP2, a map under RESP3.
   void ReplyRows(ValkeyModuleCtx *ctx, const query::SearchResult &search_result,
                  size_t start, size_t end) const;
 
@@ -70,12 +71,23 @@ struct SearchCommand : public QueryCommand {
     // Empty unless the query named the distance ($yield_distance_as or AS).
     std::string vr_field;
   };
-  RowFormat GetRowFormat() const;
+  RowFormat GetRowFormat(bool resp3) const;
   // Replies a document's elements: key, [score], [sort key], fields. Returns
   // the number of elements replied.
   size_t ReplyRowElements(ValkeyModuleCtx *ctx,
                           const indexes::Neighbor &neighbor,
                           const RowFormat &format) const;
+  // Replies a document as a RESP3 map: id, [score], [sortkey],
+  // [extra_attributes], values.
+  void ReplyRowMap(ValkeyModuleCtx *ctx, const indexes::Neighbor &neighbor,
+                   const RowFormat &format) const;
+  void ReplySortKey(ValkeyModuleCtx *ctx, const indexes::Neighbor &neighbor,
+                    const RowFormat &format) const;
+  // Replies a document's field/value pairs and returns their number. With
+  // unique_names, a field named like the reported distance is left out.
+  size_t ReplyAttributes(ValkeyModuleCtx *ctx,
+                         const indexes::Neighbor &neighbor,
+                         const RowFormat &format, bool unique_names) const;
 };
 
 }  // namespace valkey_search

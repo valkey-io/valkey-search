@@ -64,6 +64,8 @@ Each record is represented by an array which contains the field/value pairs of e
 
 If `WITHCURSOR` is specified the output is a two element array. The first element is an array whose first element is the number of records returned, followed by one element for each returned record. The second element is the cursor id to pass to [`FT.CURSOR READ`](ft.cursor.md), or 0 if all records were returned, in which case no cursor is created.
 
+With RESP3 (`HELLO 3`), the output is a Redis Search compatible map: `{attributes: [], warning: [], total_results, format: "STRING", results}`. `total_results` is the number of records output by the final processing stage, and each entry in `results` is a map holding the record's field/value pairs under `extra_attributes` and an empty `values` array. With `WITHCURSOR`, the output is a two element array of the map, holding the first batch of records, and the cursor id.
+
 # Processing Stages
 
 ## APPLY Stage

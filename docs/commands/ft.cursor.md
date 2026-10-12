@@ -22,6 +22,8 @@ A cursor is destroyed when its last row has been read, when it is deleted with `
 1. An array whose first element is the number of rows returned, followed by one element for each row. A row of an `FT.AGGREGATE` or `FT.HYBRID` cursor is an array of field/value pairs. A row of an `FT.SEARCH` cursor is an array containing the elements for one key of a non-cursor `FT.SEARCH` response, i.e. the key name followed by the optional score, the optional sort key and the array of field/value pairs.
 2. The cursor id to use for the next `FT.CURSOR READ`, or 0 if all rows have been returned, in which case the cursor has been destroyed.
 
+With RESP3, the first element of the reply to an `FT.SEARCH` or `FT.AGGREGATE` cursor is the Redis Search compatible map described for those commands, with `total_results` 0. `FT.HYBRID` cursors reply in the format above.
+
 `FT.CURSOR DEL` returns OK. It applies the same checks as `FT.CURSOR READ`: `<index-name>` must name an existing index, which need not be the cursor's own, the cursor must belong to the currently selected database, and the user must have permission to read the cursor's index.
 
 Errors:

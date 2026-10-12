@@ -815,6 +815,17 @@ def compare_results_resp3(expected, results):
             print("RL:", expected_shape)
             print("VK:", actual_shape)
             return False
+        # FT.AGGREGATE's total_results is the number of records replied, while
+        # Redis Search counts them before LIMIT, a known difference. So only
+        # FT.SEARCH counts are compared.
+        if str(expected["cmd"][0]).lower() == "ft.search":
+            expected_total = expected["result"][b"total_results"]
+            actual_total = results["result"][b"total_results"]
+            if expected_total != actual_total:
+                print(f"CMD: {printable_cmd(expected['cmd'])}")
+                print(f"RESP3 total_results mismatch RL:{expected_total} "
+                      f"VK:{actual_total}")
+                return False
         # Valkey doesn't report warnings yet, so a warning only the reference
         # engine gave is a known gap rather than a failure.
         if resp3_warnings(expected["result"]) != resp3_warnings(results["result"]):

@@ -637,3 +637,39 @@ class TestResp3Cluster(ValkeySearchClusterTestCase):
                 assert client.ping()
         finally:
             pool.disconnect()
+
+    def test_knn_total_is_capped_at_k(self):
+        # Each shard reports up to K matches; the reply must not add them up,
+        # including when LIMIT leaves no results to reply.
+        primary = self.client_for_primary(0)
+        kwargs = dict(primary.connection_pool.connection_kwargs)
+        kwargs["protocol"] = 3
+        pool = ConnectionPool(**kwargs)
+        try:
+            with Valkey(
+                connection_pool=pool
+            ) as client, self.new_cluster_client() as writer:
+                client.execute_command(
+                    "FT.CREATE", "vidx", "PREFIX", 1, "vec:", "SCHEMA", "v",
+                    "VECTOR", "FLAT", 6, "TYPE", "FLOAT32", "DIM", 2,
+                    "DISTANCE_METRIC", "L2",
+                )
+                for i in range(30):
+                    writer.hset(f"vec:{i}", mapping={"v": struct.pack("ff", i, 0)})
+                deadline = time.monotonic() + 15
+                while client.execute_command(
+                    "FT.SEARCH", "vidx", "*", "LIMIT", 0, 0
+                ) != envelope(30, []):
+                    assert (
+                        time.monotonic() < deadline
+                    ), "Cluster indexing did not finish"
+                    time.sleep(0.05)
+                knn = (
+                    "FT.SEARCH", "vidx", "*=>[KNN 2 @v $b]", "PARAMS", 2, "b",
+                    struct.pack("ff", 0, 0), "DIALECT", 2,
+                )
+                assert client.execute_command(*knn, "LIMIT", 0, 0) == envelope(2, [])
+                assert client.execute_command(*knn, "LIMIT", 2, 1) == envelope(2, [])
+                assert client.execute_command(*knn)[b"total_results"] == 2
+        finally:
+            pool.disconnect()

@@ -574,7 +574,9 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
       if (cursor_options) {
         ValkeyModule_ReplyWithArray(ctx, 2);
       }
-      query::ReplyWithSearchEnvelope(ctx, search_result.total_count, 0);
+      // Capped at K like the other replies: a fanout sums each shard's count.
+      query::ReplyWithSearchEnvelope(ctx, TotalResults(search_result, *this),
+                                     0);
     } else {
       ValkeyModule_ReplyWithArray(ctx, cursor_options ? 3 : 1);
       ValkeyModule_ReplyWithLongLong(ctx, search_result.total_count);

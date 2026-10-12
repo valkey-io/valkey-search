@@ -167,7 +167,8 @@ absl::Status ModuleConfigManager::ParseAndLoadArgv(ValkeyModuleCtx *ctx,
         iter.Next();  // skip the value
         sv_val = vmsdk::ToStringView(val);
       }
-      if (debug_mode_only && sv_key != debug_mode_key) {
+      // The first pass applies only debug-mode, the second everything else.
+      if ((sv_key == debug_mode_key) != debug_mode_only) {
         continue;
       }
       VMSDK_RETURN_IF_ERROR(UpdateConfigFromKeyVal(ctx, sv_key, sv_val));
@@ -175,7 +176,8 @@ absl::Status ModuleConfigManager::ParseAndLoadArgv(ValkeyModuleCtx *ctx,
     return absl::OkStatus();
   };
   // Dev() configs are rejected unless debug-mode is on. Apply debug-mode first
-  // so the result doesn't depend on argument order.
+  // so the result doesn't depend on argument order. If debug-mode is given
+  // more than once, the last value applies to every argument.
   VMSDK_RETURN_IF_ERROR(apply_argv(/*debug_mode_only=*/true));
   return apply_argv(/*debug_mode_only=*/false);
 }

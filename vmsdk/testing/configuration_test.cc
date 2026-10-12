@@ -412,6 +412,15 @@ TEST_F(ConfigTest, DevConfigFromArgvRequiresDebugMode) {
   EXPECT_FALSE(dev_config->GetValue());
   FreeValkeyArgs(args);
 
+  // If debug-mode is repeated, the last value applies to every argument.
+  args = vmsdk::ToValkeyStringVector(
+      "--debug-mode no --my-argv-dev-bool yes --debug-mode yes");
+  EXPECT_TRUE(ModuleConfigManager::Instance()
+                  .ParseAndLoadArgv(&fake_ctx, args.data(), args.size())
+                  .ok());
+  EXPECT_TRUE(dev_config->GetValue());
+  FreeValkeyArgs(args);
+
   args = vmsdk::ToValkeyStringVector("--debug-mode no");
   EXPECT_TRUE(ModuleConfigManager::Instance()
                   .ParseAndLoadArgv(&fake_ctx, args.data(), args.size())

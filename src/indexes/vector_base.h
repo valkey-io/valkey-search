@@ -140,6 +140,14 @@ class VectorRecord {
     return data_.load(std::memory_order_relaxed);
   }
 
+  // Raw access for HierarchicalNSW's slot seqlock (see ReadSlot there), which
+  // briefly tags the pointer and transfers references without copying.
+  std::atomic<const char *> &RawPointer() const noexcept { return data_; }
+  // Takes over one reference to `data_ptr`, which may be null.
+  static VectorRecord Adopt(const char *data_ptr) noexcept {
+    return VectorRecord(data_ptr);
+  }
+
   float GetReciprocalMagnitude() const noexcept {
     const char *ptr = data_.load(std::memory_order_relaxed);
     return ptr ? GetHeader(ptr)->reciprocal_magnitude_ : 1.0f;

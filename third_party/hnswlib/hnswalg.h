@@ -9,6 +9,7 @@
 #include <queue>
 #include <random>
 #include <string>
+#include <thread>
 #include <unordered_set>
 #include <vector>
 
@@ -257,27 +258,56 @@ class HierarchicalNSW
   }
 
   // Each slot also keeps a copy of its record's reciprocal magnitude, in the
-  // padding just before the record pointer, so search reads it from the slot
-  // line it already loads instead of from the record header (which then stays
-  // out of the search's cache footprint). The pointer and the copy are written
-  // separately, so a concurrent mutation could see them torn: only search
-  // paths, which never overlap a mutation (see ReplaceDataByInternalId), may
-  // read the copy. Mutation paths read the record header.
+  // padding just before the record pointer, so distances read it from the slot
+  // line they already load instead of from the record. Searches never overlap
+  // a mutation (see ReplaceDataByInternalId) and read the slot directly.
+  // Mutations can race a replacement of the slot they read, so they use
+  // ReadSlot.
+  inline float *SlotMagnitudePtr(tableint internal_id) const {
+    return reinterpret_cast<float *>((*data_level0_memory_)[internal_id] +
+                                     offsetData_ - sizeof(float));
+  }
+
   inline float SearchReciprocalMagnitude(tableint internal_id) const {
-    float magnitude;
-    std::memcpy(
-        &magnitude,
-        (*data_level0_memory_)[internal_id] + offsetData_ - sizeof(float),
-        sizeof(float));
-    return magnitude;
+    return *SlotMagnitudePtr(internal_id);
   }
 
   inline void SetSlotMagnitude(tableint internal_id,
                                const StoredVectorT &record) {
-    float magnitude = record.GetReciprocalMagnitude();
-    std::memcpy(
-        (*data_level0_memory_)[internal_id] + offsetData_ - sizeof(float),
-        &magnitude, sizeof(float));
+    std::atomic_ref<float>(*SlotMagnitudePtr(internal_id))
+        .store(record.GetReciprocalMagnitude(), std::memory_order_relaxed);
+  }
+
+  // A slot's vector and reciprocal magnitude, read as a consistent pair.
+  struct SlotView {
+    const char *vec;
+    float reciprocal_magnitude;
+  };
+
+  // Set in a slot's pointer while ReplaceDataByInternalId rewrites the slot.
+  // Vector data is at least 8-byte aligned, so the bit is otherwise clear.
+  static constexpr uintptr_t kSlotBusy = 1;
+
+  // Seqlock read of a slot, for mutation paths. A retired record stays
+  // allocated while the reading mutation's epoch is active, so an unchanged
+  // pointer means an unchanged record and therefore an unchanged magnitude.
+  SlotView ReadSlot(tableint internal_id) const {
+    const std::atomic<const char *> &raw =
+        GetDataByInternalId(internal_id).RawPointer();
+    std::atomic_ref<float> magnitude(*SlotMagnitudePtr(internal_id));
+    for (int spins = 0;; ++spins) {
+      const char *vec = raw.load(std::memory_order_acquire);
+      if (!(reinterpret_cast<uintptr_t>(vec) & kSlotBusy)) {
+        float m = magnitude.load(std::memory_order_relaxed);
+        std::atomic_thread_fence(std::memory_order_acquire);
+        if (raw.load(std::memory_order_relaxed) == vec) {
+          return {vec, m};
+        }
+      }
+      if (spins >= 64) {
+        std::this_thread::yield();
+      }
+    }
   }
 
   inline void SetDataByInternalId(tableint internal_id,
@@ -300,12 +330,21 @@ class HierarchicalNSW
   // schema's time-sliced mutex never lets a search overlap a mutation.
   void ReplaceDataByInternalId(tableint internal_id,
                                StoredVectorT &&datapoint) {
-    StoredVectorT *slot = GetDataPtrByInternalId(internal_id);
-    // Take a reference first, so the assignment below neither publishes an
-    // empty slot nor releases the last reference.
-    StoredVectorT old = *slot;
+    std::atomic<const char *> &raw =
+        GetDataPtrByInternalId(internal_id)->RawPointer();
+    // Seqlock write (see ReadSlot): tag the pointer, write the magnitude, then
+    // publish the new record. The slot's reference to the old record moves to
+    // `old`, which is retired below.
+    const char *old_ptr = raw.load(std::memory_order_relaxed);
+    raw.store(reinterpret_cast<const char *>(
+                  reinterpret_cast<uintptr_t>(old_ptr) | kSlotBusy),
+              std::memory_order_relaxed);
+    std::atomic_thread_fence(std::memory_order_release);
     SetSlotMagnitude(internal_id, datapoint);
-    *slot = std::move(datapoint);
+    raw.store(
+        datapoint.RawPointer().exchange(nullptr, std::memory_order_relaxed),
+        std::memory_order_release);
+    StoredVectorT old = StoredVectorT::Adopt(old_ptr);
     const uint64_t tag = vmsdk::epoch::RetireEpoch();
     {
       std::lock_guard<std::mutex> lock(retired_lock_);
@@ -360,31 +399,20 @@ class HierarchicalNSW
   // loops (searchBaseLayer, searchBaseLayerST, getNeighborsByHeuristic2) pick
   // the magnitude handling at compile time. The non-template overloads
   // dispatch on normalized_ for the remaining, colder call sites.
+  //
+  // Both magnitudes are applied in float to the raw vectors, matching
+  // RecomputeDistance. Tombstones are re-stored normalized with reciprocal
+  // magnitude 1.0 (see VectorHNSW::AlgoDeleteRecord and the RDB load
+  // generator), so the regular formula already yields the normalized distance
+  // for them. No per-candidate isMarkedDeleted() lookup is needed.
   template <bool kNormalized>
-  inline dist_t EvaluateDistance(const StoredVectorT &a,
-                                 const StoredVectorT &b) const {
+  inline dist_t EvaluateDistance(const SlotView &a, const SlotView &b) const {
     return fstdistfunc_(
-        a.GetRawVector(), b.GetRawVector(), dist_func_param_,
-        kNormalized ? a.GetReciprocalMagnitude() * b.GetReciprocalMagnitude()
-                    : 1.0f);
+        a.vec, b.vec, dist_func_param_,
+        kNormalized ? a.reciprocal_magnitude * b.reciprocal_magnitude : 1.0f);
   }
 
-  // Both magnitudes are applied in float to the raw vectors, matching the
-  // StoredVectorT-to-StoredVectorT overload and RecomputeDistance. Tombstones
-  // are re-stored normalized with reciprocal magnitude 1.0 (see
-  // VectorHNSW::AlgoDeleteRecord and the RDB load generator), so the regular
-  // formula already yields the normalized distance for them. No per-candidate
-  // isMarkedDeleted() lookup is needed.
-  template <bool kNormalized>
-  inline dist_t EvaluateDistance(const QueryVectorT &a,
-                                 const StoredVectorT &b) const {
-    return fstdistfunc_(
-        a.GetRawVector(), b.GetRawVector(), dist_func_param_,
-        kNormalized ? a.GetReciprocalMagnitude() * b.GetReciprocalMagnitude()
-                    : 1.0f);
-  }
-
-  // Same as above, for a raw stored-vector pointer (non-null)
+  // For a raw stored-vector pointer (non-null) and the reciprocal magnitude
   // already resolved from its slot.
   template <bool kNormalized>
   inline dist_t EvaluateDistance(const QueryVectorT &a, const char *b,
@@ -395,7 +423,13 @@ class HierarchicalNSW
                     : 1.0f);
   }
 
-  // Search paths only: uses the slot magnitude (see
+  template <bool kNormalized>
+  inline dist_t EvaluateDistance(const QueryVectorT &a,
+                                 const SlotView &b) const {
+    return EvaluateDistance<kNormalized>(a, b.vec, b.reciprocal_magnitude);
+  }
+
+  // Search paths only: reads the slot without the seqlock (see
   // SearchReciprocalMagnitude).
   template <bool kNormalized>
   inline dist_t EvaluateSearchDistance(const QueryVectorT &a,
@@ -410,16 +444,15 @@ class HierarchicalNSW
                        : EvaluateSearchDistance<false>(a, b);
   }
 
-  inline dist_t EvaluateDistance(const StoredVectorT &a,
-                                 const StoredVectorT &b) const {
-    return normalized_ ? EvaluateDistance<true>(a, b)
-                       : EvaluateDistance<false>(a, b);
+  // Mutation paths: read the slot through the seqlock.
+  inline dist_t EvaluateDistance(tableint a, tableint b) const {
+    return normalized_ ? EvaluateDistance<true>(ReadSlot(a), ReadSlot(b))
+                       : EvaluateDistance<false>(ReadSlot(a), ReadSlot(b));
   }
 
-  inline dist_t EvaluateDistance(const QueryVectorT &a,
-                                 const StoredVectorT &b) const {
-    return normalized_ ? EvaluateDistance<true>(a, b)
-                       : EvaluateDistance<false>(a, b);
+  inline dist_t EvaluateDistance(const QueryVectorT &a, tableint b) const {
+    return normalized_ ? EvaluateDistance<true>(a, ReadSlot(b))
+                       : EvaluateDistance<false>(a, ReadSlot(b));
   }
 
   int getRandomLevel(double reverse_size) {
@@ -461,8 +494,7 @@ class HierarchicalNSW
 
     dist_t lowerBound;
     if (!isMarkedDeleted(ep_id)) {
-      dist_t dist =
-          EvaluateDistance<kNormalized>(data_point, GetDataByInternalId(ep_id));
+      dist_t dist = EvaluateDistance<kNormalized>(data_point, ReadSlot(ep_id));
       top_candidates.emplace(dist, ep_id);
       lowerBound = dist;
       candidateSet.emplace(-dist, ep_id);
@@ -499,14 +531,11 @@ class HierarchicalNSW
       if (size > 0) {
         __builtin_prefetch((char *)(visited_array + *datal), 0, 3);
         __builtin_prefetch((char *)(visited_array + *datal + 64), 0, 3);
-        __builtin_prefetch(GetDataByInternalId(*datal).GetRawVector() -
-                               StoredVectorT::kStorageHeaderSize,
-                           0, 3);
+        __builtin_prefetch(GetDataByInternalId(*datal).GetRawVector(), 0, 3);
       }
       if (size > 1) {
-        __builtin_prefetch(GetDataByInternalId(*(datal + 1)).GetRawVector() -
-                               StoredVectorT::kStorageHeaderSize,
-                           0, 3);
+        __builtin_prefetch(GetDataByInternalId(*(datal + 1)).GetRawVector(), 0,
+                           3);
       }
 #endif
 
@@ -517,23 +546,19 @@ class HierarchicalNSW
         if (j + 1 < size) {
           __builtin_prefetch((char *)(visited_array + *(datal + j + 1)), 0, 3);
           __builtin_prefetch(
-              GetDataByInternalId(*(datal + j + 1)).GetRawVector() -
-                  StoredVectorT::kStorageHeaderSize,
-              0, 3);
+              GetDataByInternalId(*(datal + j + 1)).GetRawVector(), 0, 3);
         }
 #endif
         if (visited_array[candidate_id] == visited_array_tag) continue;
         visited_array[candidate_id] = visited_array_tag;
-        const StoredVectorT &currObj1 = (GetDataByInternalId(candidate_id));
-
-        dist_t dist1 = EvaluateDistance<kNormalized>(data_point, currObj1);
+        dist_t dist1 =
+            EvaluateDistance<kNormalized>(data_point, ReadSlot(candidate_id));
         if (top_candidates.size() < ef_construction_ || lowerBound > dist1) {
           candidateSet.emplace(-dist1, candidate_id);
 #ifdef USE_PREFETCH
           __builtin_prefetch(
-              GetDataByInternalId(candidateSet.top().second).GetRawVector() -
-                  StoredVectorT::kStorageHeaderSize,
-              0, 3);
+              GetDataByInternalId(candidateSet.top().second).GetRawVector(), 0,
+              3);
 #endif
 
           if (!isMarkedDeleted(candidate_id))
@@ -825,11 +850,11 @@ class HierarchicalNSW
       dist_t dist_to_query = -current_pair.first;
       queue_closest.pop();
       bool good = true;
-      const StoredVectorT &curr_vec = GetDataByInternalId(current_pair.second);
+      const SlotView curr_vec = ReadSlot(current_pair.second);
 
       for (std::pair<dist_t, tableint> second_pair : return_list) {
         dist_t curdist = EvaluateDistance<kNormalized>(
-            GetDataByInternalId(second_pair.second), curr_vec);
+            ReadSlot(second_pair.second), curr_vec);
         if (curdist < dist_to_query) {
           good = false;
           break;
@@ -933,7 +958,7 @@ class HierarchicalNSW
       }
     }
 
-    const StoredVectorT &cur_c_vec = GetDataByInternalId(cur_c);
+    const SlotView cur_c_vec = ReadSlot(cur_c);
     for (size_t idx = 0; idx < selectedNeighbors.size(); idx++) {
       std::unique_lock<std::mutex> lock(
           link_list_locks_[selectedNeighbors[idx]]);
@@ -975,8 +1000,7 @@ class HierarchicalNSW
           setListCount(ll_other, sz_link_list_other + 1);
         } else {
           // finding the "weakest" element to replace it with the new one
-          const StoredVectorT &neighbor_vec =
-              GetDataByInternalId(selectedNeighbors[idx]);
+          const SlotView neighbor_vec = ReadSlot(selectedNeighbors[idx]);
           dist_t d_max = EvaluateDistance<kNormalized>(cur_c_vec, neighbor_vec);
           // Heuristic:
           std::priority_queue<std::pair<dist_t, tableint>,
@@ -989,14 +1013,12 @@ class HierarchicalNSW
 #ifdef USE_PREFETCH
             if (j + 1 < sz_link_list_other) {
               __builtin_prefetch(
-                  GetDataByInternalId(data[j + 1]).GetRawVector() -
-                      StoredVectorT::kStorageHeaderSize,
-                  0, 3);
+                  GetDataByInternalId(data[j + 1]).GetRawVector(), 0, 3);
             }
 #endif
-            candidates.emplace(EvaluateDistance<kNormalized>(
-                                   GetDataByInternalId(data[j]), neighbor_vec),
-                               data[j]);
+            candidates.emplace(
+                EvaluateDistance<kNormalized>(ReadSlot(data[j]), neighbor_vec),
+                data[j]);
           }
 
           getNeighborsByHeuristic2Impl<kNormalized>(candidates, Mcurmax);
@@ -1716,8 +1738,7 @@ class HierarchicalNSW
         for (auto &&cand : sCand) {
           if (cand == neigh) continue;
 
-          dist_t distance = EvaluateDistance(GetDataByInternalId(neigh),
-                                             GetDataByInternalId(cand));
+          dist_t distance = EvaluateDistance(neigh, cand);
           if (candidates.size() < elementsToKeep) {
             candidates.emplace(distance, cand);
           } else {
@@ -1756,8 +1777,7 @@ class HierarchicalNSW
                                   int dataPointLevel, int maxLevel) {
     tableint currObj = entryPointInternalId;
     if (dataPointLevel < maxLevel) {
-      dist_t curdist =
-          EvaluateDistance(dataPoint, GetDataByInternalId(currObj));
+      dist_t curdist = EvaluateDistance(dataPoint, currObj);
       for (int level = maxLevel; level > dataPointLevel; level--) {
         bool changed = true;
         while (changed) {
@@ -1779,7 +1799,7 @@ class HierarchicalNSW
             }
 #endif
             tableint cand = datal[i];
-            dist_t d = EvaluateDistance(dataPoint, GetDataByInternalId(cand));
+            dist_t d = EvaluateDistance(dataPoint, cand);
             if (d < curdist) {
               curdist = d;
               currObj = cand;
@@ -1819,8 +1839,7 @@ class HierarchicalNSW
         bool epDeleted = isMarkedDeleted(entryPointInternalId);
         if (epDeleted) {
           filteredTopCandidates.emplace(
-              EvaluateDistance(dataPoint,
-                               GetDataByInternalId(entryPointInternalId)),
+              EvaluateDistance(dataPoint, entryPointInternalId),
               entryPointInternalId);
           if (filteredTopCandidates.size() > ef_construction_)
             filteredTopCandidates.pop();
@@ -1910,8 +1929,7 @@ class HierarchicalNSW
 
     if ((signed)currObj != -1) {
       if (curlevel < maxlevelcopy) {
-        dist_t curdist =
-            EvaluateDistance(data_point, GetDataByInternalId(currObj));
+        dist_t curdist = EvaluateDistance(data_point, currObj);
         for (int level = maxlevelcopy; level > curlevel; level--) {
           bool changed = true;
           while (changed) {
@@ -1926,8 +1944,7 @@ class HierarchicalNSW
               tableint cand = datal[i];
               if (cand < 0 || cand > max_elements_)
                 throw std::runtime_error("cand error");
-              dist_t d =
-                  EvaluateDistance(data_point, GetDataByInternalId(cand));
+              dist_t d = EvaluateDistance(data_point, cand);
               if (d < curdist) {
                 curdist = d;
                 currObj = cand;
@@ -1953,13 +1970,11 @@ class HierarchicalNSW
         // 2) If the global enterpoint_node_ is alive and distinct, also connect
         //    to it to link into the alive subgraph.
         if (top_candidates.empty()) {
-          top_candidates.emplace(
-              EvaluateDistance(data_point, GetDataByInternalId(currObj)),
-              currObj);
+          top_candidates.emplace(EvaluateDistance(data_point, currObj),
+                                 currObj);
           tableint ep = enterpoint_node_.load(std::memory_order_acquire);
           if ((signed)ep != -1 && ep != currObj && !isMarkedDeleted(ep)) {
-            top_candidates.emplace(
-                EvaluateDistance(data_point, GetDataByInternalId(ep)), ep);
+            top_candidates.emplace(EvaluateDistance(data_point, ep), ep);
           }
           if (top_candidates.size() > ef_construction_) top_candidates.pop();
         }

@@ -2244,8 +2244,14 @@ TEST_F(VectorIndexTest, SlotMagnitudeTracksRecord) {
   };
   auto expect_slots_match = [](const auto &index, size_t n) {
     for (size_t i = 0; i < n; ++i) {
+      const auto &stored = index.GetDataByInternalId(i);
       EXPECT_FLOAT_EQ(index.SearchReciprocalMagnitude(i),
-                      index.GetDataByInternalId(i).GetReciprocalMagnitude())
+                      stored.GetReciprocalMagnitude())
+          << i;
+      auto view = index.ReadSlot(i);
+      EXPECT_EQ(view.vec, stored.GetRawVector()) << i;
+      EXPECT_FLOAT_EQ(view.reciprocal_magnitude,
+                      stored.GetReciprocalMagnitude())
           << i;
     }
   };
@@ -2282,6 +2288,47 @@ TEST_F(VectorIndexTest, SlotMagnitudeTracksRecord) {
   EXPECT_TRUE(loaded.SetPointLockFree(0, record(0, 9.5f)));
   EXPECT_FLOAT_EQ(loaded.SearchReciprocalMagnitude(0), 9.5f);
   EXPECT_FALSE(loaded.SetPointLockFree(1, record(1, 1.0f)));  // Deleted.
+}
+
+// A mutation reading a slot while another replaces it must see a matching
+// (vector, magnitude) pair, never one record's vector with the other's
+// magnitude.
+TEST_F(VectorIndexTest, ReadSlotIsConsistentUnderReplace) {
+  hnswlib::InnerProductSpace space{kDimensions};
+  auto *pool = VectorPoolRegistry::Global().Get(
+      data_model::VECTOR_DATA_TYPE_FLOAT32,
+      VectorRecord::kStorageHeaderSize + kDimensions * sizeof(float));
+  auto vectors = DeterministicallyGenerateVectors(2, kDimensions, 10.0);
+  VectorRecord a = VectorRecord::Construct(VectorToStr(vectors[0]), 2.0f, pool);
+  VectorRecord b = VectorRecord::Construct(VectorToStr(vectors[1]), 5.0f, pool);
+  VectorHNSW<float>::HNSWIndex algo(&space, /*max_elements=*/1,
+                                    /*normalized=*/true, kM, kEFConstruction,
+                                    /*allow_replace_deleted=*/false,
+                                    /*random_seed=*/100);
+  algo.addPoint(QueryVector(a, kDimensions * sizeof(float), true,
+                            data_model::VECTOR_DATA_TYPE_FLOAT32),
+                0);
+  constexpr int kReplacements = 200000;
+  std::atomic<bool> done{false};
+  std::atomic<int> torn{0};
+  std::thread reader([&] {
+    while (!done.load(std::memory_order_relaxed)) {
+      auto view = algo.ReadSlot(0);
+      bool is_a =
+          view.vec == a.GetRawVector() && view.reciprocal_magnitude == 2.0f;
+      bool is_b =
+          view.vec == b.GetRawVector() && view.reciprocal_magnitude == 5.0f;
+      if (!is_a && !is_b) {
+        torn.fetch_add(1, std::memory_order_relaxed);
+      }
+    }
+  });
+  for (int i = 0; i < kReplacements; ++i) {
+    algo.SetDataByInternalId(0, VectorRecord(i % 2 ? a : b));
+  }
+  done.store(true, std::memory_order_relaxed);
+  reader.join();
+  EXPECT_EQ(torn.load(), 0);
 }
 
 // Loading a dup-label RDB must rebuild label_lookup_ to point to the live slot.

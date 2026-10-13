@@ -21,9 +21,9 @@
 #include "absl/strings/str_join.h"
 #include "absl/strings/strip.h"
 #include "absl/time/clock.h"
+#include "results_reply.h"
 #include "src/attribute_data_type.h"
 #include "src/commands/ft_aggregate_parser.h"
-#include "src/commands/results_reply.h"
 #include "src/cursor.h"
 #include "src/indexes/index_base.h"
 #include "src/query/response_generator.h"
@@ -1322,43 +1322,61 @@ class CursorAggregateResult : public Cursor {
 
 }  // namespace
 
+namespace {
+
+// A record's fields, replied through ResultsReply.
+class RecordFields : public ResultsReply::Fields {
+ public:
+  RecordFields(const AggregateParameters &parameters, const Record &rec)
+      : parameters_(parameters), rec_(rec) {}
+
+  // The reply computes no aggregate field, so unique names leave none out.
+  size_t Reply(ValkeyModuleCtx *ctx, bool) const override {
+    const auto data_type =
+        parameters_.index_schema->GetAttributeDataType().ToProto();
+    size_t pairs = 0;
+    CHECK(rec_.fields_.size() <= parameters_.record_info_by_index_.size());
+    for (size_t i = 0; i < rec_.fields_.size(); ++i) {
+      if (parameters_.suppressed_reply_column_ == i) {
+        continue;
+      }
+      const auto &info = parameters_.record_info_by_index_[i];
+      if (ReplyWithValue(ctx, data_type, info.output_name_, info.data_type_,
+                         rec_.fields_[i], parameters_.dialect)) {
+        ++pairs;
+      }
+    }
+
+    for (const auto &[name, value] : rec_.extra_fields_) {
+      if (ReplyWithValue(ctx, data_type, name, indexes::IndexerType::kNone,
+                         value, parameters_.dialect)) {
+        ++pairs;
+      }
+    }
+    return pairs;
+  }
+
+ private:
+  const AggregateParameters &parameters_;
+  const Record &rec_;
+};
+
+}  // namespace
+
 void AggregateParameters::ReplyRecords(ValkeyModuleCtx *ctx, RecordSet &records,
                                        size_t count, size_t total_results) {
-  auto reply = ResultsReply::Create(ctx, ResultsReply::Layout::kRows,
-                                    search_envelope_reply);
+  auto reply =
+      ResultsReply::Create(ctx, ResultsReply::Layout::kRows,
+                           ResultsReply::Columns{}, search_envelope_reply);
   reply->Begin(total_results, count);
   for (size_t n = 0; n < count; ++n) {
     auto rec = records.pop_front();
+    RecordFields fields(*this, *rec);
     ResultsReply::Row row;
-    row.fields = [&](bool) { return ReplyRecordFields(ctx, *rec); };
+    row.fields = &fields;
     reply->AddRow(row);
   }
   reply->End();
-}
-
-size_t AggregateParameters::ReplyRecordFields(ValkeyModuleCtx *ctx,
-                                              const Record &rec) const {
-  const auto data_type = index_schema->GetAttributeDataType().ToProto();
-  size_t pairs = 0;
-  CHECK(rec.fields_.size() <= record_info_by_index_.size());
-  for (size_t i = 0; i < rec.fields_.size(); ++i) {
-    if (suppressed_reply_column_ == i) {
-      continue;
-    }
-    if (ReplyWithValue(ctx, data_type, record_info_by_index_[i].output_name_,
-                       record_info_by_index_[i].data_type_, rec.fields_[i],
-                       dialect)) {
-      ++pairs;
-    }
-  }
-
-  for (const auto &[name, value] : rec.extra_fields_) {
-    if (ReplyWithValue(ctx, data_type, name, indexes::IndexerType::kNone, value,
-                       dialect)) {
-      ++pairs;
-    }
-  }
-  return pairs;
 }
 
 absl::Status RunAggregatePipeline(ValkeyModuleCtx *ctx,

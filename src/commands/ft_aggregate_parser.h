@@ -85,8 +85,6 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   // total_results is the total RESP3 reports.
   void ReplyRecords(ValkeyModuleCtx* ctx, RecordSet& records, size_t count,
                     size_t total_results);
-  // Replies a record's field/value pairs and returns their number.
-  size_t ReplyRecordFields(ValkeyModuleCtx* ctx, const Record& rec) const;
   // Whether RESP3 clients get the Redis Search envelope. FT.HYBRID, which
   // replies through the same pipeline, keeps its own reply shape.
   bool search_envelope_reply{true};

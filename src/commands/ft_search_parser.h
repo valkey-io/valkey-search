@@ -8,9 +8,10 @@
 #ifndef VALKEYSEARCH_SRC_COMMANDS_FT_SEARCH_PARSER_H_
 #define VALKEYSEARCH_SRC_COMMANDS_FT_SEARCH_PARSER_H_
 
-#include <optional>
 #include <string>
 
+#include "absl/strings/string_view.h"
+#include "results_reply.h"
 #include "src/commands/commands.h"
 #include "src/query/search.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -22,8 +23,6 @@ vmsdk::config::Number &GetMaxTimeoutMs();
 }  // namespace options
 
 absl::Status VerifyQueryString(query::SearchParameters &parameters);
-
-class ResultsReply;
 
 //
 // Data Unique to the FT.SEARCH command
@@ -42,6 +41,9 @@ struct SearchCommand : public QueryCommand {
   }
 
   query::SerializationRange GetSerializationRange() const;
+
+  // The columns WITHSCORES, WITHSORTKEYS and NOCONTENT give each reply row.
+  ResultsReply::Columns ReplyColumns() const;
 
   // Adds a row to reply per document in search_result.neighbors[start, end).
   void ReplyRows(ValkeyModuleCtx *ctx, ResultsReply &reply,
@@ -69,16 +71,21 @@ struct SearchCommand : public QueryCommand {
     bool has_relevance{false};
     bool sort_by_vec_score{false};
     bool nil_absent_sort_key{false};
-    std::string sort_key_prefix;
+    char sort_key_prefix{0};
     // The single VR distance field name (query::GetVrScoreFieldName).
     // Empty unless the query named the distance ($yield_distance_as or AS).
     std::string vr_field;
   };
   // RESP3 sort keys always follow Redis Search (see GetRowFormat).
   RowFormat GetRowFormat(bool resp3) const;
-  // The document's sort key, or nullopt to reply nil.
-  std::optional<std::string> SortKey(const indexes::Neighbor &neighbor,
-                                     const RowFormat &format) const;
+  // Sets the document's sort key prefix and value, or returns false to reply
+  // nil. The value points into the neighbor, or into buffer when it is
+  // formatted.
+  bool SortKey(const indexes::Neighbor &neighbor, const RowFormat &format,
+               std::string &buffer, char &prefix,
+               absl::string_view &value) const;
+  // A document's fields, replied through ResultsReply.
+  class RowFields;
   // Replies the document's field/value pairs and returns their number. With
   // unique_names, a field named like the reported distance is left out.
   size_t ReplyAttributes(ValkeyModuleCtx *ctx,

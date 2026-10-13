@@ -5,12 +5,11 @@
  *
  */
 
-#include "src/commands/results_reply.h"
+#include "results_reply.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <string>
 
 #include "src/expr/value.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -23,21 +22,10 @@ void ReplyWithStringView(ValkeyModuleCtx *ctx, absl::string_view s) {
   ValkeyModule_ReplyWithStringBuffer(ctx, s.data(), s.size());
 }
 
-void ReplySortKey(ValkeyModuleCtx *ctx,
-                  const std::optional<std::string> &sort_key) {
-  if (sort_key.has_value()) {
-    ReplyWithStringView(ctx, *sort_key);
-  } else {
-    ValkeyModule_ReplyWithNull(ctx);
-  }
-}
-
 class Resp2ResultsReply : public ResultsReply {
  public:
-  Resp2ResultsReply(ValkeyModuleCtx *ctx, Layout layout)
-      : ctx_(ctx), layout_(layout) {}
-
-  bool IsResp3() const override { return false; }
+  Resp2ResultsReply(ValkeyModuleCtx *ctx, Layout layout, Columns columns)
+      : ResultsReply(ctx, layout, columns, 2) {}
 
   void Begin(size_t total, size_t count) override {
     switch (layout_) {
@@ -60,10 +48,11 @@ class Resp2ResultsReply : public ResultsReply {
   }
 
   void AddRow(const Row &row) override {
-    if (!row.id.has_value()) {
+    if (!columns_.id) {
       // A result without an id is the array of its field/value pairs.
       ValkeyModule_ReplyWithArray(ctx_, VALKEYMODULE_POSTPONED_LEN);
-      ValkeyModule_ReplySetArrayLength(ctx_, 2 * row.fields(false));
+      ValkeyModule_ReplySetArrayLength(ctx_,
+                                       2 * row.fields->Reply(ctx_, false));
       ++elements_;
       return;
     }
@@ -71,20 +60,21 @@ class Resp2ResultsReply : public ResultsReply {
     if (!inline_row) {
       ValkeyModule_ReplyWithArray(ctx_, VALKEYMODULE_POSTPONED_LEN);
     }
-    ReplyWithStringView(ctx_, *row.id);
+    ReplyWithStringView(ctx_, row.id);
     size_t elements = 1;
-    if (row.score.has_value()) {
-      ReplyWithStringView(ctx_, expr::FormatDouble(*row.score));
+    if (columns_.score) {
+      ReplyWithStringView(ctx_, expr::FormatDouble(row.score));
       ++elements;
     }
     // NOCONTENT leaves out the sort key along with the fields.
-    if (row.fields) {
-      if (row.sort_key.has_value()) {
-        ReplySortKey(ctx_, *row.sort_key);
+    if (columns_.fields) {
+      if (columns_.sort_key) {
+        ReplySortKey(row);
         ++elements;
       }
       ValkeyModule_ReplyWithArray(ctx_, VALKEYMODULE_POSTPONED_LEN);
-      ValkeyModule_ReplySetArrayLength(ctx_, 2 * row.fields(false));
+      ValkeyModule_ReplySetArrayLength(ctx_,
+                                       2 * row.fields->Reply(ctx_, false));
       ++elements;
     }
     if (inline_row) {
@@ -108,18 +98,14 @@ class Resp2ResultsReply : public ResultsReply {
   }
 
  private:
-  ValkeyModuleCtx *ctx_;
-  Layout layout_;
   // kSearch: the elements replied so far.
   size_t elements_{0};
 };
 
 class Resp3ResultsReply : public ResultsReply {
  public:
-  Resp3ResultsReply(ValkeyModuleCtx *ctx, Layout layout)
-      : ctx_(ctx), layout_(layout) {}
-
-  bool IsResp3() const override { return true; }
+  Resp3ResultsReply(ValkeyModuleCtx *ctx, Layout layout, Columns columns)
+      : ResultsReply(ctx, layout, columns, 3) {}
 
   void Begin(size_t total, size_t count) override {
     if (layout_ == Layout::kSearchCursor) {
@@ -139,26 +125,25 @@ class Resp3ResultsReply : public ResultsReply {
   }
 
   void AddRow(const Row &row) override {
-    ValkeyModule_ReplyWithMap(ctx_, (row.id.has_value() ? 1 : 0) +
-                                        (row.score.has_value() ? 1 : 0) +
-                                        (row.sort_key.has_value() ? 1 : 0) +
-                                        (row.fields ? 1 : 0) + 1);
-    if (row.id.has_value()) {
+    ValkeyModule_ReplyWithMap(
+        ctx_,
+        columns_.id + columns_.score + columns_.sort_key + columns_.fields + 1);
+    if (columns_.id) {
       ValkeyModule_ReplyWithSimpleString(ctx_, "id");
-      ReplyWithStringView(ctx_, *row.id);
+      ReplyWithStringView(ctx_, row.id);
     }
-    if (row.score.has_value()) {
+    if (columns_.score) {
       ValkeyModule_ReplyWithSimpleString(ctx_, "score");
-      ValkeyModule_ReplyWithDouble(ctx_, *row.score);
+      ValkeyModule_ReplyWithDouble(ctx_, row.score);
     }
-    if (row.sort_key.has_value()) {
+    if (columns_.sort_key) {
       ValkeyModule_ReplyWithSimpleString(ctx_, "sortkey");
-      ReplySortKey(ctx_, *row.sort_key);
+      ReplySortKey(row);
     }
-    if (row.fields) {
+    if (columns_.fields) {
       ValkeyModule_ReplyWithSimpleString(ctx_, "extra_attributes");
       ValkeyModule_ReplyWithMap(ctx_, VALKEYMODULE_POSTPONED_LEN);
-      ValkeyModule_ReplySetMapLength(ctx_, row.fields(true));
+      ValkeyModule_ReplySetMapLength(ctx_, row.fields->Reply(ctx_, true));
     }
     ValkeyModule_ReplyWithSimpleString(ctx_, "values");
     ValkeyModule_ReplyWithArray(ctx_, 0);
@@ -169,22 +154,29 @@ class Resp3ResultsReply : public ResultsReply {
       ValkeyModule_ReplyWithLongLong(ctx_, static_cast<long long>(cursor_id));
     }
   }
-
- private:
-  ValkeyModuleCtx *ctx_;
-  Layout layout_;
 };
 
 }  // namespace
 
+void ResultsReply::ReplySortKey(const Row &row) {
+  if (row.sort_key_nil) {
+    ValkeyModule_ReplyWithNull(ctx_);
+    return;
+  }
+  sort_key_buffer_.assign(1, row.sort_key_prefix);
+  sort_key_buffer_.append(row.sort_key);
+  ReplyWithStringView(ctx_, sort_key_buffer_);
+}
+
 std::unique_ptr<ResultsReply> ResultsReply::Create(ValkeyModuleCtx *ctx,
                                                    Layout layout,
+                                                   Columns columns,
                                                    bool search_envelope) {
   if (search_envelope &&
       (ValkeyModule_GetContextFlags(ctx) & VALKEYMODULE_CTX_FLAGS_RESP3)) {
-    return std::make_unique<Resp3ResultsReply>(ctx, layout);
+    return std::make_unique<Resp3ResultsReply>(ctx, layout, columns);
   }
-  return std::make_unique<Resp2ResultsReply>(ctx, layout);
+  return std::make_unique<Resp2ResultsReply>(ctx, layout, columns);
 }
 
 }  // namespace valkey_search

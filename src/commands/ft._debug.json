@@ -23,6 +23,11 @@
             "token": "SHOW_INFO"
           },
           {
+            "name": "SHOW_CURSORS",
+            "type": "pure-token",
+            "token": "SHOW_CURSORS"
+          },
+          {
             "name": "PAUSEPOINT",
             "type": "block",
             "token": "PAUSEPOINT",

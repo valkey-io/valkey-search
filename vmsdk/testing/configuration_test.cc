@@ -45,6 +45,11 @@ TEST_F(ConfigTest, registration) {
                                  Eq(1), _, _, _, _, _))
       .Times(testing::AtLeast(1));
 
+  EXPECT_CALL(
+      *kMockValkeyModule,
+      RegisterBoolConfig(&fake_ctx, StrEq("debug-mode"), Eq(0), _, _, _, _, _))
+      .Times(testing::AtLeast(1));
+
   // 2 integer registration
   EXPECT_CALL(*kMockValkeyModule,
               RegisterNumericConfig(&fake_ctx, StrEq("number"), Eq(42), _,
@@ -321,6 +326,104 @@ TEST_F(ConfigTest, CheckDebugConfiguration) {
     CheckValue(enum_config, debug_mode, 2);
     FreeValkeyArgs(args);
   }
+}
+
+// debug-mode must be registered with Valkey (as a hidden config) so it can be
+// toggled at runtime via CONFIG SET, which in turn gates Dev() configs.
+TEST_F(ConfigTest, DebugModeMutableAtRuntime) {
+  ValkeyModuleConfigSetBoolFunc debug_mode_setfn = nullptr;
+  void *debug_mode_privdata = nullptr;
+  EXPECT_CALL(*kMockValkeyModule, RegisterBoolConfig(_, _, _, _, _, _, _, _))
+      .Times(testing::AnyNumber());
+  EXPECT_CALL(*kMockValkeyModule,
+              RegisterBoolConfig(
+                  &fake_ctx, StrEq("debug-mode"), _,
+                  Eq(static_cast<unsigned int>(VALKEYMODULE_CONFIG_HIDDEN)), _,
+                  _, _, _))
+      .WillOnce([&](ValkeyModuleCtx *, const char *, int, unsigned int,
+                    ValkeyModuleConfigGetBoolFunc,
+                    ValkeyModuleConfigSetBoolFunc setfn,
+                    ValkeyModuleConfigApplyFunc, void *privdata) {
+        debug_mode_setfn = setfn;
+        debug_mode_privdata = privdata;
+        return VALKEYMODULE_OK;
+      });
+  ASSERT_TRUE(ModuleConfigManager::Instance().Init(&fake_ctx).ok());
+  ASSERT_NE(debug_mode_setfn, nullptr);
+
+  // Start with debug-mode off, as if loaded without `--debug-mode yes`.
+  auto args = vmsdk::ToValkeyStringVector("--debug-mode no");
+  ASSERT_TRUE(ModuleConfigManager::Instance()
+                  .ParseAndLoadArgv(&fake_ctx, args.data(), args.size())
+                  .ok());
+  ASSERT_FALSE(config::IsDebugModeEnabled());
+
+  auto dev_config = config::BooleanBuilder("my-dev-bool", true).Dev().Build();
+  EXPECT_TRUE(absl::IsPermissionDenied(dev_config->SetValue(false)));
+
+  // CONFIG SET search.debug-mode yes
+  EXPECT_EQ(debug_mode_setfn("debug-mode", 1, debug_mode_privdata, nullptr),
+            VALKEYMODULE_OK);
+  EXPECT_TRUE(config::IsDebugModeEnabled());
+  EXPECT_TRUE(dev_config->SetValue(false).ok());
+  EXPECT_FALSE(dev_config->GetValue());
+
+  // CONFIG SET search.debug-mode no
+  EXPECT_EQ(debug_mode_setfn("debug-mode", 0, debug_mode_privdata, nullptr),
+            VALKEYMODULE_OK);
+  EXPECT_FALSE(config::IsDebugModeEnabled());
+  EXPECT_TRUE(absl::IsPermissionDenied(dev_config->SetValue(true)));
+  EXPECT_FALSE(dev_config->GetValue());
+  FreeValkeyArgs(args);
+}
+
+// A Dev() config passed as a module argument must be rejected unless
+// debug-mode is enabled.
+TEST_F(ConfigTest, DevConfigFromArgvRequiresDebugMode) {
+  auto dev_config =
+      config::BooleanBuilder("my-argv-dev-bool", false).Dev().Build();
+
+  auto args =
+      vmsdk::ToValkeyStringVector("--debug-mode no --my-argv-dev-bool yes");
+  EXPECT_TRUE(
+      absl::IsPermissionDenied(ModuleConfigManager::Instance().ParseAndLoadArgv(
+          &fake_ctx, args.data(), args.size())));
+  EXPECT_FALSE(dev_config->GetValue());
+  FreeValkeyArgs(args);
+
+  args = vmsdk::ToValkeyStringVector("--debug-mode yes --my-argv-dev-bool yes");
+  EXPECT_TRUE(ModuleConfigManager::Instance()
+                  .ParseAndLoadArgv(&fake_ctx, args.data(), args.size())
+                  .ok());
+  EXPECT_TRUE(dev_config->GetValue());
+  FreeValkeyArgs(args);
+
+  args = vmsdk::ToValkeyStringVector("--debug-mode no");
+  EXPECT_TRUE(ModuleConfigManager::Instance()
+                  .ParseAndLoadArgv(&fake_ctx, args.data(), args.size())
+                  .ok());
+  FreeValkeyArgs(args);
+}
+
+// Dev() configs from the config file (applied between Init and
+// ParseAndLoadArgv) are accepted without debug-mode, as before debug-mode was
+// registered.
+TEST_F(ConfigTest, DevConfigFromConfigFileAllowed) {
+  auto dev_config =
+      config::BooleanBuilder("my-file-dev-bool", false).Dev().Build();
+  EXPECT_CALL(*kMockValkeyModule, RegisterBoolConfig(_, _, _, _, _, _, _, _))
+      .Times(testing::AnyNumber());
+  ASSERT_TRUE(ModuleConfigManager::Instance().Init(&fake_ctx).ok());
+  ASSERT_FALSE(config::IsDebugModeEnabled());
+  EXPECT_TRUE(dev_config->SetValue(true).ok());
+  EXPECT_TRUE(dev_config->GetValue());
+
+  auto args = vmsdk::ToValkeyStringVector("--debug-mode no");
+  EXPECT_TRUE(ModuleConfigManager::Instance()
+                  .ParseAndLoadArgv(&fake_ctx, args.data(), args.size())
+                  .ok());
+  EXPECT_TRUE(absl::IsPermissionDenied(dev_config->SetValue(false)));
+  FreeValkeyArgs(args);
 }
 
 TEST_F(ConfigTest, defaultValue) {

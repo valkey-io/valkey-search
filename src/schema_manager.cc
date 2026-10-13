@@ -31,6 +31,7 @@
 #include "highwayhash/hh_types.h"
 #include "highwayhash/highwayhash.h"
 #include "src/coordinator/metadata_manager.h"
+#include "src/cursor.h"
 #include "src/index_schema.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/vector_base.h"
@@ -417,6 +418,12 @@ SchemaManager::RemoveIndexSchemaInternal(int db_num, absl::string_view name) {
   // backlog of mutations, they can keep the index schema alive and cause
   // unnecessary CPU and memory usage.
   result->MarkAsDestructing();
+  // Cursors hold this index's saved query output, which is of no use once the
+  // index is gone. This is the single choke point for every removal path
+  // (FT.DROPINDEX, FLUSHDB, replica full sync, RDB load, metadata updates).
+  if (CursorTable::HasInstance()) {
+    CursorTable::Instance().EraseIndex(db_num, name);
+  }
   return result;
 }
 
@@ -705,6 +712,11 @@ void SchemaManager::OnSwapDB(ValkeyModuleSwapDbInfo *swap_db_info) {
        absl::flat_hash_map<std::string, std::shared_ptr<IndexSchema>>()});
   std::swap(db_to_index_schemas_[swap_db_info->dbnum_first],
             db_to_index_schemas_[swap_db_info->dbnum_second]);
+  // Cursors follow their index schema to its new database.
+  if (CursorTable::HasInstance()) {
+    CursorTable::Instance().SwapDb(swap_db_info->dbnum_first,
+                                   swap_db_info->dbnum_second);
+  }
   for (auto &schema : db_to_index_schemas_[swap_db_info->dbnum_first]) {
     schema.second->OnSwapDB(swap_db_info);
   }

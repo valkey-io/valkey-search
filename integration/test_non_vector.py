@@ -1223,7 +1223,21 @@ class TestNonVectorCluster(ValkeySearchClusterTestCase):
         validate_limit_queries(client)
         # Test bulk limit functionality
         validate_bulk_limit_queries(client)
-    
+
+    def test_bare_wildcard_cluster(self):
+        """
+            Test bare '*' match-all FT.SEARCH in Valkey Search CME. The
+            match-all flag is derived on the coordinating node and has to reach
+            each shard, which never re-parses the query string.
+        """
+        cluster_client: ValkeyCluster = self.new_cluster_client()
+        client: Valkey = self.new_client_for_primary(0)
+        create_indexes(client)
+        for doc in hash_docs:
+            assert cluster_client.execute_command(*doc) == 5
+        time.sleep(1)
+        validate_bare_wildcard_queries(client)
+
     def test_aggregate_complex_cluster(self):
         cluster_client: ValkeyCluster = self.new_cluster_client()
         client: Valkey = self.new_client_for_primary(0)

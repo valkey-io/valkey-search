@@ -180,10 +180,14 @@ TEST_P(AllocatorTest, FixedSizeAllocatorMultipleChunksWithDeleteChunks) {
     VerifyAllocationChunk(*allocator, buffers, 1, 2);
     VerifyAllocationChunk(*allocator, buffers, 0, 3);
 
+    buffers[2].clear();
+    buffers[3].clear();
     EXPECT_EQ(allocator->ChunkCount(), chunks - 2);
     EXPECT_EQ(allocator->ActiveAllocations(),
               (chunks - 2) * entries_fit_in_chunk);
-    EXPECT_NE(allocator->Allocate(size), nullptr);
+    char *new_alloc = allocator->Allocate(size);
+    EXPECT_NE(new_alloc, nullptr);
+    buffers.push_back({new_alloc});
     EXPECT_EQ(allocator->ChunkCount(), chunks - 1);
     EXPECT_EQ(allocator->ActiveAllocations(),
               (chunks - 2) * entries_fit_in_chunk + 1);

@@ -122,8 +122,13 @@ class VectorRegistry {
     }
   };
 
-  using PerDbRegistryMap =
-      absl::flat_hash_map<RegistryKey, indexes::VectorRecordWithSize>;
+  // A tracked record and the element type it was built for. Equal bytes are
+  // only the same vector when read as the same type (#1559).
+  struct TrackedRecord : indexes::VectorRecordWithSize {
+    data_model::VectorDataType data_type;
+  };
+
+  using PerDbRegistryMap = absl::flat_hash_map<RegistryKey, TrackedRecord>;
 
   // Maps db_num -> inner map to track active vector records per database.
   absl::flat_hash_map<int, PerDbRegistryMap> tracked_vectors_;
@@ -153,7 +158,7 @@ class VectorRegistry {
       absl::string_view attribute_identifier,
       const indexes::VectorRecord &vector_record, size_t vector_size,
       const data_model::AttributeDataType &attribute_data_type);
-  std::optional<indexes::VectorRecordWithSize> ExtractTrackedRecord(
+  std::optional<TrackedRecord> ExtractTrackedRecord(
       int db_num, const InternedStringPtr &key,
       const InternedStringPtr &attribute_identifier);
   void EraseTrackedRecord(int db_num, const RegistryKey &key);

@@ -95,21 +95,21 @@ indexes::VectorRecordWithSize VectorRegistry::DedupOrConstruct(
   auto it = db_tracked.find(search_key);
   if (it != db_tracked.end() && it->second == vector_str) {
     // Equal bytes are only the same vector if read as the same element type.
-    // Pools are per type, so a record from another index's pool was built
-    // (and its magnitude computed) for a different type. Give this index its
-    // own untracked record; the tracked one stays shared with the hash.
-    auto *record_pool = it->second.vector_record.GetPool();
-    if (record_pool && record_pool != vector_base->GetVectorPool()) {
+    // A record built for another type has that type's magnitude (and pool).
+    // Give this index its own untracked record; the tracked one stays shared
+    // with the hash.
+    if (it->second.data_type != vector_base->GetVectorDataType()) {
       return ConstructVectorRecord(vector_str, vector_base);
     }
     ++stats_.dedup_cnt;
     result = it->second;
   } else {
     result = ConstructVectorRecord(vector_str, vector_base);
+    TrackedRecord tracked{result, vector_base->GetVectorDataType()};
     if (it != db_tracked.end()) {
-      it->second = result;
+      it->second = tracked;
     } else {
-      db_tracked.emplace(search_key, result);
+      db_tracked.emplace(search_key, tracked);
     }
   }
 
@@ -120,7 +120,7 @@ indexes::VectorRecordWithSize VectorRegistry::DedupOrConstruct(
   return result;
 }
 
-std::optional<indexes::VectorRecordWithSize>
+std::optional<VectorRegistry::TrackedRecord>
 VectorRegistry::ExtractTrackedRecord(
     int db_num, const InternedStringPtr &key,
     const InternedStringPtr &attribute_identifier) {

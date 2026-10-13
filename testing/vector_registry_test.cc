@@ -78,7 +78,6 @@ TEST_F(VectorRegistryTest, DedupDoesNotShareAcrossElementTypes) {
   MockIndex f32(data_model::VECTOR_DATA_TYPE_FLOAT32, sizeof(float), 4,
                 attr->Str(), 0);
   MockIndex f16(data_model::VECTOR_DATA_TYPE_FLOAT16, 2, 8, attr->Str(), 0);
-  ASSERT_NE(f32.GetVectorPool(), f16.GetVectorPool());
 
   std::vector<float> vec_data = {1.0f, 2.0f, 3.0f, 4.0f};
   std::string vec_str(reinterpret_cast<const char *>(vec_data.data()),

@@ -8,9 +8,9 @@
 
 #include <sys/types.h>
 
+#include <bit>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <memory>
 #include <set>
 #include <string>
@@ -1013,11 +1013,11 @@ absl::Status SVSVamanaParameters::Verify() const {
   // Any user-supplied value must be finite and respect SVS's L2
   // invariant (alpha >= 1.0). IP/COSINE's 0 < alpha <= 1.0 range is
   // unreachable while those metrics are fenced above; the check will
-  // widen when the fence lifts. Bit-pattern test avoids -ffast-math
-  // folding isnan/isfinite to constants.
-  if (alpha != kDefaultSVSAlphaSentinel) {
-    uint32_t alpha_bits;
-    std::memcpy(&alpha_bits, &alpha, sizeof(alpha_bits));
+  // widen when the fence lifts. Both tests compare bit patterns because
+  // -ffast-math folds isnan/isfinite and lets NaN compare equal to the
+  // sentinel.
+  const auto alpha_bits = std::bit_cast<uint32_t>(alpha);
+  if (alpha_bits != std::bit_cast<uint32_t>(kDefaultSVSAlphaSentinel)) {
     const bool is_non_finite = (alpha_bits & 0x7F800000u) == 0x7F800000u;
     if (is_non_finite || alpha < 1.0f) {
       return absl::InvalidArgumentError(

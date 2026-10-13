@@ -70,11 +70,6 @@ const absl::flat_hash_map<data_model::DistanceMetric, std::string>
         {data_model::DISTANCE_METRIC_L2, typeid(kL2Space).name()},
     }};
 
-static cancel::Token &CancelNever() {
-  static cancel::Token cancel_never = cancel::Make(1000000, nullptr);
-  return cancel_never;
-}
-
 static void ExpectNeighborsNear(const std::vector<NeighborTest> &act,
                                 const std::vector<NeighborTest> &exp,
                                 float tolerance = 1e-5f) {
@@ -1485,26 +1480,6 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   EXPECT_NEAR(*orthogonal, 1.0f, 1e-5f);
 }
 
-float CalcRecall(VectorFlat<float> *flat_index, VectorHNSW<float> *hnsw_index,
-                 uint64_t k, int dimensions, std::optional<size_t> ef_runtime) {
-  auto search_vectors = DeterministicallyGenerateVectors(50, dimensions, 1.5);
-  int cnt = 0;
-  for (const auto &search_vector : search_vectors) {
-    absl::string_view vector = VectorToStr(search_vector);
-    auto res_hnsw =
-        hnsw_index->Search(vector, k, CancelNever(), nullptr, ef_runtime);
-    auto res_flat = flat_index->Search(vector, k, CancelNever());
-    for (auto &label : *res_hnsw) {
-      for (auto &real_label : *res_flat) {
-        if (label.external_id == real_label.external_id) {
-          ++cnt;
-          break;
-        }
-      }
-    }
-  }
-  return ((float)(cnt)) / ((float)(k * search_vectors.size()));
-}
 // Note this test is expected to fail if run with `config=release`. This has to
 // do with the usage of the optimization flag `-ffast-math`
 TEST_F(VectorIndexTest, EfRuntimeRecall) {

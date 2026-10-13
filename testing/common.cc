@@ -25,6 +25,7 @@
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "src/attribute_data_type.h"
+#include "src/indexes/svs_index.pb.h"
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_hnsw.h"
 #include "src/query/search.h"
@@ -152,6 +153,46 @@ data_model::VectorIndex CreateFlatVectorIndexProto(
   flat_algorithm->set_block_size(block_size);
   vector_index_proto.set_allocated_flat_algorithm(flat_algorithm.release());
   return vector_index_proto;
+}
+
+data_model::VectorIndex CreateSVSVectorIndexProto(
+    int dimensions, data_model::DistanceMetric distance_metric,
+    data_model::SVSCompressionType compression, uint32_t graph_max_degree,
+    uint32_t construction_window_size, uint32_t search_window_size) {
+  data_model::VectorIndex vector_index_proto;
+  vector_index_proto.set_dimension_count(dimensions);
+  vector_index_proto.set_distance_metric(distance_metric);
+  auto svs_algorithm = std::make_unique<data_model::SVSVamanaAlgorithm>();
+  svs_algorithm->set_graph_max_degree(graph_max_degree);
+  svs_algorithm->set_construction_window_size(construction_window_size);
+  svs_algorithm->set_search_window_size(search_window_size);
+  svs_algorithm->set_alpha(0.0f);
+  svs_algorithm->set_compression(compression);
+  vector_index_proto.set_allocated_svs_vamana_algorithm(
+      svs_algorithm.release());
+  return vector_index_proto;
+}
+
+float CalcRecall(indexes::VectorBase *ground_truth_index,
+                 indexes::VectorBase *query_index, uint64_t k, int dimensions,
+                 std::optional<size_t> ef_runtime) {
+  auto search_vectors = DeterministicallyGenerateVectors(50, dimensions, 1.5);
+  int cnt = 0;
+  for (const auto &search_vector : search_vectors) {
+    absl::string_view vector = VectorToStr(search_vector);
+    auto res_query =
+        query_index->Search(vector, k, CancelNever(), nullptr, ef_runtime);
+    auto res_ground = ground_truth_index->Search(vector, k, CancelNever());
+    for (auto &label : *res_query) {
+      for (auto &real_label : *res_ground) {
+        if (label.external_id == real_label.external_id) {
+          ++cnt;
+          break;
+        }
+      }
+    }
+  }
+  return ((float)(cnt)) / ((float)(k * search_vectors.size()));
 }
 
 data_model::NumericIndex CreateNumericIndexProto() { return {}; }

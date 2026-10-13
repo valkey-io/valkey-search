@@ -156,8 +156,8 @@ struct SearchPartitionResultsTracker {
                                              vmsdk::MakeUniqueValkeyString(
                                                  attribute_content.content())));
       }
-      // A shard sends distance_fp64 and score_fp64 only when the float fields
-      // lost precision; a shard that predates them never sends them.
+      // A shard sends distance_fp64 and score_fp64 instead of the float
+      // fields only when the value does not fit in a float.
       indexes::Neighbor neighbor{
           StringInternStore::Intern(neighbor_entry->key()),
           neighbor_entry->has_distance_fp64() ? neighbor_entry->distance_fp64()

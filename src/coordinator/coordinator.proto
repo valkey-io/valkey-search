@@ -199,11 +199,12 @@ message InkeysFilter {
 
 message NeighborEntry {
   string key = 1;
-  // distance and score narrowed to float, kept for coordinators that predate
-  // distance_fp64 and score_fp64.
   float distance = 2;
   repeated AttributeContentEntry attribute_contents = 3;
   float score = 4;
+  // Set instead of distance and score when the value does not fit in a float,
+  // which happens only for FLOAT64 indexes. A FLOAT64 index exists only on
+  // nodes that read these fields.
   optional double distance_fp64 = 5;
   optional double score_fp64 = 6;
 }

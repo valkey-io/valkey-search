@@ -7,8 +7,8 @@
 
 #include "src/coordinator/server.h"
 
-#include <algorithm>
 #include <bit>
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -100,25 +100,20 @@ void RecordSearchMetrics(bool failure,
   }
 }
 
-// Whether narrowing `value` to float loses information, as it does for most
-// FLOAT64 distances. Compared by bits: -ffast-math makes float comparisons with
-// NaN and infinity unreliable.
 namespace {
-// The float field for `value`. A finite value beyond the float range is
-// clamped first: converting it is undefined. Non-finite values are recognized
-// by their bits, since -ffast-math makes comparisons with them unreliable.
-float ToLegacyFloat(double value) {
+// Whether `value` is exactly representable as a float. Only FLOAT64 indexes
+// produce values that do not. Infinity and NaN are detected by their bits,
+// because -ffast-math makes comparisons with them unreliable.
+bool IsRepresentableAsFloat(double value) {
   constexpr uint64_t kExponentMask = 0x7ff0000000000000ULL;
   if ((std::bit_cast<uint64_t>(value) & kExponentMask) == kExponentMask) {
-    return static_cast<float>(value);
+    return true;
   }
-  constexpr double kMax = std::numeric_limits<float>::max();
-  return static_cast<float>(std::clamp(value, -kMax, kMax));
-}
-
-bool NeedsFp64(double value) {
-  return std::bit_cast<uint64_t>(static_cast<double>(ToLegacyFloat(value))) !=
-         std::bit_cast<uint64_t>(value);
+  // Converting a finite value beyond the float range is undefined behavior.
+  if (std::abs(value) > std::numeric_limits<float>::max()) {
+    return false;
+  }
+  return static_cast<double>(static_cast<float>(value)) == value;
 }
 }  // namespace
 
@@ -127,12 +122,14 @@ void SerializeNeighbors(SearchIndexPartitionResponse *response,
   for (const auto &neighbor : neighbors) {
     auto *neighbor_proto = response->add_neighbors();
     neighbor_proto->set_key(std::move(*neighbor.external_id));
-    neighbor_proto->set_score(ToLegacyFloat(neighbor.score));
-    neighbor_proto->set_distance(ToLegacyFloat(neighbor.distance));
-    if (NeedsFp64(neighbor.score)) {
+    if (IsRepresentableAsFloat(neighbor.score)) {
+      neighbor_proto->set_score(static_cast<float>(neighbor.score));
+    } else {
       neighbor_proto->set_score_fp64(neighbor.score);
     }
-    if (NeedsFp64(neighbor.distance)) {
+    if (IsRepresentableAsFloat(neighbor.distance)) {
+      neighbor_proto->set_distance(static_cast<float>(neighbor.distance));
+    } else {
       neighbor_proto->set_distance_fp64(neighbor.distance);
     }
     if (neighbor.attribute_contents) {

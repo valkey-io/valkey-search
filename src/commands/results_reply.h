@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, valkey-search contributors
+ * Copyright (c) 2026, valkey-search contributors
  * All rights reserved.
  * SPDX-License-Identifier: BSD 3-Clause
  *
@@ -49,12 +49,17 @@ class ResultsReply {
     bool fields{true};
   };
 
-  // Replies the field/value pairs of one row.
+  // The field/value pairs of one row, implemented by each command for its
+  // results. AddRow() opens the container the pairs go into (a RESP2 array,
+  // or the RESP3 extra_attributes map), calls Reply() to write them, and then
+  // sets the container's length from what Reply() returns.
   class Fields {
    public:
     virtual ~Fields() = default;
-    // Replies the pairs and returns their number. With unique_names the pairs
-    // go into a map, so a field named like a computed one must be left out.
+    // Replies the pairs and returns their number. unique_names is set when the
+    // pairs go into a RESP3 map: a command that adds a field of its own (the
+    // FT.SEARCH distance) must then leave out a document field of the same
+    // name, since a map cannot hold both.
     virtual size_t Reply(ValkeyModuleCtx *ctx, bool unique_names) const = 0;
   };
 
@@ -76,8 +81,11 @@ class ResultsReply {
                                               Layout layout, Columns columns,
                                               bool search_envelope = true);
 
+  // RespVersion() values.
+  static constexpr int kResp2 = 2;
+  static constexpr int kResp3 = 3;
+
   virtual ~ResultsReply() = default;
-  // 2 or 3.
   int RespVersion() const { return resp_version_; }
   // Starts the reply of `count` rows out of `total` matches.
   virtual void Begin(size_t total, size_t count) = 0;

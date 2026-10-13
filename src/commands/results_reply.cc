@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, valkey-search contributors
+ * Copyright (c) 2026, valkey-search contributors
  * All rights reserved.
  * SPDX-License-Identifier: BSD 3-Clause
  *
@@ -25,7 +25,7 @@ void ReplyWithStringView(ValkeyModuleCtx *ctx, absl::string_view s) {
 class Resp2ResultsReply : public ResultsReply {
  public:
   Resp2ResultsReply(ValkeyModuleCtx *ctx, Layout layout, Columns columns)
-      : ResultsReply(ctx, layout, columns, 2) {}
+      : ResultsReply(ctx, layout, columns, kResp2) {}
 
   void Begin(size_t total, size_t count) override {
     switch (layout_) {
@@ -105,7 +105,7 @@ class Resp2ResultsReply : public ResultsReply {
 class Resp3ResultsReply : public ResultsReply {
  public:
   Resp3ResultsReply(ValkeyModuleCtx *ctx, Layout layout, Columns columns)
-      : ResultsReply(ctx, layout, columns, 3) {}
+      : ResultsReply(ctx, layout, columns, kResp3) {}
 
   void Begin(size_t total, size_t count) override {
     if (layout_ == Layout::kSearchCursor) {

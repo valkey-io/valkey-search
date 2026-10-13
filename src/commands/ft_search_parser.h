@@ -76,11 +76,10 @@ struct SearchCommand : public QueryCommand {
     // Empty unless the query named the distance ($yield_distance_as or AS).
     std::string vr_field;
   };
-  // RESP3 sort keys always follow Redis Search (see GetRowFormat).
-  RowFormat GetRowFormat(bool resp3) const;
-  // Sets the document's sort key prefix and value, or returns false to reply
-  // nil. The value points into the neighbor, or into buffer when it is
-  // formatted.
+  // resp_version is ResultsReply::RespVersion(). RESP3 sort keys always
+  // follow Redis Search (see GetRowFormat).
+  RowFormat GetRowFormat(int resp_version) const;
+  // Gets the document's WITHSORTKEYS value, see the definition.
   bool SortKey(const indexes::Neighbor &neighbor, const RowFormat &format,
                std::string &buffer, char &prefix,
                absl::string_view &value) const;

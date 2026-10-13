@@ -330,7 +330,8 @@ class CursorSearchResult : public Cursor {
 
 }  // namespace
 
-SearchCommand::RowFormat SearchCommand::GetRowFormat(bool resp3) const {
+SearchCommand::RowFormat SearchCommand::GetRowFormat(int resp_version) const {
+  const bool resp3 = resp_version == ResultsReply::kResp3;
   RowFormat format;
   format.has_relevance = HasTextRelevance(*this);
   // The vector-distance sort key is numeric ('#').
@@ -363,19 +364,25 @@ SearchCommand::RowFormat SearchCommand::GetRowFormat(bool resp3) const {
   return format;
 }
 
+// Gets the document's WITHSORTKEYS value: the reply is prefix followed by
+// value, or nil when this returns false. The prefix is format.sort_key_prefix.
+//
+// When SORTBY names the vector distance (the KNN score field, or the VR
+// distance alias), the value is the formatted distance, written into buffer.
+// The distance is not a document field, so it cannot be looked up there.
+// Its prefix needs no special case: format.sort_key_prefix is already '#',
+// since IsSortByFieldNumeric() treats both distances as numeric, and without
+// the ft_search_sortkey_type_prefix fix the prefix is always '#'.
+//
+// Otherwise the value is the document's SORTBY field, pointing into neighbor.
+// A document without the field gets nil, or an empty value when
+// format.nil_absent_sort_key is unset.
 bool SearchCommand::SortKey(const indexes::Neighbor &neighbor,
                             const RowFormat &format, std::string &buffer,
                             char &prefix, absl::string_view &value) const {
-  // Prefix the sort key: '#' for NUMERIC fields, '$' for string fields
-  // (RediSearch-compatible). A SORTBY on the VR distance alias must emit the
-  // formatted distance (Neighbor::distance) with the numeric '#' prefix; it
-  // is not in attribute_contents, so GetSortKeyValue() would return "".
   prefix = format.sort_key_prefix;
-  const bool vr_sort_key = IsVrSortKey(neighbor, *this, format.vr_field);
-  if (vr_sort_key || format.sort_by_vec_score) {
-    if (vr_sort_key) {
-      prefix = '#';
-    }
+  if (format.sort_by_vec_score ||
+      IsVrSortKey(neighbor, *this, format.vr_field)) {
     buffer = expr::FormatDouble(neighbor.distance);
     value = buffer;
     return true;
@@ -475,7 +482,7 @@ ResultsReply::Columns SearchCommand::ReplyColumns() const {
 void SearchCommand::ReplyRows(ValkeyModuleCtx *ctx, ResultsReply &reply,
                               const query::SearchResult &search_result,
                               size_t start, size_t end) const {
-  auto format = GetRowFormat(reply.RespVersion() == 3);
+  auto format = GetRowFormat(reply.RespVersion());
   std::string sort_key_buffer;
   for (auto i = start; i < end; ++i) {
     const auto &neighbor = search_result.neighbors[i];

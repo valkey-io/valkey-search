@@ -1324,14 +1324,17 @@ class CursorAggregateResult : public Cursor {
 
 namespace {
 
-// A record's fields, replied through ResultsReply.
+// The fields FT.AGGREGATE replies for one record: its columns, except
+// suppressed_reply_column_, then the extra fields LOAD * fetched. ResultsReply
+// writes them as the row of the record.
 class RecordFields : public ResultsReply::Fields {
  public:
   RecordFields(const AggregateParameters &parameters, const Record &rec)
       : parameters_(parameters), rec_(rec) {}
 
-  // The reply computes no aggregate field, so unique names leave none out.
-  size_t Reply(ValkeyModuleCtx *ctx, bool) const override {
+  // unique_names is ignored: FT.AGGREGATE adds no field of its own to a
+  // record, so there is no name to leave out.
+  size_t Reply(ValkeyModuleCtx *ctx, bool /*unique_names*/) const override {
     const auto data_type =
         parameters_.index_schema->GetAttributeDataType().ToProto();
     size_t pairs = 0;

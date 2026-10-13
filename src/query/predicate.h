@@ -7,7 +7,9 @@
 
 #ifndef VALKEYSEARCH_SRC_QUERY_PREDICATE_H_
 #define VALKEYSEARCH_SRC_QUERY_PREDICATE_H_
+#include <bit>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -246,10 +248,14 @@ class VectorRangePredicate : public Predicate {
   void SetEpsilon(std::optional<double> epsilon) { epsilon_ = epsilon; }
   // An infinite radius is stored as the largest double. It matches every
   // finite distance, while the +inf that VectorBase::ClampCosineDistance
-  // reports for a NaN or +inf distance stays outside it.
+  // reports for a NaN or +inf distance stays outside it. +inf is recognized by
+  // its bits: under -ffast-math the compiler may assume `radius > max()` is
+  // never true and drop the comparison.
   void SetRadius(double radius) {
-    constexpr double kMaxRadius = std::numeric_limits<double>::max();
-    radius_ = radius > kMaxRadius ? kMaxRadius : radius;
+    constexpr uint64_t kPositiveInfinity = 0x7ff0000000000000ULL;
+    radius_ = std::bit_cast<uint64_t>(radius) == kPositiveInfinity
+                  ? std::numeric_limits<double>::max()
+                  : radius;
   }
 
   // Returns the PARAMS key for the radius, if the radius was specified as

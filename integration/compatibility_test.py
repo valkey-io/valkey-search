@@ -44,6 +44,9 @@ TOLERANCE_BY_VECTOR_TYPE = {
     "FLOAT32": (1e-5, 1e-6),
     "FLOAT16": (1e-2, 1e-2),
     "BFLOAT16": (1e-2, 1e-2),
+    # Both engines reply with 12 significant digits, so FLOAT64 values agree
+    # to that; a FLOAT64 distance narrowed to float would differ near 1e-8.
+    "FLOAT64": (1e-10, 1e-12),
 }
 DEFAULT_TOLERANCE = TOLERANCE_BY_VECTOR_TYPE["FLOAT32"]
 

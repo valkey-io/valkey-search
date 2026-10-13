@@ -145,8 +145,8 @@ absl::StatusOr<RecordResult> Tag::AddRecord(const InternedStringPtr &key,
   auto parsed_tags = ParseRecordTags(*interned_data, separator_);
   absl::MutexLock lock(&index_mutex_);
   if (parsed_tags.empty()) {
-    // An empty tag set is a missing value, not invalid data. (Content
-    // validation of TAG fields, e.g. non-UTF8 detection, is deferred.)
+    // An empty tag set is a missing value, not invalid data. (Non-UTF-8
+    // content is handled above by RejectNonUtf8.)
     untracked_keys_.insert(key);
     return RecordResult::kMissing;
   }

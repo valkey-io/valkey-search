@@ -8,7 +8,8 @@ from .generate import BaseCompatibilityTest
 '''
 Capture RediSearch answers for repeated RETURN clauses (issue #1353 item 7):
 the last RETURN clause wins, including a later clause overriding an earlier
-`RETURN 0`, while the NOCONTENT keyword stays sticky.
+`RETURN 0`, while the NOCONTENT keyword stays sticky. Also for repeated
+output names within one clause (issue #1521).
 '''
 
 
@@ -31,5 +32,11 @@ class TestReturnClauseCompatibility(BaseCompatibilityTest):
             ("RETURN", "0", "NOCONTENT", "RETURN", "1", "title"),
             # A lone RETURN 0 behaves like NOCONTENT.
             ("RETURN", "0"),
+            # Within one clause each output name is returned once, first wins
+            # (issue #1521). Two names for one field stay two entries.
+            ("RETURN", "3", "p", "title", "p"),
+            ("RETURN", "4", "p", "AS", "title", "title"),
+            ("RETURN", "6", "title", "AS", "a", "title", "AS", "b"),
+            ("RETURN", "6", "title", "AS", "a", "p", "AS", "a"),
         ):
             self.check("FT.SEARCH", idx, "@m:{all}", *tail, "DIALECT", "2")

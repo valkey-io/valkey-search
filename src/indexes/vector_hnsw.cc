@@ -338,7 +338,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
   try {
     CancelCondition cancel_condition(cancellation_token);
     VectorRecord query_record =
-        VectorRecord::Construct(query, reciprocal_magnitude, GetVectorPool());
+        VectorRecord::Construct(query, reciprocal_magnitude, nullptr);
     QueryVector embedding(query_record, query.size(), normalize_,
                           GetVectorDataType());
     auto res = algo_->searchKnn(embedding, count, ef_runtime, filter.get(),
@@ -376,8 +376,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
     try {
       CancelCondition cancel_condition(cancellation_token);
       QueryVector embedding(
-          VectorRecord::Construct(query_view, reciprocal_magnitude,
-                                  GetVectorPool()),
+          VectorRecord::Construct(query_view, reciprocal_magnitude, nullptr),
           query_view.size(), normalize_, GetVectorDataType());
       auto res = algo_->searchKnn(embedding, max_candidates,
                                   std::optional<size_t>(max_candidates),

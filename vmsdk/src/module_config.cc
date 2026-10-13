@@ -144,32 +144,42 @@ absl::Status ModuleConfigManager::ParseAndLoadArgv(ValkeyModuleCtx *ctx,
                                                    ValkeyModuleString **argv,
                                                    int argc) {
   loading_config_file = false;
-  vmsdk::ArgsIterator iter{argv, argc};
-  while (iter.HasNext()) {
-    VMSDK_ASSIGN_OR_RETURN(auto key, iter.Get());
-    auto sv_key = vmsdk::ToStringView(key);
-    iter.Next();  // skip the key
+  const std::string debug_mode_key = absl::StrCat("--", kDebugMode);
+  auto apply_argv = [&](bool debug_mode_only) -> absl::Status {
+    vmsdk::ArgsIterator iter{argv, argc};
+    while (iter.HasNext()) {
+      VMSDK_ASSIGN_OR_RETURN(auto key, iter.Get());
+      auto sv_key = vmsdk::ToStringView(key);
+      iter.Next();  // skip the key
 
-    absl::string_view sv_val;
-    if (sv_key == kUseCoordinator) {
-      // All keys must accept values. Unless it is `--use-coordinator` (we
-      // keep this option for backward compatibility)
-      sv_val = "yes";
-      VMSDK_RETURN_IF_ERROR(UpdateConfigFromKeyVal(ctx, sv_key, sv_val));
-    } else {
-      // Read the value
-      if (!iter.HasNext()) {
-        return absl::NotFoundError(absl::StrFormat(
-            "Command line argument `%s` is missing a value", sv_key));
+      absl::string_view sv_val;
+      if (sv_key == kUseCoordinator) {
+        // All keys must accept values. Unless it is `--use-coordinator` (we
+        // keep this option for backward compatibility)
+        sv_val = "yes";
+      } else {
+        // Read the value
+        if (!iter.HasNext()) {
+          return absl::NotFoundError(absl::StrFormat(
+              "Command line argument `%s` is missing a value", sv_key));
+        }
+        VMSDK_ASSIGN_OR_RETURN(auto val, iter.Get());
+        iter.Next();  // skip the value
+        sv_val = vmsdk::ToStringView(val);
       }
-      VMSDK_ASSIGN_OR_RETURN(auto val, iter.Get());
-      iter.Next();  // skip the value
-
-      sv_val = vmsdk::ToStringView(val);
+      // The first pass applies only debug-mode, the second everything else.
+      if ((sv_key == debug_mode_key) != debug_mode_only) {
+        continue;
+      }
       VMSDK_RETURN_IF_ERROR(UpdateConfigFromKeyVal(ctx, sv_key, sv_val));
     }
-  }
-  return absl::OkStatus();
+    return absl::OkStatus();
+  };
+  // Dev() configs are rejected unless debug-mode is on. Apply debug-mode first
+  // so the result doesn't depend on argument order. If debug-mode is given
+  // more than once, the last value applies to every argument.
+  VMSDK_RETURN_IF_ERROR(apply_argv(/*debug_mode_only=*/true));
+  return apply_argv(/*debug_mode_only=*/false);
 }
 
 absl::Status ModuleConfigManager::UpdateConfigFromKeyVal(

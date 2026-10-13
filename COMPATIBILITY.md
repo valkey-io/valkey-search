@@ -106,6 +106,14 @@ This section describes areas where Valkey Search intentionally diverges from Red
 
 **Migration impact.** Log-scraping rules, alerting triggers keyed on specific log strings, log-shipping parsers, and runbooks that instruct operators to look for particular Redisearch log phrases all need to be reviewed and updated against Valkey Search's log output. Applications that do not consume logs programmatically are not affected.
 
+### Zero-relevance scores with an infinite document score
+
+**What differs.** When a document's summed relevance is `0` and its `SCORE_FIELD` value is `inf` or `-inf`, Valkey Search scores it `0`, while Redisearch scores it `nan` (0 × ±inf). Examples include a query whose only clause has `$weight: 0`, or a numeric-only query. When the summed relevance is non-zero, both return `inf` or `-inf`.
+
+**Why.** Zero relevance scores zero regardless of the document score, and a `nan` score has no defined sort order.
+
+**Migration impact.** Applications that check for `nan` scores should expect `0` instead.
+
 ## Extensions
 
 Valkey Search may extend functionality beyond what Redisearch provides. These extensions take two forms.

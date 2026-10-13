@@ -163,6 +163,30 @@ class TestFtHybridBase(ValkeySearchTestCaseBase):
         assert result[0] == 10  # union of arms (SEARCH matched all 10)
         assert len(result) == 11  # count + 10 records
 
+    def test_param_survives_into_cursor_read(self):
+        # The APPLY $p value must not be a view into the creating command's
+        # argv, which is freed before FT.CURSOR READ replies with it.
+        client = self.server.get_new_client()
+        self.setup_index(client)
+        param = b"param-" + b"Z" * 75
+        batch, cursor = client.execute_command(
+            "FT.HYBRID", self.INDEX,
+            "SEARCH", "@title:hello",
+            "VSIM", "@vec", "$q", "KNN", "2", "K", "5",
+            "PARAMS", "4", "q", self.Q, "p", param,
+            "LOAD", "1", "@title", "APPLY", "$p", "AS", "tag",
+            "WITHCURSOR", "COUNT", "1",
+        )
+        assert cursor != 0
+        # Recycle the freed argv allocation.
+        client.execute_command("SET", "filler", b"X" * len(param))
+        tags = []
+        while cursor != 0:
+            batch, cursor = client.execute_command(
+                "FT.CURSOR", "READ", self.INDEX, cursor)
+            tags += [dict(zip(row[::2], row[1::2]))[b"tag"] for row in batch[1:]]
+        assert tags == [param] * 9
+
     def test_combine_linear_ok(self):
         client = self.server.get_new_client()
         self.setup_index(client)

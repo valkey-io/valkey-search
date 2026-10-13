@@ -661,6 +661,13 @@ class VectorBase : public IndexBase {
       RDBChunkOutputStream chunked_out) const = 0;
 
   virtual VectorRecord &GetVectorLockFree(uint64_t internal_id) const = 0;
+
+  // During LoadTrackedKeys, allow an index implementation to create missing
+  // labels instead of crashing on the CHECK in GetVectorLockFree.
+  virtual VectorRecord &GetOrCreateVectorLockFree(uint64_t internal_id) {
+    return GetVectorLockFree(internal_id);
+  }
+
   virtual VectorRecord &GetVector(uint64_t internal_id) const = 0;
 
   int db_num_;

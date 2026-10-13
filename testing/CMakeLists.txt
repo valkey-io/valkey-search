@@ -139,6 +139,30 @@ target_link_libraries(vector_index_test PRIVATE text)
 target_link_libraries(vector_index_test PRIVATE hnswlib_vmsdk)
 finalize_test_flags(vector_index_test)
 
+# SVS stream adapter test - only where the SVS C API is built (see
+# src/indexes/CMakeLists.txt's svs_c_api_static guard).
+if(UNIX AND NOT APPLE
+   AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+    add_executable(svs_stream_adapter_test
+        ${CMAKE_CURRENT_LIST_DIR}/svs_stream_adapter_test.cc)
+    target_include_directories(svs_stream_adapter_test PUBLIC
+                               ${CMAKE_CURRENT_LIST_DIR})
+    target_link_libraries(svs_stream_adapter_test PRIVATE testing_common_base)
+    target_link_libraries(svs_stream_adapter_test PRIVATE svs_c_api_static)
+    finalize_test_flags(svs_stream_adapter_test)
+
+    # SVS RDB save/load test - VectorSVS<T>::SaveIndexImpl / LoadFromRDB, same
+    # guard as svs_stream_adapter_test.
+    add_executable(vector_svs_test
+        ${CMAKE_CURRENT_LIST_DIR}/vector_svs_test.cc)
+    target_include_directories(vector_svs_test PUBLIC
+                               ${CMAKE_CURRENT_LIST_DIR})
+    target_link_libraries(vector_svs_test PRIVATE testing_common_base)
+    target_link_libraries(vector_svs_test PRIVATE vector_svs)
+    target_link_libraries(vector_svs_test PRIVATE svs_c_api_static)
+    finalize_test_flags(vector_svs_test)
+endif()
+
 # 1. Core Test Suite - consolidates core functionality tests
 set(CORE_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/valkey_search_test.cc

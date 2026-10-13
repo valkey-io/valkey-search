@@ -28,6 +28,7 @@
 #include "src/indexes/fp16.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/vector_base.h"
+#include "src/metrics.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/cancel.h"
 #include "third_party/hnswlib/hnswlib.h"
@@ -41,6 +42,8 @@
 
 #include "absl/strings/str_cat.h"
 #include "src/index_schema.pb.h"
+#include "src/indexes/svs_index.pb.h"
+#include "src/indexes/svs_stream_adapter.h"
 #include "vmsdk/src/utils.h"
 #endif
 
@@ -49,11 +52,26 @@ namespace valkey_search::indexes {
 namespace {
 constexpr absl::string_view kUnavailableMsg =
     "SVS_VAMANA is not available on this build (requires x86_64 Linux).";
+
+// Shared by ToProtoImpl and the RDB header's build_config echo, so the two
+// never drift apart. No SVS dependency: safe to call on any platform.
+void FillSvsVamanaProto(const SVSBuildConfig& config,
+                        data_model::SVSVamanaAlgorithm* proto) {
+  proto->set_graph_max_degree(config.graph_max_degree);
+  proto->set_construction_window_size(config.construction_window_size);
+  proto->set_search_window_size(config.search_window_size);
+  proto->set_alpha(config.alpha);
+  proto->set_compression(config.compression);
+}
 }  // namespace
 
 #if defined(__linux__) && defined(__x86_64__)
 
 namespace {
+
+// RDB header format, bumped whenever SVSIndexHeader's shape changes in a
+// way that breaks backward compatibility with older readers.
+constexpr uint32_t kSvsHeaderFormatVersion = 1;
 
 // Sequential threadpool vtable: SVS invokes parallel_for on the calling
 // reader thread. Matches HNSW's concurrency model (one search occupies
@@ -86,7 +104,8 @@ svs_threadpool_t kSvsThreadpoolIface{&kSvsThreadpoolOps, nullptr};
 // maxmemory just like the module's own malloc arena.
 constexpr size_t kSvsAllocatorHugePageSize = 2 * 1024 * 1024;
 
-// Block size passed to svs_index_build_dynamic. SVS's "default" (0)
+// Block size for both svs_index_build_dynamic and the RDB stream load; a
+// mismatch makes a loaded index reserve differently. SVS's "default" (0)
 // resolves to 2^30 bytes, materialized up-front on the first HSET;
 // 16 MiB keeps the first-add reservation bounded. Measured 16–64 MiB
 // behave identically; smaller wastes per-block overhead at large DIM.
@@ -316,15 +335,11 @@ absl::Status CheckFiniteVector(const T* src, size_t n_elements) {
   return absl::OkStatus();
 }
 
-// Constructs the first svs_index for a VectorSVS instance on the first
-// HSET arriving at an index whose Create() left svs_index_ null.
-// Assembles algorithm/storage/builder, wires the sequential threadpool
-// and huge-page-aware allocator, and returns the built handle. The
-// SVS C API requires num_vectors > 0 for svs_index_build_dynamic; the
-// first-add path passes the vector supplied by the ingest call.
-absl::StatusOr<svs_index_h> BootstrapIndex(
+// Algorithm/storage/builder trio shared by first-insert bootstrap and RDB
+// load, so a loaded index is structurally identical to a freshly built one.
+absl::StatusOr<BuilderPtr> AssembleIndexBuilder(
     const SVSBuildConfig& config, data_model::DistanceMetric distance_metric,
-    int dimensions, uint64_t label, const float* fp32_vector) {
+    int dimensions, svs_error_h err) {
   auto metric = ToSvsDistanceMetric(distance_metric);
   if (!metric.has_value()) {
     return absl::InvalidArgumentError(
@@ -337,58 +352,79 @@ absl::StatusOr<svs_index_h> BootstrapIndex(
         "in this build");
   }
 
-  ScopedSvsError err;
-
   AlgorithmPtr algo(svs_algorithm_create_vamana(
       config.graph_max_degree, config.construction_window_size,
-      config.search_window_size, err.get()));
-  if (!algo) return SvsErrorToStatus(err.get(), "algorithm_create_vamana");
+      config.search_window_size, err));
+  if (!algo) return SvsErrorToStatus(err, "algorithm_create_vamana");
 
   if (config.alpha > 0.0f) {
-    if (!svs_algorithm_vamana_set_alpha(algo.get(), config.alpha, err.get())) {
-      return SvsErrorToStatus(err.get(), "algorithm_vamana_set_alpha");
+    if (!svs_algorithm_vamana_set_alpha(algo.get(), config.alpha, err)) {
+      return SvsErrorToStatus(err, "algorithm_vamana_set_alpha");
     }
   }
 
   StoragePtr storage;
   if (config.compression == data_model::SVS_COMPRESSION_SQ8) {
-    storage.reset(svs_storage_create_sq(*storage_type, err.get()));
+    storage.reset(svs_storage_create_sq(*storage_type, err));
   } else {
-    storage.reset(svs_storage_create_simple(*storage_type, err.get()));
+    storage.reset(svs_storage_create_simple(*storage_type, err));
   }
-  if (!storage) return SvsErrorToStatus(err.get(), "storage_create");
+  if (!storage) return SvsErrorToStatus(err, "storage_create");
 
   BuilderPtr builder(svs_index_builder_create(
-      *metric, static_cast<size_t>(dimensions), algo.get(), err.get()));
-  if (!builder) return SvsErrorToStatus(err.get(), "index_builder_create");
+      *metric, static_cast<size_t>(dimensions), algo.get(), err));
+  if (!builder) return SvsErrorToStatus(err, "index_builder_create");
 
-  if (!svs_index_builder_set_storage(builder.get(), storage.get(), err.get())) {
-    return SvsErrorToStatus(err.get(), "index_builder_set_storage");
+  if (!svs_index_builder_set_storage(builder.get(), storage.get(), err)) {
+    return SvsErrorToStatus(err, "index_builder_set_storage");
   }
-  if (!svs_index_builder_set_threadpool_custom(
-          builder.get(), &kSvsThreadpoolIface, err.get())) {
-    return SvsErrorToStatus(err.get(), "index_builder_set_threadpool_custom");
+  if (!svs_index_builder_set_threadpool_custom(builder.get(),
+                                               &kSvsThreadpoolIface, err)) {
+    return SvsErrorToStatus(err, "index_builder_set_threadpool_custom");
   }
   if (ValkeyModule_IncrExternalMemory != nullptr &&
       ValkeyModule_DecrExternalMemory != nullptr) {
-    if (!svs_index_builder_set_allocator_custom(
-            builder.get(), &kSvsAllocatorIface, err.get())) {
-      return SvsErrorToStatus(err.get(), "index_builder_set_allocator_custom");
+    if (!svs_index_builder_set_allocator_custom(builder.get(),
+                                                &kSvsAllocatorIface, err)) {
+      return SvsErrorToStatus(err, "index_builder_set_allocator_custom");
     }
   } else {
-    if (!svs_index_builder_set_allocator(
-            builder.get(), SVS_ALLOCATOR_KIND_SIMPLE, err.get())) {
-      return SvsErrorToStatus(err.get(), "index_builder_set_allocator");
+    if (!svs_index_builder_set_allocator(builder.get(),
+                                         SVS_ALLOCATOR_KIND_SIMPLE, err)) {
+      return SvsErrorToStatus(err, "index_builder_set_allocator");
     }
   }
+  return builder;
+}
+
+// Builds the first svs_index on the first HSET after Create() left
+// svs_index_ null. svs_index_build_dynamic requires num_vectors > 0.
+absl::StatusOr<svs_index_h> BootstrapIndex(
+    const SVSBuildConfig& config, data_model::DistanceMetric distance_metric,
+    int dimensions, uint64_t label, const float* fp32_vector) {
+  ScopedSvsError err;
+  auto builder =
+      AssembleIndexBuilder(config, distance_metric, dimensions, err.get());
+  if (!builder.ok()) return builder.status();
 
   svs_index_h index = svs_index_build_dynamic(
-      builder.get(), fp32_vector, &label, /*num_vectors=*/1,
+      builder->get(), fp32_vector, &label, /*num_vectors=*/1,
       /*blocksize_bytes=*/kSvsBlockSizeBytes, err.get());
   if (index == nullptr) {
     return SvsErrorToStatus(err.get(), "index_build_dynamic");
   }
   return index;
+}
+
+// Compares the v1 fields that determine SVS's on-disk layout
+bool BuildConfigMatches(const SVSBuildConfig& expected,
+                        const data_model::SVSVamanaAlgorithm& header_config) {
+  return expected.graph_max_degree == header_config.graph_max_degree() &&
+         expected.construction_window_size ==
+             header_config.construction_window_size() &&
+         expected.search_window_size == header_config.search_window_size() &&
+         expected.alpha == header_config.alpha() &&
+         expected.compression == header_config.compression();
 }
 
 }  // namespace
@@ -454,11 +490,111 @@ absl::StatusOr<std::shared_ptr<VectorSVS<T>>> VectorSVS<T>::Create(
 
 template <typename T>
 absl::StatusOr<std::shared_ptr<VectorSVS<T>>> VectorSVS<T>::LoadFromRDB(
-    ValkeyModuleCtx* /*ctx*/, const AttributeDataType* /*attribute_data_type*/,
-    const data_model::VectorIndex& /*vector_index_proto*/,
-    absl::string_view /*attribute_identifier*/,
-    SupplementalContentChunkIter&& /*iter*/, int /*db_num*/) {
+    ValkeyModuleCtx* /*ctx*/, const AttributeDataType* attribute_data_type,
+    const data_model::VectorIndex& vector_index_proto,
+    absl::string_view attribute_identifier, SupplementalContentChunkIter&& iter,
+    int db_num) {
+#if defined(__linux__) && defined(__x86_64__)
+  RDBChunkInputStream input(std::move(iter));
+  // On success the terminator invariant already leaves input drained; on
+  // any early return below it is not, which aborts the destructor's DCHECK
+  // in debug and corrupts later RDB sections in release (design.md "The
+  // terminator invariant").
+  auto load = [&]() -> absl::StatusOr<std::shared_ptr<VectorSVS<T>>> {
+    VMSDK_ASSIGN_OR_RETURN(auto serialized_header, input.LoadChunk());
+    data_model::SVSIndexHeader header;
+    if (!header.ParseFromString(*serialized_header)) {
+      return absl::InternalError("Could not deserialize SVS index header");
+    }
+
+    if (header.format_version() != kSvsHeaderFormatVersion) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "SVS_VAMANA RDB header format_version mismatch: expected ",
+          kSvsHeaderFormatVersion, ", got ", header.format_version()));
+    }
+    uint32_t current_svs_version = svs_get_version();
+    if (header.svs_version() != current_svs_version) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "SVS_VAMANA RDB svs_version mismatch: index was saved with SVS "
+          "version ",
+          header.svs_version(), ", this build is SVS version ",
+          current_svs_version));
+    }
+
+    if (header.dimensionality() != vector_index_proto.dimension_count()) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "SVS_VAMANA RDB header dimensionality mismatch: expected ",
+          vector_index_proto.dimension_count(), ", got ",
+          header.dimensionality()));
+    }
+
+    VMSDK_ASSIGN_OR_RETURN(auto instance,
+                           Create(vector_index_proto, attribute_identifier,
+                                  attribute_data_type->ToProto(), db_num));
+    if (!BuildConfigMatches(instance->build_config_, header.build_config())) {
+      return absl::InvalidArgumentError(
+          "SVS_VAMANA RDB header build_config does not match the index "
+          "definition");
+    }
+    if (header.element_type() != instance->GetVectorDataType()) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "SVS_VAMANA RDB header element_type mismatch: expected ",
+          instance->GetVectorDataType(), ", got ", header.element_type()));
+    }
+    if (!header.has_index()) {
+      // Handle-less empty index (design.md "Empty index"): svs_index_ stays
+      // null and bootstraps on the first HSET, same as a fresh Create().
+      // A correct empty save writes only the header, so the chunk lookahead
+      // already leaves the stream at end; anything left is format drift.
+      if (!input.AtEnd()) {
+        return absl::InvalidArgumentError(
+            "SVS_VAMANA RDB load: payload chunks remain after a header with "
+            "has_index=false");
+      }
+      return instance;
+    }
+
+    SvsRdbInputStream adapter(input);
+    svs_stream_interface iface = adapter.AsInterface();
+    ScopedSvsError err;
+    auto builder = AssembleIndexBuilder(instance->build_config_,
+                                        vector_index_proto.distance_metric(),
+                                        instance->dimensions_, err.get());
+    if (!builder.ok()) return builder.status();
+
+    svs_index_h index = svs_index_load_stream_dynamic(
+        builder->get(), &iface, /*blocksize_bytes=*/kSvsBlockSizeBytes,
+        err.get());
+    if (index == nullptr) {
+      if (!adapter.status().ok()) return adapter.status();
+      return SvsErrorToStatus(err.get(), "index_load_stream_dynamic");
+    }
+    // Hand the handle to instance before the check below, so ~VectorSVS owns
+    // it on every path out of here and no path needs its own free.
+    instance->svs_index_ = index;
+
+    // Terminator invariant (design.md): consumed_sentinel() implies AtEnd();
+    // AtEnd() == false either way means SVS stopped before the payload end.
+    DCHECK(!adapter.consumed_sentinel() || input.AtEnd());
+    if (!input.AtEnd()) {
+      return absl::InvalidArgumentError(
+          "SVS_VAMANA RDB load: payload chunks remain after SVS stopped "
+          "reading the stream");
+    }
+    return instance;
+  };
+  auto result = load();
+  while (!input.AtEnd() && input.LoadChunk().ok()) {
+  }
+  return result;
+#else
+  (void)attribute_data_type;
+  (void)vector_index_proto;
+  (void)attribute_identifier;
+  (void)iter;
+  (void)db_num;
   return absl::UnimplementedError(kUnavailableMsg);
+#endif
 }
 
 template <typename T>
@@ -670,12 +806,7 @@ void VectorSVS<T>::ToProtoImpl(
     data_model::VectorIndex* vector_index_proto) const {
   this->SetProtoDataType(vector_index_proto);
   auto svs_proto = std::make_unique<data_model::SVSVamanaAlgorithm>();
-  svs_proto->set_graph_max_degree(build_config_.graph_max_degree);
-  svs_proto->set_construction_window_size(
-      build_config_.construction_window_size);
-  svs_proto->set_search_window_size(build_config_.search_window_size);
-  svs_proto->set_alpha(build_config_.alpha);
-  svs_proto->set_compression(build_config_.compression);
+  FillSvsVamanaProto(build_config_, svs_proto.get());
   vector_index_proto->set_allocated_svs_vamana_algorithm(svs_proto.release());
 }
 
@@ -708,8 +839,44 @@ int VectorSVS<T>::RespondWithInfoImpl(ValkeyModuleCtx* ctx) const {
 
 template <typename T>
 absl::Status VectorSVS<T>::SaveIndexImpl(
-    RDBChunkOutputStream /*chunked_out*/) const {
+    RDBChunkOutputStream chunked_out) const {
+#if defined(__linux__) && defined(__x86_64__)
+  absl::ReaderMutexLock lock(&resize_mutex_);
+
+  data_model::SVSIndexHeader header;
+  header.set_format_version(kSvsHeaderFormatVersion);
+  header.set_svs_version(svs_get_version());
+  header.set_has_index(svs_index_ != nullptr);
+  header.set_element_type(GetVectorDataType());
+  header.set_dimensionality(static_cast<uint32_t>(dimensions_));
+  FillSvsVamanaProto(build_config_, header.mutable_build_config());
+
+  std::string serialized;
+  if (!header.SerializeToString(&serialized)) {
+    return absl::InternalError("Could not serialize SVS index header");
+  }
+  // Own RDB chunk, never bytes prepended to the SVS stream: SVS pads
+  // from tellp() at its stream's start, so a prefix would shift alignment.
+  VMSDK_RETURN_IF_ERROR(chunked_out.SaveString(serialized));
+
+  if (svs_index_ == nullptr) {
+    // Handle-less empty index: nothing to hand to SVS. chunked_out's
+    // destructor still emits the EOF sentinel below.
+    return absl::OkStatus();
+  }
+
+  SvsRdbOutputStream adapter(chunked_out);
+  svs_stream_interface iface = adapter.AsInterface();
+  ScopedSvsError err;
+  if (!svs_index_save_stream(svs_index_, &iface, err.get())) {
+    if (!adapter.status().ok()) return adapter.status();
+    return SvsErrorToStatus(err.get(), "index_save_stream");
+  }
+  return absl::OkStatus();
+#else
+  (void)chunked_out;
   return absl::UnimplementedError(kUnavailableMsg);
+#endif
 }
 
 template <typename T>
@@ -731,6 +898,18 @@ std::shared_ptr<const VectorRecord>& VectorSVS<T>::GetVectorLockFree(
   auto it = label_to_record_.find(internal_id);
   CHECK(it != label_to_record_.end())
       << "SVS internal_id not found: " << internal_id;
+  return it->second;
+}
+
+template <typename T>
+std::shared_ptr<const VectorRecord>& VectorSVS<T>::GetOrCreateVectorLockFree(
+    uint64_t internal_id) {
+  // label_to_record_ is filled before any query or mutation can reach this
+  // index, which is why resize_mutex_ is not taken; an insert rehashes it.
+  auto [it, inserted] = label_to_record_.try_emplace(internal_id, nullptr);
+  if (!inserted) {
+    ++Metrics::GetStats().svs_duplicate_label_on_load_cnt;
+  }
   return it->second;
 }
 

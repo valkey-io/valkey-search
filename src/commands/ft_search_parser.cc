@@ -359,9 +359,8 @@ absl::Status VerifyQueryString(query::SearchParameters &parameters) {
         "DIALECT requires a non negative integer >=2 and <= 4");
   }
 
-  // An unused PARAM is allowed (matching RediSearch, which does not check
-  // whether a declared parameter is referenced). Tear down parse_vars to avoid
-  // dangling pointers into the argument buffer.
+  // An unused PARAM is allowed. Tear down parse_vars to avoid
+  // dangling pointers in the argument buffer.
   parameters.parse_vars.ClearAtEndOfParse();
   return absl::OkStatus();
 }

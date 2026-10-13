@@ -91,6 +91,7 @@ class MockValkeyModule {
               (ValkeyModuleKey * key, ValkeyModuleString *field,
                ValkeyModuleHashExternCB fn, void *privdata));
   MOCK_METHOD(int, GetApi, (const char *name, void *func));
+  MOCK_METHOD(mstime_t, GetExpire, (ValkeyModuleKey * key));
   MOCK_METHOD(int, HashGet,
               (ValkeyModuleKey * key, int flags, const char *field,
                int *exists_out, void *terminating_null));
@@ -136,6 +137,7 @@ class MockValkeyModule {
   MOCK_METHOD(int, ScanKey,
               (ValkeyModuleKey * key, ValkeyModuleScanCursor *cursor,
                ValkeyModuleScanKeyCB fn, void *privdata));
+  MOCK_METHOD(size_t, ValueLength, (ValkeyModuleKey * key));
   MOCK_METHOD(ValkeyModuleScanCursor *, ScanCursorCreate, ());
   MOCK_METHOD(void, ScanCursorDestroy, (ValkeyModuleScanCursor * cursor));
   MOCK_METHOD(int, SubscribeToServerEvent,
@@ -685,6 +687,10 @@ inline int TestValkeyModule_GetApi(const char *name, void *func) {
   return kMockValkeyModule->GetApi(name, func);
 }
 
+inline mstime_t TestValkeyModule_GetExpire(ValkeyModuleKey *key) {
+  return kMockValkeyModule->GetExpire(key);
+}
+
 inline int TestValkeyModule_HashGet(ValkeyModuleKey *key, int flags, ...) {
   va_list args;
   va_start(args, flags);
@@ -728,6 +734,10 @@ inline int TestValkeyModule_ScanKey(ValkeyModuleKey *key,
                                     ValkeyModuleScanCursor *cursor,
                                     ValkeyModuleScanKeyCB fn, void *privdata) {
   return kMockValkeyModule->ScanKey(key, cursor, fn, privdata);
+}
+
+inline size_t TestValkeyModule_ValueLength(ValkeyModuleKey *key) {
+  return kMockValkeyModule->ValueLength(key);
 }
 
 inline ValkeyModuleScanCursor *TestValkeyModule_ScanCursorCreate() {
@@ -1492,9 +1502,11 @@ inline void TestValkeyModule_Init() {
   ValkeyModule_OpenKey = &TestValkeyModule_OpenKey;
   ValkeyModule_HashExternalize = &TestValkeyModule_HashExternalize;
   ValkeyModule_GetApi = &TestValkeyModule_GetApi;
+  ValkeyModule_GetExpire = &TestValkeyModule_GetExpire;
   ValkeyModule_HashGet = &TestValkeyModule_HashGet;
   ValkeyModule_HashSet = &TestValkeyModule_HashSet;
   ValkeyModule_ScanKey = &TestValkeyModule_ScanKey;
+  ValkeyModule_ValueLength = &TestValkeyModule_ValueLength;
   ValkeyModule_ScanCursorCreate = &TestValkeyModule_ScanCursorCreate;
   ValkeyModule_ScanCursorDestroy = &TestValkeyModule_ScanCursorDestroy;
   ValkeyModule_CloseKey = &TestValkeyModule_CloseKey;

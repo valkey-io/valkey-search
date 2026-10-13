@@ -111,7 +111,8 @@ struct AggregateParameters : public expr::Expression::CompileContext,
     auto it = parse_vars.params.find(s);
     if (it != parse_vars.params.end()) {
       it->second.first++;
-      return expr::Value(it->second.second);
+      // Owned copy: the map views argv, and a WITHCURSOR reply outlives argv.
+      return expr::Value(std::string(it->second.second));
     } else {
       return absl::NotFoundError(absl::StrCat("parameter ", s, " not found."));
     }

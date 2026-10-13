@@ -2402,6 +2402,12 @@ TEST_F(VectorIndexTest, ReadSlotIsConsistentUnderReplace) {
       if (view.reciprocal_magnitude != magnitudes[i]) {
         torn.fetch_add(1, std::memory_order_relaxed);
       }
+      // Without the magnitude, a plain load with the busy bit cleared.
+      const char *vec = algo.ReadSlot<false>(0).vec;
+      if (std::memcmp(vec, vectors[0].data(), kDimensions * sizeof(float)) &&
+          std::memcmp(vec, vectors[1].data(), kDimensions * sizeof(float))) {
+        torn.fetch_add(1, std::memory_order_relaxed);
+      }
     }
   });
   for (int i = 0; i < kReplacements; ++i) {

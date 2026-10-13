@@ -301,9 +301,21 @@ class HierarchicalNSW
   //   the slot's: a new one, or the key's tracked record from the
   //   VectorRegistry, which is the one in the slot or newer.
   // A caller that could reinstall a previous record would break this.
+  //
+  // Unnormalized metrics never use the magnitude, so with kNormalized false
+  // this is a single pointer load (busy bit cleared; the old record it then
+  // names stays allocated for the reader's epoch) and a magnitude of 1.
+  template <bool kNormalized = true>
   SlotView ReadSlot(tableint internal_id) const {
     const std::atomic<const char *> &raw =
         GetDataByInternalId(internal_id).RawPointer();
+    if constexpr (!kNormalized) {
+      return {
+          reinterpret_cast<const char *>(
+              reinterpret_cast<uintptr_t>(raw.load(std::memory_order_acquire)) &
+              ~kSlotBusy),
+          1.0f};
+    }
     std::atomic_ref<float> magnitude(*SlotMagnitudePtr(internal_id));
     for (int spins = 0;; ++spins) {
       const char *vec = raw.load(std::memory_order_acquire);
@@ -456,13 +468,15 @@ class HierarchicalNSW
 
   // Mutation paths: read the slot through the seqlock.
   inline dist_t EvaluateDistance(tableint a, tableint b) const {
-    return normalized_ ? EvaluateDistance<true>(ReadSlot(a), ReadSlot(b))
-                       : EvaluateDistance<false>(ReadSlot(a), ReadSlot(b));
+    return normalized_
+               ? EvaluateDistance<true>(ReadSlot<true>(a), ReadSlot<true>(b))
+               : EvaluateDistance<false>(ReadSlot<false>(a),
+                                         ReadSlot<false>(b));
   }
 
   inline dist_t EvaluateDistance(const QueryVectorT &a, tableint b) const {
-    return normalized_ ? EvaluateDistance<true>(a, ReadSlot(b))
-                       : EvaluateDistance<false>(a, ReadSlot(b));
+    return normalized_ ? EvaluateDistance<true>(a, ReadSlot<true>(b))
+                       : EvaluateDistance<false>(a, ReadSlot<false>(b));
   }
 
   int getRandomLevel(double reverse_size) {
@@ -504,7 +518,8 @@ class HierarchicalNSW
 
     dist_t lowerBound;
     if (!isMarkedDeleted(ep_id)) {
-      dist_t dist = EvaluateDistance<kNormalized>(data_point, ReadSlot(ep_id));
+      dist_t dist = EvaluateDistance<kNormalized>(data_point,
+                                                  ReadSlot<kNormalized>(ep_id));
       top_candidates.emplace(dist, ep_id);
       lowerBound = dist;
       candidateSet.emplace(-dist, ep_id);
@@ -561,8 +576,8 @@ class HierarchicalNSW
 #endif
         if (visited_array[candidate_id] == visited_array_tag) continue;
         visited_array[candidate_id] = visited_array_tag;
-        dist_t dist1 =
-            EvaluateDistance<kNormalized>(data_point, ReadSlot(candidate_id));
+        dist_t dist1 = EvaluateDistance<kNormalized>(
+            data_point, ReadSlot<kNormalized>(candidate_id));
         if (top_candidates.size() < ef_construction_ || lowerBound > dist1) {
           candidateSet.emplace(-dist1, candidate_id);
 #ifdef USE_PREFETCH
@@ -860,11 +875,11 @@ class HierarchicalNSW
       dist_t dist_to_query = -current_pair.first;
       queue_closest.pop();
       bool good = true;
-      const SlotView curr_vec = ReadSlot(current_pair.second);
+      const SlotView curr_vec = ReadSlot<kNormalized>(current_pair.second);
 
       for (std::pair<dist_t, tableint> second_pair : return_list) {
         dist_t curdist = EvaluateDistance<kNormalized>(
-            ReadSlot(second_pair.second), curr_vec);
+            ReadSlot<kNormalized>(second_pair.second), curr_vec);
         if (curdist < dist_to_query) {
           good = false;
           break;
@@ -968,7 +983,7 @@ class HierarchicalNSW
       }
     }
 
-    const SlotView cur_c_vec = ReadSlot(cur_c);
+    const SlotView cur_c_vec = ReadSlot<kNormalized>(cur_c);
     for (size_t idx = 0; idx < selectedNeighbors.size(); idx++) {
       std::unique_lock<std::mutex> lock(
           link_list_locks_[selectedNeighbors[idx]]);
@@ -1010,7 +1025,8 @@ class HierarchicalNSW
           setListCount(ll_other, sz_link_list_other + 1);
         } else {
           // finding the "weakest" element to replace it with the new one
-          const SlotView neighbor_vec = ReadSlot(selectedNeighbors[idx]);
+          const SlotView neighbor_vec =
+              ReadSlot<kNormalized>(selectedNeighbors[idx]);
           dist_t d_max = EvaluateDistance<kNormalized>(cur_c_vec, neighbor_vec);
           // Heuristic:
           std::priority_queue<std::pair<dist_t, tableint>,
@@ -1027,7 +1043,8 @@ class HierarchicalNSW
             }
 #endif
             candidates.emplace(
-                EvaluateDistance<kNormalized>(ReadSlot(data[j]), neighbor_vec),
+                EvaluateDistance<kNormalized>(ReadSlot<kNormalized>(data[j]),
+                                              neighbor_vec),
                 data[j]);
           }
 

@@ -253,10 +253,6 @@ class MockIndex : public indexes::VectorBase {
     static indexes::VectorRecord p;
     return p;
   }
-  double ComputeDistance(absl::string_view, const indexes::VectorRecord &,
-                         double) const override {
-    return 0.0;
-  }
   std::optional<hnswlib::tableint> GetAlgoIdLockFree(uint64_t) const override {
     return std::nullopt;
   }
@@ -281,6 +277,22 @@ class MockIndex : public indexes::VectorBase {
       absl::string_view, double, cancel::Token &,
       std::unique_ptr<hnswlib::BaseFilterFunctor> = nullptr) override {
     return std::vector<indexes::Neighbor>{};
+  }
+  absl::StatusOr<std::optional<double>> IsWithinVectorRange(
+      const InternedStringPtr &, absl::string_view, double) const override {
+    return std::nullopt;
+  }
+  bool IsRecordWithinVectorRange(absl::string_view, absl::string_view,
+                                 double) const override {
+    return false;
+  }
+  absl::StatusOr<double> RecomputeDistance(absl::string_view,
+                                           absl::string_view) const override {
+    return 0.0;
+  }
+  std::unique_ptr<NearestKeys> CreateNearestKeys(absl::string_view,
+                                                 uint64_t) override {
+    return nullptr;
   }
 };
 

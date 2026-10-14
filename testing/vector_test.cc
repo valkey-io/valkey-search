@@ -930,9 +930,7 @@ class SearchRangeTest : public VectorIndexTest {
                                                       float radius) {
     std::string nq(query);
     if (index.GetNormalize()) {
-      auto normalized = NormalizeVector(
-          query, index.GetVectorDataType(),
-          CalcReciprocalMagnitude(query, index.GetVectorDataType()));
+      auto normalized = NormalizeVector<T>(query);
       nq.assign(normalized.data(), normalized.size());
     }
     std::map<std::string, float> out;

@@ -29,6 +29,9 @@
 
 namespace valkey_search::indexes {
 
+// MagnitudeT is the type of the record's reciprocal magnitude, which is also
+// the type HNSW computes distances in.
+template <typename MagnitudeT = float>
 class QueryVector {
  public:
   // Holds a query or inserted vector and caches its raw data pointer and
@@ -40,7 +43,7 @@ class QueryVector {
                   data_model::VECTOR_DATA_TYPE_FLOAT32) noexcept
       : record_ref_(&vector_record),
         raw_vector_(vector_record.GetRawVector()),
-        reciprocal_magnitude_(vector_record.GetReciprocalMagnitude()) {}
+        reciprocal_magnitude_(ReciprocalMagnitudeOf(vector_record)) {}
 
   QueryVector(VectorRecord &&vector_record, size_t vector_record_size = 0,
               bool normalize = false,
@@ -48,7 +51,7 @@ class QueryVector {
                   data_model::VECTOR_DATA_TYPE_FLOAT32) noexcept
       : owned_record_(std::move(vector_record)),
         raw_vector_(owned_record_.GetRawVector()),
-        reciprocal_magnitude_(owned_record_.GetReciprocalMagnitude()) {}
+        reciprocal_magnitude_(ReciprocalMagnitudeOf(owned_record_)) {}
 
   QueryVector(const QueryVector &other) noexcept
       : record_ref_(other.record_ref_),
@@ -73,17 +76,23 @@ class QueryVector {
   }
 
   const char *GetRawVector() const noexcept { return raw_vector_; }
-  double GetReciprocalMagnitude() const noexcept {
+  MagnitudeT GetReciprocalMagnitude() const noexcept {
     return reciprocal_magnitude_;
   }
 
   VectorRecord GetVectorRecord() const noexcept { return GetRecord(); }
 
  private:
+  static MagnitudeT ReciprocalMagnitudeOf(const VectorRecord &record) noexcept {
+    const char *ptr = record.GetRawVector();
+    return ptr ? TypedVectorRecord<MagnitudeT>::ReciprocalMagnitudeOf(ptr)
+               : MagnitudeT{1};
+  }
+
   const VectorRecord *record_ref_{nullptr};
   VectorRecord owned_record_;
   const char *raw_vector_{nullptr};
-  double reciprocal_magnitude_{1.0};
+  MagnitudeT reciprocal_magnitude_{1};
 };
 
 template <typename T>
@@ -111,8 +120,8 @@ class VectorHNSW : public VectorType<T> {
   using typename VectorType<T>::MagnitudeT;
   using typename VectorType<T>::DistanceT;
   using typename VectorType<T>::StoredVector;
-  using HNSWIndex =
-      hnswlib::HierarchicalNSW<DistanceT, QueryVector, StoredVector>;
+  using Query = QueryVector<MagnitudeT>;
+  using HNSWIndex = hnswlib::HierarchicalNSW<DistanceT, Query, StoredVector>;
 
   static absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> Create(
       const data_model::VectorIndex &vector_index_proto,
@@ -180,9 +189,9 @@ class VectorHNSW : public VectorType<T> {
   // Lock-free search optimization: Phase-based locking guarantees that queries
   // and resizes/mutations are strictly mutually exclusive. Therefore, no data
   // races can occur during the search phase.
-  double ComputeDistance(
+  DistanceT ComputeDistance(
       absl::string_view query, const VectorRecord &vector_record,
-      double query_magnitude) const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
+      MagnitudeT query_magnitude) const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
   VectorRecord &GetVectorLockFree(uint64_t internal_id) const override
       ABSL_NO_THREAD_SAFETY_ANALYSIS {
     auto *ptr = algo_->GetPointLockFree(internal_id);

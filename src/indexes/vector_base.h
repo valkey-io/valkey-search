@@ -14,7 +14,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <limits>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -339,15 +338,6 @@ template <typename T>
 std::vector<char> NormalizeVector(absl::string_view record,
                                   MagnitudeOf<T> *magnitude = nullptr);
 
-// Runtime-dispatched variants, for the few call sites that hold only a
-// data-type enum rather than a compile-time T (VectorRegistry, QueryVector).
-double CalcReciprocalMagnitude(absl::string_view record,
-                               data_model::VectorDataType data_type);
-
-std::vector<char> NormalizeVector(absl::string_view record,
-                                  data_model::VectorDataType data_type,
-                                  double reciprocal_magnitude);
-
 // Default score value used when no scorer has been applied yet.
 inline constexpr float kDefaultScore = 0.0f;
 
@@ -524,11 +514,21 @@ class VectorBase : public IndexBase {
     auto it = key_by_internal_id_.find(internal_id);
     return it == key_by_internal_id_.end() ? nullptr : &it->second;
   }
-  bool AddPrefilteredKey(
-      absl::string_view query, double query_magnitude,
-      const InternedStringPtr &key, uint64_t count,
-      std::priority_queue<std::pair<double, hnswlib::labeltype>> &results,
-      absl::flat_hash_set<const char *> &top_keys) const;
+  // The `count` keys nearest to a query, among keys offered one at a time by
+  // pre-filtering. Distances stay in the type the index computes them in.
+  class NearestKeys {
+   public:
+    virtual ~NearestKeys() = default;
+    // Keeps `key` if it is tracked and fewer than `count` keys are kept, or it
+    // is nearer than the farthest kept key, which it then replaces; the
+    // replaced key is also erased from `top_keys`. Returns whether `key` was
+    // kept.
+    virtual bool Add(const InternedStringPtr &key,
+                     absl::flat_hash_set<const char *> &top_keys) = 0;
+    virtual absl::StatusOr<std::vector<Neighbor>> CreateReply() = 0;
+  };
+  virtual std::unique_ptr<NearestKeys> CreateNearestKeys(
+      absl::string_view query, uint64_t count) = 0;
   template <typename T>
   absl::StatusOr<std::vector<Neighbor>> CreateReply(
       std::priority_queue<std::pair<T, hnswlib::labeltype>> &knn_res);
@@ -548,39 +548,20 @@ class VectorBase : public IndexBase {
       absl::string_view query, double radius, cancel::Token &cancellation_token,
       std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr) = 0;
 
-  // Distance and internal label for `key`, or an error if untracked. Backs
-  // IsWithinVectorRange. Search-phase only: lock-free, like
-  // GetVectorDuringSearch.
-  absl::StatusOr<std::pair<double, hnswlib::labeltype>>
-  ComputeDistanceFromRecord(const InternedStringPtr &key,
-                            absl::string_view query) const;
-
   // Returns the distance from the stored vector for `key` to `query` if the
   // distance is <= `radius`; returns std::nullopt if outside the radius;
-  // returns an error if the key is not tracked in this index.
-  absl::StatusOr<std::optional<double>> IsWithinVectorRange(
+  // returns an error if the key is not tracked in this index. Search-phase
+  // only: lock-free, like GetVectorDuringSearch.
+  virtual absl::StatusOr<std::optional<double>> IsWithinVectorRange(
       const InternedStringPtr &key, absl::string_view query,
-      double radius) const {
-    auto result = ComputeDistanceFromRecord(key, query);
-    if (!result.ok()) {
-      return result.status();
-    }
-    double distance = ClampCosineDistance(result->first);
-    if (distance > RangeRadius(radius)) {
-      return std::nullopt;
-    }
-    return distance;
-  }
+      double radius) const = 0;
   // Range test for `record`, the raw vector bytes just read back from the
   // database. Like RecomputeDistance it touches no index structure, so it is
   // safe on the main thread outside the search phase, where
   // IsWithinVectorRange is not.
-  bool IsRecordWithinVectorRange(absl::string_view record,
-                                 absl::string_view query, double radius) const {
-    auto distance = RecomputeDistance(record, query);
-    return distance.ok() &&
-           ClampCosineDistance(*distance) <= RangeRadius(radius);
-  }
+  virtual bool IsRecordWithinVectorRange(absl::string_view record,
+                                         absl::string_view query,
+                                         double radius) const = 0;
   bool IsVectorIndex() const override { return true; }
   virtual uint64_t GetMaxLoadedLabel() const { return 0; }
   virtual size_t GetLabelCount() const { return 0; }
@@ -626,8 +607,8 @@ class VectorBase : public IndexBase {
   // about a different one. Taking the bytes as an argument is what keeps this
   // callable from the main thread, where the index structures are not held
   // under a reader lock.
-  absl::StatusOr<double> RecomputeDistance(absl::string_view record,
-                                           absl::string_view query) const;
+  virtual absl::StatusOr<double> RecomputeDistance(
+      absl::string_view record, absl::string_view query) const = 0;
   const InternedStringPtr &GetInternedAttributeIdentifier() const {
     return interned_attribute_identifier_;
   }
@@ -675,78 +656,14 @@ class VectorBase : public IndexBase {
 
   int RespondWithInfo(ValkeyModuleCtx *ctx) const override;
 
-  // `radius` rounded to the type the index computes distances in, so a
-  // distance that equals the radius as written stays within it. Radii are
-  // capped at the largest double (see VectorRangePredicate::SetRadius); a
-  // float index caps them at the largest float, which still bounds every
-  // finite float distance.
-  double RangeRadius(double radius) const {
-    if (GetVectorDataType() == data_model::VECTOR_DATA_TYPE_FLOAT64) {
-      return radius;
-    }
-    return static_cast<float>(
-        std::min(radius, double{std::numeric_limits<float>::max()}));
-  }
-
-  // Clamped distance for a range search; `query` from NormalizeQueryIfNeeded,
-  // `query_magnitude` its reciprocal magnitude (1 unless normalize_).
-  double RangeDistance(absl::string_view query, double query_magnitude,
-                       const VectorRecord &record) const {
-    if (normalize_) {
-      query_magnitude *= record.GetReciprocalMagnitude();
-    }
-    return ClampCosineDistance(ComputeDistance(query, record, query_magnitude));
-  }
-
-  // Every tracked key within `radius` of `query`, unordered, for FLAT/HNSW
-  // alike. Lock-free: phase-based locking keeps queries and mutations
-  // mutually exclusive, so key_to_metadata_mutex_ is not needed here.
-  std::vector<Neighbor> SearchRangeExhaustive(
-      absl::string_view query, double radius, cancel::Token &cancellation_token,
-      hnswlib::BaseFilterFunctor *filter = nullptr) const
-      ABSL_NO_THREAD_SAFETY_ANALYSIS;
-
-  // Holds an optionally-normalized query vector. `view` is always valid and
-  // points either into `storage` (if normalization was applied) or into the
-  // original caller-owned buffer.
-  struct NormalizedQuery {
-    std::vector<char> storage;  // owns normalized data when normalize_ is true
-    absl::string_view view;     // always usable as the query input
-  };
-
-  // Returns a normalized copy of `query` when the index uses cosine distance,
-  // or a zero-copy view into the original buffer otherwise.
-  NormalizedQuery NormalizeQueryIfNeeded(absl::string_view query) const {
-    if (normalize_) {
-      double reciprocal_magnitude =
-          CalcReciprocalMagnitude(query, GetVectorDataType());
-      auto norm =
-          NormalizeVector(query, GetVectorDataType(), reciprocal_magnitude);
-      absl::string_view v(reinterpret_cast<const char *>(norm.data()),
-                          norm.size());
-      return {std::move(norm), v};
-    }
-    return {{}, query};
-  }
-
-  // Clamps a cosine distance to [0, 2]; no tolerance window, since one wide
-  // enough to absorb FP noise also swallows real near-duplicates/antipodes.
-  // Non-finite values are classified from their bits (-ffast-math breaks
-  // isnan/isfinite) and reported as +inf, outside every radius; an IP -inf
-  // is kept as-is, within every radius, matching Redis.
-  double ClampCosineDistance(double dist) const {
-    constexpr uint64_t kExponentMask = 0x7ff0000000000000ULL;
-    constexpr uint64_t kNegativeInfinity = 0xfff0000000000000ULL;
-    const auto bits = std::bit_cast<uint64_t>(dist);
-    if ((bits & kExponentMask) == kExponentMask) {
-      return !normalize_ && bits == kNegativeInfinity
-                 ? dist
-                 : std::bit_cast<double>(kExponentMask);
-    }
-    if (!normalize_) {
-      return dist;
-    }
-    return std::clamp(dist, 0.0, 2.0);
+  // Lock-free search optimization: Phase-based locking guarantees that queries
+  // and resizes/mutations are strictly mutually exclusive. Therefore, no data
+  // races can occur during the search phase.
+  absl::StatusOr<uint64_t> GetInternalIdDuringSearch(
+      const InternedStringPtr &key) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  const InternedStringHashMap<TrackedKeyMetadata> &
+  GetTrackedMetadataDuringSearch() const ABSL_NO_THREAD_SAFETY_ANALYSIS {
+    return tracked_metadata_by_key_;
   }
 
   virtual absl::Status AddRecordImpl(uint64_t internal_id,
@@ -772,9 +689,6 @@ class VectorBase : public IndexBase {
   bool normalize_{false};
   data_model::AttributeDataType attribute_data_type_;
   data_model::DistanceMetric distance_metric_;
-  virtual double ComputeDistance(absl::string_view query,
-                                 const VectorRecord &vector_record,
-                                 double query_magnitude) const = 0;
   virtual std::optional<hnswlib::tableint> GetAlgoIdLockFree(
       uint64_t internal_id) const = 0;
   mutable absl::Mutex resize_mutex_;
@@ -791,11 +705,6 @@ class VectorBase : public IndexBase {
       ABSL_LOCKS_EXCLUDED(resize_mutex_, key_to_metadata_mutex_);
   absl::StatusOr<uint64_t> GetInternalId(const InternedStringPtr &key) const
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
-  // Lock-free search optimization: Phase-based locking guarantees that queries
-  // and resizes/mutations are strictly mutually exclusive. Therefore, no data
-  // races can occur during the search phase.
-  absl::StatusOr<uint64_t> GetInternalIdDuringSearch(
-      const InternedStringPtr &key) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
   absl::flat_hash_map<uint64_t, InternedStringPtr> key_by_internal_id_
       ABSL_GUARDED_BY(key_to_metadata_mutex_);
 
@@ -803,10 +712,6 @@ class VectorBase : public IndexBase {
       ABSL_GUARDED_BY(key_to_metadata_mutex_);
   uint64_t inc_id_ ABSL_GUARDED_BY(key_to_metadata_mutex_){0};
   mutable absl::Mutex key_to_metadata_mutex_;
-  absl::StatusOr<std::pair<double, hnswlib::labeltype>>
-  ComputeDistanceFromRecord(const InternedStringPtr &key,
-                            absl::string_view query,
-                            double query_magnitude) const;
   UniqueFixedSizeAllocatorPtr vector_allocator_{nullptr, nullptr};
 };
 

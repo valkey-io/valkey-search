@@ -270,9 +270,9 @@ absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::Search(
 }
 
 template <typename T>
-double VectorFlat<T>::ComputeDistance(absl::string_view query,
-                                      const VectorRecord &vector_record,
-                                      double query_magnitude) const {
+typename VectorFlat<T>::DistanceT VectorFlat<T>::ComputeDistance(
+    absl::string_view query, const VectorRecord &vector_record,
+    MagnitudeT query_magnitude) const {
   return algo_->fstdistfunc_(query.data(), vector_record.GetRawVector(),
                              algo_->dist_func_param_, query_magnitude);
 }
@@ -283,11 +283,9 @@ template <typename T>
 absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::SearchRange(
     absl::string_view query, double radius, cancel::Token &cancellation_token,
     std::unique_ptr<hnswlib::BaseFilterFunctor> filter) {
-  radius = this->RangeRadius(radius);
+  const DistanceT range_radius = this->RangeRadius(radius);
   auto nq = this->NormalizeQueryIfNeeded(query);
-  const double query_magnitude =
-      normalize_ ? CalcReciprocalMagnitude(nq.view, this->GetVectorDataType())
-                 : kDefaultMagnitude;
+  const MagnitudeT query_magnitude = this->QueryReciprocalMagnitude(nq.view);
 
   std::vector<Neighbor> neighbors;
   neighbors.reserve(kRangeReserve);
@@ -300,9 +298,9 @@ absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::SearchRange(
     if (!*stored_vector || (filter && !(*filter)(label))) {
       continue;
     }
-    double distance =
+    const DistanceT distance =
         this->RangeDistance(nq.view, query_magnitude, *stored_vector);
-    if (distance <= radius) {
+    if (distance <= range_radius) {
       if (const auto *key = this->FindKeyDuringSearch(label)) {
         neighbors.emplace_back(*key, distance);
       }

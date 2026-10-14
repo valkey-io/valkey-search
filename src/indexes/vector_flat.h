@@ -113,9 +113,9 @@ class VectorFlat : public VectorType<T> {
   // Lock-free search optimization: Phase-based locking guarantees that queries
   // and resizes/mutations are strictly mutually exclusive. Therefore, no data
   // races can occur during the search phase.
-  double ComputeDistance(
+  DistanceT ComputeDistance(
       absl::string_view query, const VectorRecord &vector_record,
-      double query_magnitude) const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
+      MagnitudeT query_magnitude) const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
   VectorRecord &GetVectorLockFree(uint64_t internal_id) const override
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
   VectorRecord &GetVector(uint64_t internal_id) const override

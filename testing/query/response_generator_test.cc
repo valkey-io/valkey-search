@@ -7,9 +7,11 @@
 
 #include "src/query/response_generator.h"
 
+#include <cmath>
 #include <cstddef>
 #include <deque>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -18,6 +20,8 @@
 #include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -748,6 +752,175 @@ TEST_F(ResponseGeneratorTest, TextRevalidationLeavesSchemaMutexFree) {
 
   vmsdk::WriterMutexLock lock(&parameters.index_schema->GetTimeSlicedMutex());
 }
+
+// --- VECTOR_RANGE revalidation on the main-thread content-fetch path ---
+//
+// A mutated document's VR predicate is re-checked against the vector the
+// document holds now -- the value in the records VerifyFilter is handed -- and
+// never against the index. The re-check runs on the main thread after the
+// search released its reader lock, where the index's lock-free accessors race
+// the writer threads. Each case gives the index and the record opposite
+// answers, so the verdict shows which of the two was read.
+
+class VectorRangeRevalidationTest
+    : public ValkeySearchTestWithParam<data_model::AttributeDataType> {
+ protected:
+  bool IsJson() const {
+    return GetParam() ==
+           data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON;
+  }
+  // The vector as the database hands it back: raw bytes in a HASH field, JSON
+  // text for a JSON path.
+  std::string Stored(const std::vector<float> &v) const {
+    if (IsJson()) {
+      return absl::StrCat("[", absl::StrJoin(v, ","), "]");
+    }
+    return Floats(v);
+  }
+  static std::string Floats(const std::vector<float> &v) {
+    return {reinterpret_cast<const char *>(v.data()), v.size() * sizeof(float)};
+  }
+
+  // k1 is indexed with `indexed` and has been rewritten since the search: its
+  // fetched record holds `current` in the VR field, or no such field when
+  // `current` is nullopt. Returns whether VerifyFilter keeps k1 for
+  // `@vec:[VECTOR_RANGE radius $query]` on a 4-dimensional FLAT index.
+  bool Keeps(data_model::DistanceMetric metric,
+             const std::vector<float> &indexed,
+             const std::optional<std::string> &current,
+             const std::vector<float> &query, double radius) {
+    const std::string identifier = IsJson() ? "$.vec" : "vec";
+    UnitTestSearchParameters parameters;
+    std::unique_ptr<AttributeDataType> attribute_data_type;
+    if (IsJson()) {
+      attribute_data_type = std::make_unique<JsonAttributeDataType>();
+    } else {
+      attribute_data_type = std::make_unique<HashAttributeDataType>();
+    }
+    parameters.index_schema =
+        MockIndexSchema::Create(&fake_ctx_, "index", {"prefix:"},
+                                std::move(attribute_data_type))
+            .value();
+    auto index = indexes::VectorFlat<float>::Create(
+        CreateFlatVectorIndexProto(4, metric, 10, 10), identifier, GetParam(),
+        0);
+    EXPECT_TRUE(index.ok());
+    VMSDK_EXPECT_OK(
+        parameters.index_schema->AddIndex("vec", identifier, index.value()));
+    auto key = StringInternStore::Intern("k1");
+    VMSDK_EXPECT_OK(
+        testing_infra::AddVectorRecord(*index.value(), key, Floats(indexed)));
+    // The sequence numbers disagree, so VerifyFilter re-checks the document
+    // rather than returning on its fast path.
+    parameters.index_schema->SetIndexMutationSequenceNumber(key, 0);
+    parameters.index_schema->SetDbMutationSequenceNumber(key, 1);
+    indexes::Neighbor neighbor(key, 0.0f);
+    neighbor.sequence_number = 0;
+
+    auto predicate = std::make_unique<query::VectorRangePredicate>(
+        "vec", identifier, radius, "BLOB", std::nullopt, std::nullopt);
+    predicate->SetQueryVector(Floats(query));
+    parameters.filter_parse_results.root_predicate = std::move(predicate);
+    parameters.has_vector_range = true;
+
+    RecordsMap records;
+    if (current.has_value()) {
+      records.emplace(identifier,
+                      RecordsMapValue(vmsdk::MakeUniqueValkeyString(identifier),
+                                      vmsdk::MakeUniqueValkeyString(*current)));
+    }
+    std::unique_ptr<query::SingleDocumentScorer> scorer;
+    return query::VerifyFilter(parameters, records, neighbor, scorer).matches;
+  }
+
+  // Squared L2 from the origin: 0.25 for inside_, 81 for outside_.
+  const std::vector<float> origin_{0.0f, 0.0f, 0.0f, 0.0f};
+  const std::vector<float> inside_{0.5f, 0.0f, 0.0f, 0.0f};
+  const std::vector<float> outside_{9.0f, 0.0f, 0.0f, 0.0f};
+};
+
+TEST_P(VectorRangeRevalidationTest, DroppedWhenTheCurrentVectorIsOutOfRange) {
+  EXPECT_FALSE(Keeps(data_model::DISTANCE_METRIC_L2, /*indexed=*/inside_,
+                     Stored(outside_), origin_, /*radius=*/1.0));
+}
+
+TEST_P(VectorRangeRevalidationTest, KeptWhenTheCurrentVectorIsInRange) {
+  EXPECT_TRUE(Keeps(data_model::DISTANCE_METRIC_L2, /*indexed=*/outside_,
+                    Stored(inside_), origin_, /*radius=*/1.0));
+}
+
+TEST_P(VectorRangeRevalidationTest, DroppedWhenTheVectorFieldIsGone) {
+  EXPECT_FALSE(Keeps(data_model::DISTANCE_METRIC_L2, /*indexed=*/inside_,
+                     std::nullopt, origin_, /*radius=*/1.0));
+}
+
+TEST_P(VectorRangeRevalidationTest, DroppedWhenTheVectorIsNotAVector) {
+  EXPECT_FALSE(Keeps(data_model::DISTANCE_METRIC_L2, /*indexed=*/inside_,
+                     Stored({0.5f, 0.0f, 0.0f}), origin_, /*radius=*/1.0));
+  EXPECT_FALSE(Keeps(data_model::DISTANCE_METRIC_L2, /*indexed=*/inside_,
+                     IsJson() ? "[0.5,zero,0,0]" : "not a vector", origin_,
+                     /*radius=*/1.0));
+}
+
+// The re-check must bound a cosine distance exactly as the index's own
+// membership test (IsWithinVectorRange) does, whatever that bound is, or a
+// document kept at search time could be dropped at reply time. Compare the two
+// verdicts for the same stored vector at the radii where the bound decides: 0
+// and either side of the raw distance, for a self-match whose raw distance is
+// rounding noise above 0 and for a near neighbour.
+TEST_P(VectorRangeRevalidationTest, CosineVerdictMatchesTheIndex) {
+  auto probe = indexes::VectorFlat<float>::Create(
+      CreateFlatVectorIndexProto(4, data_model::DISTANCE_METRIC_COSINE, 10, 10),
+      "probe", data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
+  ASSERT_TRUE(probe.ok());
+  // Multiples of 1/8 survive the JSON text Stored() writes unchanged, so the
+  // probe and the re-check see the same vector.
+  std::optional<std::vector<float>> self;
+  for (int i = 1; i <= 30 && !self.has_value(); ++i) {
+    std::vector<float> v{0.125f * i, 0.75f, 1.375f, 0.25f};
+    auto raw = probe.value()->RecomputeDistance(Floats(v), Floats(v));
+    ASSERT_TRUE(raw.ok());
+    if (*raw > 0.0f) {
+      self = v;
+    }
+  }
+  ASSERT_TRUE(self.has_value());
+  auto key = StringInternStore::Intern("probe");
+  VMSDK_EXPECT_OK(
+      testing_infra::AddVectorRecord(*probe.value(), key, Floats(*self)));
+  std::vector<float> near = *self;
+  near[3] += 0.125f;
+  bool saw_keep = false;
+  bool saw_drop = false;
+  for (const std::vector<float> &query : {*self, near}) {
+    auto raw = probe.value()->RecomputeDistance(Floats(*self), Floats(query));
+    ASSERT_TRUE(raw.ok());
+    for (float radius : {0.0f, std::nextafter(*raw, 0.0f), *raw, 2.0f}) {
+      auto in_index =
+          probe.value()->IsWithinVectorRange(key, Floats(query), radius);
+      ASSERT_TRUE(in_index.ok());
+      bool keeps = Keeps(data_model::DISTANCE_METRIC_COSINE,
+                         /*indexed=*/{-1.0f, 0.0f, 0.0f, 0.0f}, Stored(*self),
+                         query, radius);
+      EXPECT_EQ(keeps, in_index->has_value())
+          << "raw distance " << *raw << ", radius " << radius;
+      saw_keep |= keeps;
+      saw_drop |= !keeps;
+    }
+  }
+  EXPECT_TRUE(saw_keep && saw_drop);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    VectorRangeRevalidationTests, VectorRangeRevalidationTest,
+    testing::Values(data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH,
+                    data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON),
+    [](const testing::TestParamInfo<data_model::AttributeDataType> &info) {
+      return info.param ==
+                     data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH
+                 ? "Hash"
+                 : "Json";
+    });
 
 INSTANTIATE_TEST_SUITE_P(
     ResponseGeneratorTests, ResponseGeneratorTest,

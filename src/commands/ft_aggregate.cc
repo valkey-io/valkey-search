@@ -121,6 +121,16 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
         }
         continue;
       }
+      // Also skip the VR score field name — it is a synthetic computed field
+      // that is not in the index schema.
+      bool is_vr_field = !params.vr_score_field_name_.empty() &&
+                         identifier == params.vr_score_field_name_;
+      if (is_vr_field) {
+        if (renamed) {
+          apply_rename(params.record_indexes_by_alias_.at(identifier));
+        }
+        continue;
+      }
       content = true;
       VMSDK_ASSIGN_OR_RETURN(auto indexer,
                              params.index_schema->GetIndex(identifier));
@@ -166,6 +176,17 @@ absl::Status AggregateParameters::ParseCommand(vmsdk::ArgsIterator &itr) {
   parse_vars_.index_interface_ = &real_index_interface;
 
   VMSDK_RETURN_IF_ERROR(PreParseQueryString());
+  // Resolve the single VR predicate's distance field name (if any).
+  if (has_vector_range) {
+    vr_score_field_name_ = query::GetVrScoreFieldName(*this);
+
+    // For non-vector queries the mandatory slot-1 record attribute must carry
+    // the VR distance. Set score_as so the unconditional AddRecordAttribute
+    // call below uses the correct name.
+    if (IsNonVectorQuery() && !vr_score_field_name_.empty()) {
+      score_as = vmsdk::MakeUniqueValkeyString(vr_score_field_name_);
+    }
+  }
   // Non-vector queries have no KNN AS clause to name the score field, so
   // default to Redis' ADDSCORES name. This also makes @__score resolvable by
   // LOAD and by stages (SORTBY/APPLY/GROUPBY) via record_indexes_by_alias_.

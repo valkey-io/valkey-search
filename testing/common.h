@@ -42,6 +42,7 @@
 #include "src/valkey_search.h"
 #include "src/vector_registry.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
@@ -275,6 +276,11 @@ class MockIndex : public indexes::VectorBase {
       std::optional<size_t> = std::nullopt, bool = false) override {
     return std::vector<indexes::Neighbor>{};
   }
+  absl::StatusOr<std::vector<indexes::Neighbor>> SearchRange(
+      absl::string_view, float, cancel::Token &,
+      std::unique_ptr<hnswlib::BaseFilterFunctor> = nullptr) override {
+    return std::vector<indexes::Neighbor>{};
+  }
 };
 
 class MockKeyspaceEventSubscription : public KeyspaceEventSubscription {
@@ -505,6 +511,18 @@ inline void InitThreadPools(std::optional<size_t> readers,
                             std::optional<size_t> utility) {
   ((TestableValkeySearch *)&ValkeySearch::Instance())
       ->InitThreadPools(readers, writers, utility);
+}
+
+// Toggles search.debug-mode, which gates modification of Dev() configs.
+inline void SetDebugMode(bool enabled) {
+  auto args = vmsdk::ToValkeyStringVector(enabled ? "--debug-mode yes"
+                                                  : "--debug-mode no");
+  VMSDK_EXPECT_OK(
+      vmsdk::config::ModuleConfigManager::Instance().ParseAndLoadArgv(
+          nullptr, args.data(), args.size()));
+  for (auto *arg : args) {
+    TestValkeyModule_FreeString(nullptr, arg);
+  }
 }
 
 absl::StatusOr<std::shared_ptr<MockIndexSchema>> CreateIndexSchema(

@@ -29,11 +29,14 @@
 #include "src/indexes/bfloat16.h"
 #include "src/indexes/fp16.h"
 #include "src/indexes/index_base.h"
+#include "src/indexes/scoring/scorer.h"
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_type.h"
 #include "src/metrics.h"
 #include "src/query/search.h"
 #include "src/rdb_serialization.h"
+#include "src/utils/cancel.h"
+#include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
 #include "src/valkey_search_options.h"
 #include "valkey_search_options.h"
@@ -350,6 +353,96 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
         1, std::memory_order_relaxed);
     return absl::InternalError(e.what());
   }
+}
+
+template <typename T>
+absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
+    absl::string_view query, float radius, cancel::Token &cancellation_token,
+    std::unique_ptr<hnswlib::BaseFilterFunctor> filter) {
+  const size_t max_candidates = static_cast<size_t>(
+      options::GetMaxNonVectorSearchResultsFetched().GetValue());
+
+  // Run a KNN search for max_candidates neighbors (ef = max_candidates), then
+  // filter to the radius. Like any HNSW search this is approximate and can
+  // miss keys within the radius. The EpsilonSearchStopCondition approach was
+  // not used: it terminates as soon as any out-of-radius candidate is
+  // encountered, which happens immediately when the HNSW entry point is far
+  // from the query.
+  auto perform_search =
+      [this, &filter, max_candidates, &cancellation_token](
+          absl::string_view query_view, float reciprocal_magnitude)
+          ABSL_NO_THREAD_SAFETY_ANALYSIS
+      -> absl::StatusOr<
+          std::priority_queue<std::pair<float, hnswlib::labeltype>>> {
+    try {
+      CancelCondition cancel_condition(cancellation_token);
+      QueryVector embedding(
+          VectorRecord::Construct(query_view, reciprocal_magnitude,
+                                  GetVectorAllocator()),
+          query_view.size(), normalize_, GetVectorDataType());
+      auto res = algo_->searchKnn(embedding, max_candidates,
+                                  std::optional<size_t>(max_candidates),
+                                  filter.get(), &cancel_condition);
+      return res;
+    } catch (const std::exception &e) {
+      Metrics::GetStats().hnsw_search_exceptions_cnt.fetch_add(
+          1, std::memory_order_relaxed);
+      return absl::InternalError(e.what());
+    }
+  };
+
+  auto nq = this->NormalizeQueryIfNeeded(query);
+  float reciprocal_magnitude =
+      this->normalize_
+          ? CalcReciprocalMagnitude(nq.view, this->GetVectorDataType())
+          : kDefaultMagnitude;
+  VMSDK_ASSIGN_OR_RETURN(auto raw_results,
+                         perform_search(nq.view, reciprocal_magnitude));
+
+  // Capped only if the fetch filled the cap AND its farthest candidate is
+  // still in range; then in-range docs may be unenumerated, so fall back to
+  // an exhaustive scan, as FLAT does (cap 0 always scans). Reported on the
+  // same counter as the non-vector prefilter cap (search.cc).
+  const bool fetch_full = raw_results.size() >= max_candidates;
+  const bool fetch_limited =
+      fetch_full &&
+      (raw_results.empty() ||
+       this->ClampCosineDistance(raw_results.top().first) <= radius);
+  if (fetch_limited) {
+    query::RecordNonVectorResultsFetchedLimited();
+    return this->SearchRangeExhaustive(query, radius, cancellation_token,
+                                       filter.get());
+  }
+
+  // Keep only the results within the radius.
+  std::vector<Neighbor> neighbors;
+  neighbors.reserve(raw_results.size());
+  while (!raw_results.empty()) {
+    auto [dist, label] = raw_results.top();
+    raw_results.pop();
+    if (cancellation_token->IsCancelled()) {
+      break;
+    }
+    // NaN breaks heap order, so a full fetch can't be trusted to hold the
+    // closest candidates; an infinite distance can mean an unnormalized
+    // infinite stored vector sorting at a heap end. Rescan exhaustively.
+    // IsNaN/IsInf read the bits, unaffected by -ffast-math.
+    if (fetch_full && (scoring::IsNaN(dist) || scoring::IsInf(dist))) {
+      query::RecordNonVectorResultsFetchedLimited();
+      return this->SearchRangeExhaustive(query, radius, cancellation_token,
+                                         filter.get());
+    }
+    float clamped_dist = this->ClampCosineDistance(static_cast<float>(dist));
+    if (clamped_dist > radius) {
+      continue;
+    }
+    auto key = this->GetKeyDuringSearch(label);
+    if (!key.ok()) {
+      continue;
+    }
+    neighbors.emplace_back(*key, clamped_dist);
+  }
+  return neighbors;
 }
 
 template <typename T>

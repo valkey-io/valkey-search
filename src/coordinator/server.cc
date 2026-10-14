@@ -352,7 +352,11 @@ grpc::ServerUnaryReactor *Service::MultiSearchIndexPartition(
     auto *sub_resp = response->mutable_sub_responses(i);
     SearchOneArm(
         context, request->sub_requests(i), sub_resp->mutable_response(),
-        [sub_resp, completion](grpc::Status s) {
+        [sub_resp, completion, i](grpc::Status s) {
+          if (s.ok()) {
+            s = ToGrpcStatus(
+                query::ForcedMultiArmFailure(static_cast<size_t>(i)));
+          }
           sub_resp->set_grpc_code(static_cast<uint32_t>(s.error_code()));
           if (!s.ok()) {
             sub_resp->set_error_message(s.error_message());

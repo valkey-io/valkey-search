@@ -438,6 +438,21 @@ class TestScoring(ValkeySearchTestCaseBase):
             "doc:3": 0.119322, "doc:4": -0.523122, "doc:7": float("-inf"),
         }, abs=SCORE_ABS_TOL)
 
+        # `$weight: 0` still matches but scores 0, even for the ±inf docs, where
+        # the reference returns NaN.
+        _, zero = search(client, IDX_DOC_SCORE, "hello => {$weight: 0}")
+        assert zero == {k: 0.0 for k in ("doc:1", "doc:2", "doc:3", "doc:4",
+                                          "doc:5", "doc:7")}
+
+        # In a composed query only the zero-weight leaf drops out, so each doc
+        # scores as if that term were absent.
+        _, world = search(client, IDX_DOC_SCORE, "world")
+        _, partial = search(client, IDX_DOC_SCORE, "(hello)=>{$weight:0} world")
+        assert 0.0 not in partial.values()
+        assert partial == pytest.approx(
+            {k: world[k] for k in ("doc:1", "doc:2", "doc:3", "doc:4", "doc:7")},
+            abs=SCORE_ABS_TOL)
+
     # Group 5: term frequency is counted document-wide, not per field.
     def test_doc_wide_term_frequency(self):
         client = self.server.get_new_client()

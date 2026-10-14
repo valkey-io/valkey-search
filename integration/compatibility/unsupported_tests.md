@@ -14,8 +14,8 @@ Two markers are used, and they mean different things:
   If one starts matching, the run prints a loud `XPASS` banner: the gap has
   been closed, and both the marker and the entry here should be removed.
 
-Sections 1-4 cover the text-search suite (`generate_text.py`); section 5 covers
-the FT.HYBRID suite (`generate_hybrid.py`).
+Sections 1-4 and 6 cover the text-search suite (`generate_text.py`); section 5
+covers the FT.HYBRID suite (`generate_hybrid.py`).
 
 ## 1. Exact Phrase Query
 
@@ -234,31 +234,29 @@ rather than computing anything, and a `GROUPBY` *reducer* over one returns
 still refused on both engines, which `test_sortby_every_kind_of_column` and
 `test_pipeline_stages_over_scores` pin.
 
-### 5.4b. `POLICY` — valkey accepts and discards, Redis rejects
+### 5.4b. `POLICY` — active inside the counted VSIM `FILTER`
 
-**Status:** deliberate leniency, not swept.
+**Status:** supported.
+
+The earlier probe placed `POLICY` directly after the KNN block. Redis rejects
+that placement because `POLICY` belongs inside the counted `FILTER` block; the
+rejection did not mean that FT.HYBRID lacked policy selection.
+
+Measured against Redis 8.10.2, Search module 81001:
 
 ```
-... VSIM @vec $q KNN 2 K 20 POLICY local ...
-Redis:  (error) SEARCH_PARSE_ARGS POLICY: Unknown argument
-Valkey: answers as if the clause were not there
+... VSIM @vec $q KNN 2 K 20 FILTER 3 @tag:{x} POLICY ADHOC
+... VSIM @vec $q KNN 2 K 20 FILTER 3 @tag:{x} POLICY BATCHES
 ```
 
-The Redis 8.4 query engine has no `POLICY` clause on FT.HYBRID and refuses the
-token outright, for every value tried. valkey-search parses it and throws the
-value away (ft_hybrid_parser.cc, the top-level walk), erroring only when the
-value is missing. Accepted so a command written for a coordinator dialect that
-does carry `POLICY` is not rejected here; it does not change an answer, so
-sweeping it would record an error-message mismatch and nothing else.
+`FT.PROFILE` reports `HYBRID_ADHOC_BF` for `ADHOC` and `HYBRID_BATCHES` for
+`BATCHES`. The FT.HYBRID spelling is `ADHOC`, not the `ADHOC_BF` used by the
+FT.SEARCH/FT.AGGREGATE `HYBRID_POLICY` modifier. `BATCH_SIZE` follows
+`POLICY BATCHES` inside the same counted block.
 
-Both engines take a `FILTER` inside the VSIM clause, where it pre-filters the
-vector search. It goes after the `KNN`/`RANGE` block and *before*
-`YIELD_SCORE_AS` -- placed after the alias it ends the clause and becomes the
-aggregate stage instead -- and it is written in the FT.SEARCH query language,
-not the aggregate FILTER's expression language. The count is optional. Note the
-command reference has the order the other way round, and its structured
-argument list omits `POLICY` entirely while the syntax line shows it; both were
-resolved by measurement.
+A policy outside `FILTER`, outside its count, or named `ADHOC_BF` is rejected.
+The FILTER expression remains in the FT.SEARCH query language, not the
+aggregate FILTER expression language.
 
 ### 5.4c. A pipeline stage naming a field no LOAD clause asked for
 
@@ -680,3 +678,16 @@ computation, or to capture a second set of reference answers from a Redis
 cluster. Until one of those happens, flipping the flag would record the
 divergence 169 times rather than test anything. Note the reference engine's own
 cluster behaviour is unmeasured here: this generator runs one container.
+
+## 6. Multi-language text search
+
+Excluded wholesale (`exclude_all=True`) because the engines differ by design;
+each is described, with the measured Redis behavior, in `known_differences.md`
+§4.
+
+- `test_multilang_unescaped` — Valkey splits on language-specific non-ASCII
+  punctuation; Redis treats it as word characters (§4.1).
+- `test_multilang_escaped` — Redis does not resolve backslash-escaped non-ASCII
+  punctuation (§4.2).
+- `test_multilang_turkish_uppercase` — Redis applies no Turkish casing, so
+  `IŞIK` does not match `ışık` (§4.4).

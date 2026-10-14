@@ -679,6 +679,56 @@ INSTANTIATE_TEST_SUITE_P(
              std::get<1>(info.param).test_name;
     });
 
+TEST_F(ValkeySearchTest,
+       HybridPolicyTakesPriorityOverInkeysWithAndWithoutFilter) {
+  auto index_schema = CreateIndexSchemaWithMultipleAttributes(
+      indexes::IndexerType::kHNSW, data_model::DISTANCE_METRIC_L2);
+  UnitTestSearchParameters params;
+  params.index_schema_name = kIndexSchemaName;
+  params.index_schema = index_schema;
+  params.attribute_alias = kVectorAttributeAlias;
+  params.score_as = vmsdk::MakeUniqueValkeyString(kScoreAs);
+  params.dialect = kDialect;
+  params.k = 5;
+  std::vector<float> query_vector(kVectorDimensions, 1.0f);
+  params.query = VectorToStr(query_vector);
+  TextParsingOptions options{};
+  FilterParser parser(*index_schema, "@tag:{LT5}", options);
+  params.filter_parse_results = std::move(parser.Parse().value());
+  params.inkeys = absl::flat_hash_set<std::string>{"0", "1"};
+
+  auto expect_inkeys_results = [&]() {
+    ASSERT_EQ(params.search_result.neighbors.size(), 2);
+    for (const auto &neighbor : params.search_result.neighbors) {
+      EXPECT_TRUE(
+          params.inkeys->contains(std::string(neighbor.external_id->Str())));
+    }
+  };
+
+  auto run_policy = [&](query::HybridPolicy policy, bool expect_prefilter) {
+    params.hybrid_policy = policy;
+    auto prefiltering_requests =
+        Metrics::GetStats().query_prefiltering_requests_cnt.load();
+    auto inline_filtering_requests =
+        Metrics::GetStats().query_inline_filtering_requests_cnt.load();
+    VMSDK_EXPECT_OK(Search(params, query::SearchMode::kLocal));
+    expect_inkeys_results();
+    EXPECT_EQ(Metrics::GetStats().query_prefiltering_requests_cnt.load(),
+              prefiltering_requests + expect_prefilter);
+    EXPECT_EQ(Metrics::GetStats().query_inline_filtering_requests_cnt.load(),
+              inline_filtering_requests + !expect_prefilter);
+  };
+
+  for (bool with_filter : {true, false}) {
+    if (!with_filter) {
+      params.filter_parse_results = FilterParseResults{};
+    }
+    run_policy(query::HybridPolicy::kAuto, true);
+    run_policy(query::HybridPolicy::kBatches, false);
+    run_policy(query::HybridPolicy::kAdHocBruteForce, true);
+  }
+}
+
 // A hybrid `text=>[KNN]` query must rank by the text relevance score, not by
 // the vector distance. Both docs contain "cat": "short" is a one-word document
 // (high BM25) but far from the query vector; "long" buries "cat" in a long

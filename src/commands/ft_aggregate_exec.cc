@@ -1180,12 +1180,13 @@ absl::Status CreateRecordsFromNeighbors(
     if (parameters.load_key) {
       rec->fields_.at(key_index) = expr::Value(n.external_id->Str());
     }
-
-    if (parameters.IsVectorQuery() || parameters.addscores_) {
-      // A vector query's score column is its KNN distance alias. For a hybrid
-      // `text=>[KNN]` query Neighbor.score holds the text relevance instead.
-      rec->fields_.at(scores_index) =
-          expr::Value(parameters.IsVectorQuery() ? n.distance : n.score);
+    
+    // A vector query's score column is its KNN distance alias. For a hybrid
+    // `text=>[KNN]` query Neighbor.score holds the text relevance instead.
+    if (parameters.IsVectorQuery()) {
+      rec->fields_.at(scores_index) = expr::Value(n.distance);
+    } else if (parameters.addscores_) {
+      rec->fields_.at(scores_index) = expr::Value(n.score);
     }
 
     if (n.attribute_contents.has_value() && !parameters.no_content) {

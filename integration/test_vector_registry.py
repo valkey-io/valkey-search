@@ -151,7 +151,8 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
             prefixes=["doc:"],
             type=KeyDataType.HASH,
         )
-        vector_index.create(client)
+        # Finish the initial scan before writes so backfill cannot add dedup hits.
+        vector_index.create(client, wait_for_backfill=True)
 
         # 1. Initial stats should be 0
         stats = _get_vector_registry_stats(client)

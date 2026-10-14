@@ -11,6 +11,9 @@ from compatibility.data_sets import *
 
 ALL_ANSWER_FILES = [g["answers"] for g in GENERATORS]
 CLUSTER_ANSWER_FILES = [g["answers"] for g in GENERATORS if g["cluster"]]
+MULTILANG_ANSWER_FILES = [g["answers"] for g in GENERATORS if "multilang" in g["answers"]]
+# Non-multilang pickles run separately for organizational clarity
+BASE_ANSWER_FILES = [g["answers"] for g in GENERATORS if "multilang" not in g["answers"]]
 TEST_MARKER = "*" * 100
 from valkey_search_test_case import (
     ValkeySearchClusterTestCase,
@@ -173,9 +176,40 @@ def result_has_sortkeys(rs):
         return second_elem.startswith('#') or second_elem.startswith('$')
     return False
 
-def unpack_search_result(rs, key_type, has_sortkeys=False):
+def unpack_search_result(rs, key_type, has_sortkeys=False, nocontent=False,
+                         has_scores=False):
     rows = []
-    if has_sortkeys:
+    if nocontent:
+        # NOCONTENT reply carries no field arrays. Driven by the command
+        # (see unpack_result), not inferred from the reply shape.
+        if has_scores:
+            # WITHSCORES: [count, key1, score1, ...] -- stride 2. __score goes
+            # through compare_row's numeric-tolerance path.
+            for i in range(1, len(rs), 2):
+                rows += [{"__key": rs[i], "__score": rs[i + 1]}]
+        else:
+            for key in rs[1:]:
+                rows += [{"__key": key}]
+    elif has_scores and has_sortkeys:
+        # WITHSCORES + WITHSORTKEYS:
+        # [count, key1, score1, sortkey1, [fields1], ...] -- stride 4.
+        for i in range(1, len(rs), 4):
+            key, score, value = rs[i], rs[i+1], rs[i+3]
+            row = {"__key": key, "__score": score}
+            for j in range(0, len(value), 2):
+                row[parse_field(value[j], key_type)] = parse_value(value[j+1], key_type)
+            rows += [row]
+    elif has_scores:
+        # WITHSCORES: [count, key1, score1, [fields1], ...] -- stride 3, with
+        # the middle element a relevance score (not a #/$ sortkey). The score
+        # goes into __score, which compare_row compares with numeric tolerance.
+        for i in range(1, len(rs), 3):
+            key, score, value = rs[i], rs[i+1], rs[i+2]
+            row = {"__key": key, "__score": score}
+            for j in range(0, len(value), 2):
+                row[parse_field(value[j], key_type)] = parse_value(value[j+1], key_type)
+            rows += [row]
+    elif has_sortkeys:
         # Format: [count, key1, sortkey1, [fields1], key2, sortkey2, [fields2], ...]
         # Step by 3 elements at a time
         for (key, sortkey, value) in [(rs[i], rs[i+1], rs[i+2]) for i in range(1, len(rs), 3)]:
@@ -259,6 +293,30 @@ def row_sort_key(sortkeys):
     return key
 
 
+def _search_returns_no_fields(cmd):
+    """True when an FT.SEARCH command yields a keys-only reply.
+
+    Two command shapes produce [count, key1, key2, ...] with no field arrays:
+      * NOCONTENT keyword present.
+      * A RETURN clause requesting zero fields (RETURN 0). Per Redisearch, the
+        last RETURN clause wins, so a later `RETURN <n>` (n>0) re-adds fields
+        and overrides an earlier `RETURN 0`; honor the last one.
+    Command-driven on purpose -- inferring this from the reply shape misreads a
+    normal keys-only reply as key/fields pairs.
+    """
+    tokens = [c.lower() if isinstance(c, str) else c for c in cmd]
+    if "nocontent" in tokens:
+        return True
+    last_return_count = None
+    for i, tok in enumerate(tokens):
+        if tok == "return" and i + 1 < len(tokens):
+            try:
+                last_return_count = int(cmd[i + 1])
+            except (ValueError, TypeError):
+                last_return_count = None
+    return last_return_count == 0
+
+
 def canonicalize_ties(rows, sortkeys):
     """Order the rows that tie on `sortkeys`, and leave everything else where
     it is.
@@ -299,7 +357,18 @@ def unpack_result(cmd, key_type, rs, sortkeys, ordered=False):
         # where the expected result (from pickle) may not have sort keys even
         # if the command requested them.
         has_sortkeys = result_has_sortkeys(rs)
-        out = unpack_search_result(rs, key_type, has_sortkeys)
+        # A keys-only reply (NOCONTENT or RETURN 0) is decided by the command,
+        # not inferred from the reply shape: the reply is [count, key1, key2,
+        # ...] with no field arrays, which the field-bearing path below would
+        # misread as key/fields pairs.
+        nocontent = _search_returns_no_fields(cmd)
+        # WITHSCORES inserts a relevance score after each key. It is not a #/$
+        # sort key, so result_has_sortkeys can't see it; drive it from the cmd.
+        has_scores = any(
+            isinstance(c, str) and c.lower() == "withscores" for c in cmd
+        )
+        out = unpack_search_result(rs, key_type, has_sortkeys, nocontent,
+                                   has_scores)
     else:
         out = unpack_agg_result(rs, key_type)
     #
@@ -403,10 +472,17 @@ def compare_number_eq(l, r, tol=DEFAULT_TOLERANCE):
         
     
 def compare_row(l, r, key_type, tol=DEFAULT_TOLERANCE):
-    lks = sorted(list(l.keys()))
-    rks = sorted(list(r.keys()))
-    #print("Comparing row: ", l, " and ", r)
-    #print("Sorted keys: ", lks, " and ", rks)
+    # VECTOR_RANGE parity: Redisearch surfaces the VR distance ONLY under an
+    # explicit $yield_distance_as alias — never a default __<field>_score. Valkey
+    # matches this (GetVrScoreFieldName returns "" without an alias), so neither
+    # side emits a default score field and the rows compare directly. Do NOT
+    # re-introduce a strip of __*_score fields here: that would re-hide a real
+    # divergence if the default field ever reappeared on one side.
+    l_filtered = dict(l)
+    r_filtered = dict(r)
+
+    lks = sorted(list(l_filtered.keys()))
+    rks = sorted(list(r_filtered.keys()))
     if lks != rks:
         return False
     for i in range(len(lks)):
@@ -430,27 +506,26 @@ def compare_row(l, r, key_type, tol=DEFAULT_TOLERANCE):
                 print("RL: ", r)
                 print("VK: ", l)
                 return False
-        elif lks[i].startswith("v") and key_type == "json":
-            # Vector compare fields
-            assert isinstance(l[lks[i]], list)
-            assert isinstance(r[rks[i]], list)
-            if len(l[lks[i]]) != len(r[rks[i]]):
-                print("mismatch vector field length: ", l[lks[i]], " ", r[rks[i]])
+        elif lks[i].startswith("v") and key_type == "json" and \
+                isinstance(l_filtered[lks[i]], list) and isinstance(r_filtered[rks[i]], list):
+            # Vector compare fields (only when values are actually lists)
+            if len(l_filtered[lks[i]]) != len(r_filtered[rks[i]]):
+                print("mismatch vector field length: ", l_filtered[lks[i]], " ", r_filtered[rks[i]])
                 return False
-            for i in range(l[lks[i]]):
-                if not compare_number_eq(l[lks[i]][i], r[rks[i]][i], tol):
-                    print("mismatch vector field value: ", l[lks[i]], " ", r[rks[i]])
+            for j in range(len(l_filtered[lks[i]])):
+                if not compare_number_eq(l_filtered[lks[i]][j], r_filtered[rks[i]][j], tol):
+                    print("mismatch vector field value: ", l_filtered[lks[i]], " ", r_filtered[rks[i]])
                     return False
         elif lks[i] == b'$' and rks[i] == b'$':
             try:
-                l_json = json_load(l[lks[i]])
-                r_json = json_load(r[rks[i]])
+                l_json = json_load(l_filtered[lks[i]])
+                r_json = json_load(r_filtered[rks[i]])
                 if l_json != r_json:
-                    print("mismatch JSON field: ", l[lks[i]], " and ", r[rks[i]])
+                    print("mismatch JSON field: ", l_filtered[lks[i]], " and ", r_filtered[rks[i]])
                     print("Loaded JSON: L:", l_json, " and R:", r_json)
                     return False
             except json.decoder.JSONDecodeError:
-                print("JSON decode error comparing: ", l[lks[i]], " and ", r[rks[i]])
+                print("JSON decode error comparing: ", l_filtered[lks[i]], " and ", r_filtered[rks[i]])
                 return False
         else:
             lv, rv = l[lks[i]], r[rks[i]]
@@ -462,14 +537,14 @@ def compare_row(l, r, key_type, tol=DEFAULT_TOLERANCE):
             # tolerant numeric compare -- it treats nan/-nan as equal and uses
             # math.isclose, absorbing the two engines' differing float precision
             # and negative-zero formatting on any server-computed numeric field
-            # (APPLY results, GROUPBY reducers). Non-numeric values (concat/
-            # lower/substr/timefmt string results, tags, keys) stay an exact
-            # match.
-            if _is_numeric(lv) and _is_numeric(rv) and compare_number_eq(lv, rv):
+            # (APPLY results, GROUPBY reducers, VR distances). Non-numeric
+            # values (concat/lower/substr/timefmt string results, tags, keys)
+            # stay an exact match.
+            if _is_numeric(lv) and _is_numeric(rv) and compare_number_eq(lv, rv, tol):
                 continue
             print("mismatch field: ", lks[i], " and ", rks[i], " ", lv, "!=", rv)
             return False
-    return True            
+    return True
     
 def compare_results(expected, results):
     print("CMD:", printable_cmd(expected["cmd"]))
@@ -554,9 +629,14 @@ def compare_results(expected, results):
         return True
 
     if expected["exception"]:
-        print("RL Exception, skipped")
-        #print(f"RL Exception: Raw: {printable_result(results['RL'])}")
-        #print(f"VK: Result: {printable_result(results['VK:'])}")
+        # The reference engine rejected the command but Valkey-search accepted
+        # it. This is a real permissiveness divergence, not a pass -- surface it
+        # loudly instead of silently skipping so a regression cannot hide here.
+        # It is not failed automatically because several such differences are
+        # pre-existing and out of scope for VECTOR_RANGE (e.g. unused PARAMS,
+        # unescaped tag punctuation); the warning keeps them visible for triage.
+        print("WARNING: reference engine raised but Valkey-search accepted "
+              f"(permissiveness divergence). CMD: {cmd}")
         print(TEST_MARKER)
         return True
 
@@ -567,13 +647,9 @@ def compare_results(expected, results):
         print(TEST_MARKER)
         return False
 
-    # The sortkey-prefix cases assert the sort-key bytes, which the generic
-    # unpack path below discards (unpack_search_result drops the sort-key
-    # element). The return-clause cases produce no-content replies whose
-    # 1-element stride the unpacker cannot parse. Both data sets are fully
-    # deterministic, so compare them raw.
-    if expected.get("data_set_name") in (SORTKEY_PREFIX_DATA_SET,
-                                         RETURN_CLAUSE_DATA_SET):
+    # These data sets are order-deterministic and assert bytes the generic
+    # unpack path below discards, so compare them raw.
+    if expected.get("data_set_name") in (SORTKEY_PREFIX_DATA_SET, SORTKEY_NIL_DATA_SET, RETURN_CLAUSE_DATA_SET):
         if expected["result"] == results["result"]:
             return True
         print(f"CMD: {cmd}")
@@ -784,11 +860,24 @@ def do_answer_cluster(cluster_client, expected, data_set, test_case):
             expected["key_type"],
         )
 
+        # Wait for indexing to complete on all primary nodes before querying.
+        # Without this wait, results can be partial if queries run before all
+        # shards finish indexing the newly loaded keys (flaky cluster failures).
+        index_name = f"{expected['key_type']}_idx1"
+        primary_clients = [
+            test_case.new_client_for_primary(i)
+            for i in range(test_case.CLUSTER_SIZE)
+        ]
+        IndexingTestHelper.wait_for_indexing_complete_on_all_nodes(
+            primary_clients, index_name
+        )
+
         data_set = next_data_set
 
     # for the excluded queries with known difference
-    # just run in valkey to make sure they do not crash
-    if expected.get("excluded"):
+    # just run in valkey to make sure they do not crash.
+    # excluded_cluster: relaxed in cluster only (CMD still asserts equality).
+    if expected.get("excluded") or expected.get("excluded_cluster"):
         try:
             print(f"Running excluded CLUSTER query (no-crash check): {expected['cmd']}")
             cluster_client.execute_command(*expected["cmd"])
@@ -872,7 +961,7 @@ def _load_answers_with_hash_check(answer_file_name):
 
 
 class TestAnswersCMD(ValkeySearchTestCaseDebugMode):
-    @pytest.mark.parametrize("answers", ALL_ANSWER_FILES)
+    @pytest.mark.parametrize("answers", BASE_ANSWER_FILES)
     def test_answers(self, answers):
         global client, data_set
         global correct_answers, failed_tests, passed_tests
@@ -951,6 +1040,39 @@ class TestAnswersCMD(ValkeySearchTestCaseDebugMode):
             print(f"Passed test {k:60}: {v} times")
     '''
 
+
+class TestAnswersMultiLang(ValkeySearchTestCaseBase):
+    """Compatibility tests for multi-language text search."""
+
+    @pytest.mark.parametrize("answers", MULTILANG_ANSWER_FILES)
+    def test_answers(self, answers):
+        global client, data_set
+        global correct_answers, failed_tests, passed_tests
+
+        # RESET GLOBAL COUNTERS AT START OF EACH TEST
+        correct_answers = 0
+        wrong_answers = 0
+        failed_tests = {}
+        passed_tests = {}
+
+        print("Running test_answers (multilang) with answers file:", answers)
+        answers = _load_answers_with_hash_check(answers)
+
+        data_set = None
+        client = self.server.get_new_client()
+        for i in range(len(answers)):
+            data_set = do_answer(client, answers[i], data_set)
+
+        expected_count = sum(1 for a in answers if not a.get('excluded'))
+        if correct_answers != expected_count:
+            print(f"Correct answers: {correct_answers} out of {len(answers)}")
+            if len(failed_tests) != 0:
+                print(">>>>>>>>> Failed Tests <<<<<<<<<")
+                for k, v in failed_tests.items():
+                    print(f"Failed test {k:60}: {v} times")
+            assert False
+
+
 # TODO: fix cluster mode test failures
 class TestAnswersCME(ValkeySearchClusterTestCaseDebugMode):
     @pytest.mark.parametrize("answers", CLUSTER_ANSWER_FILES)
@@ -992,7 +1114,10 @@ class TestAnswersCME(ValkeySearchClusterTestCaseDebugMode):
                 test_case=self,
             )
 
-        expected_count = sum(1 for a in answers if not a.get('excluded'))
+        expected_count = sum(
+            1 for a in answers
+            if not a.get('excluded') and not a.get('excluded_cluster')
+        )
         if correct_answers != expected_count:
             print(f"Correct answers: {correct_answers} out of {len(answers)}")
             if failed_tests:

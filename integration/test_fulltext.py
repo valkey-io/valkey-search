@@ -2341,8 +2341,9 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         # ft.info
         info_data = IndexingTestHelper.get_ft_info(client, "idx").parsed_data
         assert info_data["num_docs"] == 9
-        assert info_data["hash_indexing_failures"] == 5  # doc:5 to doc:9
-        assert info_data["num_records"] == 4 # doc:1 to 4
+        # Default emulate-release (< 1.3.0): doc:9 non-UTF-8 tag is indexed
+        assert info_data["hash_indexing_failures"] == 4  # doc: 5, doc:6, doc:7, doc:8
+        assert info_data["num_records"] == 5 # doc:1 to 4 , doc:9
         # Query parsing: Verify tokenization handles non-ASCII
         assert client.execute_command("FT.SEARCH", "idx", "“smart")[0] == 1
         assert client.execute_command("FT.SEARCH", "idx", "café")[0] == 1
@@ -2356,10 +2357,44 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         assert client.execute_command("FT.SEARCH", "idx", b"invalid\xff")[0] == 0
         assert client.execute_command("FT.SEARCH", "idx", b"\xff\xfe")[0] == 0
         assert client.execute_command("FT.SEARCH", "idx",  b"%invalid\xff%")[0] == 0
-        assert client.execute_command("FT.SEARCH", "idx", b"@category:{invalid\xc3}")[0] == 0
+        # When `\` is not punctuation, the byte after it is kept in the term.
+        # A malformed byte there becomes U+FFFD, as anywhere else in a query,
+        # so fuzzy search (code points, for French) must match nothing rather
+        # than crash.
+        client.execute_command("FT.CREATE", "idx_no_backslash", "ON", "HASH",
+                               "LANGUAGE", "FRENCH", "PUNCTUATION", " ",
+                               "PREFIX", "1", "fr:",
+                               "SCHEMA", "content", "TEXT")
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx_no_backslash")
+        client.execute_command("HSET", "fr:1", "content", "foo")
+        assert client.execute_command("FT.SEARCH", "idx_no_backslash", b"%fo\\\xffo%")[0] == 0
+        assert client.execute_command("FT.SEARCH", "idx", b"@category:{invalid\xc3}")[0] == 1
         with pytest.raises(ResponseError) as e:
             client.execute_command("FT.SEARCH", "idx", b"@price:invalid\xc3 invalid\xc3]")
         assert "Invalid filter expression" in str(e.value)
+
+    def test_non_utf8_tag_emulate_release(self):
+        """Non-UTF-8 TAG values are indexed before 1.3.0 and rejected from 1.3.0"""
+        client: Valkey = self.server.get_new_client()
+        counter = "search_compatibility-tag_rejects_non_utf8"
+        for release, expected in (("1.2.0", 1), ("1.3.0", 0)):
+            assert client.execute_command(
+                "CONFIG", "SET", "search.emulate-release", release) == b"OK"
+            client.execute_command("FLUSHALL")
+            client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA",
+                                   "category", "TAG")
+            IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+            before = client.info("SEARCH")[counter]
+            client.execute_command("HSET", "doc:1", "category", b"invalid\xc3")
+            IndexingTestHelper.wait_for_indexing_complete_on_node(client, "idx")
+            info_data = IndexingTestHelper.get_ft_info(client, "idx").parsed_data
+            assert info_data["hash_indexing_failures"] == 1 - expected, release
+            assert info_data["num_records"] == expected, release
+            assert client.info("SEARCH")[counter] - before == expected, release
+            if expected:
+                assert client.execute_command(
+                    "FT.SEARCH", "idx", b"@category:{invalid\xc3}")[0] == 1
+            client.execute_command("FT.DROPINDEX", "idx")
 
     def test_multilanguage_text(self):
         """Test multi-language text handling - should not crash"""
@@ -2411,8 +2446,14 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         # 3. Suffix
         assert client.execute_command("FT.SEARCH", "idx", "@content:*ana")[0] == 1
         assert client.execute_command("FT.SEARCH", "idx", "@content:*界")[0] == 2
-        # 4. Fuzzy (operates today at character level and not byte level)
+        # 4. Fuzzy. doc:1 indexes "¡hola" as one token (¡ U+00A1 is not ASCII
+        # punctuation). English counts edit distance in bytes unless
+        # emulate-release >= 1.3.0 (see COMPATIBILITY.md): ¡ is 2 bytes, so
+        # distance 1 misses by default and matches when counting code points.
         assert client.execute_command("FT.SEARCH", "idx", "%Hola%")[0] == 0
+        client.execute_command("CONFIG", "SET", "search.emulate-release", "1.3.0")
+        assert client.execute_command("FT.SEARCH", "idx", "%Hola%")[0] == 1
+        client.execute_command("CONFIG", "SET", "search.emulate-release", "1.0.0")
         assert client.execute_command("FT.SEARCH", "idx", "%%très%%")[0] == 1
         assert client.execute_command("FT.SEARCH", "idx", "%你好%")[0] == 0
         # 5. Exact phrase
@@ -2734,6 +2775,20 @@ class TestFullTextCluster(ValkeySearchClusterTestCaseDebugMode):
         # Validation of search queries:
         time.sleep(1)
         validate_fulltext_search(client)
+
+    def test_malformed_tag_query_cluster(self):
+        """
+            A malformed tag is sent to the shards with its raw bytes. Under the
+            default emulate-release (< 1.3.0) the shards tolerate it, and must
+            not crash while doing so.
+        """
+        client: Valkey = self.new_client_for_primary(0)
+        client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA", "category", "TAG")
+        for primary in self.get_all_primary_clients():
+            IndexingTestHelper.wait_for_backfill_complete_on_node(primary, "idx")
+        assert client.execute_command("FT.SEARCH", "idx", b"@category:{invalid\xc3}")[0] == 0
+        for primary in self.get_all_primary_clients():
+            assert primary.ping()
 
     def test_info_search_fulltext_metrics(self):
         """Test info search for fulltext metrics in cluster mode"""

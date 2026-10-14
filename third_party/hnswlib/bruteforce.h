@@ -71,16 +71,22 @@ class BruteforceSearch
     return GetLabel(GetDataPtrByInternalId(internal_id));
   }
 
-  // Computes distance between two vector records stored in the index.
-  // When normalized_ is true (e.g. Cosine metric), scales inner product space
-  // by the product of the reciprocal magnitudes of the vectors.
-  inline dist_t EvaluateDistance(const VectorRecordT &a,
-                                 const VectorRecordT &b) const {
-    float reciprocal_mag_product =
-        normalized_ ? a->GetReciprocalMagnitude() * b->GetReciprocalMagnitude()
-                    : 1.0f;
-    return fstdistfunc_(a->GetRawVector(), b->GetRawVector(), dist_func_param_,
-                        reciprocal_mag_product);
+  // Computes the distance between a query and a stored vector.
+  // When normalized_ is true (e.g. Cosine metric), both vectors
+  // are unnormalized and their reciprocal magnitudes are applied in float.
+  // The query is not pre-normalized: for FLOAT16/BFLOAT16 that would round the
+  // scaled query back to two bytes, changing near-tie rankings and diverging
+  // from VectorBase::RecomputeDistance. Templated on kNormalized so the scan in
+  // searchKnn picks the magnitude handling at compile time.
+  template <bool kNormalized>
+  inline dist_t EvaluateDistance(const VectorRecordT &query,
+                                 float query_reciprocal_magnitude,
+                                 const VectorRecordT &stored) const {
+    return fstdistfunc_(
+        query.GetRawVector(), stored.GetRawVector(), dist_func_param_,
+        kNormalized
+            ? query_reciprocal_magnitude * stored.GetReciprocalMagnitude()
+            : 1.0f);
   }
 
   void clear() {
@@ -166,20 +172,33 @@ class BruteforceSearch
     cur_element_count_--;
   }
 
+  // `query_data` carries its own reciprocal magnitude (see EvaluateDistance).
   std::priority_queue<std::pair<dist_t, labeltype>> searchKnn(
       const VectorRecordT &query_data, size_t k,
       BaseFilterFunctor *isIdAllowed = nullptr,
       BaseCancellationFunctor *isCancelled = nullptr) const override {
+    return normalized_
+               ? searchKnnImpl<true>(query_data, k, isIdAllowed, isCancelled)
+               : searchKnnImpl<false>(query_data, k, isIdAllowed, isCancelled);
+  }
+
+  template <bool kNormalized>
+  std::priority_queue<std::pair<dist_t, labeltype>> searchKnnImpl(
+      const VectorRecordT &query_data, size_t k, BaseFilterFunctor *isIdAllowed,
+      BaseCancellationFunctor *isCancelled) const {
     std::priority_queue<std::pair<dist_t, labeltype>> topResults;
     if (cur_element_count_ == 0 || k == 0) {
       return topResults;
     }
+    const float query_rm =
+        kNormalized ? query_data.GetReciprocalMagnitude() : 1.0f;
     const size_t initial_count = std::min(k, cur_element_count_);
     size_t i = 0;
     for (; i < initial_count && (!isCancelled || !isCancelled->isCancelled());
          i++) {
       const VectorRecordT *stored_vector = GetDataPtrByInternalId(i);
-      dist_t dist = EvaluateDistance(query_data, *stored_vector);
+      dist_t dist =
+          EvaluateDistance<kNormalized>(query_data, query_rm, *stored_vector);
       labeltype label = GetLabel(stored_vector);
       if ((!isIdAllowed) || (*isIdAllowed)(label)) {
         topResults.emplace(dist, label);
@@ -194,7 +213,8 @@ class BruteforceSearch
            (!isCancelled || !isCancelled->isCancelled());
          i++) {
       const VectorRecordT *stored_vector = GetDataPtrByInternalId(i);
-      dist_t dist = EvaluateDistance(query_data, *stored_vector);
+      dist_t dist =
+          EvaluateDistance<kNormalized>(query_data, query_rm, *stored_vector);
       if (topResults.size() < k || dist <= lastdist) {
         labeltype label = GetLabel(stored_vector);
         if ((!isIdAllowed) || (*isIdAllowed)(label)) {

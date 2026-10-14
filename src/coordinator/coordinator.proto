@@ -82,6 +82,16 @@ message FuzzyPredicate {
   uint32 distance = 3;
 }
 
+message VectorRangePredicate {
+  string attribute_alias = 1;
+  double radius = 2;
+  string vector_param_name = 3;
+  optional string score_as = 4;
+  optional double epsilon = 5;
+  bytes query_vector = 6;
+  string radius_param_name = 7;
+}
+
 message AndPredicate {
   repeated Predicate children = 1;
   optional uint32 slop = 2;
@@ -108,6 +118,7 @@ message Predicate {
     SuffixPredicate suffix = 8;
     InfixPredicate infix = 9;
     FuzzyPredicate fuzzy = 10;
+    VectorRangePredicate vector_range = 12;
   }
   // Query-modifier weight ($weight:N). Defaults to 1.0 when unset so scoring on
   // the shard matches standalone. Applies to leaf and composed predicates.
@@ -139,6 +150,12 @@ enum Scorer {
   SCORER_TFIDF = 1;
 }
 
+enum HybridPolicy {
+  HYBRID_POLICY_AUTO = 0;
+  HYBRID_POLICY_BATCHES = 1;
+  HYBRID_POLICY_ADHOC_BF = 2;
+}
+
 message SearchIndexPartitionRequest {
   uint32 db_num = 1;
   string index_schema_name = 2;
@@ -147,7 +164,7 @@ message SearchIndexPartitionRequest {
   bytes query = 5;
   uint32 dialect = 6;
   uint32 k = 7;
-  uint64 ef = 8;
+  optional uint64 ef = 8;
   LimitParameter limit = 9;
   uint64 timeout_ms = 10;
   bool no_content = 11;
@@ -172,6 +189,12 @@ message SearchIndexPartitionRequest {
   // evaluate a null predicate. The shard never re-parses the query string, so
   // it has to cross the wire.
   bool is_match_all = 22;
+  optional InkeysFilter inkeys = 23;
+  HybridPolicy hybrid_policy = 24;
+}
+
+message InkeysFilter {
+  repeated string keys = 1;
 }
 
 message NeighborEntry {

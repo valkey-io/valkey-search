@@ -112,6 +112,28 @@ TEXT_DATASETS = {
         }
     },
     # ,.<>{}[]"':;!@#$%^&*()-+=~
+    # Words joined by a Unicode (non-ASCII) whitespace character. Querying one
+    # half tells whether the engine splits on that character.
+    'unicode whitespace': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                'apple\u00a0banana',   # U+00A0 NO-BREAK SPACE
+                'chair\u00a0desk',
+                'music\u2009movie',    # U+2009 THIN SPACE
+                'river\u202fmountain', # U+202F NARROW NO-BREAK SPACE
+                'castle\u3000garden',  # U+3000 IDEOGRAPHIC SPACE
+                'winter\u2028summer',  # U+2028 LINE SEPARATOR
+            ],
+            'body': [
+                'bright\u00a0morning',
+                'silver\u2009coin',
+                'green\u3000forest',
+            ],
+            'color': ['red', 'blue', 'green'],
+            'price': (0, 10)
+        }
+    },
     'punctuation': {
         'schema': TEXT_SCHEMA,
         'field_values': {
@@ -177,6 +199,450 @@ TEXT_DATASETS = {
         }
     }
 }
+
+# Multi-language text datasets for compatibility testing.
+#
+# These datasets are used by the compat suite to generate random queries that
+# should produce identical results between Valkey Search and RediSearch. To
+# achieve this, the vocabulary is curated to avoid known behavioral differences:
+#
+# Divergences handled at the vocab level:
+#
+# 1. Snowball 3.0.1 vs 2.1.0 (Dutch only)
+#    Valkey uses Kraaij-Pohlmann which strips ge-/be-/ver- prefixes. RediSearch
+#    is observed to use Porter-style stemming which does not strip these.
+#    Excluded specific Dutch terms whose K-P stems collide with other dataset
+#    terms (e.g. geschilderd, schilder, gebouwd).
+#
+# 2. CaseMap::utf8Fold decomposition (affects all languages)
+#    Valkey's ICU case folding converts ß→ss, ﬁ→fi, and similar. RediSearch is
+#    observed to use simple lowercasing which preserves these characters. Avoided
+#    characters like ß and ligatures in all language datasets.
+#
+# 3. Default stop words (affects all languages)
+#    Valkey applies per-language Lucene stop words by default. RediSearch is
+#    observed to only filter English stop words. Avoided any term that appears
+#    in the language's Lucene stop word list.
+#
+# 4. NOSTEM query-time stemming bypass (affects all languages)
+#    When running bare (non-field) queries against RediSearch on NOSTEM fields,
+#    stemmed matches are observed (suggesting query-time stemming bypasses
+#    NOSTEM). Valkey strictly enforces NOSTEM at both index and query time.
+#    Avoided vocab pairs where stem(term_A) == term_B within the same dataset
+#    (e.g. kekuatan stems to kuat in Indonesian).
+#
+# 5. Fuzzy search over stemmed forms (affects all languages, handled at generation time)
+#    When running fuzzy queries against RediSearch, matches are observed against
+#    stemmed forms of indexed terms in addition to originals. Valkey only matches
+#    against original forms. The fuzzy generator filters vocab at generation time
+#    to words whose 1-char mutations cannot land within edit-distance 1 of any
+#    stem (see _compute_safe_fuzzy_vocab in generate_text.py).
+#
+# Each dataset includes vocabulary that exercises language-specific features:
+# - Diacritics and special characters for normalization/case-folding
+# - Inflected forms to exercise Snowball stemming
+# - Script-specific characters where applicable
+# Word lists are ~30 words per field, organized by semantic category,
+# with no overlap between title and body fields.
+TEXT_DATASETS_MULTILANG = {
+    'french text': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                # food/drink — accents, cedilla
+                'café', 'crème', 'gâteau', 'pâtisserie', 'bière', 'fromage',
+                # places — circumflex, accents
+                'château', 'hôpital', 'forêt', 'île', 'cathédrale', 'musée',
+                # people/roles — accents, ligature
+                'médecin', 'employé', 'étudiant', 'professeur', 'ingénieur', 'boulanger',
+                # nature
+                'rivière', 'montagne', 'lumière', 'étoile', 'nuage', 'tempête',
+                # verbs (inflected — exercises stemmer)
+                'mangeons', 'travaillé', 'chercher', 'finissent', 'commencé', 'découvrir',
+            ],
+            'body': [
+                # objects — accents
+                'fenêtre', 'clé', 'vélo', 'échelle', 'réfrigérateur', 'bibliothèque',
+                # animals
+                'chèvre', 'léopard', 'hérisson', 'écureuil', 'pélican', 'girafe',
+                # abstract — accents, circumflex
+                'liberté', 'égalité', 'fraternité', 'intérêt', 'beauté', 'vérité',
+                # actions (inflected)
+                'courir', 'nager', 'réfléchir', 'construire', 'détruire', 'répondre',
+                # descriptors — accents
+                'rapide', 'lent', 'bruyant', 'silencieux', 'chaud', 'froid',
+            ],
+            'color': ['rouge', 'bleu', 'vert', 'jaune', 'noir',
+                      'blanc', 'violet', 'orange', 'rose', 'brun'],
+            'price': (0, 50)
+        }
+    },
+    'german text': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                # places/buildings — umlauts, compounds
+                'Gebäude', 'Brücke', 'Universität', 'Küche', 'Bücherei', 'Rathaus',
+                # transport — umlauts, compounds
+                'Flughafen', 'Führerschein', 'Fahrrad', 'Schiff', 'Eisenbahn', 'Autobahn',
+                # people — umlauts
+                'Mädchen', 'Ärzte', 'Schüler', 'Händler', 'Bäcker', 'Künstler',
+                # nature — umlauts
+                'Vögel', 'Bäume', 'Flüsse', 'Gärten', 'Wälder', 'Blüten',
+                # verbs (inflected)
+                'arbeiten', 'geöffnet', 'verstehen', 'gewünscht', 'übersetzen', 'anfangen',
+            ],
+            'body': [
+                # objects — umlauts
+                'Schlüssel', 'Kühlschrank', 'Gemälde', 'Rätsel', 'Bücher', 'Möbel',
+                # food
+                'Käse', 'Brötchen', 'Würstchen', 'Knödel', 'Gemüse', 'Lebkuchen',
+                # abstract — umlauts
+                'Stärke', 'Schönheit', 'Fähigkeit', 'Höflichkeit', 'Gemütlichkeit', 'Freiheit',
+                # actions (inflected)
+                'laufen', 'schwimmen', 'gekämpft', 'geändert', 'zerstört', 'gefahren',
+                # descriptors — umlauts
+                'schnell', 'langsam', 'böse', 'schön', 'grün', 'müde',
+            ],
+            'color': ['rot', 'blau', 'grün', 'gelb', 'schwarz',
+                      'lila', 'orange', 'rosa', 'braun', 'golden'],
+            'price': (0, 50)
+        }
+    },
+    'spanish text': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                # places — tildes, accents
+                'ciudad', 'montaña', 'señal', 'estación', 'río', 'jardín',
+                # people — ñ, accents
+                'niño', 'señor', 'compañero', 'médico', 'músico', 'capitán',
+                # food
+                'manzana', 'plátano', 'piña', 'limón', 'naranja', 'cereza',
+                # nature — accents
+                'pájaro', 'corazón', 'árbol', 'océano', 'volcán', 'relámpago',
+                # verbs (inflected — exercises stemmer)
+                'corriendo', 'trabajaron', 'comiendo', 'vivieron', 'pensando', 'escribió',
+            ],
+            'body': [
+                # objects — accents
+                'teléfono', 'lámpara', 'vehículo', 'periódico', 'cámara', 'máquina',
+                # animals — accents
+                'águila', 'murciélago', 'pingüino', 'delfín', 'tiburón', 'camaleón',
+                # abstract — accents
+                'información', 'educación', 'solución', 'dirección', 'tradición', 'comunicación',
+                # actions (inflected)
+                'construir', 'destruir', 'nadar', 'conducir', 'resolver', 'descubrir',
+                # descriptors — accents
+                'rápido', 'difícil', 'fácil', 'débil', 'útil', 'ágil',
+            ],
+            'color': ['rojo', 'azul', 'verde', 'amarillo', 'negro',
+                      'blanco', 'morado', 'naranja', 'rosa', 'marrón'],
+            'price': (0, 50)
+        }
+    },
+    'italian text': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                # places — accented finals
+                'città', 'università', 'caffè', 'stazione', 'piazza', 'mercato',
+                # people
+                'ragazzo', 'dottore', 'professore', 'musicista', 'pittore', 'giornalista',
+                # food
+                'formaggio', 'pomodoro', 'arancia', 'ciliegia', 'limone', 'fragola',
+                # nature — accents
+                'montagna', 'temporale', 'fiore', 'albero', 'farfalla', 'nuvola',
+                # verbs (inflected — exercises stemmer)
+                'mangiando', 'lavorato', 'correre', 'dormire', 'scrivendo', 'costruito',
+            ],
+            'body': [
+                # objects — accents
+                'tavolo', 'finestra', 'specchio', 'orologio', 'chiave', 'quaderno',
+                # animals
+                'gatto', 'cavallo', 'aquila', 'squalo', 'tigre', 'tartaruga',
+                # abstract — accents
+                'libertà', 'felicità', 'verità', 'società', 'qualità', 'possibilità',
+                # actions (inflected)
+                'nuotare', 'saltare', 'guidare', 'volare', 'dipingere', 'scoprire',
+                # descriptors
+                'veloce', 'lento', 'forte', 'debole', 'caldo', 'freddo',
+            ],
+            'color': ['rosso', 'blu', 'verde', 'giallo', 'nero',
+                      'bianco', 'viola', 'arancione', 'rosa', 'marrone'],
+            'price': (0, 50)
+        }
+    },
+    'portuguese text': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                # places — cedilla, tildes, accents
+                'estação', 'coração', 'ação', 'praça', 'palácio', 'ição',
+                # people — tildes, accents
+                'capitão', 'irmão', 'médico', 'músico', 'engenheiro', 'professor',
+                # food — accents
+                'maçã', 'limão', 'pêssego', 'abacaxi', 'morango', 'melão',
+                # nature — tildes, accents
+                'trovão', 'relâmpago', 'vulcão', 'montanha', 'floresta', 'oceano',
+                # verbs (inflected — exercises stemmer)
+                'trabalhando', 'correram', 'comendo', 'escreveu', 'construído', 'descobrir',
+            ],
+            'body': [
+                # objects — cedilla, accents
+                'televisão', 'geração', 'informação', 'câmera', 'computador', 'relógio',
+                # animals — accents
+                'tubarão', 'falcão', 'leão', 'camaleão', 'golfinho', 'tartaruga',
+                # abstract — tildes, accents
+                'educação', 'comunicação', 'tradição', 'solução', 'evolução', 'proteção',
+                # actions (inflected)
+                'nadar', 'correr', 'voar', 'construir', 'destruir', 'resolver',
+                # descriptors — accents
+                'rápido', 'difícil', 'fácil', 'possível', 'útil', 'agradável',
+            ],
+            'color': ['vermelho', 'azul', 'verde', 'amarelo', 'preto',
+                      'branco', 'roxo', 'laranja', 'rosa', 'marrom'],
+            'price': (0, 50)
+        }
+    },
+    'russian text': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                # places — Cyrillic
+                'город', 'деревня', 'площадь', 'станция', 'библиотека', 'больница',
+                # people
+                'учитель', 'студент', 'инженер', 'художник', 'музыкант', 'писатель',
+                # food
+                'яблоко', 'молоко', 'хлеб', 'масло', 'сахар', 'картофель',
+                # nature
+                'дерево', 'река', 'гора', 'облако', 'звезда', 'цветок',
+                # verbs (inflected — exercises stemmer)
+                'работает', 'бежали', 'читает', 'построил', 'написала', 'открывать',
+            ],
+            'body': [
+                # objects
+                'стол', 'окно', 'дверь', 'книга', 'лампа', 'зеркало',
+                # animals
+                'кошка', 'собака', 'лошадь', 'медведь', 'орёл', 'волк',
+                # abstract
+                'свобода', 'правда', 'счастье', 'красота', 'мудрость', 'справедливость',
+                # actions (inflected)
+                'плавать', 'летать', 'строить', 'бегать', 'прыгать', 'водить',
+                # descriptors
+                'быстрый', 'медленный', 'тихий', 'громкий', 'тёплый', 'холодный',
+            ],
+            'color': ['красный', 'синий', 'зелёный', 'жёлтый', 'чёрный',
+                      'белый', 'фиолетовый', 'оранжевый', 'розовый', 'коричневый'],
+            'price': (0, 50)
+        }
+    },
+    'swedish text': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                # places — Å, Ä, Ö
+                'sjukhus', 'järnväg', 'övergång', 'flygplats', 'bibliotek', 'slöjd',
+                # people — Ö
+                'läkare', 'lärare', 'ingenjör', 'författare', 'konstnär', 'hantverkare',
+                # food — Ä, Ö
+                'äpple', 'smörgås', 'köttbulle', 'räkmacka', 'grädde', 'knäckebröd',
+                # nature — Å, Ö
+                'ångbåt', 'blåbär', 'björk', 'öken', 'sjö', 'ström',
+                # verbs (inflected — exercises stemmer)
+                'arbetar', 'öppnade', 'stängde', 'förstår', 'översatte', 'byggde',
+            ],
+            'body': [
+                # objects — Ö, Ä
+                'nyckel', 'möbel', 'dörr', 'fönster', 'vägg', 'spegel',
+                # animals — Ö
+                'häst', 'fågel', 'björn', 'älg', 'räv', 'varg',
+                # abstract — Ö, Ä
+                'förändring', 'möjlighet', 'rättvisa', 'skönhet', 'säkerhet', 'gemenskap',
+                # actions (inflected)
+                'simma', 'springa', 'flyga', 'köra', 'bygga', 'måla',
+                # descriptors — Å, Ä
+                'snabb', 'långsam', 'stark', 'svår', 'varm', 'kall',
+            ],
+            'color': ['röd', 'blå', 'grön', 'gul', 'svart',
+                      'vit', 'lila', 'orange', 'rosa', 'brun'],
+            'price': (0, 50)
+        }
+    },
+    'turkish text': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                # places — ş, ç, ğ, ö, ü, ı (dotless i is key for case-fold testing)
+                'şehir', 'hastane', 'üniversite', 'köprü', 'çarşı', 'müze',
+                # people — ö, ü, ç
+                'öğretmen', 'mühendis', 'doçent', 'müdür', 'çiftçi', 'öğrenci',
+                # food — ö, ü, ş
+                'börek', 'çiçek', 'şeftali', 'üzüm', 'portakal', 'kiraz',
+                # nature — dotless ı, ğ, ö
+                'ışık', 'dağ', 'göl', 'nehir', 'orman', 'çiçek',
+                # verbs (inflected — exercises stemmer + Turkish ı/İ)
+                'çalışmak', 'öğrenmek', 'başlamak', 'değiştirmek', 'yürümek', 'düşünmek',
+            ],
+            'body': [
+                # objects — ü, ö, ş, ç
+                'anahtar', 'dolap', 'pencere', 'köşe', 'süpürge', 'çamaşır',
+                # animals — ş, ç
+                'kuş', 'kaplumbağa', 'kelebek', 'karınca', 'köpek', 'maymun',
+                # abstract — ö, ü, ğ
+                'özgürlük', 'güzellik', 'doğruluk', 'büyüklük', 'güçlülük', 'mutluluk',
+                # actions (inflected) — dotless ı testing
+                'yüzmek', 'koşmak', 'uçmak', 'sürmek', 'gitmek', 'bulmak',
+                # descriptors — ı, ş
+                'hızlı', 'yavaş', 'güçlü', 'sessiz', 'sıcak', 'soğuk',
+            ],
+            'color': ['kırmızı', 'mavi', 'yeşil', 'sarı', 'siyah',
+                      'beyaz', 'mor', 'turuncu', 'pembe', 'kahverengi'],
+            'price': (0, 50)
+        }
+    },
+    'dutch text': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                # places — IJ digraph, compounds
+                'ziekenhuis', 'universiteit', 'bibliotheek', 'vliegveld', 'station', 'wijk',
+                # people
+                'leraar', 'ingenieur', 'schrijver', 'kunstenaar', 'bakker', 'timmerman',
+                # food
+                'kaas', 'brood', 'appel', 'sinaasappel', 'citroen', 'aardbei',
+                # nature — IJ, compounds
+                'ijsbeer', 'rivier', 'bos', 'woestijn', 'bloem', 'storm',
+                # verbs (inflected)
+                'werken', 'lopen', 'spreken', 'zingen', 'dansen', 'lezen',
+            ],
+            'body': [
+                # objects — compounds
+                'sleutel', 'koelkast', 'spiegel', 'boekenkast', 'fiets', 'klok',
+                # animals
+                'paard', 'vogel', 'vlinder', 'schildpad', 'dolfijn', 'adelaar',
+                # abstract
+                'vrijheid', 'gelijkheid', 'schoonheid', 'mogelijkheid', 'veiligheid', 'waarheid',
+                # actions (inflected)
+                'zwemmen', 'rennen', 'vliegen', 'rijden', 'tekenen', 'wandelen',
+                # descriptors
+                'snel', 'langzaam', 'sterk', 'zwak', 'warm', 'koud',
+            ],
+            'color': ['rood', 'blauw', 'groen', 'geel', 'zwart',
+                      'wit', 'paars', 'oranje', 'roze', 'bruin'],
+            'price': (0, 50)
+        }
+    },
+    'indonesian text': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                # places — agglutinative prefixes/suffixes
+                'perpustakaan', 'universitas', 'pelabuhan', 'bandara', 'pertokoan', 'perumahan',
+                # people — prefixes
+                'pelajar', 'pengajar', 'pekerja', 'penulis', 'pelukis', 'penyanyi',
+                # food
+                'mangga', 'jeruk', 'pisang', 'anggur', 'semangka', 'nanas',
+                # nature
+                'gunung', 'sungai', 'hutan', 'pantai', 'danau', 'lembah',
+                # verbs (inflected — exercises stemmer with me-/ber-/pe- prefixes)
+                'membangun', 'berenang', 'berlari', 'menulis', 'membaca', 'memahami',
+            ],
+            'body': [
+                # objects
+                'kunci', 'jendela', 'pintu', 'cermin', 'kursi', 'lemari',
+                # animals
+                'kucing', 'burung', 'kuda', 'harimau', 'elang', 'lumba',
+                # abstract — agglutinative suffixes (-an, -kan)
+                'keindahan', 'kemerdekaan', 'kebahagiaan', 'kebenaran', 'kesehatan', 'keadilan',
+                # actions (inflected)
+                'berenang', 'terbang', 'mengemudi', 'melompat', 'memanjat', 'menyelam',
+                # descriptors
+                'cepat', 'lambat', 'kuat', 'lemah', 'panas', 'dingin',
+            ],
+            'color': ['merah', 'biru', 'hijau', 'kuning', 'hitam',
+                      'putih', 'ungu', 'jingga', 'merah muda', 'cokelat'],
+            'price': (0, 50)
+        }
+    },
+    'arabic text': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                # places — Arabic script, various letter forms
+                'مدرسة', 'جامعة', 'مستشفى', 'مطار', 'مكتبة', 'متحف',
+                # people
+                'معلم', 'طبيب', 'مهندس', 'كاتب', 'رسام', 'موسيقي',
+                # food
+                'تفاحة', 'برتقال', 'عنب', 'ليمون', 'موز', 'فراولة',
+                # nature
+                'جبل', 'نهر', 'بحر', 'صحراء', 'غابة', 'شجرة',
+                # verbs (various forms — tests Arabic morphology)
+                'يعمل', 'يكتب', 'يقرأ', 'يبني', 'يفهم', 'يتعلم',
+            ],
+            'body': [
+                # objects
+                'مفتاح', 'نافذة', 'باب', 'كتاب', 'مصباح', 'مرآة',
+                # animals
+                'قطة', 'حصان', 'نسر', 'نمر', 'دلفين', 'سلحفاة',
+                # abstract
+                'حرية', 'عدالة', 'سعادة', 'جمال', 'حقيقة', 'قوة',
+                # actions
+                'يسبح', 'يطير', 'يركض', 'يقود', 'يقفز', 'يبحث',
+                # descriptors
+                'سريع', 'بطيء', 'قوي', 'ضعيف', 'حار', 'بارد',
+            ],
+            'color': ['أحمر', 'أزرق', 'أخضر', 'أصفر', 'أسود',
+                      'أبيض', 'بنفسجي', 'برتقالي', 'وردي', 'بني'],
+            'price': (0, 50)
+        }
+    },
+}
+
+# Multi-language punctuation datasets — mirrors the English 'punctuation' dataset
+# but uses non-ASCII punctuation characters from each language's configured punct
+# set (e.g. French guillemets «», em-dash —, curly quotes).  Title field has
+# unescaped values (punct splits tokens); body field has backslash-escaped values
+# (punct kept inside tokens).
+TEXT_DATASETS_MULTILANG_PUNCTUATION = {
+    # French typographic punctuation: « » – — … ' ' " "
+    'french punctuation': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                # Unescaped — these split into multiple tokens
+                'liberté«égalité',
+                'fraternité»justice',
+                'château–village',
+                'musée—galerie',
+                'forêt…prairie',
+                'médecin\u2018chirurgien',
+                'professeur\u2019étudiant',
+                'boulanger\u201cpâtissier',
+                'ingénieur\u201darchitecte',
+            ],
+            'body': [
+                # Backslash-escaped — punct kept inside token
+                'liberté\\«égalité',
+                'fraternité\\»justice',
+                'château\\–village',
+                'musée\\—galerie',
+                'forêt\\…prairie',
+                'médecin\\\u2018chirurgien',
+                'professeur\\\u2019étudiant',
+                'boulanger\\\u201cpâtissier',
+                'ingénieur\\\u201darchitecte',
+            ],
+            'color': ['rouge', 'bleu', 'vert'],
+            'price': (0, 10)
+        }
+    },
+}
+
+TEXT_DATASETS_MULTILANG.update(TEXT_DATASETS_MULTILANG_PUNCTUATION)
+
+# Merge multilang datasets into TEXT_DATASETS so existing code paths work unchanged
+TEXT_DATASETS.update(TEXT_DATASETS_MULTILANG)
 
 # Schema flags per field type and schema variant.
 # For field types with multiple variants (like "text"), use a dict keyed by schema_type.
@@ -672,6 +1138,56 @@ def compute_data_sets(vector_data_type="FLOAT32"):
                     for z in vector_points
                 ]
 
+    #
+    # Two-vector dataset: designed for multi-VR predicate compatibility tests.
+    # Has two vector fields (v1 and v2) with asymmetric values so that distance
+    # ordering on v1 differs from v2.  Also includes numeric and tag fields.
+    #
+    data["two vectors"] = {}
+    two_vec_create_cmds = {
+        "hash": (
+            "FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: SCHEMA "
+            "v1 VECTOR FLAT 6 DIM 3 TYPE FLOAT32 DISTANCE_METRIC L2 "
+            "v2 VECTOR FLAT 6 DIM 3 TYPE FLOAT32 DISTANCE_METRIC L2 "
+            "n1 NUMERIC t1 TAG"
+        ),
+        "json": (
+            "FT.CREATE json_idx1 ON JSON PREFIX 1 json: SCHEMA "
+            "$.v1 AS v1 VECTOR FLAT 6 DIM 3 TYPE FLOAT32 DISTANCE_METRIC L2 "
+            "$.v2 AS v2 VECTOR FLAT 6 DIM 3 TYPE FLOAT32 DISTANCE_METRIC L2 "
+            "$.n1 AS n1 NUMERIC $.t1 AS t1 TAG"
+        ),
+    }
+    # 6 documents with asymmetric v1/v2 placements:
+    #   doc:0  v1=(0,0,0)  v2=(0,0,0)   -- origin for both
+    #   doc:1  v1=(1,0,0)  v2=(3,0,0)   -- close on v1, far on v2
+    #   doc:2  v1=(3,0,0)  v2=(1,0,0)   -- far on v1, close on v2
+    #   doc:3  v1=(2,0,0)  v2=(2,0,0)   -- moderate both
+    #   doc:4  v1=(5,0,0)  v2=(5,0,0)   -- far both
+    #   doc:5  v1=(10,0,0) v2=(10,0,0)  -- very far both
+    two_vec_docs_template = [
+        ("0", [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], 0, "A"),
+        ("1", [1.0, 0.0, 0.0], [3.0, 0.0, 0.0], 1, "B"),
+        ("2", [3.0, 0.0, 0.0], [1.0, 0.0, 0.0], 2, "A"),
+        ("3", [2.0, 0.0, 0.0], [2.0, 0.0, 0.0], 3, "B"),
+        ("4", [5.0, 0.0, 0.0], [5.0, 0.0, 0.0], 4, "A"),
+        ("5", [10.0, 0.0, 0.0], [10.0, 0.0, 0.0], 5, "B"),
+    ]
+    for key_type in ["hash", "json"]:
+        data["two vectors"][CREATES_KEY(key_type)] = [two_vec_create_cmds[key_type]]
+        data["two vectors"][SETS_KEY(key_type)] = [
+            (
+                f"{key_type}:{doc_id}",
+                {
+                    "v1": array_encode(key_type, v1),
+                    "v2": array_encode(key_type, v2),
+                    "n1": n1,
+                    "t1": t1,
+                },
+            )
+            for doc_id, v1, v2, n1, t1 in two_vec_docs_template
+        ]
+
     # Tag special characters data set. Comma separator so } and | are literal;
     # avoid '-' etc. (query operators) or the reference engine rejects the query.
     tag_special_base_tags = ["a}b", "a|b", "normal", "x}y}z",
@@ -707,18 +1223,48 @@ def compute_data_sets(vector_data_type="FLOAT32"):
 
     return data
 
-def compute_text_data_sets(dataset_name, seed=123, schema_type="default"):
+# Mapping from dataset name to the LANGUAGE parameter value for FT.CREATE.
+# English datasets (original) use "english"; multilang datasets use their language.
+DATASET_LANGUAGE_MAP = {
+    'pure text': 'english',
+    'pure text small': 'english',
+    'numeric text': 'english',
+    'punctuation': 'english',
+    'unicode whitespace': 'english',
+    'french text': 'french',
+    'german text': 'german',
+    'spanish text': 'spanish',
+    'italian text': 'italian',
+    'portuguese text': 'portuguese',
+    'russian text': 'russian',
+    'swedish text': 'swedish',
+    'turkish text': 'turkish',
+    'dutch text': 'dutch',
+    'indonesian text': 'indonesian',
+    'arabic text': 'arabic',
+    'french punctuation': 'french',
+}
+
+
+def compute_text_data_sets(dataset_name, seed=123, schema_type="default", language=None):
     """Generate random documents for a specific dataset.
     
     Args:
-        dataset_name: Name of dataset (e.g., "pure text", "pure text small")
+        dataset_name: Name of dataset (e.g., "pure text", "french text")
         seed: Random seed for reproducibility
+        schema_type: Schema variant ("default" or "nostem")
+        language: Language for FT.CREATE LANGUAGE option. If None, auto-detected
+                  from DATASET_LANGUAGE_MAP (defaults to "english").
     
     Returns:
         dict with structure: {dataset_name: {"hash creates": [...], "hash sets": [...], ...}}
     """
     if dataset_name not in TEXT_DATASETS:
         raise ValueError(f"Unknown dataset: {dataset_name}. Available: {list(TEXT_DATASETS.keys())}")
+    
+    # Auto-detect language from dataset name if not explicitly provided
+    if language is None:
+        language = DATASET_LANGUAGE_MAP.get(dataset_name, 'english')
     
     config = TEXT_DATASETS[dataset_name]
     field_values = config['field_values']
@@ -733,10 +1279,11 @@ def compute_text_data_sets(dataset_name, seed=123, schema_type="default"):
     tag_fields = schema.get('tag', [])
     numeric_fields = schema.get('numeric', [])
     
-    # Build create commands for both hash and json
+    # Build create commands for both hash and json, with LANGUAGE option
+    language_clause = f"LANGUAGE {language} " if language != "english" else ""
     create_cmds = {
-        "hash": "FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: SCHEMA {}",
-        "json": "FT.CREATE json_idx1 ON JSON PREFIX 1 json: SCHEMA {}",
+        "hash": f"FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: {language_clause}SCHEMA {{}}",
+        "json": f"FT.CREATE json_idx1 ON JSON PREFIX 1 json: {language_clause}SCHEMA {{}}",
     }
     
     # Build schema strings using the shared helper
@@ -1248,6 +1795,9 @@ def compute_filter_data_sets(dataset_name):
 # future JSON variant: add SETS/CREATES "json" entries here.
 SORTKEY_PREFIX_DATA_SET = "sortkey prefix"
 
+# Absent-sort-key cases: nsk3 lacks p; the 'solo' tag isolates one document.
+SORTKEY_NIL_DATA_SET = "sortkey nil"
+
 
 def compute_sortkey_data_sets():
     schema = ("m TAG z TEXT SORTABLE t TAG n NUMERIC f NUMERIC "
@@ -1266,7 +1816,20 @@ def compute_sortkey_data_sets():
             CREATES_KEY("hash"): [
                 f"FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: SCHEMA {schema}"
             ],
-        }
+        },
+        SORTKEY_NIL_DATA_SET: {
+            SETS_KEY("hash"): [
+                ("hash:nsk1", {"m": "all,solo", "p": "10",
+                               "vec": b"AAAAAAAA"}),
+                ("hash:nsk2", {"m": "all", "p": "20", "vec": b"BBBBBBBB"}),
+                ("hash:nsk3", {"m": "all", "vec": b"CCCCCCCC"}),
+            ],
+            CREATES_KEY("hash"): [
+                "FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: SCHEMA "
+                "m TAG p NUMERIC SORTABLE "
+                "vec VECTOR FLAT 6 TYPE FLOAT32 DIM 2 DISTANCE_METRIC L2"
+            ],
+        },
     }
 
 
@@ -1292,7 +1855,41 @@ def compute_return_data_sets():
     }
 
 
-def load_data(client, data_set, key_type, data_source=None, schema_type="default", vector_data_type="FLOAT32"):
+### VR + text (BM-25) scoring data set ###
+#
+# Fixture for the single-VR + text compound scoring cases
+# (generate.py test_vector_range_text_bm25_scoring). A schema with both a TEXT
+# field and a vector field lets us exercise `@body:text @vec:[VECTOR_RANGE...]`
+# with WITHSCORES and confirm whether/how the VR distance affects the BM-25
+# relevance score, matching the reference engine.
+VR_TEXT_DATA_SET = "vr text"
+
+
+def compute_vr_text_data_sets():
+    # Vectors chosen so distances to the [0,0,0] query vector differ per doc,
+    # while the text field drives the BM-25 score. VECTOR_DIM == 3.
+    def vec(x, y, z):
+        return struct.pack(f"<{VECTOR_DIM}f", x, y, z).hex()
+
+    docs = [
+        ("hash:vt1", {"body": "hello world", "v1": bytes.fromhex(vec(0.1, 0.0, 0.0))}),
+        ("hash:vt2", {"body": "hello there", "v1": bytes.fromhex(vec(0.2, 0.0, 0.0))}),
+        ("hash:vt3", {"body": "hello hello world", "v1": bytes.fromhex(vec(0.3, 0.0, 0.0))}),
+        ("hash:vt4", {"body": "goodbye world", "v1": bytes.fromhex(vec(0.4, 0.0, 0.0))}),
+    ]
+    return {
+        VR_TEXT_DATA_SET: {
+            SETS_KEY("hash"): docs,
+            CREATES_KEY("hash"): [
+                f"FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: "
+                f"SCHEMA body TEXT v1 vector HNSW 6 DIM {VECTOR_DIM} "
+                f"TYPE FLOAT32 DISTANCE_METRIC L2"
+            ],
+        }
+    }
+
+
+def load_data(client, data_set, key_type, data_source=None, schema_type="default", language=None, vector_data_type="FLOAT32"):
     # Auto-detect data source based on data_set name
     if data_source is None:
         if data_set in HYBRID_DATASETS:
@@ -1301,10 +1898,12 @@ def load_data(client, data_set, key_type, data_source=None, schema_type="default
             data_source = "text"
         elif data_set in FILTER_DATASETS:
             data_source = "filter"
-        elif data_set == SORTKEY_PREFIX_DATA_SET:
+        elif data_set in (SORTKEY_PREFIX_DATA_SET, SORTKEY_NIL_DATA_SET):
             data_source = "sortkey"
         elif data_set == RETURN_CLAUSE_DATA_SET:
             data_source = "return"
+        elif data_set == VR_TEXT_DATA_SET:
+            data_source = "vr_text"
         else:
             data_source = "vector"
 
@@ -1312,7 +1911,7 @@ def load_data(client, data_set, key_type, data_source=None, schema_type="default
         case "vector":
             data = compute_data_sets(vector_data_type=vector_data_type)
         case "text":
-            data = compute_text_data_sets(data_set, schema_type=schema_type)
+            data = compute_text_data_sets(data_set, schema_type=schema_type, language=language)
         case "hybrid":
             data = compute_hybrid_data_sets()
         case "filter":
@@ -1321,6 +1920,8 @@ def load_data(client, data_set, key_type, data_source=None, schema_type="default
             data = compute_sortkey_data_sets()
         case "return":
             data = compute_return_data_sets()
+        case "vr_text":
+            data = compute_vr_text_data_sets()
         case _:
             raise ValueError(f"Unknown data source: {data_source}")
     load_list = data[data_set][SETS_KEY(key_type)]
@@ -1355,23 +1956,54 @@ def load_data(client, data_set, key_type, data_source=None, schema_type="default
         for s in range(0, len(load_list)):
             k = client.execute_command(*["JSON.GET", load_list[s][0], "$"])
             print(f"{s}:{load_list[s][0]}:  ", k)
-    return len(load_list)
+    return load_list
 
-def load_data_cluster(cluster_client, test_case, data_set, key_type,
-                      vector_data_type="FLOAT32", schema_type="default"):
-    # Same corpus dispatch load_data does. Hardcoding the vector corpora here
-    # is what kept the text and hybrid answer files out of cluster replay:
-    # their data sets are not in that dictionary, so the lookup below raised.
-    if data_set in HYBRID_DATASETS:
-        data = compute_hybrid_data_sets()
-    elif data_set in TEXT_DATASETS:
-        data = compute_text_data_sets(data_set, schema_type=schema_type)
-    else:
-        data = compute_data_sets(vector_data_type=vector_data_type)
+def load_data_cluster(cluster_client, test_case, data_set, key_type, data_source=None, schema_type="default", vector_data_type="FLOAT32"):
+    # Auto-detect data source based on data_set name (mirrors load_data). Without
+    # this, every dataset fell through to compute_data_sets(), which only knows
+    # the vector datasets — so a non-vector dataset (hybrid, vr_text, text,
+    # filter, sortkey, return) replayed in cluster mode raised KeyError on
+    # data[data_set].
+    if data_source is None:
+        if data_set in HYBRID_DATASETS:
+            data_source = "hybrid"
+        elif data_set in TEXT_DATASETS:
+            data_source = "text"
+        elif data_set in FILTER_DATASETS:
+            data_source = "filter"
+        elif data_set == SORTKEY_PREFIX_DATA_SET:
+            data_source = "sortkey"
+        elif data_set == RETURN_CLAUSE_DATA_SET:
+            data_source = "return"
+        elif data_set == VR_TEXT_DATA_SET:
+            data_source = "vr_text"
+        else:
+            data_source = "vector"
+
+    match data_source:
+        case "vector":
+            data = compute_data_sets(vector_data_type=vector_data_type)
+        case "text":
+            data = compute_text_data_sets(data_set, schema_type=schema_type)
+        case "hybrid":
+            data = compute_hybrid_data_sets()
+        case "filter":
+            data = compute_filter_data_sets(data_set)
+        case "sortkey":
+            data = compute_sortkey_data_sets()
+        case "return":
+            data = compute_return_data_sets()
+        case "vr_text":
+            data = compute_vr_text_data_sets()
+        case _:
+            raise ValueError(f"Unknown data source: {data_source}")
 
     primary0 = test_case.new_client_for_primary(0)
     for create_cmd in data[data_set][CREATES_KEY(key_type)]:
-        primary0.execute_command(create_cmd)
+        if isinstance(create_cmd, (list, tuple)):
+            primary0.execute_command(*create_cmd)
+        else:
+            primary0.execute_command(create_cmd)
 
     for key, fields in data[data_set][SETS_KEY(key_type)]:
         if key_type == "hash":

@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
 #include "absl/functional/any_invocable.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
@@ -44,6 +45,13 @@ enum class SearchMode {
 };
 
 enum class SortOrder { kAscending, kDescending };
+
+enum class HybridPolicy {
+  kAuto,
+  kBatches,
+  kAdHocBruteForce,
+};
+
 struct SortByParameter {
   std::string field;
   SortOrder order{SortOrder::kAscending};
@@ -85,6 +93,7 @@ constexpr absl::string_view kSlop{"SLOP"};
 constexpr absl::string_view kScorer{"SCORER"};
 constexpr absl::string_view kInorder{"INORDER"};
 constexpr absl::string_view kVerbatim{"VERBATIM"};
+constexpr absl::string_view kInkeysParam{"INKEYS"};
 
 struct LimitParameter {
   uint64_t first_index{0};
@@ -199,6 +208,13 @@ class SearchParametersInFlightGuard {
   SearchParametersInFlightGuard &operator=(
       SearchParametersInFlightGuard &&) noexcept = default;
   ~SearchParametersInFlightGuard();
+  // Drops this object out of the count early, for an operation whose query is
+  // over while the object itself lives on (a cursor holding its output). The
+  // flag keeps the destructor from decrementing the count a second time.
+  void Terminate();
+
+ private:
+  bool terminated_{false};
 };
 }  // namespace detail
 
@@ -218,10 +234,16 @@ struct SearchParameters {
   bool enable_consistency{options::GetPreferConsistentResults().GetValue()};
   int k{0};
   std::optional<unsigned> ef;
+  HybridPolicy hybrid_policy{HybridPolicy::kAuto};
   LimitParameter limit;
+  std::optional<absl::flat_hash_set<std::string>> inkeys;
   uint64_t timeout_ms{0};
   bool no_content{false};
   FilterParseResults filter_parse_results;
+  // True when the filter tree contains a (single) VectorRangePredicate. In the
+  // single-VR model the matched distance is carried in Neighbor::distance;
+  // there is no per-predicate score-slot side channel.
+  bool has_vector_range{false};
   std::vector<ReturnAttribute> return_attributes;
   bool inorder{false};
   std::optional<uint32_t> slop;
@@ -241,6 +263,7 @@ struct SearchParameters {
     absl::string_view query_vector_string;
     absl::string_view k_string;
     absl::string_view ef_string;
+    absl::string_view hybrid_policy_string;
     //
     // A Map of param names to values. The target of the map is a pair
     // that is the string of the value AND a reference count so that we can
@@ -255,6 +278,7 @@ struct SearchParameters {
       query_vector_string = absl::string_view();
       k_string = absl::string_view();
       ef_string = absl::string_view();
+      hybrid_policy_string = absl::string_view();
       params.clear();
     }
   } parse_vars;
@@ -267,10 +291,10 @@ struct SearchParameters {
   bool IsVectorQuery() const { return !IsNonVectorQuery(); }
   // Indicates whether the search requires complete results (neighbors/keys) to
   // be able to return correct results. An example of this is when sorting on a
-  // particular is needed on the results. This should be overridden in derived
-  // classes if needed. The default implementation returns false.
+  // particular field is needed on the results. This should be overridden in
+  // derived classes if needed. The default implementation returns false.
   virtual bool RequiresCompleteResults() const {
-    return sortby_parameter.has_value();
+    return sortby_parameter.has_value() || inkeys.has_value();
   }
 
   // True when the search needs no post-search processing: a NOCONTENT reply
@@ -320,6 +344,10 @@ struct SearchParameters {
 
   SearchParameters(SearchParameters &&) = default;
 
+  // Declares the query operation finished, so that it no longer counts in
+  // GetSearchParametersInFlight() even though this object is still alive.
+  void DeclareOperationTerminated() { in_flight_guard_.Terminate(); }
+
  private:
   // Keeps GetSearchParametersInFlight() in sync with this object's lifetime.
   // Declared last so it is destroyed first; its position does not otherwise
@@ -355,6 +383,9 @@ absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
                          vmsdk::ThreadPool *thread_pool,
                          SearchMode search_mode);
 
+// Test-only: returns an error if arm `arm_index` is forced to fail, else OK.
+absl::Status ForcedMultiArmFailure(size_t arm_index);
+
 absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
     absl::StatusOr<std::vector<indexes::Neighbor>> results,
     const SearchParameters &parameters);
@@ -370,6 +401,13 @@ size_t EvaluateFilterAsPrimary(
 absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
     indexes::VectorBase *vector_index, const SearchParameters &parameters);
 
+// Vector Range query (no KNN): returns the keys matching the filter, with the
+// VR distance in Neighbor::distance, in key order. A query that is only the VR
+// predicate is answered by VectorBase::SearchRange; a compound one evaluates
+// the full predicate tree per fetched key.
+absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
+    const SearchParameters &parameters);
+
 std::priority_queue<std::pair<float, hnswlib::labeltype>>
 CalcBestMatchingPrefilteredKeys(
     const SearchParameters &parameters,
@@ -378,8 +416,28 @@ CalcBestMatchingPrefilteredKeys(
 
 bool QueryHasTextPredicate(const SearchParameters &parameters);
 
+// Returns the distance score field name for the single VR predicate in the
+// query: the $yield_distance_as (or AS) name if set, otherwise "" (empty).
+// Redisearch parity: a VECTOR_RANGE distance is surfaced ONLY under an explicit
+// alias — there is no default "__<alias>_score" field — so an empty name here
+// suppresses the field wherever emission is gated on a non-empty name. Also
+// returns "" when the query has no VR predicate.
+std::string GetVrScoreFieldName(const SearchParameters &parameters);
+
+// Count the number of VectorRangePredicate nodes in the predicate tree. Used
+// at parse time to reject unsupported multi-VR queries (single-VR only).
+// Returns 0 when predicate is null.
+size_t CountVectorRangePredicates(const Predicate *predicate);
+
 // Check if no results should be returned based on limit parameters
 bool ShouldReturnNoResults(const SearchParameters &parameters);
+
+// Increments the developer-visible "nonvector_results_fetched_limited_count"
+// INFO counter. The counter object is file-static to search.cc; this accessor
+// lets other translation units (e.g. the HNSW range search) report the same
+// "fetch hit the max-candidates cap" signal against the one shared counter,
+// rather than registering a duplicate field.
+void RecordNonVectorResultsFetchedLimited();
 
 // Scans for the vector filter delimiter `=>` that is followed by `[` (after
 // optional whitespace). Returns the position of `=>` or npos if not found.

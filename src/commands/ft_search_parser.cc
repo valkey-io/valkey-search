@@ -72,52 +72,6 @@ vmsdk::config::Number &GetMaxTimeoutMs() {
 
 namespace {
 
-absl::Status Verify(query::SearchParameters &parameters) {
-  // Only verify the vector KNN parameters for vector based queries.
-  if (!parameters.IsNonVectorQuery()) {
-    if (parameters.query.empty()) {
-      return absl::InvalidArgumentError("Invalid Query Syntax");
-    }
-    if (parameters.ef.has_value()) {
-      auto max_ef_runtime_value = options::GetMaxEfRuntime().GetValue();
-      VMSDK_RETURN_IF_ERROR(
-          vmsdk::VerifyRange(parameters.ef.value(), 1, max_ef_runtime_value))
-          << "`EF_RUNTIME` must be a positive integer greater than 0 and "
-             "cannot "
-             "exceed "
-          << max_ef_runtime_value << ".";
-    }
-    auto max_knn_value = options::GetMaxKnn().GetValue();
-    VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(parameters.k, 1, max_knn_value))
-        << "KNN parameter must be a positive integer greater than 0 and cannot "
-           "exceed "
-        << max_knn_value << ".";
-  }
-  const auto max_timeout_ms = options::GetMaxTimeoutMs().GetValue();
-  if (parameters.timeout_ms > static_cast<uint64_t>(max_timeout_ms)) {
-    return absl::InvalidArgumentError(
-        absl::StrCat(query::kTimeoutParam,
-                     " must be a positive integer greater than 0 and "
-                     "cannot exceed ",
-                     max_timeout_ms, "."));
-  }
-  if (parameters.dialect < 2 || parameters.dialect > 4) {
-    return absl::InvalidArgumentError(
-        "DIALECT requires a non negative integer >=2 and <= 4");
-  }
-
-  // Validate all parameters used, nuke the map to avoid dangling pointers
-  while (!parameters.parse_vars.params.empty()) {
-    auto begin = parameters.parse_vars.params.begin();
-    if (begin->second.first == 0) {
-      return absl::NotFoundError(
-          absl::StrCat("Parameter `", begin->first, "` not used."));
-    }
-    parameters.parse_vars.params.erase(begin);
-  }
-  return absl::OkStatus();
-}
-
 std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructLimitParser() {
   return std::make_unique<vmsdk::ParamParser<SearchCommand>>(
       [](SearchCommand &parameters, vmsdk::ArgsIterator &itr) -> absl::Status {
@@ -237,6 +191,29 @@ std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructReturnParser() {
       });
 }
 
+std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructWithCursorParser() {
+  return std::make_unique<vmsdk::ParamParser<SearchCommand>>(
+      [](SearchCommand &parameters, vmsdk::ArgsIterator &itr) -> absl::Status {
+        VMSDK_ASSIGN_OR_RETURN(parameters.cursor_options,
+                               ParseCursorOptions(itr));
+        return absl::OkStatus();
+      });
+}
+
+std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructInkeysParser() {
+  return std::make_unique<vmsdk::ParamParser<SearchCommand>>(
+      [](SearchCommand &parameters, vmsdk::ArgsIterator &itr) -> absl::Status {
+        uint32_t count{0};
+        VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, count));
+        parameters.inkeys.emplace();
+        for (uint32_t i = 0; i < count; ++i) {
+          VMSDK_ASSIGN_OR_RETURN(auto key, itr.PopNext());
+          parameters.inkeys->insert(std::string(vmsdk::ToStringView(key)));
+        }
+        return absl::OkStatus();
+      });
+}
+
 vmsdk::KeyValueParser<SearchCommand> CreateSearchParser() {
   vmsdk::KeyValueParser<SearchCommand> parser;
   parser.AddParamParser(query::kDialectParam,
@@ -287,6 +264,8 @@ vmsdk::KeyValueParser<SearchCommand> CreateSearchParser() {
                                    indexes::scoring::ParseScorerType(str));
             return absl::OkStatus();
           }));
+  parser.AddParamParser(kWithCursorParam, ConstructWithCursorParser());
+  parser.AddParamParser(query::kInkeysParam, ConstructInkeysParser());
 
   return parser;
 }
@@ -312,14 +291,28 @@ absl::Status SearchCommand::PostParseQueryString() {
     }
   }
 
+  // Check the VR yield-distance alias against the schema for the same reason.
+  {
+    const std::string vr_field = query::GetVrScoreFieldName(*this);
+    if (!vr_field.empty() && index_schema->GetIndex(vr_field).ok()) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Property `", vr_field, "` already exists in schema"));
+    }
+  }
+
   if (sortby_parameter.has_value()) {
-    // The vector score field (KNN distance, reported via score_as) is a
+    // Allow sorting by the vector range distance alias (yield_distance_as)
+    // without requiring it to be a real index field.
+    const std::string vr_score_field = query::GetVrScoreFieldName(*this);
+    const bool is_vr_score_field =
+        !vr_score_field.empty() && sortby_parameter->field == vr_score_field;
+    // The vector score field (KNN distance, reported via score_as) is also a
     // synthesized reply field, not a schema attribute, so it is sortable
     // without being declared. Validate any other field against the schema.
     const bool is_vector_score =
         score_as &&
         sortby_parameter->field == vmsdk::ToStringView(score_as.get());
-    if (!is_vector_score) {
+    if (!is_vr_score_field && !is_vector_score) {
       VMSDK_RETURN_IF_ERROR(
           index_schema->GetIdentifier(sortby_parameter->field).status());
     }
@@ -342,6 +335,10 @@ absl::Status VerifyQueryString(query::SearchParameters &parameters) {
              "cannot "
              "exceed "
           << max_ef_runtime_value << ".";
+      if (parameters.hybrid_policy == query::HybridPolicy::kAdHocBruteForce) {
+        return absl::InvalidArgumentError(
+            "EF_RUNTIME is irrelevant for the ADHOC_BF hybrid policy");
+      }
     }
     auto max_knn_value = options::GetMaxKnn().GetValue();
     VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(parameters.k, 1, max_knn_value))
@@ -362,15 +359,9 @@ absl::Status VerifyQueryString(query::SearchParameters &parameters) {
         "DIALECT requires a non negative integer >=2 and <= 4");
   }
 
-  // Validate all parameters used, nuke the map to avoid dangling pointers
-  while (!parameters.parse_vars.params.empty()) {
-    auto begin = parameters.parse_vars.params.begin();
-    if (begin->second.first == 0) {
-      return absl::NotFoundError(
-          absl::StrCat("Parameter `", begin->first, "` not used."));
-    }
-    parameters.parse_vars.params.erase(begin);
-  }
+  // An unused PARAM is allowed. Tear down parse_vars to avoid
+  // dangling pointers in the argument buffer.
+  parameters.parse_vars.ClearAtEndOfParse();
   return absl::OkStatus();
 }
 

@@ -346,23 +346,29 @@ TEST_F(FTHybridParserTest, VsimFilterAcceptsAnOptionalCount) {
   EXPECT_EQ(VsimArm(**without).k, VsimArm(**with).k);
 }
 
-TEST_F(FTHybridParserTest, VsimFilterCountSwallowsItsPolicyOptions) {
-  // POLICY and BATCH_SIZE tune how the pre-filter runs rather than what it
-  // answers, so they are consumed and discarded. The count is a raw token
-  // count, as on the reference engine.
+TEST_F(FTHybridParserTest, VsimFilterPolicySetsBatches) {
   auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
                        "2", "K", "5", "FILTER", "5", "@n:[0 3]", "POLICY",
                        "BATCHES", "BATCH_SIZE", "10"});
   VMSDK_EXPECT_OK(params);
   EXPECT_EQ(VsimArm(**params).k, 5);
+  EXPECT_EQ(VsimArm(**params).hybrid_policy, HybridPolicy::kBatches);
 }
 
-TEST_F(FTHybridParserTest, VsimFilterAcceptsPolicyWithoutACount) {
+TEST_F(FTHybridParserTest, VsimFilterPolicySetsAdHoc) {
   auto params =
       Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K",
-             "5", "FILTER", "@n:[0 3]", "POLICY", "ADHOC_BF"});
+             "5", "FILTER", "3", "@n:[0 3]", "POLICY", "ADHOC"});
   VMSDK_EXPECT_OK(params);
-  EXPECT_EQ(VsimArm(**params).k, 5);
+  EXPECT_EQ(VsimArm(**params).hybrid_policy, HybridPolicy::kAdHocBruteForce);
+}
+
+TEST_F(FTHybridParserTest, VsimFilterRejectsPolicyOutsideItsCount) {
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "2", "K", "5", "FILTER", "@n:[0 3]", "POLICY", "ADHOC"});
+  ASSERT_FALSE(params.ok());
+  EXPECT_EQ(params.status().message(),
+            "POLICY is only supported inside a counted VSIM FILTER");
 }
 
 TEST_F(FTHybridParserTest, VsimFilterCountCannotRunPastTheArguments) {
@@ -1033,61 +1039,67 @@ TEST_F(FTHybridParserTest, TimeoutAtTheMaxIsAccepted) {
 }
 
 // ---------------------------------------------------------------------
-// POLICY / BATCH_SIZE inside the VSIM clause
-//
-// Both tune how the vector search runs rather than what it answers, so the
-// value is read and discarded. What matters here is that reading it does not
-// end the VSIM clause -- the token after it still belongs to VSIM.
+// POLICY / BATCH_SIZE inside the counted VSIM FILTER block
 // ---------------------------------------------------------------------
 
-TEST_F(FTHybridParserTest, PolicyInsideVsimDoesNotSwallowTheNextToken) {
+TEST_F(FTHybridParserTest, PolicyOutsideVsimFilterIsRejected) {
   auto params =
       Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K",
              "5", "POLICY", "BATCHES", "YIELD_SCORE_AS", "vs"});
-  VMSDK_EXPECT_OK(params);
-  EXPECT_EQ(VsimArm(**params).k, 5);
-  EXPECT_EQ(vmsdk::ToStringView(VsimArm(**params).score_as.get()), "vs");
+  ASSERT_FALSE(params.ok());
+  EXPECT_EQ(params.status().message(),
+            "POLICY is only supported inside a counted VSIM FILTER");
 }
 
-TEST_F(FTHybridParserTest, BatchSizeInsideVsimDoesNotSwallowTheNextToken) {
+TEST_F(FTHybridParserTest, BatchSizeOutsideVsimFilterIsRejected) {
   auto params =
       Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K",
              "5", "BATCH_SIZE", "10", "YIELD_SCORE_AS", "vs"});
-  VMSDK_EXPECT_OK(params);
-  EXPECT_EQ(VsimArm(**params).k, 5);
-  EXPECT_EQ(vmsdk::ToStringView(VsimArm(**params).score_as.get()), "vs");
+  ASSERT_FALSE(params.ok());
+  EXPECT_EQ(params.status().message(),
+            "BATCH_SIZE is only supported inside a counted VSIM FILTER");
 }
 
-TEST_F(FTHybridParserTest, PolicyInsideVsimWithNoValueIsRejected) {
-  // Parsed without the usual PARAMS suffix: with one, the clause would read
-  // `PARAMS` as POLICY's value.
-  auto params = ParseExact({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q",
-                            "KNN", "2", "K", "5", "POLICY"});
+TEST_F(FTHybridParserTest, PolicyInsideFilterWithNoValueIsRejected) {
+  auto params =
+      ParseExact({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2",
+                  "K", "5", "FILTER", "2", "@n:[0 3]", "POLICY"});
   ASSERT_FALSE(params.ok());
   EXPECT_EQ(params.status().message(), "POLICY requires a value");
 }
 
-TEST_F(FTHybridParserTest, BatchSizeInsideVsimWithNoValueIsRejected) {
-  auto params = ParseExact({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q",
-                            "KNN", "2", "K", "5", "BATCH_SIZE"});
+TEST_F(FTHybridParserTest, InvalidPolicyValueIsRejected) {
+  auto params =
+      Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K",
+             "5", "FILTER", "3", "@n:[0 3]", "POLICY", "ADHOC_BF"});
   ASSERT_FALSE(params.ok());
-  EXPECT_EQ(params.status().message(), "BATCH_SIZE requires a value");
+  EXPECT_EQ(params.status().message(), "Invalid POLICY value `ADHOC_BF`");
 }
 
-TEST_F(FTHybridParserTest, PolicyWithNoModeBlockStillParses) {
-  // The regression guard for the spelling that reaches POLICY with no KNN
-  // block at all: the clause has to accept it and keep the default K.
-  auto params = Parse(
-      {"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "POLICY", "local"});
-  VMSDK_EXPECT_OK(params);
-  EXPECT_EQ(VsimArm(**params).k, 10);
-}
-
-TEST_F(FTHybridParserTest, PolicyBeforeAnAggregateStageStillParses) {
+TEST_F(FTHybridParserTest, DuplicatePolicyIsRejected) {
   auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
-                       "2", "K", "5", "POLICY", "local", "LIMIT", "0", "5"});
+                       "2", "K", "5", "FILTER", "5", "@n:[0 3]", "POLICY",
+                       "BATCHES", "POLICY", "ADHOC"});
+  ASSERT_FALSE(params.ok());
+  EXPECT_EQ(params.status().message(), "POLICY was specified more than once");
+}
+
+TEST_F(FTHybridParserTest, AdHocPolicyRejectsEfRuntime) {
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "4", "K", "5", "EF_RUNTIME", "10", "FILTER", "3",
+                       "@n:[0 3]", "POLICY", "ADHOC"});
+  ASSERT_FALSE(params.ok());
+  EXPECT_EQ(params.status().message(),
+            "EF_RUNTIME is irrelevant for POLICY ADHOC");
+}
+
+TEST_F(FTHybridParserTest, BatchesPolicyAcceptsEfRuntime) {
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "4", "K", "5", "EF_RUNTIME", "10", "FILTER", "3",
+                       "@n:[0 3]", "POLICY", "BATCHES"});
   VMSDK_EXPECT_OK(params);
-  EXPECT_EQ(VsimArm(**params).k, 5);
+  EXPECT_EQ(VsimArm(**params).hybrid_policy, HybridPolicy::kBatches);
+  EXPECT_EQ(VsimArm(**params).ef, 10);
 }
 
 TEST_F(FTHybridParserTest, PolicyInsideTheSearchClauseIsRejected) {
@@ -1357,6 +1369,111 @@ TEST_F(FTHybridParserTest, ExecuteSyncLocalIsRefused) {
   EXPECT_THAT(std::string(status.message()),
               ::testing::AllOf(::testing::HasSubstr("MULTI/EXEC"),
                                ::testing::HasSubstr("reader thread pool")));
+}
+
+// ---------------------------------------------------------------------
+// WITHCURSOR
+// ---------------------------------------------------------------------
+
+TEST_F(FTHybridParserTest, NoWithCursorLeavesTheCursorOptionsUnset) {
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q"});
+  VMSDK_EXPECT_OK(params);
+  EXPECT_FALSE((*params)->agg->cursor_options.has_value());
+}
+
+TEST_F(FTHybridParserTest, WithCursorIsParsedLikeFtAggregate) {
+  struct {
+    std::vector<std::string> suffix;
+    int64_t count;
+    int64_t max_idle_ms;
+  } test_cases[] = {
+      {{"WITHCURSOR"}, 1000, 300000},
+      {{"withcursor", "count", "5"}, 5, 300000},
+      {{"WITHCURSOR", "MAXIDLE", "10", "COUNT", "7"}, 7, 10},
+      // A later WITHCURSOR replaces an earlier one.
+      {{"WITHCURSOR", "COUNT", "1", "WITHCURSOR", "COUNT", "3"}, 3, 300000},
+      // Anywhere among the other suffix clauses.
+      {{"WITHCURSOR", "COUNT", "2", "LOAD", "1", "@n"}, 2, 300000},
+      {{"LOAD", "1", "@n", "WITHCURSOR", "COUNT", "2", "SORTBY", "2", "@n",
+        "ASC"},
+       2,
+       300000},
+      {{"SORTBY", "2", "@n", "ASC", "LIMIT", "0", "5", "WITHCURSOR", "COUNT",
+        "4"},
+       4,
+       300000},
+  };
+  for (auto &tc : test_cases) {
+    std::vector<std::string> args{"SEARCH", "@n:[0 10]", "VSIM", "@vector",
+                                  "$q"};
+    args.insert(args.end(), tc.suffix.begin(), tc.suffix.end());
+    auto params = Parse(args);
+    VMSDK_EXPECT_OK(params) << absl::StrJoin(tc.suffix, " ");
+    if (!params.ok()) {
+      continue;
+    }
+    const auto &options = (*params)->agg->cursor_options;
+    ASSERT_TRUE(options.has_value()) << absl::StrJoin(tc.suffix, " ");
+    EXPECT_EQ(options->count, tc.count) << absl::StrJoin(tc.suffix, " ");
+    EXPECT_EQ(options->max_idle, absl::Milliseconds(tc.max_idle_ms))
+        << absl::StrJoin(tc.suffix, " ");
+  }
+}
+
+TEST_F(FTHybridParserTest, WithCursorEndsTheVsimAndCombineClauses) {
+  // Like LOAD or LIMIT, WITHCURSOR is where a SEARCH, VSIM or COMBINE clause
+  // stops.
+  for (auto args : std::vector<std::vector<std::string>>{
+           {"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "WITHCURSOR",
+            "COUNT", "2"},
+           {"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K",
+            "5", "WITHCURSOR", "COUNT", "2"},
+           {"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "COMBINE", "RRF",
+            "2", "YIELD_SCORE_AS", "hs", "WITHCURSOR", "COUNT", "2"},
+       }) {
+    auto params = Parse(args);
+    VMSDK_EXPECT_OK(params) << absl::StrJoin(args, " ");
+    if (params.ok()) {
+      ASSERT_TRUE((*params)->agg->cursor_options.has_value());
+      EXPECT_EQ((*params)->agg->cursor_options->count, 2);
+    }
+  }
+}
+
+TEST_F(FTHybridParserTest, WithCursorRejectsBadValues) {
+  for (auto suffix : std::vector<std::vector<std::string>>{
+           {"WITHCURSOR", "COUNT"},
+           {"WITHCURSOR", "COUNT", "x"},
+           {"WITHCURSOR", "COUNT", "0"},
+           {"WITHCURSOR", "COUNT", "-1"},
+           {"WITHCURSOR", "COUNT", "100001"},
+           {"WITHCURSOR", "MAXIDLE"},
+           {"WITHCURSOR", "MAXIDLE", "0"},
+       }) {
+    std::vector<std::string> args{"SEARCH", "@n:[0 10]", "VSIM", "@vector",
+                                  "$q"};
+    args.insert(args.end(), suffix.begin(), suffix.end());
+    EXPECT_FALSE(Parse(args).ok()) << absl::StrJoin(suffix, " ");
+  }
+}
+
+TEST_F(FTHybridParserTest, WithCursorLeavesPartialResultsAlone) {
+  // WITHCURSOR is no exception to the cancellation rules: it does not touch
+  // the partial results setting of the envelope or of any arm.
+  auto &prefer_partial =
+      const_cast<vmsdk::config::Boolean &>(options::GetPreferPartialResults());
+  const bool saved = prefer_partial.GetValue();
+  for (bool partial : {false, true}) {
+    VMSDK_EXPECT_OK(prefer_partial.SetValue(partial));
+    auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q",
+                         "WITHCURSOR", "COUNT", "2"});
+    VMSDK_EXPECT_OK(params);
+    EXPECT_EQ((*params)->enable_partial_results, partial);
+    for (const auto &arm : (*params)->arms) {
+      EXPECT_EQ(arm->enable_partial_results, partial);
+    }
+  }
+  VMSDK_EXPECT_OK(prefer_partial.SetValue(saved));
 }
 
 }  // namespace

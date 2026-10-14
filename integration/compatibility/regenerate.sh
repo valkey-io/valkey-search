@@ -3,7 +3,7 @@
 # (aggregate-answers.pickle.gz and text-search-answers.pickle.gz).
 #
 # Requires Docker: the generators spin up redis:latest on a port
-# docker picks, in a container named Generate-search-NNNN.
+# docker picks, in a container named Generate-search-<Class>-NNNN.
 # to capture reference answers.
 #
 # Usage:
@@ -43,8 +43,8 @@ GENERATOR_FILES=()
 while IFS= read -r line; do
     GENERATOR_FILES+=("${line}")
 done < <(PYTHONPATH=integration "${PYTHON}" -c \
-    "from compatibility import GENERATORS
-for g in GENERATORS: print(g['generator'])")
+    "from compatibility import GENERATOR_FILES_UNIQUE
+for g in GENERATOR_FILES_UNIQUE: print(g)")
 
 ANSWER_FILES=()
 while IFS= read -r line; do
@@ -54,10 +54,19 @@ done < <(PYTHONPATH=integration "${PYTHON}" -c \
 for g in GENERATORS: print(g['answers'])")
 
 cd "${COMPAT_DIR}"
-for gen in "${GENERATOR_FILES[@]}"; do
-    echo "==> Running ${gen}"
-    "${PYTHON}" -m pytest "${gen}" "$@"
-done
+# Each generator collects its answers in one class and writes them in
+# teardown_class, so loadscope keeps a generator on a single worker; one
+# worker per generator is the most parallelism that stays correct.
+XDIST_ARGS=()
+if "${PYTHON}" -c "import xdist" 2>/dev/null; then
+    XDIST_ARGS=(-n "${#GENERATOR_FILES[@]}" --dist=loadscope)
+else
+    echo "pytest-xdist not found in ${PYTHON}; running generators serially." >&2
+fi
+echo "==> Running ${GENERATOR_FILES[*]}"
+# The default fd capture writes each print() unbuffered to a temp file;
+# sys capture keeps the same per-test output in memory.
+"${PYTHON}" -m pytest "${XDIST_ARGS[@]}" --capture=sys "${GENERATOR_FILES[@]}" "$@"
 
 echo
 echo "Done. Updated files:"

@@ -18,8 +18,10 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
+#include "absl/algorithm/container.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -188,6 +190,138 @@ INSTANTIATE_TEST_SUITE_P(
     [](const testing::TestParamInfo<data_model::SVSCompressionType> &info) {
       return data_model::SVSCompressionType_Name(info.param);
     });
+
+// -- Save after deletes -------------------------------------------------------
+
+// Deletes only mark SVS slots, and svs_index_ stays non-null even with no
+// live entries, so the save path's consolidate/compact runs over the deleted
+// slots. Covers the entry point being deleted and zero survivors.
+struct DeleteCase {
+  const char *name;
+  std::vector<size_t> deleted;
+};
+
+class VectorSVSDeleteBeforeSaveTest
+    : public VectorSVSTest,
+      public testing::WithParamInterface<DeleteCase> {};
+
+TEST_P(VectorSVSDeleteBeforeSaveTest, SaveAndLoadAfterDeletes) {
+  const size_t kNumVectors = 10;
+  FakeSafeRDB rdb;
+  auto vectors =
+      DeterministicallyGenerateVectors(kNumVectors + 1, kDimensions, 5.0);
+  std::vector<ValkeyModuleString *> records(kNumVectors + 1);
+  for (size_t i = 0; i <= kNumVectors; ++i) {
+    records[i] = ValkeyModule_CreateString(
+        nullptr, (const char *)vectors[i].data(), kDimensions * sizeof(float));
+  }
+
+  auto proto =
+      CreateSVSVectorIndexProto(kDimensions, data_model::DISTANCE_METRIC_L2,
+                                data_model::SVS_COMPRESSION_NONE);
+  auto index = VectorSVS<float>::Create(proto, attribute_identifier,
+                                        attribute_data_type, 0);
+  VMSDK_EXPECT_OK(index);
+  for (size_t i = 0; i < kNumVectors; ++i) {
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(**index, IndexToKey(i),
+                                                   VectorToStr(vectors[i])));
+  }
+  for (size_t i : GetParam().deleted) {
+    VMSDK_EXPECT_OK((*index)->RemoveRecord(IndexToKey(i), DeletionType::kNone));
+  }
+  const size_t survivors = kNumVectors - GetParam().deleted.size();
+  ASSERT_EQ(AsBase(*index)->GetLabelCount(), survivors);
+
+  auto save_status = (*index)->SaveIndex(RDBChunkOutputStream(&rdb));
+  ASSERT_TRUE(save_status.ok()) << save_status;
+  auto keys_status = (*index)->SaveTrackedKeys(RDBChunkOutputStream(&rdb));
+  ASSERT_TRUE(keys_status.ok()) << keys_status;
+
+  ExpectHashGetsForRecords(records);
+  auto loaded = VectorSVS<float>::LoadFromRDB(
+      &fake_ctx_, &hash_attribute_data_type_, proto, "attribute_identifier_2",
+      SupplementalContentChunkIter(&rdb), 0);
+  ASSERT_TRUE(loaded.ok()) << loaded.status();
+  auto load_keys_status =
+      (*loaded)->LoadTrackedKeys(&fake_ctx_, &hash_attribute_data_type_,
+                                 SupplementalContentChunkIter(&rdb));
+  ASSERT_TRUE(load_keys_status.ok()) << load_keys_status;
+  EXPECT_EQ(AsBase(*loaded)->GetLabelCount(), survivors);
+
+  // Every survivor is still its own nearest neighbour after the reload.
+  for (size_t i = 0; i < kNumVectors; ++i) {
+    if (absl::c_linear_search(GetParam().deleted, i)) continue;
+    auto search_result =
+        (*loaded)->Search(VectorToStr(vectors[i]), 1, CancelNever());
+    ASSERT_TRUE(search_result.ok()) << search_result.status();
+    ASSERT_EQ(search_result->size(), 1u);
+    EXPECT_EQ((*search_result)[0].external_id, IndexToKey(i));
+  }
+
+  // The loaded index still accepts writes.
+  VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(
+      **loaded, IndexToKey(kNumVectors), VectorToStr(vectors[kNumVectors])));
+  EXPECT_EQ(AsBase(*loaded)->GetLabelCount(), survivors + 1);
+
+  for (auto *record : records) {
+    ValkeyModule_FreeString(nullptr, record);
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    DeleteCases, VectorSVSDeleteBeforeSaveTest,
+    testing::Values(DeleteCase{"AllDeleted", {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}},
+                    DeleteCase{"FirstInsertedDeleted", {0}},
+                    DeleteCase{"AllButOneDeleted",
+                               {0, 1, 2, 3, 4, 5, 6, 7, 8}}),
+    [](const testing::TestParamInfo<DeleteCase> &info) {
+      return std::string(info.param.name);
+    });
+
+// A foreground SAVE / DEBUG RELOAD runs on the main thread while reader
+// threads keep searching; SVS compacts the live index during the save, so
+// the two must not overlap. Meaningful under TSAN; a plain build only checks
+// that concurrent searches keep returning results.
+TEST_F(VectorSVSTest, SaveWhileSearchingIsExclusive) {
+  const size_t kNumVectors = 200;
+  auto vectors =
+      DeterministicallyGenerateVectors(kNumVectors, kDimensions, 5.0);
+  auto proto =
+      CreateSVSVectorIndexProto(kDimensions, data_model::DISTANCE_METRIC_L2,
+                                data_model::SVS_COMPRESSION_NONE);
+  auto index = VectorSVS<float>::Create(proto, attribute_identifier,
+                                        attribute_data_type, 0);
+  VMSDK_EXPECT_OK(index);
+  for (size_t i = 0; i < kNumVectors; ++i) {
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(**index, IndexToKey(i),
+                                                   VectorToStr(vectors[i])));
+  }
+  // Deleted slots give consolidate() and compact() real work to do.
+  for (size_t i = 0; i < kNumVectors; i += 4) {
+    VMSDK_EXPECT_OK((*index)->RemoveRecord(IndexToKey(i), DeletionType::kNone));
+  }
+
+  std::atomic<bool> stop{false};
+  std::atomic<size_t> failed_searches{0};
+  std::vector<std::thread> readers;
+  for (int t = 0; t < 4; ++t) {
+    readers.emplace_back([&, t] {
+      for (size_t q = t; !stop.load(); q = (q + 1) % kNumVectors) {
+        auto result =
+            (*index)->Search(VectorToStr(vectors[q]), 5, CancelNever());
+        if (!result.ok() || result->empty()) ++failed_searches;
+      }
+    });
+  }
+  for (int round = 0; round < 5; ++round) {
+    FakeSafeRDB rdb;
+    auto status = (*index)->SaveIndex(RDBChunkOutputStream(&rdb));
+    EXPECT_TRUE(status.ok()) << status;
+  }
+  stop = true;
+  for (auto &reader : readers) reader.join();
+  EXPECT_EQ(failed_searches.load(), 0u);
+}
 
 // -- Recall and payload span verification ------------------------------------
 

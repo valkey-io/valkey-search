@@ -112,8 +112,9 @@ class VectorSVS : public VectorType<T> {
       float query_magnitude) const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
   std::shared_ptr<const VectorRecord> &GetVectorLockFree(
       uint64_t internal_id) const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
-  // SVS has no tombstones, so every label LoadTrackedKeys re-encounters is
-  // new to this map; try_emplace instead of the base class's CHECK.
+  // LoadFromRDB leaves this map empty (saves consolidate SVS's soft
+  // deletes away), so every label LoadTrackedKeys re-encounters is new to
+  // it; try_emplace instead of the base class's CHECK.
   std::shared_ptr<const VectorRecord> &GetOrCreateVectorLockFree(
       uint64_t internal_id) override ABSL_NO_THREAD_SAFETY_ANALYSIS;
   std::shared_ptr<const VectorRecord> &GetVector(

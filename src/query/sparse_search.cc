@@ -24,6 +24,7 @@ namespace {
 // are skipped by selecting the next block from the posting-list cursors.
 constexpr uint64_t kBlockSize = 8192;
 
+// Returns whether value is finite by inspecting its IEEE 754 exponent.
 // Avoid std::isfinite: an out-of-line inline definition from another
 // translation unit compiled with fast-math can be selected at link time.
 bool IsFiniteDouble(double value) {
@@ -31,6 +32,7 @@ bool IsFiniteDouble(double value) {
   return (std::bit_cast<uint64_t>(value) & kExponentMask) != kExponentMask;
 }
 
+// Orders hits by descending score, breaking ties by ascending document ID.
 bool Better(const SparseSearchHit &a, const SparseSearchHit &b) {
   return a.score > b.score || (a.score == b.score && a.id < b.id);
 }
@@ -44,6 +46,9 @@ struct Cursor {
 
 }  // namespace
 
+// Computes exact top-K using fixed-size ID blocks and a bounded heap. Validates
+// every posting, accumulates in list order, and returns score-descending hits
+// with ID-ascending ties; invalid inputs or score overflow return an error.
 absl::StatusOr<std::vector<SparseSearchHit>> SparseSearch(
     absl::Span<const SparsePostingList> lists, size_t k) {
   if (k == 0 || k > kSparseMaxTopK || lists.empty() ||

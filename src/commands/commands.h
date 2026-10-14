@@ -89,8 +89,10 @@ absl::Status FTListCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                        int argc);
 absl::Status FTSearchCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                          int argc);
+// Searches packed posting strings and replies with ranked ID/score pairs.
 absl::Status FTSparseSearchCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                                int argc);
+// Searches packed posting strings and replies with uint32/FP64 binary records.
 absl::Status FTSparseSearchBinCmd(ValkeyModuleCtx *ctx,
                                   ValkeyModuleString **argv, int argc);
 absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,

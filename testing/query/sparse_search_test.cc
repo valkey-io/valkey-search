@@ -23,6 +23,7 @@
 namespace valkey_search::query {
 namespace {
 
+// Appends one little-endian uint32 ID and raw FP16 weight to a test list.
 void Append(std::string &data, uint32_t id, uint16_t weight_bits) {
   const size_t offset = data.size();
   data.resize(offset + kSparsePostingBytes);
@@ -30,6 +31,7 @@ void Append(std::string &data, uint32_t id, uint16_t weight_bits) {
   absl::little_endian::Store16(data.data() + offset + sizeof(id), weight_bits);
 }
 
+// Checks weighted accumulation across block boundaries and the maximum ID.
 TEST(SparseSearchTest, AccumulatesAcrossListsAndBlocks) {
   std::string a;
   std::string b;
@@ -50,6 +52,7 @@ TEST(SparseSearchTest, AccumulatesAcrossListsAndBlocks) {
   EXPECT_EQ((*result)[2].score, 8);
 }
 
+// Checks empty results and deterministic ID ordering for zero-score hits.
 TEST(SparseSearchTest, EmptyListsAndZeroScores) {
   auto empty = SparseSearch({{{}, 1}}, 10);
   ASSERT_TRUE(empty.ok());
@@ -64,6 +67,7 @@ TEST(SparseSearchTest, EmptyListsAndZeroScores) {
   EXPECT_EQ(result->front().score, 0);
 }
 
+// Checks all nonnegative finite FP16 encodings, including subnormal weights.
 TEST(SparseSearchTest, HandlesAllFiniteNonnegativeHalfValues) {
   std::string data;
   for (uint16_t bits = 0; bits < 0x7c00; ++bits) {
@@ -80,6 +84,7 @@ TEST(SparseSearchTest, HandlesAllFiniteNonnegativeHalfValues) {
   EXPECT_EQ(result->front().score, 0x1p-24);
 }
 
+// Checks query bounds, record lengths, ID ordering, weights, and overflow.
 TEST(SparseSearchTest, RejectsMalformedListsAndWeights) {
   EXPECT_FALSE(SparseSearch({}, 1).ok());
   EXPECT_FALSE(SparseSearch({{{}, 1}}, 0).ok());
@@ -114,6 +119,7 @@ TEST(SparseSearchTest, RejectsMalformedListsAndWeights) {
       SparseSearch({{overflow, std::numeric_limits<double>::max()}}, 1).ok());
 }
 
+// Ensures list-order rounding preserves near-tie ranking for top-1 and top-2.
 TEST(SparseSearchTest, PreservesAccumulationOrderForNearlyTiedScores) {
   std::string candidate;
   std::string competitor;
@@ -141,6 +147,7 @@ TEST(SparseSearchTest, PreservesAccumulationOrderForNearlyTiedScores) {
   }
 }
 
+// Ensures separate multiply/add rounding preserves bit-exact scores and ties.
 TEST(SparseSearchTest, RoundsMultiplyAndAddSeparatelyForNearlyTiedScores) {
   std::string unit;
   std::string fraction;
@@ -166,6 +173,7 @@ TEST(SparseSearchTest, RoundsMultiplyAndAddSeparatelyForNearlyTiedScores) {
   }
 }
 
+// Compares block search against a full-map oracle across dimensions and K.
 TEST(SparseSearchTest, MatchesReferenceDotProduct) {
   std::mt19937 rng(42);
   for (size_t dimensions : {4, 8, 16, 64}) {

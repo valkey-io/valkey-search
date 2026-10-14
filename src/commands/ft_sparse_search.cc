@@ -22,6 +22,9 @@
 namespace valkey_search {
 namespace {
 
+// Validates command arguments, borrows posting strings for synchronous search,
+// and writes nested ID/score pairs or packed uint32/FP64 records. Returns an
+// error for invalid arguments, non-string keys, or malformed posting data.
 absl::Status SearchPacked(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                           int argc, bool binary) {
   vmsdk::VerifyMainThread();
@@ -91,11 +94,13 @@ absl::Status SearchPacked(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
 
 }  // namespace
 
+// Executes FT.SPARSESEARCH and replies with ranked [document ID, score] pairs.
 absl::Status FTSparseSearchCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                                int argc) {
   return SearchPacked(ctx, argv, argc, false);
 }
 
+// Executes FT.SPARSESEARCHBIN with little-endian uint32/FP64 result records.
 absl::Status FTSparseSearchBinCmd(ValkeyModuleCtx *ctx,
                                   ValkeyModuleString **argv, int argc) {
   return SearchPacked(ctx, argv, argc, true);

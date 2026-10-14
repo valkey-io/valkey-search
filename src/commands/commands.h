@@ -171,6 +171,9 @@ struct QueryCommand : public query::SearchParameters {
                          query::SearchResult &search_result) = 0;
   // Generate the reply, including asynchronous failure and timeout handling.
   int GenerateReply(ValkeyModuleCtx *ctx);
+  // Counts a failed reply on the main thread, or records it for async::Reply
+  // when the reply is generated in the background.
+  void CountFailedReply();
   //
   // Determine if we need full results or if we can optimize with trimming
   //
@@ -195,6 +198,9 @@ struct QueryCommand : public query::SearchParameters {
   // client was unblocked. The reply callback must then only complete the
   // unblock, not serialize a second response.
   std::atomic<bool> reply_generated_in_background{false};
+  // Whether that background reply was an error. Counted from this instead of
+  // re-evaluating the cancellation token, which may have expired since.
+  bool background_reply_failed{false};
 
  private:
   void QueryCompleteImpl(std::unique_ptr<SearchParameters> parameters);

@@ -66,9 +66,7 @@ int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
           std::memory_order_acquire)) {
     // Reply generation itself happened on a reader thread. Keep these
     // main-thread-only counters on the reply callback, as before.
-    if (!parameters->search_result.status.ok() ||
-        (!parameters->enable_partial_results &&
-         parameters->cancellation_token->IsCancelled())) {
+    if (parameters->background_reply_failed) {
       ++Metrics::GetStats().query_failed_requests_cnt;
     } else {
       ++Metrics::GetStats().query_successful_requests_cnt;
@@ -95,21 +93,25 @@ void Free([[maybe_unused]] ValkeyModuleCtx *ctx, void *privdata) {
 int QueryCommand::GenerateReply(ValkeyModuleCtx *ctx) {
   // Check if operation failed first to get the actual error message
   if (!search_result.status.ok()) {
-    if (vmsdk::IsMainThread()) {
-      ++Metrics::GetStats().query_failed_requests_cnt;
-    }
+    CountFailedReply();
     return ValkeyModule_ReplyWithError(ctx,
                                        search_result.status.message().data());
   }
   // Check if operation was cancelled and partial results are disabled
   if (!enable_partial_results && cancellation_token->IsCancelled()) {
-    if (vmsdk::IsMainThread()) {
-      ++Metrics::GetStats().query_failed_requests_cnt;
-    }
+    CountFailedReply();
     return ValkeyModule_ReplyWithError(ctx, query::kTimeoutMsg.data());
   }
   SendReply(ctx, search_result);
   return VALKEYMODULE_OK;
+}
+
+void QueryCommand::CountFailedReply() {
+  if (vmsdk::IsMainThread()) {
+    ++Metrics::GetStats().query_failed_requests_cnt;
+  } else {
+    background_reply_failed = true;
+  }
 }
 
 CONTROLLED_BOOLEAN(ForceReplicasOnly, false);

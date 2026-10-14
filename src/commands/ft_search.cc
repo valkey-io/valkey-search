@@ -413,9 +413,7 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
   if (!skip_content) {
     auto status = ProcessNeighborsForQuery(ctx, search_result, *this);
     if (!status.ok()) {
-      if (vmsdk::IsMainThread()) {
-        ++Metrics::GetStats().query_failed_requests_cnt;
-      }
+      CountFailedReply();
       ValkeyModule_ReplyWithError(ctx, status.message().data());
       return;
     }

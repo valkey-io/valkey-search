@@ -704,6 +704,54 @@ TEST_F(ValkeySearchTest, BackgroundReplyCompletesBeforeDestruction) {
   async::Free(&fake_ctx_, private_data);
 }
 
+// A background reply is counted by what it sent, even if the query's deadline
+// passes before the main thread runs async::Reply.
+TEST_F(ValkeySearchTest, BackgroundReplyMetricsIgnoreLaterCancellation) {
+  auto index_schema = CreateVectorHNSWSchema("idx", &fake_ctx_).value();
+  auto parameters = std::make_unique<SearchCommand>(0);
+  parameters->index_schema = index_schema;
+  parameters->no_content = true;
+  parameters->enable_partial_results = false;
+  parameters->timeout_ms = 10000;
+  parameters->cancellation_token =
+      cancel::Make(parameters->timeout_ms, nullptr);
+  auto token = parameters->cancellation_token;
+  auto *blocked_client = (ValkeyModuleBlockedClient *)1;
+  EXPECT_CALL(
+      *kMockValkeyModule,
+      BlockClient(testing::_, testing::_, testing::_, testing::_, testing::_))
+      .WillOnce(testing::Return(blocked_client));
+  parameters->blocked_client = vmsdk::BlockedClient(
+      &fake_ctx_, async::Reply, async::Timeout, async::Free, 0);
+  ValkeyModuleCtx background_ctx;
+  EXPECT_CALL(*kMockValkeyModule, GetThreadSafeContext(blocked_client))
+      .WillOnce(testing::Return(&background_ctx));
+  void *private_data = nullptr;
+  EXPECT_CALL(*kMockValkeyModule, UnblockClient(blocked_client, testing::_))
+      .WillOnce([&](ValkeyModuleBlockedClient *, void *data) {
+        private_data = data;
+        return VALKEYMODULE_OK;
+      });
+
+  std::thread reader([parameters = std::move(parameters)]() mutable {
+    auto *command = parameters.get();
+    command->QueryCompleteBackground(std::move(parameters));
+  });
+  reader.join();
+  ASSERT_EQ(background_ctx.reply_capture.GetReply(), "*1\r\n:0\r\n");
+
+  auto &stats = Metrics::GetStats();
+  const uint64_t successful = stats.query_successful_requests_cnt;
+  const uint64_t failed = stats.query_failed_requests_cnt;
+  token->Cancel();
+  EXPECT_CALL(*kMockValkeyModule, GetBlockedClientPrivateData(&fake_ctx_))
+      .WillRepeatedly(testing::Return(private_data));
+  async::Reply(&fake_ctx_, nullptr, 0);
+  EXPECT_EQ(stats.query_successful_requests_cnt, successful + 1);
+  EXPECT_EQ(stats.query_failed_requests_cnt, failed);
+  async::Free(&fake_ctx_, private_data);
+}
+
 using ::testing::TestParamInfo;
 using ::testing::ValuesIn;
 

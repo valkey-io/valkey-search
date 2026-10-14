@@ -46,6 +46,8 @@ constexpr absl::string_view kDropIndexCommand{"FT.DROPINDEX"};
 constexpr absl::string_view kInfoCommand{"FT.INFO"};
 constexpr absl::string_view kListCommand{"FT._LIST"};
 constexpr absl::string_view kSearchCommand{"FT.SEARCH"};
+constexpr absl::string_view kSparseSearchCommand{"FT.SPARSESEARCH"};
+constexpr absl::string_view kSparseSearchBinCommand{"FT.SPARSESEARCHBIN"};
 constexpr absl::string_view kDebugCommand{"FT._DEBUG"};
 constexpr absl::string_view kAggregateCommand{"FT.AGGREGATE"};
 constexpr absl::string_view kHybridCommand{"FT.HYBRID"};
@@ -87,6 +89,10 @@ absl::Status FTListCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                        int argc);
 absl::Status FTSearchCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                          int argc);
+absl::Status FTSparseSearchCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
+                               int argc);
+absl::Status FTSparseSearchBinCmd(ValkeyModuleCtx *ctx,
+                                  ValkeyModuleString **argv, int argc);
 absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                         int argc);
 absl::Status FTAggregateCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,

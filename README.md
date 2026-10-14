@@ -24,6 +24,12 @@ For a detailed description of the supported commands and configuration options, 
 
 For comprehensive examples, refer to the [Quick Start Guide](https://github.com/valkey-io/valkey-search/blob/main/QUICK_START.md).
 
+## Packed sparse-vector search
+
+For externally generated inverted indexes, see the experimental
+[`FT.SPARSESEARCH` and `FT.SPARSESEARCHBIN` API](docs/packed_sparse_search.md).
+These commands operate on packed strings independently of schema-based `FT.SEARCH`.
+
 ## Scaling
 
 valkey-search supports both **Standalone** and **Cluster** modes. Query processing and ingestion scale linearly with CPU cores in both modes. For large storage requirements, users can leverage Cluster mode for horizontal scaling of the keyspace.

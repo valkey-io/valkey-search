@@ -28,7 +28,6 @@
 #include "testing/coordinator/common.h"
 #include "valkey_search_options.h"
 #include "vmsdk/src/info.h"
-#include "vmsdk/src/memory_allocation_overrides.h"
 #include "vmsdk/src/module.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
@@ -213,12 +212,12 @@ INSTANTIATE_TEST_SUITE_P(
             .expected_load_ret = 1,
         },
     }),
-    [](const testing::TestParamInfo<LoadTestCase>& info) {
+    [](const testing::TestParamInfo<LoadTestCase> &info) {
       return info.param.test_name;
     });
 
 TEST_P(LoadTest, load) {
-  const LoadTestCase& test_case = GetParam();
+  const LoadTestCase &test_case = GetParam();
   std::string port_str, tls_port_str;
   int call_reply_count = 0;
   auto args = vmsdk::ToValkeyStringVector(test_case.args);
@@ -228,7 +227,7 @@ TEST_P(LoadTest, load) {
       *kMockValkeyModule,
       CreateDataType(&fake_ctx_, testing::StrEq(kValkeySearchModuleTypeName),
                      testing::_, testing::_))
-      .WillOnce(testing::Return((ValkeyModuleType*)0xBADF00D));
+      .WillOnce(testing::Return((ValkeyModuleType *)0xBADF00D));
   if (test_case.expected_load_ret == 0) {
     EXPECT_CALL(*kMockValkeyModule,
                 Call(testing::_, testing::StrEq("MODULE"), testing::StrEq("c"),
@@ -253,7 +252,7 @@ TEST_P(LoadTest, load) {
     empty_slots_reply->type = VALKEYMODULE_REPLY_ARRAY;
     empty_slots_reply->val = CallReplyArray{};
 
-    ValkeyModuleCallReply* empty_slots_reply_ptr = empty_slots_reply.get();
+    ValkeyModuleCallReply *empty_slots_reply_ptr = empty_slots_reply.get();
 
     EXPECT_CALL(*kMockValkeyModule,
                 Call(testing::_, testing::StrEq("CLUSTER"), testing::StrEq("c"),
@@ -270,7 +269,7 @@ TEST_P(LoadTest, load) {
     // heap-allocated one
     EXPECT_CALL(*kMockValkeyModule, FreeCallReply(testing::_))
         .WillRepeatedly([empty_slots_reply_ptr,
-                         &empty_slots_reply](ValkeyModuleCallReply* r) {
+                         &empty_slots_reply](ValkeyModuleCallReply *r) {
           if (r == empty_slots_reply_ptr) {
             empty_slots_reply.release();
             delete r;
@@ -303,7 +302,7 @@ TEST_P(LoadTest, load) {
         EXPECT_CALL(*kMockValkeyModule,
                     CallReplyStringPtr(testing::_, testing::_))
             .WillRepeatedly(
-                [&](ValkeyModuleCallReply* reply, size_t* len) -> const char* {
+                [&](ValkeyModuleCallReply *reply, size_t *len) -> const char * {
                   if (call_reply_count == 1) {
                     *len = port_str.size();
                     return port_str.c_str();
@@ -366,7 +365,7 @@ TEST_P(LoadTest, load) {
     EXPECT_THAT(ValkeySearch::Instance().GetCoordinatorServer(),
                 testing::IsNull());
   }
-  for (const auto& arg : args) {
+  for (const auto &arg : args) {
     TestValkeyModule_FreeString(nullptr, arg);
   }
 }
@@ -415,16 +414,25 @@ TEST_F(ValkeySearchTest, Info) {
   auto test_index_schema =
       CreateVectorHNSWSchema("index_schema_key", nullptr, writer_thread_pool)
           .value();
-  auto& index_schema_stats = test_index_schema->stats_;
-  index_schema_stats.subscription_remove.failure_cnt = 1;
-  index_schema_stats.subscription_remove.success_cnt = 2;
-  index_schema_stats.subscription_remove.skipped_cnt = 3;
-  index_schema_stats.subscription_modify.failure_cnt = 1;
-  index_schema_stats.subscription_modify.success_cnt = 2;
-  index_schema_stats.subscription_modify.skipped_cnt = 3;
-  index_schema_stats.subscription_add.failure_cnt = 1;
-  index_schema_stats.subscription_add.success_cnt = 2;
-  index_schema_stats.subscription_add.skipped_cnt = 3;
+  auto &index_schema_stats = test_index_schema->stats_;
+  index_schema_stats.subscription_remove.failure_cnt.Reset();
+  index_schema_stats.subscription_remove.failure_cnt.Add(1);
+  index_schema_stats.subscription_remove.success_cnt.Reset();
+  index_schema_stats.subscription_remove.success_cnt.Add(2);
+  index_schema_stats.subscription_remove.skipped_cnt.Reset();
+  index_schema_stats.subscription_remove.skipped_cnt.Add(3);
+  index_schema_stats.subscription_modify.failure_cnt.Reset();
+  index_schema_stats.subscription_modify.failure_cnt.Add(1);
+  index_schema_stats.subscription_modify.success_cnt.Reset();
+  index_schema_stats.subscription_modify.success_cnt.Add(2);
+  index_schema_stats.subscription_modify.skipped_cnt.Reset();
+  index_schema_stats.subscription_modify.skipped_cnt.Add(3);
+  index_schema_stats.subscription_add.failure_cnt.Reset();
+  index_schema_stats.subscription_add.failure_cnt.Add(1);
+  index_schema_stats.subscription_add.success_cnt.Reset();
+  index_schema_stats.subscription_add.success_cnt.Add(2);
+  index_schema_stats.subscription_add.skipped_cnt.Reset();
+  index_schema_stats.subscription_add.skipped_cnt.Add(3);
   index_schema_stats.document_cnt = 4;
   index_schema_stats.backfill_inqueue_tasks = 4;
   {
@@ -433,37 +441,59 @@ TEST_F(ValkeySearchTest, Info) {
     index_schema_stats.mutations_queue_delay_ = absl::Seconds(3);
   }
 
-  auto& stats = Metrics::GetStats();
+  auto &stats = Metrics::GetStats();
   stats.query_failed_requests_cnt = 1;
   stats.query_successful_requests_cnt = 2;
   stats.query_hybrid_requests_cnt = 1;
-  stats.query_inline_filtering_requests_cnt = 2;
-  stats.hnsw_add_exceptions_cnt = 3;
-  stats.hnsw_remove_exceptions_cnt = 4;
-  stats.hnsw_modify_exceptions_cnt = 5;
-  stats.hnsw_search_exceptions_cnt = 6;
-  stats.hnsw_create_exceptions_cnt = 7;
+  stats.query_inline_filtering_requests_cnt.Reset();
+  stats.query_inline_filtering_requests_cnt.Add(2);
+  stats.hnsw_add_exceptions_cnt.Reset();
+  stats.hnsw_add_exceptions_cnt.Add(3);
+  stats.hnsw_remove_exceptions_cnt.Reset();
+  stats.hnsw_remove_exceptions_cnt.Add(4);
+  stats.hnsw_modify_exceptions_cnt.Reset();
+  stats.hnsw_modify_exceptions_cnt.Add(5);
+  stats.hnsw_search_exceptions_cnt.Reset();
+  stats.hnsw_search_exceptions_cnt.Add(6);
+  stats.hnsw_create_exceptions_cnt.Reset();
+  stats.hnsw_create_exceptions_cnt.Add(7);
 
   // Set global ingestion stats
-  stats.ingest_hash_keys = 100;
+  stats.ingest_hash_keys.Reset();
+  stats.ingest_hash_keys.Add(100);
   // Let's set the blocked clients values in the test
   // These would normally be set from the BlockedClientTracker
-  stats.ingest_json_keys = 200;
-  stats.ingest_field_vector = 300;
-  stats.ingest_field_numeric = 400;
-  stats.ingest_field_tag = 500;
+  stats.ingest_json_keys.Reset();
+  stats.ingest_json_keys.Add(200);
+  stats.ingest_field_vector.Reset();
+  stats.ingest_field_vector.Add(300);
+  stats.ingest_field_numeric.Reset();
+  stats.ingest_field_numeric.Add(400);
+  stats.ingest_field_tag.Reset();
+  stats.ingest_field_tag.Add(500);
   stats.ingest_last_batch_size = 600;
-  stats.ingest_total_batches = 700;
-  stats.ingest_total_failures = 800;
-  stats.flat_add_exceptions_cnt = 8;
-  stats.flat_remove_exceptions_cnt = 9;
-  stats.flat_modify_exceptions_cnt = 10;
-  stats.flat_search_exceptions_cnt = 11;
-  stats.flat_create_exceptions_cnt = 12;
-  stats.worker_thread_pool_suspend_cnt = 13;
-  stats.writer_worker_thread_pool_resumed_cnt = 14;
-  stats.reader_worker_thread_pool_resumed_cnt = 15;
-  stats.writer_worker_thread_pool_suspension_expired_cnt = 16;
+  stats.ingest_total_batches.Reset();
+  stats.ingest_total_batches.Add(700);
+  stats.ingest_total_failures.Reset();
+  stats.ingest_total_failures.Add(800);
+  stats.flat_add_exceptions_cnt.Reset();
+  stats.flat_add_exceptions_cnt.Add(8);
+  stats.flat_remove_exceptions_cnt.Reset();
+  stats.flat_remove_exceptions_cnt.Add(9);
+  stats.flat_modify_exceptions_cnt.Reset();
+  stats.flat_modify_exceptions_cnt.Add(10);
+  stats.flat_search_exceptions_cnt.Reset();
+  stats.flat_search_exceptions_cnt.Add(11);
+  stats.flat_create_exceptions_cnt.Reset();
+  stats.flat_create_exceptions_cnt.Add(12);
+  stats.worker_thread_pool_suspend_cnt.Reset();
+  stats.worker_thread_pool_suspend_cnt.Add(13);
+  stats.writer_worker_thread_pool_resumed_cnt.Reset();
+  stats.writer_worker_thread_pool_resumed_cnt.Add(14);
+  stats.reader_worker_thread_pool_resumed_cnt.Reset();
+  stats.reader_worker_thread_pool_resumed_cnt.Add(15);
+  stats.writer_worker_thread_pool_suspension_expired_cnt.Reset();
+  stats.writer_worker_thread_pool_suspension_expired_cnt.Add(16);
   stats.rdb_load_success_cnt = 17;
   stats.rdb_load_failure_cnt = 18;
   stats.rdb_save_success_cnt = 19;
@@ -473,16 +503,26 @@ TEST_F(ValkeySearchTest, Info) {
 
   auto mock_server = std::make_unique<coordinator::MockServer>();
   ValkeySearch::Instance().SetCoordinatorServer(std::move(mock_server));
-  stats.coordinator_client_get_global_metadata_failure_cnt = 21;
-  stats.coordinator_client_get_global_metadata_success_cnt = 22;
-  stats.coordinator_client_search_index_partition_failure_cnt = 23;
-  stats.coordinator_client_search_index_partition_success_cnt = 24;
-  stats.coordinator_server_get_global_metadata_failure_cnt = 25;
-  stats.coordinator_server_get_global_metadata_success_cnt = 26;
-  stats.coordinator_server_search_index_partition_failure_cnt = 27;
-  stats.coordinator_server_search_index_partition_success_cnt = 28;
-  stats.coordinator_bytes_out = 1000;
-  stats.coordinator_bytes_in = 2000;
+  stats.coordinator_client_get_global_metadata_failure_cnt.Reset();
+  stats.coordinator_client_get_global_metadata_failure_cnt.Add(21);
+  stats.coordinator_client_get_global_metadata_success_cnt.Reset();
+  stats.coordinator_client_get_global_metadata_success_cnt.Add(22);
+  stats.coordinator_client_search_index_partition_failure_cnt.Reset();
+  stats.coordinator_client_search_index_partition_failure_cnt.Add(23);
+  stats.coordinator_client_search_index_partition_success_cnt.Reset();
+  stats.coordinator_client_search_index_partition_success_cnt.Add(24);
+  stats.coordinator_server_get_global_metadata_failure_cnt.Reset();
+  stats.coordinator_server_get_global_metadata_failure_cnt.Add(25);
+  stats.coordinator_server_get_global_metadata_success_cnt.Reset();
+  stats.coordinator_server_get_global_metadata_success_cnt.Add(26);
+  stats.coordinator_server_search_index_partition_failure_cnt.Reset();
+  stats.coordinator_server_search_index_partition_failure_cnt.Add(27);
+  stats.coordinator_server_search_index_partition_success_cnt.Reset();
+  stats.coordinator_server_search_index_partition_success_cnt.Add(28);
+  stats.coordinator_bytes_out.Reset();
+  stats.coordinator_bytes_out.Add(1000);
+  stats.coordinator_bytes_in.Reset();
+  stats.coordinator_bytes_in.Add(2000);
   auto interned_key_1 = StringInternStore::Intern("key1");
   EXPECT_EQ(std::string(*interned_key_1), "key1");
 
@@ -544,11 +584,11 @@ TEST_F(ValkeySearchTest, Info) {
 
 TEST_F(ValkeySearchTest, OnForkChildDiedCallback) {
   InitThreadPools(std::nullopt, 5, 1);
-  auto* writer_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
+  auto *writer_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
   VMSDK_EXPECT_OK(writer_thread_pool->SuspendWorkers());
   ValkeyModuleEvent eid;
-  Metrics::GetStats().writer_worker_thread_pool_suspension_expired_cnt = 0;
-  Metrics::GetStats().writer_worker_thread_pool_resumed_cnt = 0;
+  Metrics::GetStats().writer_worker_thread_pool_suspension_expired_cnt.Reset();
+  Metrics::GetStats().writer_worker_thread_pool_resumed_cnt.Reset();
   ValkeySearch::Instance().OnForkChildCallback(&fake_ctx_, eid, 0, nullptr);
   EXPECT_TRUE(writer_thread_pool->IsSuspended());
   ValkeySearch::Instance().OnForkChildCallback(
@@ -562,11 +602,11 @@ TEST_F(ValkeySearchTest, OnForkChildDiedCallback) {
 TEST_F(ValkeySearchTest, OnForkChildBornCallback) {
   VMSDK_EXPECT_OK(options::GetMaxWorkerSuspensionSecs().SetValue(0));
   InitThreadPools(std::nullopt, 5, 1);
-  auto* writer_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
+  auto *writer_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
   VMSDK_EXPECT_OK(writer_thread_pool->SuspendWorkers());
   ValkeyModuleEvent eid;
-  Metrics::GetStats().writer_worker_thread_pool_suspension_expired_cnt = 0;
-  Metrics::GetStats().writer_worker_thread_pool_resumed_cnt = 0;
+  Metrics::GetStats().writer_worker_thread_pool_suspension_expired_cnt.Reset();
+  Metrics::GetStats().writer_worker_thread_pool_resumed_cnt.Reset();
   ValkeySearch::Instance().OnForkChildCallback(&fake_ctx_, eid, 0, nullptr);
   EXPECT_FALSE(writer_thread_pool->IsSuspended());
   EXPECT_EQ(
@@ -631,7 +671,7 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Values(CompatibilityFixPathCase{"below_fix", {1, 0, 0}, 'O'},
                       CompatibilityFixPathCase{"equals_fix", {1, 1, 0}, 'F'},
                       CompatibilityFixPathCase{"above_fix", {1, 2, 0}, 'F'}),
-    [](const ::testing::TestParamInfo<CompatibilityFixPathCase>& info) {
+    [](const ::testing::TestParamInfo<CompatibilityFixPathCase> &info) {
       return info.param.name;
     });
 

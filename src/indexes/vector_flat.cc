@@ -8,7 +8,6 @@
 #include "src/indexes/vector_flat.h"
 
 #include <algorithm>
-#include <atomic>
 #include <cstdint>
 #include <exception>
 #include <memory>
@@ -260,8 +259,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::Search(
     }
     return CreateReply(res);
   } catch (const std::exception &e) {
-    Metrics::GetStats().flat_search_exceptions_cnt.fetch_add(
-        1, std::memory_order_relaxed);
+    ++Metrics::GetStats().flat_search_exceptions_cnt;
     return absl::InternalError(e.what());
   }
 }

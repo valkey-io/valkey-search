@@ -94,27 +94,19 @@ void AddLatencyStat(ValkeyModuleInfoCtx *ctx, absl::string_view stat_name,
 
 static vmsdk::info_field::Integer human_used_memory(
     "memory", "used_memory_human",
-    vmsdk::info_field::IntegerBuilder()
-        .SIBytes()
-        .App()
-        .Computed(vmsdk::GetUsedMemoryCnt)
-        .CrashSafe());
+    vmsdk::info_field::IntegerBuilder().SIBytes().App().Computed(
+        vmsdk::GetUsedMemoryCnt));
 
 static vmsdk::info_field::Integer used_memory(
     "memory", "used_memory_bytes",
-    vmsdk::info_field::IntegerBuilder()
-        .App()
-        .Computed(vmsdk::GetUsedMemoryCnt)
-        .CrashSafe());
+    vmsdk::info_field::IntegerBuilder().App().Computed(
+        vmsdk::GetUsedMemoryCnt));
 
 static vmsdk::info_field::Integer reclaimable_memory(
     "memory", "index_reclaimable_memory",
-    vmsdk::info_field::IntegerBuilder()
-        .App()
-        .Computed([]() -> uint64_t {
-          return Metrics::GetStats().reclaimable_memory;
-        })
-        .CrashSafe());
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> uint64_t {
+      return Metrics::GetStats().reclaimable_memory.GetNonNegativeTotal();
+    }));
 
 static vmsdk::info_field::String background_indexing_status(
     "indexing", "background_indexing_status",
@@ -972,23 +964,20 @@ static std::array<vmsdk::info_field::Integer, 3> CreateSubscriptionInfoFields(
 static auto add_subscription_fields = CreateSubscriptionInfoFields(
     "add_subscription",
     [](const IndexSchema::Stats &stats)
-        -> const IndexSchema::Stats::ResultCnt<std::atomic<uint64_t>> & {
-      return stats.subscription_add;
-    });
+        -> const IndexSchema::Stats::ResultCnt<vmsdk::ShardedAtomic<uint64_t>>
+            & { return stats.subscription_add; });
 
 static auto modify_subscription_fields = CreateSubscriptionInfoFields(
     "modify_subscription",
     [](const IndexSchema::Stats &stats)
-        -> const IndexSchema::Stats::ResultCnt<std::atomic<uint64_t>> & {
-      return stats.subscription_modify;
-    });
+        -> const IndexSchema::Stats::ResultCnt<vmsdk::ShardedAtomic<uint64_t>>
+            & { return stats.subscription_modify; });
 
 static auto remove_subscription_fields = CreateSubscriptionInfoFields(
     "remove_subscription",
     [](const IndexSchema::Stats &stats)
-        -> const IndexSchema::Stats::ResultCnt<std::atomic<uint64_t>> & {
-      return stats.subscription_remove;
-    });
+        -> const IndexSchema::Stats::ResultCnt<vmsdk::ShardedAtomic<uint64_t>>
+            & { return stats.subscription_remove; });
 
 static vmsdk::info_field::Integer &add_subscription_successful_count =
     add_subscription_fields[0];
@@ -1015,18 +1004,13 @@ static vmsdk::info_field::Integer &remove_subscription_skipped_count =
 
 static vmsdk::info_field::Integer string_interning_memory_bytes(
     "string_interning", "string_interning_memory_bytes",
-    vmsdk::info_field::IntegerBuilder()
-        .Dev()
-        .Computed(StringInternStore::GetMemoryUsage)
-        .CrashSafe());
+    vmsdk::info_field::IntegerBuilder().Dev().Computed(
+        StringInternStore::GetMemoryUsage));
 
 static vmsdk::info_field::Integer string_interning_memory_human(
     "string_interning", "string_interning_memory_human",
-    vmsdk::info_field::IntegerBuilder()
-        .SIBytes()
-        .Dev()
-        .Computed(StringInternStore::GetMemoryUsage)
-        .CrashSafe());
+    vmsdk::info_field::IntegerBuilder().SIBytes().Dev().Computed(
+        StringInternStore::GetMemoryUsage));
 
 void ValkeySearch::Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const {
   vmsdk::info_field::DoSections(ctx, for_crash_report);

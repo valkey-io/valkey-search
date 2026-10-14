@@ -44,6 +44,7 @@
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/module_config.h"
+#include "vmsdk/src/sharded_atomic.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/time_sliced_mrmw_mutex.h"
 #include "vmsdk/src/utils.h"
@@ -124,9 +125,9 @@ class IndexSchema : public KeyspaceEventSubscription,
       T success_cnt{0};
       T skipped_cnt{0};
     };
-    ResultCnt<std::atomic<uint64_t>> subscription_remove;
-    ResultCnt<std::atomic<uint64_t>> subscription_modify;
-    ResultCnt<std::atomic<uint64_t>> subscription_add;
+    ResultCnt<vmsdk::ShardedAtomic<uint64_t>> subscription_remove;
+    ResultCnt<vmsdk::ShardedAtomic<uint64_t>> subscription_modify;
+    ResultCnt<vmsdk::ShardedAtomic<uint64_t>> subscription_add;
     std::atomic<uint32_t> document_cnt{0};
     std::atomic<uint32_t> backfill_inqueue_tasks{0};
     // Written only during index-time FILTER evaluation, which runs on the

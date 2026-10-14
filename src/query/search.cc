@@ -45,7 +45,6 @@
 #include "src/indexes/text/posting.h"
 #include "src/indexes/text/proximity.h"
 #include "src/indexes/text/rax_wrapper.h"
-#include "src/indexes/text/text_fetcher.h"
 #include "src/indexes/text/text_index.h"
 #include "src/indexes/universal_set_fetcher.h"
 #include "src/indexes/vector_base.h"

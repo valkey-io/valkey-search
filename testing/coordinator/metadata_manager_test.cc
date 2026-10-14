@@ -1763,6 +1763,18 @@ TEST_F(MetadataManagerTest, CompatibleMinimumVersionIgnoresHighCounter) {
       test_metadata_manager_->ReconcileMetadata(proposed_metadata, "test"));
 }
 
+TEST_F(MetadataManagerTest, IncompatibleMinimumVersionIsRejected) {
+  GlobalMetadata proposed_metadata;
+  proposed_metadata.mutable_version_header()->set_top_level_min_version(
+      kModuleVersion.ToInt() + 1);
+
+  EXPECT_FALSE(
+      test_metadata_manager_->ReconcileMetadata(proposed_metadata, "test")
+          .ok());
+  EXPECT_TRUE(google::protobuf::util::MessageDifferencer::Equals(
+      *test_metadata_manager_->GetGlobalMetadata(), GlobalMetadata()));
+}
+
 TEST_F(MetadataManagerTest, TestBroadcastMetadata) {
   GlobalMetadata existing_metadata;
   ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(

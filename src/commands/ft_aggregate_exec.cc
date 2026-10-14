@@ -1180,7 +1180,7 @@ absl::Status CreateRecordsFromNeighbors(
     if (parameters.load_key) {
       rec->fields_.at(key_index) = expr::Value(n.external_id->Str());
     }
-    
+
     // A vector query's score column is its KNN distance alias. For a hybrid
     // `text=>[KNN]` query Neighbor.score holds the text relevance instead.
     if (parameters.IsVectorQuery()) {

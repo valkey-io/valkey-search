@@ -84,7 +84,11 @@ while [ $# -gt 0 ]; do
     --clean)
         shift || true
         CMAKE_TARGET="clean"
-        echo "Will run 'make clean'"
+        if [[ "${CMAKE_GENERATOR}" == "Ninja" ]]; then
+            echo "Will run 'ninja clean'"
+        else
+            echo "Will run 'make clean'"
+        fi
         ;;
     --debug)
         shift || true
@@ -190,7 +194,22 @@ while [ $# -gt 0 ]; do
         echo "Using extra cmake arguments: ${CMAKE_EXTRA_ARGS}"
         ;;
     --jobs=*)
-        JOBS=${1#*=}
+        JOBS="${1#*=}"
+        if [[ -z "${JOBS}" ]]; then
+            echo "Error: --jobs requires a value" >&2
+            print_usage
+            exit 1
+        fi
+        shift || true
+        ;;
+    --jobs)
+        if [[ -z "${2:-}" || "$2" =~ ^- ]]; then
+            echo "Error: --jobs requires a value" >&2
+            print_usage
+            exit 1
+        fi
+        shift
+        JOBS="$1"
         shift || true
         ;;
     --verbose | -v)
@@ -241,6 +260,7 @@ elif [[ "${SAN_BUILD}" == "thread" ]]; then
     export TSAN_BUILD=1
 fi
 export ROOT_DIR
+export BUILD_DIR_SUFFIX
 . "${ROOT_DIR}/scripts/common.rc"
 
 if [[ "${CMAKE_GENERATOR}" == "Ninja" ]]; then

@@ -74,6 +74,26 @@ static auto query_string_bytes =
                           UINT_MAX)                  // max size
         .Build();
 
+/// Register the "--cursor-max-count" flag. The largest COUNT accepted by
+/// WITHCURSOR and FT.CURSOR READ.
+constexpr absl::string_view kCursorMaxCountConfig{"cursor-max-count"};
+static auto cursor_max_count =
+    config::NumberBuilder(kCursorMaxCountConfig,  // name
+                          100000,                 // default
+                          1,                      // min
+                          INT64_MAX)              // max
+        .Build();
+
+/// Register the "--cursor-max-idle-ms" flag. The largest MAXIDLE accepted by
+/// WITHCURSOR.
+constexpr absl::string_view kCursorMaxIdleMsConfig{"cursor-max-idle-ms"};
+static auto cursor_max_idle_ms =
+    config::NumberBuilder(kCursorMaxIdleMsConfig,  // name
+                          INT64_MAX,               // default
+                          1,                       // min
+                          INT64_MAX)               // max
+        .Build();
+
 constexpr absl::string_view kHNSWBlockSizeConfig{"hnsw-block-size"};
 static auto hnsw_block_size =
     config::NumberBuilder(kHNSWBlockSizeConfig,   // name
@@ -376,6 +396,29 @@ static auto max_term_expansions =
                           kDefaultMaxTermExpansions,  // default limit (200)
                           kMinimumMaxTermExpansions,  // min limit (1)
                           kMaximumMaxTermExpansions)  // max limit (100k)
+        .Build();
+
+/// Register the "--max-combine-window" flag. Caps COMBINE ... WINDOW on
+/// FT.HYBRID. WINDOW decides how many of each arm's results take part in
+/// fusion, and in cluster mode it also sets each shard's fetch limit, so a
+/// large value costs memory at the coordinator and work on every shard.
+/// Dev-only: the default is far above anything a legitimate query asks for,
+/// and lowering it is a debugging and investigation tool rather than a
+/// deployment knob.
+///
+/// It is a ceiling on every window, not only an explicitly supplied one: the
+/// parser resolves `WINDOW 0` -- and COMBINE FUNCTION's implicit default --
+/// to this value rather than leaving a zero sentinel for the fanout to turn
+/// into a per-shard fetch limit of 10.
+constexpr absl::string_view kMaxCombineWindowConfig{"max-combine-window"};
+constexpr uint32_t kDefaultMaxCombineWindow{1000000};
+constexpr uint32_t kMinimumMaxCombineWindow{1};
+static auto max_combine_window =
+    config::NumberBuilder(kMaxCombineWindowConfig,   // name
+                          kDefaultMaxCombineWindow,  // default limit (1M)
+                          kMinimumMaxCombineWindow,  // min limit (1)
+                          UINT_MAX)                  // max limit
+        .Dev()                                       // debug mode only
         .Build();
 
 /// Register the "--max-group-key-expansion" flag. A GROUPBY over a multi-value
@@ -699,6 +742,18 @@ vmsdk::config::Number &GetThreadPoolWaitTimeSamples() {
 
 vmsdk::config::Number &GetMaxTermExpansions() {
   return dynamic_cast<vmsdk::config::Number &>(*max_term_expansions);
+}
+
+vmsdk::config::Number &GetCursorMaxCount() {
+  return dynamic_cast<vmsdk::config::Number &>(*cursor_max_count);
+}
+
+vmsdk::config::Number &GetCursorMaxIdleMs() {
+  return dynamic_cast<vmsdk::config::Number &>(*cursor_max_idle_ms);
+}
+
+vmsdk::config::Number &GetMaxCombineWindow() {
+  return dynamic_cast<vmsdk::config::Number &>(*max_combine_window);
 }
 
 vmsdk::config::Number &GetMaxGroupKeyExpansion() {

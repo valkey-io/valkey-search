@@ -9,6 +9,7 @@
 #include <absl/strings/ascii.h>
 
 #include "module_config.h"
+#include "src/commands/commands.h"
 #include "src/coordinator/metadata_manager.h"
 #include "src/index_schema.h"
 #include "src/schema_manager.h"
@@ -351,6 +352,8 @@ absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
       {"FT_DEBUG SHOW_METADATA",
        "list internal metadata manager table namespace"},
       {"FT_DEBUG SHOW_INDEXSCHEMAS", "list internal index schema tables"},
+      {"FT._DEBUG SHOW_CURSORS",
+       "list each cursor's id and milliseconds until expiration"},
       {"FT._DEBUG LIST_METRICS [APP|DEV] [NAMES_ONLY]",
        "List all APP or DEV metrics with optional names-only format"},
       {"FT._DEBUG LIST_CONFIGS [VERBOSE] [APP|DEV|HIDDEN]",
@@ -395,6 +398,9 @@ absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
         ctx, itr);
   } else if (keyword == "SHOW_INDEXSCHEMAS") {
     return valkey_search::SchemaManager::Instance().ShowIndexSchemas(ctx, itr);
+  } else if (keyword == "SHOW_CURSORS") {
+    VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
+    return ShowCursorsCmd(ctx);
   } else if (keyword == "HELP") {
     return HelpCmd(ctx, itr);
   } else if (keyword == "LIST_METRICS") {

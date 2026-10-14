@@ -19,6 +19,8 @@
 #include "gtest/gtest.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
+#include "src/indexes/text/languages/french.h"
+#include "src/indexes/text/languages/german.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
 
@@ -32,6 +34,8 @@ struct AttributeParameters {
   absl::string_view identifier;
   absl::string_view attribute_alias;
   indexes::IndexerType indexer_type{indexes::IndexerType::kNone};
+  bool sortable{false};
+  bool unf{false};
 };
 
 // Default stop words
@@ -197,6 +201,10 @@ TEST_P(FTCreateParserTest, ParseParams) {
                 test_case.expected.attributes[i].identifier);
       EXPECT_EQ(index_schema_proto->attributes(i).alias(),
                 test_case.expected.attributes[i].attribute_alias);
+      EXPECT_EQ(index_schema_proto->attributes(i).sortable(),
+                test_case.expected.attributes[i].sortable);
+      EXPECT_EQ(index_schema_proto->attributes(i).unf(),
+                test_case.expected.attributes[i].unf);
       if (test_case.expected.attributes[i].indexer_type ==
           indexes::IndexerType::kFlat) {
         EXPECT_TRUE(index_schema_proto->attributes(i)
@@ -733,6 +741,150 @@ INSTANTIATE_TEST_SUITE_P(
                               .attribute_alias = "hash_field11",
                               .indexer_type = indexes::IndexerType::kTag,
                           }}},
+         },
+         {
+             .test_name = "sortable_unf_at_end_of_schema",
+             .success = true,
+             .command_str = "idx1 on HASH SCHEMA sku as sku TAG SORTABLE UNF",
+             .tag_parameters = {{
+                 .separator = ",",
+                 .case_sensitive = false,
+             }},
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .attributes = {{
+                              .identifier = "sku",
+                              .attribute_alias = "sku",
+                              .indexer_type = indexes::IndexerType::kTag,
+                              .sortable = true,
+                              .unf = true,
+                          }}},
+         },
+         {
+             .test_name = "sortable_only_sets_sortable",
+             .success = true,
+             .command_str = "idx1 on HASH SCHEMA sku TAG SORTABLE",
+             .tag_parameters = {{
+                 .separator = ",",
+                 .case_sensitive = false,
+             }},
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .attributes = {{
+                              .identifier = "sku",
+                              .attribute_alias = "sku",
+                              .indexer_type = indexes::IndexerType::kTag,
+                              .sortable = true,
+                          }}},
+         },
+         {
+             .test_name = "sortable_unf_followed_by_another_attribute",
+             .success = true,
+             .command_str = "idx1 on HASH SCHEMA sku TAG SORTABLE UNF "
+                            "price NUMERIC SORTABLE UNF",
+             .tag_parameters = {{
+                 .separator = ",",
+                 .case_sensitive = false,
+             }},
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .attributes = {{
+                                             .identifier = "sku",
+                                             .attribute_alias = "sku",
+                                             .indexer_type =
+                                                 indexes::IndexerType::kTag,
+                                             .sortable = true,
+                                             .unf = true,
+                                         },
+                                         {
+                                             .identifier = "price",
+                                             .attribute_alias = "price",
+                                             .indexer_type =
+                                                 indexes::IndexerType::kNumeric,
+                                             .sortable = true,
+                                             .unf = true,
+                                         }}},
+         },
+         {
+             .test_name = "nohl_ignored",
+             .success = true,
+             .command_str = "idx1 on HASH NOHL SCHEMA hash_field1 as "
+                            "hash_field11 tag ",
+             .tag_parameters = {{
+                 .separator = ",",
+                 .case_sensitive = false,
+             }},
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .attributes = {{
+                              .identifier = "hash_field1",
+                              .attribute_alias = "hash_field11",
+                              .indexer_type = indexes::IndexerType::kTag,
+                          }}},
+         },
+         {
+             // Redis accepts NOHL in any pre-SCHEMA position, and twice.
+             .test_name = "nohl_accepted_in_any_position_and_repeated",
+             .success = true,
+             .command_str = "idx1 on HASH PREFIX 1 p: NOHL SKIPINITIALSCAN NOHL "
+                            "SCHEMA hash_field1 tag ",
+             .tag_parameters = {{
+                 .separator = ",",
+                 .case_sensitive = false,
+             }},
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .prefixes = {"p:"},
+                          .skip_initial_scan = true,
+                          .attributes = {{
+                              .identifier = "hash_field1",
+                              .attribute_alias = "hash_field1",
+                              .indexer_type = indexes::IndexerType::kTag,
+                          }}},
+         },
+         {
+             // Redis does the same: a token in identifier position is a field
+             // name, so this creates a field literally called UNF.
+             .test_name = "unf_without_sortable_becomes_a_field_name",
+             .success = true,
+             .command_str = "idx1 on HASH SCHEMA sku TAG UNF TEXT",
+             .tag_parameters = {{
+                 .separator = ",",
+                 .case_sensitive = false,
+             }},
+             .text_parameters = {{
+                 .with_suffix_trie = false,
+                 .no_stem = false,
+                 .weight = 1.0,
+             }},
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .attributes = {{
+                                             .identifier = "sku",
+                                             .attribute_alias = "sku",
+                                             .indexer_type =
+                                                 indexes::IndexerType::kTag,
+                                         },
+                                         {
+                                             .identifier = "UNF",
+                                             .attribute_alias = "UNF",
+                                             .indexer_type =
+                                                 indexes::IndexerType::kText,
+                                         }}},
+         },
+         {
+             .test_name = "unf_without_sortable_before_a_field_is_rejected",
+             .success = false,
+             .command_str = "idx1 on HASH SCHEMA sku TAG UNF body TEXT",
+             .expected_error_message =
+                 "Invalid field type for field `UNF`: Unknown argument `body`",
+         },
+         {
+             .test_name = "unf_without_sortable_is_rejected",
+             .success = false,
+             .command_str = "idx1 on HASH SCHEMA sku TAG UNF",
+             .expected_error_message =
+                 "Invalid field type for field `UNF`: Missing argument",
          },
          {
             .test_name = "score_field_supported",
@@ -2092,6 +2244,233 @@ INSTANTIATE_TEST_SUITE_P(
                      .language = data_model::Language::LANGUAGE_ENGLISH,
                      .with_offsets = true,
                      .min_stem_size = 4,  // Default value
+                 }
+             },
+         },
+         // Per-language default stop words test cases
+         {
+             .test_name = "language_french_default_stop_words",
+             .success = true,
+             .command_str = "idx1 on HASH LANGUAGE french SCHEMA text_field TEXT",
+             .text_parameters = {{
+                 .with_suffix_trie = false,
+                 .no_stem = false,
+             }},
+             .expected = {
+                 .index_schema_name = "idx1",
+                 .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                 .attributes = {{
+                     .identifier = "text_field",
+                     .attribute_alias = "text_field",
+                     .indexer_type = indexes::IndexerType::kText,
+                 }},
+                 .per_index_text_params = {
+                     .punctuation = indexes::text::kFrenchPunctuation,
+                     .stop_words = {indexes::text::kFrenchStopWords},
+                     .language = data_model::Language::LANGUAGE_FRENCH,
+                     .with_offsets = true,
+                     .min_stem_size = 4,
+                 }
+             },
+         },
+         {
+             .test_name = "language_french_nostopwords_override",
+             .success = true,
+             .command_str = "idx1 on HASH LANGUAGE french NOSTOPWORDS SCHEMA text_field TEXT",
+             .text_parameters = {{
+                 .with_suffix_trie = false,
+                 .no_stem = false,
+             }},
+             .expected = {
+                 .index_schema_name = "idx1",
+                 .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                 .attributes = {{
+                     .identifier = "text_field",
+                     .attribute_alias = "text_field",
+                     .indexer_type = indexes::IndexerType::kText,
+                 }},
+                 .per_index_text_params = {
+                     .punctuation = indexes::text::kFrenchPunctuation,
+                     .stop_words = {},
+                     .language = data_model::Language::LANGUAGE_FRENCH,
+                     .with_offsets = true,
+                     .min_stem_size = 4,
+                 }
+             },
+         },
+         {
+             .test_name = "language_french_explicit_stopwords_override",
+             .success = true,
+             .command_str = "idx1 on HASH LANGUAGE french STOPWORDS 2 foo bar SCHEMA text_field TEXT",
+             .text_parameters = {{
+                 .with_suffix_trie = false,
+                 .no_stem = false,
+             }},
+             .expected = {
+                 .index_schema_name = "idx1",
+                 .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                 .attributes = {{
+                     .identifier = "text_field",
+                     .attribute_alias = "text_field",
+                     .indexer_type = indexes::IndexerType::kText,
+                 }},
+                 .per_index_text_params = {
+                     .punctuation = indexes::text::kFrenchPunctuation,
+                     .stop_words = {"foo", "bar"},
+                     .language = data_model::Language::LANGUAGE_FRENCH,
+                     .with_offsets = true,
+                     .min_stem_size = 4,
+                 }
+             },
+         },
+         {
+             .test_name = "language_german_default_stop_words",
+             .success = true,
+             .command_str = "idx1 on HASH LANGUAGE german SCHEMA text_field TEXT",
+             .text_parameters = {{
+                 .with_suffix_trie = false,
+                 .no_stem = false,
+             }},
+             .expected = {
+                 .index_schema_name = "idx1",
+                 .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                 .attributes = {{
+                     .identifier = "text_field",
+                     .attribute_alias = "text_field",
+                     .indexer_type = indexes::IndexerType::kText,
+                 }},
+                 .per_index_text_params = {
+                     .punctuation = indexes::text::kGermanPunctuation,
+                     .stop_words = {indexes::text::kGermanStopWords},
+                     .language = data_model::Language::LANGUAGE_GERMAN,
+                     .with_offsets = true,
+                     .min_stem_size = 4,
+                 }
+             },
+         },
+         {
+             .test_name = "nostopwords_before_language_french",
+             .success = true,
+             .command_str = "idx1 on HASH NOSTOPWORDS LANGUAGE french SCHEMA text_field TEXT",
+             .text_parameters = {{
+                 .with_suffix_trie = false,
+                 .no_stem = false,
+             }},
+             .expected = {
+                 .index_schema_name = "idx1",
+                 .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                 .attributes = {{
+                     .identifier = "text_field",
+                     .attribute_alias = "text_field",
+                     .indexer_type = indexes::IndexerType::kText,
+                 }},
+                 .per_index_text_params = {
+                     .punctuation = indexes::text::kFrenchPunctuation,
+                     .stop_words = {},
+                     .language = data_model::Language::LANGUAGE_FRENCH,
+                     .with_offsets = true,
+                     .min_stem_size = 4,
+                 }
+             },
+         },
+         {
+             .test_name = "stopwords_zero_with_language_german",
+             .success = true,
+             .command_str = "idx1 on HASH STOPWORDS 0 LANGUAGE german SCHEMA text_field TEXT",
+             .text_parameters = {{
+                 .with_suffix_trie = false,
+                 .no_stem = false,
+             }},
+             .expected = {
+                 .index_schema_name = "idx1",
+                 .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                 .attributes = {{
+                     .identifier = "text_field",
+                     .attribute_alias = "text_field",
+                     .indexer_type = indexes::IndexerType::kText,
+                 }},
+                 .per_index_text_params = {
+                     .punctuation = indexes::text::kGermanPunctuation,
+                     .stop_words = {},
+                     .language = data_model::Language::LANGUAGE_GERMAN,
+                     .with_offsets = true,
+                     .min_stem_size = 4,
+                 }
+             },
+         },
+         {
+             .test_name = "stopwords_then_nostopwords_last_writer_wins",
+             .success = true,
+             .command_str = "idx1 on HASH STOPWORDS 3 the a is NOSTOPWORDS SCHEMA text_field TEXT",
+             .text_parameters = {{
+                 .with_suffix_trie = false,
+                 .no_stem = false,
+             }},
+             .expected = {
+                 .index_schema_name = "idx1",
+                 .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                 .attributes = {{
+                     .identifier = "text_field",
+                     .attribute_alias = "text_field",
+                     .indexer_type = indexes::IndexerType::kText,
+                 }},
+                 .per_index_text_params = {
+                     .punctuation = std::string(kDefPunctuation),
+                     .stop_words = {},
+                     .language = data_model::Language::LANGUAGE_ENGLISH,
+                     .with_offsets = true,
+                     .min_stem_size = 4,
+                 }
+             },
+         },
+         // Per-language punctuation override tests
+         {
+             .test_name = "explicit_punctuation_overrides_language_default",
+             .success = true,
+             .command_str = "idx1 on HASH LANGUAGE french PUNCTUATION ',.!' SCHEMA text_field TEXT",
+             .text_parameters = {{
+                 .with_suffix_trie = false,
+                 .no_stem = false,
+             }},
+             .expected = {
+                 .index_schema_name = "idx1",
+                 .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                 .attributes = {{
+                     .identifier = "text_field",
+                     .attribute_alias = "text_field",
+                     .indexer_type = indexes::IndexerType::kText,
+                 }},
+                 .per_index_text_params = {
+                     .punctuation = ",.!",
+                     .stop_words = {indexes::text::kFrenchStopWords},
+                     .language = data_model::Language::LANGUAGE_FRENCH,
+                     .with_offsets = true,
+                     .min_stem_size = 4,
+                 }
+             },
+         },
+         {
+             .test_name = "punctuation_specified_twice_last_wins",
+             .success = true,
+             .command_str = "idx1 on HASH LANGUAGE french PUNCTUATION ',.!' PUNCTUATION 'xyz' SCHEMA text_field TEXT",
+             .text_parameters = {{
+                 .with_suffix_trie = false,
+                 .no_stem = false,
+             }},
+             .expected = {
+                 .index_schema_name = "idx1",
+                 .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                 .attributes = {{
+                     .identifier = "text_field",
+                     .attribute_alias = "text_field",
+                     .indexer_type = indexes::IndexerType::kText,
+                 }},
+                 .per_index_text_params = {
+                     .punctuation = "xyz",
+                     .stop_words = {indexes::text::kFrenchStopWords},
+                     .language = data_model::Language::LANGUAGE_FRENCH,
+                     .with_offsets = true,
+                     .min_stem_size = 4,
                  }
              },
          }}),

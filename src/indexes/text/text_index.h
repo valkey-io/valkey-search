@@ -31,14 +31,12 @@
 #include "rax/rax.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/text/invasive_ptr.h"
-#include "src/indexes/text/lexer.h"
+#include "src/indexes/text/language.h"
 #include "src/indexes/text/posting.h"
 #include "src/indexes/text/rax_target_mutex_pool.h"
 #include "src/indexes/text/rax_wrapper.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/memory_tracker.h"
-
-struct sb_stemmer;
 
 namespace valkey_search::indexes::text {
 
@@ -99,8 +97,12 @@ class TextIndex {
 
 class TextIndexSchema {
  public:
-  TextIndexSchema(data_model::Language language, const std::string &punctuation,
-                  bool with_offsets, const std::vector<std::string> &stop_words,
+  // `language` is the shared instance for the index's LANGUAGE; `punctuation`
+  // and `stop_words` are the index's own settings (FT.CREATE overrides or the
+  // language defaults).
+  TextIndexSchema(std::shared_ptr<const Language> language,
+                  const std::string &punctuation,
+                  const std::vector<std::string> &stop_words, bool with_offsets,
                   uint32_t min_stem_size);
 
   absl::StatusOr<bool> StageAttributeData(const InternedStringPtr &key,
@@ -120,7 +122,10 @@ class TextIndexSchema {
   bool HasTextOffsets() const { return with_offsets_; }
   uint8_t GetNumTextFields() const { return num_text_fields_; }
   std::shared_ptr<TextIndex> GetTextIndex() const { return text_index_; }
-  Lexer GetLexer() const { return lexer_; }
+  const Language &GetLanguage() const { return *language_; }
+  const TokenizerConfig &GetTokenizerConfig() const {
+    return *tokenizer_config_;
+  }
 
   // Access to metadata for memory pool usage
   TextIndexMetadata &GetMetadata() { return metadata_; }
@@ -151,7 +156,12 @@ class TextIndexSchema {
   // Takes a borrowed key so neither scoring path (post-filter walk in
   // search.cc, in-iterator hot path in term.cc) incurs ref-count churn; owning
   // callers wrap their key in a BorrowedInternedStringPtr.
-  uint32_t GetKeyDocLen(BorrowedInternedStringPtr key) const {
+  // No locking needed if called from read phase of time-slice mutex.
+  uint32_t GetKeyDocLen(BorrowedInternedStringPtr key, bool lock) const {
+    std::optional<std::lock_guard<std::mutex>> per_key_guard;
+    if (lock) {
+      per_key_guard.emplace(per_key_text_indexes_mutex_);
+    }
     auto itr = per_key_scoring_info_.find(key);
     return itr != per_key_scoring_info_.end() ? itr->second.doc_len : 0;
   }
@@ -164,12 +174,14 @@ class TextIndexSchema {
   // Access stem tree for word expansion during search
   const Rax &GetStemTree() const { return stem_tree_; }
 
-  // Get stem root and all stem parents for a search term
+  // Get stem root and all stem parents for a search term. out_distinct_docs, if
+  // set, receives StemParents::distinct_docs (untouched if the root is absent).
   std::string GetAllStemVariants(
       absl::string_view search_term,
       absl::InlinedVector<absl::string_view, kStemVariantsInlineCapacity>
           &words_to_search,
-      uint64_t stem_enabled_mask, bool lock_needed);
+      uint64_t stem_enabled_mask, bool lock_needed,
+      uint32_t *out_distinct_docs = nullptr);
 
   // Get the minimum stem size across all fields
   uint32_t GetMinStemSize() const { return min_stem_size_; }
@@ -234,6 +246,9 @@ class TextIndexSchema {
   // pointer stability, so storing it inline avoids a per-document cache miss on
   // the GetKeyDocLen() scoring hot path.
   // Transparent functors so GetKeyDocLen() can probe with a borrowed key.
+  // TODO: combine with per_key_text_index_ to have a single map (e.g.
+  // per_key_text_data_)
+  //       to save space
   absl::flat_hash_map<Key, KeyScoringInfo, InternedStringPtrHash,
                       InternedStringPtrEq>
       per_key_scoring_info_;
@@ -241,7 +256,10 @@ class TextIndexSchema {
   // Prevent concurrent mutations to per-key text index map and scoring info
   mutable std::mutex per_key_text_indexes_mutex_;
 
-  Lexer lexer_;
+  std::shared_ptr<const Language> language_;
+  // Shared with the language when the index uses its default punctuation and
+  // stop words; owned by this index otherwise.
+  std::shared_ptr<const TokenizerConfig> tokenizer_config_;
 
   // Key updates are fanned out to each attribute's IndexBase object. Since text
   // indexing operates at the schema-level, any new text data to insert for a
@@ -289,16 +307,13 @@ class TextIndexSchema {
   uint64_t GetTotalTextIndexMemoryUsage() const;
 
   // Total number of keys with text fields indexed in this schema.
-  // No locking needed because only called from read phase.
-  size_t GetTrackedKeyCount() const { return per_key_text_indexes_.size(); }
-
-  // Locking-enabled version of GetTrackedKeyCount.
-  size_t GetTrackedKeyCount(bool lock) {
+  // No locking needed when called from read phase.
+  size_t GetTrackedKeyCount(bool lock = false) const {
     std::optional<std::lock_guard<std::mutex>> per_key_guard;
     if (lock) {
       per_key_guard.emplace(per_key_text_indexes_mutex_);
     }
-    return GetTrackedKeyCount();
+    return per_key_text_indexes_.size();
   }
 
   // Helper function to lookup text index for a key.

@@ -75,7 +75,7 @@ static absl::Status DumpWordIterator(ValkeyModuleCtx* ctx, auto& wi,
 FT._DEBUG TEXTINFO <index_name> PREFIX <word> [WITHKEYS [WITHPOSITIONS]]
 FT._DEBUG TEXTINFO <index_name> SUFFIX <word> [WITHKEYS [WITHPOSITIONS]]
 FT._DEBUG TEXTINFO <index_name> STEM <word>
-FT._DEBUG TEXTINFO <index_name> LEXER <string> [<stemsize>]
+FT._DEBUG TEXTINFO <index_name> LEXER <string>
 
 */
 absl::Status IndexSchema::TextInfoCmd(ValkeyModuleCtx* ctx,
@@ -132,7 +132,7 @@ absl::Status IndexSchema::TextInfoCmd(ValkeyModuleCtx* ctx,
       // Reply with parent words set
       const auto& stem_parents_ptr = stem_wi.GetStemParentsTarget();
       if (stem_parents_ptr) {
-        const auto& parents = *stem_parents_ptr;
+        const auto& parents = stem_parents_ptr->parents;
         ValkeyModule_ReplyWithArray(ctx, parents.size());
         for (const auto& parent : parents) {
           ValkeyModule_ReplyWithStringBuffer(ctx, parent.data(), parent.size());
@@ -146,8 +146,10 @@ absl::Status IndexSchema::TextInfoCmd(ValkeyModuleCtx* ctx,
   } else if (subcommand == "LEXER") {
     std::string text;
     VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, text));
-    auto lexer = index_schema->GetTextIndexSchema()->GetLexer();
-    VMSDK_ASSIGN_OR_RETURN(auto result, lexer.Tokenize(text, false, 0));
+    const auto& text_index_schema = *index_schema->GetTextIndexSchema();
+    VMSDK_ASSIGN_OR_RETURN(auto result,
+                           text_index_schema.GetLanguage().Tokenize(
+                               text, text_index_schema.GetTokenizerConfig()));
     ValkeyModule_ReplyWithArray(ctx, result.size());
     for (auto& token : result) {
       ValkeyModule_ReplyWithStringBuffer(ctx, token.data(), token.size());

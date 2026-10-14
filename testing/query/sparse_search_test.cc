@@ -114,6 +114,58 @@ TEST(SparseSearchTest, RejectsMalformedListsAndWeights) {
       SparseSearch({{overflow, std::numeric_limits<double>::max()}}, 1).ok());
 }
 
+TEST(SparseSearchTest, PreservesAccumulationOrderForNearlyTiedScores) {
+  std::string candidate;
+  std::string competitor;
+  Append(candidate, 2, 0x3c00);  // 1
+  Append(competitor, 3, 0x3c00);
+  // Each +1 rounds away after 2^53. Regrouping the two small terms would
+  // instead tie point 3 and incorrectly promote the smaller point ID 2.
+  const std::vector<SparsePostingList> lists = {
+      {candidate, 0x1p53},
+      {candidate, 1},
+      {candidate, 1},
+      {competitor, 0x1.0000000000001p53}};
+  for (size_t k : {1, 2}) {
+    auto result = SparseSearch(lists, k);
+    ASSERT_TRUE(result.ok()) << result.status();
+    ASSERT_EQ(result->size(), k);
+    EXPECT_EQ((*result)[0].id, 3);
+    EXPECT_EQ(std::bit_cast<uint64_t>((*result)[0].score),
+              std::bit_cast<uint64_t>(0x1.0000000000001p53));
+    if (k == 2) {
+      EXPECT_EQ((*result)[1].id, 2);
+      EXPECT_EQ(std::bit_cast<uint64_t>((*result)[1].score),
+                std::bit_cast<uint64_t>(0x1p53));
+    }
+  }
+}
+
+TEST(SparseSearchTest, RoundsMultiplyAndAddSeparatelyForNearlyTiedScores) {
+  std::string unit;
+  std::string fraction;
+  std::string competitor;
+  Append(unit, 1, 0x3c00);      // 1
+  Append(fraction, 1, 0x3c01);  // 1 + 2^-10
+  Append(competitor, 0, 0x3c00);
+  // The rounded product is 1 + 2^-10 + 2^-51. Adding 2^-53 rounds
+  // back to that even value; FMA retains the product's 2^-61 remainder
+  // and rounds one ULP higher, incorrectly promoting point 1 over point 0.
+  constexpr double expected = 0x1.0040000000002p0;
+  const std::vector<SparsePostingList> lists = {
+      {unit, 0x1p-53}, {fraction, 0x1.0000000000002p0}, {competitor, expected}};
+  for (size_t k : {1, 2}) {
+    auto result = SparseSearch(lists, k);
+    ASSERT_TRUE(result.ok()) << result.status();
+    ASSERT_EQ(result->size(), k);
+    for (size_t i = 0; i < k; ++i) {
+      EXPECT_EQ((*result)[i].id, i);
+      EXPECT_EQ(std::bit_cast<uint64_t>((*result)[i].score),
+                std::bit_cast<uint64_t>(expected));
+    }
+  }
+}
+
 TEST(SparseSearchTest, MatchesReferenceDotProduct) {
   std::mt19937 rng(42);
   for (size_t dimensions : {4, 8, 16, 64}) {

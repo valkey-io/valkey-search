@@ -30,7 +30,10 @@ Malformed lengths, unordered or duplicate IDs, invalid weights, and score
 overflow produce an error without a partial reply.
 
 The score is `sum(query_weight[t] * stored_weight[point, t])`, accumulated in
-double precision. Missing dimensions contribute zero. Exactness is relative to
+double precision, in the supplied key/weight order. Multiplication and addition
+round separately; fused multiply-add and regrouping sums are not used. Changing
+the input order can therefore change rounding and the ranking of nearly tied
+scores. Missing dimensions contribute zero. Exactness is relative to
 the stored FP16 values, after any quantization performed by the producer.
 Candidates are the union of the supplied lists, including zero-score candidates;
 points absent from that union are not returned.

@@ -46,7 +46,16 @@ message(STATUS "GRPC_CPP_PLUGIN_PATH is set to ${GRPC_CPP_PLUGIN_PATH}")
 message(STATUS "protoc_EXE is set to ${protoc_EXE}")
 message(STATUS "highwayhash include path: ${HIGHWAY_HASH_INCLUDE_PATH}")
 
-set(CMAKE_CXX_STANDARD 20 REQUIRED)
+option(ENABLE_COVERAGE "Enable code coverage instrumentation" OFF)
+if(ENABLE_COVERAGE)
+  message(STATUS "Code coverage instrumentation enabled")
+  add_compile_options(--coverage -g)
+  add_link_options(--coverage)
+endif()
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 

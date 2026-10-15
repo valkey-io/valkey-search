@@ -99,7 +99,7 @@ class VectorHNSW : public VectorType<T> {
   using VectorType<T>::CreateReply;
   using VectorType<T>::GetCapacity;
   using VectorType<T>::GetDataTypeSize;
-  using VectorType<T>::GetVectorAllocator;
+  using VectorType<T>::GetVectorPool;
   using VectorType<T>::GetVectorDataSize;
   using VectorType<T>::GetVectorDataType;
   using VectorType<T>::IsValidSizeVector;
@@ -192,6 +192,12 @@ class VectorHNSW : public VectorType<T> {
     CHECK(ptr != nullptr) << "Internal ID not found in label_lookup: "
                           << internal_id;
     return *ptr;
+  }
+  // Also sets the slot's copy of the reciprocal magnitude.
+  void SetLoadedVector(uint64_t internal_id, VectorRecord &&record) override
+      ABSL_NO_THREAD_SAFETY_ANALYSIS {
+    CHECK(algo_->SetPointLockFree(internal_id, std::move(record)))
+        << "Internal ID not found in label_lookup: " << internal_id;
   }
   // Lock-free search optimization: Phase-based locking guarantees that queries
   // and resizes/mutations are strictly mutually exclusive. Therefore, no data

@@ -36,9 +36,9 @@
 #include "src/indexes/index_base.h"
 #include "src/query/predicate.h"
 #include "src/rdb_serialization.h"
-#include "src/utils/allocator.h"
 #include "src/utils/cancel.h"
 #include "src/utils/string_interning.h"
+#include "src/utils/vector_pool.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -58,6 +58,11 @@ inline constexpr size_t UpperBoundToMultipleOf64(size_t num) {
   return (num + 63) & ~size_t(63);
 }
 
+// A refcounted pointer to a vector's data. Pooled data (see VectorPool) keeps
+// its reference count and reciprocal magnitude in its page's metadata table.
+// Data from the default allocator (no pool, or the pool could not allocate)
+// keeps them in a Header just before the data. Pooled data is cache-line
+// aligned and the other data is 8 mod 16, so the address says which.
 class VectorRecord {
  public:
   struct Header {
@@ -68,6 +73,7 @@ class VectorRecord {
   static constexpr size_t kStorageHeaderSize = sizeof(Header);
   static_assert(kStorageHeaderSize == 8,
                 "VectorRecord::Header must be exactly 8 bytes");
+  static constexpr size_t kUnpooledAlignment = 16;
 
   VectorRecord() noexcept : data_(nullptr) {}
   VectorRecord(std::nullptr_t) noexcept : data_(nullptr) {}
@@ -76,7 +82,7 @@ class VectorRecord {
       : data_(other.data_.load(std::memory_order_relaxed)) {
     const char *ptr = data_.load(std::memory_order_relaxed);
     if (ptr) {
-      GetHeader(ptr)->ref_count_.fetch_add(1, std::memory_order_relaxed);
+      RefCountOf(ptr).fetch_add(1, std::memory_order_relaxed);
     }
   }
 
@@ -87,7 +93,7 @@ class VectorRecord {
     if (this != &other) {
       const char *new_ptr = other.data_.load(std::memory_order_relaxed);
       if (new_ptr) {
-        GetHeader(new_ptr)->ref_count_.fetch_add(1, std::memory_order_relaxed);
+        RefCountOf(new_ptr).fetch_add(1, std::memory_order_relaxed);
       }
       const char *old_ptr = data_.exchange(new_ptr, std::memory_order_acq_rel);
       if (old_ptr) {
@@ -128,28 +134,42 @@ class VectorRecord {
     }
   }
 
+  // Allocates from `pool` when given, falling back to operator new if it is
+  // null or exhausted.
   static VectorRecord Construct(absl::string_view vector,
-                                float reciprocal_magnitude,
-                                Allocator *allocator);
+                                float reciprocal_magnitude, VectorPool *pool);
 
   const char *GetRawVector() const noexcept {
     return data_.load(std::memory_order_relaxed);
   }
 
-  float GetReciprocalMagnitude() const noexcept {
-    const char *ptr = data_.load(std::memory_order_relaxed);
-    return ptr ? GetHeader(ptr)->reciprocal_magnitude_ : 1.0f;
+  // Raw access for HierarchicalNSW's slot seqlock (see ReadSlot there), which
+  // briefly tags the pointer and transfers references without copying.
+  std::atomic<const char *> &RawPointer() const noexcept { return data_; }
+  // Takes over one reference to `data_ptr`, which may be null.
+  static VectorRecord Adopt(const char *data_ptr) noexcept {
+    return VectorRecord(data_ptr);
   }
 
-  // Reciprocal magnitude of the record whose (non-null) vector data starts at
-  // data_ptr. Lets hot loops that hold only the raw vector pointer read it.
-  static float ReciprocalMagnitudeOf(const char *data_ptr) noexcept {
-    return GetHeader(data_ptr)->reciprocal_magnitude_;
+  float GetReciprocalMagnitude() const noexcept {
+    const char *ptr = data_.load(std::memory_order_relaxed);
+    if (!ptr) {
+      return 1.0f;
+    }
+    return IsPooled(ptr) ? VectorPool::MetaOf(ptr).reciprocal_magnitude
+                         : GetHeader(ptr)->reciprocal_magnitude_;
+  }
+
+  // The pool the data came from; nullptr for an empty record or data from the
+  // default allocator.
+  VectorPool *GetPool() const noexcept {
+    const char *ptr = data_.load(std::memory_order_relaxed);
+    return ptr && IsPooled(ptr) ? VectorPool::PoolOf(ptr) : nullptr;
   }
 
   uint32_t RefCount() const noexcept {
     const char *ptr = data_.load(std::memory_order_relaxed);
-    return ptr ? GetHeader(ptr)->ref_count_.load(std::memory_order_relaxed) : 0;
+    return ptr ? RefCountOf(ptr).load(std::memory_order_relaxed) : 0;
   }
 
   bool empty() const noexcept {
@@ -182,10 +202,24 @@ class VectorRecord {
     return const_cast<Header *>(reinterpret_cast<const Header *>(data_ptr) - 1);
   }
 
+  static bool IsPooled(const char *data_ptr) noexcept {
+    return (reinterpret_cast<uintptr_t>(data_ptr) & (kUnpooledAlignment - 1)) ==
+           0;
+  }
+
+  static std::atomic<uint32_t> &RefCountOf(const char *data_ptr) noexcept {
+    return IsPooled(data_ptr) ? VectorPool::MetaOf(data_ptr).ref_count
+                              : GetHeader(data_ptr)->ref_count_;
+  }
+
   static void Release(const char *data_ptr) noexcept {
-    Header *h = GetHeader(data_ptr);
-    if (h->ref_count_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-      Allocator::Free(reinterpret_cast<char *>(h));
+    if (RefCountOf(data_ptr).fetch_sub(1, std::memory_order_acq_rel) == 1) {
+      if (IsPooled(data_ptr)) {
+        VectorPool::PoolOf(data_ptr)->Free(const_cast<char *>(data_ptr));
+      } else {
+        ::operator delete(GetHeader(data_ptr),
+                          std::align_val_t{kUnpooledAlignment});
+      }
     }
   }
 
@@ -489,9 +523,7 @@ class VectorBase : public IndexBase {
   bool IsVectorIndex() const override { return true; }
   virtual uint64_t GetMaxLoadedLabel() const { return 0; }
   virtual size_t GetLabelCount() const { return 0; }
-  FixedSizeAllocator *GetVectorAllocator() const {
-    return vector_allocator_.get();
-  }
+  VectorPool *GetVectorPool() const { return vector_pool_; }
   int GetDimensions() const { return dimensions_; }
   // Provided by VectorType<T> so the per-element byte width and format
   // conversion come from sizeof(T) + if-constexpr on T instead of a
@@ -547,6 +579,7 @@ class VectorBase : public IndexBase {
 
  protected:
   VectorBase(IndexerType indexer_type, int dimensions, size_t element_size,
+             data_model::VectorDataType vector_data_type,
              data_model::AttributeDataType attribute_data_type,
              absl::string_view attribute_identifier, int db_num)
       : IndexBase(indexer_type),
@@ -558,9 +591,8 @@ class VectorBase : public IndexBase {
         attribute_data_type_(attribute_data_type)
 #ifndef SAN_BUILD
         ,
-        vector_allocator_(CREATE_UNIQUE_PTR(
-            FixedSizeAllocator,
-            VectorRecord::kStorageHeaderSize + dimensions * element_size, true))
+        vector_pool_(VectorPoolRegistry::Global().Get(
+            vector_data_type, dimensions * element_size))
 #endif  // !SAN_BUILD
   {
   }
@@ -568,7 +600,8 @@ class VectorBase : public IndexBase {
   VectorBase(IndexerType indexer_type, int dimensions,
              data_model::AttributeDataType attribute_data_type,
              absl::string_view attribute_identifier, int db_num)
-      : VectorBase(indexer_type, dimensions, sizeof(float), attribute_data_type,
+      : VectorBase(indexer_type, dimensions, sizeof(float),
+                   data_model::VECTOR_DATA_TYPE_FLOAT32, attribute_data_type,
                    attribute_identifier, db_num) {}
   void RemoveRecordDueToError(const InternedStringPtr &key,
                               std::optional<uint64_t> internal_id)
@@ -652,6 +685,10 @@ class VectorBase : public IndexBase {
 
   virtual VectorRecord &GetVectorLockFree(uint64_t internal_id) const = 0;
   virtual VectorRecord &GetVector(uint64_t internal_id) const = 0;
+  // Attaches the record of a key loaded from RDB to its empty slot.
+  virtual void SetLoadedVector(uint64_t internal_id, VectorRecord &&record) {
+    GetVectorLockFree(internal_id) = std::move(record);
+  }
 
   int db_num_;
   int dimensions_;
@@ -695,7 +732,7 @@ class VectorBase : public IndexBase {
   ComputeDistanceFromRecord(const InternedStringPtr &key,
                             absl::string_view query,
                             float query_magnitude) const;
-  UniqueFixedSizeAllocatorPtr vector_allocator_{nullptr, nullptr};
+  VectorPool *vector_pool_{nullptr};
 };
 
 class PrefilterEvaluator : public query::Evaluator {

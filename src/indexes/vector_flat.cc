@@ -113,14 +113,12 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::LoadFromRDB(
         std::make_unique<FlatIndex>(index->space_.get(), index->normalize_);
     RDBChunkInputStream input(std::move(iter));
 
-    auto generator = [allocator = index->GetVectorAllocator()](
+    auto generator = [pool = index->GetVectorPool()](
                          absl::string_view vector_data) {
       float reciprocal_magnitude = CalcReciprocalMagnitude(
           reinterpret_cast<const T *>(vector_data.data()),
           vector_data.size() / sizeof(T));
-      return VectorRecord::Construct(
-          vector_data, reciprocal_magnitude,
-          static_cast<FixedSizeAllocator *>(allocator));
+      return VectorRecord::Construct(vector_data, reciprocal_magnitude, pool);
     };
     VMSDK_RETURN_IF_ERROR(
         index->algo_->LoadIndex(input, index->space_.get(), generator));
@@ -189,13 +187,10 @@ template <typename T>
 absl::Status VectorFlat<T>::ModifyRecordImpl(uint64_t internal_id,
                                              VectorRecord &&vector_record) {
   absl::ReaderMutexLock lock(&resize_mutex_);
-  VectorRecord *stored_record = algo_->GetPoint(internal_id);
-  if (!stored_record) {
+  if (!algo_->ReplacePoint(internal_id, std::move(vector_record))) {
     return absl::InternalError(
         absl::StrCat("Couldn't find internal id: ", internal_id));
   }
-
-  *stored_record = std::move(vector_record);
 
   return absl::OkStatus();
 }

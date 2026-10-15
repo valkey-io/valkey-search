@@ -296,6 +296,93 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
         assert search_err[0] is not None
         assert b"Index with name 'idx' not found in database 0" in str(search_err[0]).encode()
 
+    def test_dropindex_with_count_only_query(self):
+        """A LIMIT 0 reply must still fail if its index is dropped mid-query."""
+        client: Valkey = self.server.get_new_client()
+        client.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:",
+            "SCHEMA", "content", "TEXT"
+        )
+        client.execute_command("HSET", "doc:1", "content", "hello world")
+        IndexingTestHelper.wait_for_indexing_complete_on_node(client, "idx")
+
+        client.execute_command("FT._DEBUG PAUSEPOINT SET background_search_completing")
+        search_thread, _, search_err = run_in_thread(
+            lambda: self.server.get_new_client().execute_command(
+                "FT.SEARCH", "idx", "*", "LIMIT", "0", "0"
+            )
+        )
+        waiters.wait_for_true(
+            lambda: client.execute_command(
+                "FT._DEBUG PAUSEPOINT TEST background_search_completing") > 0
+        )
+
+        client.execute_command("FT.DROPINDEX", "idx")
+        client.execute_command("FT._DEBUG PAUSEPOINT RESET background_search_completing")
+        search_thread.join()
+
+        assert search_err[0] is not None
+        assert b"Index with name 'idx' not found in database 0" in str(search_err[0]).encode()
+
+    def test_dropindex_with_vector_offset_query(self):
+        """A vector query whose offset is past K must preserve drop errors."""
+        client: Valkey = self.server.get_new_client()
+        client.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:",
+            "SCHEMA", "vec", "VECTOR", "HNSW", "6", "TYPE", "FLOAT32",
+            "DIM", "4", "DISTANCE_METRIC", "L2"
+        )
+        vector = struct.pack('<4f', 0.0, 0.0, 0.0, 0.0)
+        client.execute_command("HSET", "doc:1", "vec", vector)
+        IndexingTestHelper.wait_for_indexing_complete_on_node(client, "idx")
+
+        client.execute_command("FT._DEBUG PAUSEPOINT SET background_search_completing")
+        search_thread, _, search_err = run_in_thread(
+            lambda: self.server.get_new_client().execute_command(
+                "FT.SEARCH", "idx", "*=>[KNN 1 @vec $BLOB]", "PARAMS", "2",
+                "BLOB", vector, "LIMIT", "1", "10", "DIALECT", "2"
+            )
+        )
+        waiters.wait_for_true(
+            lambda: client.execute_command(
+                "FT._DEBUG PAUSEPOINT TEST background_search_completing") > 0
+        )
+
+        client.execute_command("FT.DROPINDEX", "idx")
+        client.execute_command("FT._DEBUG PAUSEPOINT RESET background_search_completing")
+        search_thread.join()
+
+        assert search_err[0] is not None
+        assert b"Index with name 'idx' not found in database 0" in str(search_err[0]).encode()
+
+    def test_dropindex_with_background_nocontent_query(self):
+        """A background NOCONTENT reply must still fail after FT.DROPINDEX."""
+        client: Valkey = self.server.get_new_client()
+        client.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:",
+            "SCHEMA", "content", "TEXT"
+        )
+        client.execute_command("HSET", "doc:1", "content", "hello world")
+        IndexingTestHelper.wait_for_indexing_complete_on_node(client, "idx")
+
+        client.execute_command("FT._DEBUG PAUSEPOINT SET background_search_completing")
+        search_thread, _, search_err = run_in_thread(
+            lambda: self.server.get_new_client().execute_command(
+                "FT.SEARCH", "idx", "*", "NOCONTENT"
+            )
+        )
+        waiters.wait_for_true(
+            lambda: client.execute_command(
+                "FT._DEBUG PAUSEPOINT TEST background_search_completing") > 0
+        )
+
+        client.execute_command("FT.DROPINDEX", "idx")
+        client.execute_command("FT._DEBUG PAUSEPOINT RESET background_search_completing")
+        search_thread.join()
+
+        assert search_err[0] is not None
+        assert b"Index with name 'idx' not found in database 0" in str(search_err[0]).encode()
+
 
 class TestFullTextInFlightBlockingCME(ValkeySearchClusterTestCaseDebugMode):
     """Tests for CME (cluster) mode."""

@@ -16,11 +16,27 @@ from valkey.client import Valkey
 from valkeytestframework.util import waiters
 
 from ft_info_parser import FTInfoParser
-from valkey_search_test_case import ValkeySearchTestCaseBase
+from valkey_search_test_case import (
+    ValkeySearchTestCaseBase,
+    ValkeySearchTestCaseDebugMode,
+)
 from valkeytestframework.conftest import resource_port_tracker
 
 
 DIM = 4
+
+# Five documents per metric whose scores against METRIC_QUERY are
+# METRIC_EXPECTED (doc number -> 1 - similarity). IP uses unit vectors.
+# COSINE scales them, so a missing normalization shows up as a wrong score,
+# and makes doc 5 a zero vector, which must score 1.0 rather than NaN.
+METRIC_DOCS = {
+    "IP": [[0, 0, 1, 0], [0.8, 0.6, 0, 0], [1, 0, 0, 0], [0.6, 0.8, 0, 0],
+           [0, 0, 0, 1]],
+    "COSINE": [[0, 0, 5, 0], [4, 3, 0, 0], [2, 0, 0, 0], [0.3, 0.4, 0, 0],
+               [0, 0, 0, 0]],
+}
+METRIC_QUERY = {"IP": [1.0, 0.0, 0.0, 0.0], "COSINE": [3.0, 0.0, 0.0, 0.0]}
+METRIC_EXPECTED = {1: 1.0, 2: 0.2, 3: 0.0, 4: 0.4, 5: 1.0}
 
 
 def _fp32(values):
@@ -63,6 +79,38 @@ def _module_external_memory(client: Valkey) -> int:
             "this Valkey build predates PR #4128"
         )
     return int(info["used_memory_module_external"])
+
+
+def _create_metric_index(client: Valkey, index: str,
+                         algorithm: str, metric: str):
+    client.execute_command(
+        "FT.CREATE", index, "PREFIX", "1", f"{index}:",
+        "SCHEMA",
+        "v", "VECTOR", algorithm,
+        "6", "TYPE", "FLOAT32", "DIM", str(DIM),
+        "DISTANCE_METRIC", metric,
+        "color", "TAG",
+    )
+    for i, values in enumerate(METRIC_DOCS[metric], start=1):
+        client.hset(f"{index}:{i}",
+                    mapping={"v": _fp32(values), "color": "red"})
+
+    def indexed():
+        info = FTInfoParser(client.execute_command("FT.INFO", index))
+        return info.num_docs == len(METRIC_DOCS[metric]) and \
+            info.mutation_queue_size == 0
+
+    waiters.wait_for_equal(indexed, True, timeout=5)
+
+
+def _knn_scores(client: Valkey, index: str, query, filter="*"):
+    reply = client.execute_command(
+        "FT.SEARCH", index, f"{filter}=>[KNN 5 @v $q]",
+        "PARAMS", "2", "q", _fp32(query), "DIALECT", "2",
+    )
+    assert reply[0] == 5, reply
+    prefix = f"{index}:".encode()
+    return {int(k[len(prefix):]): s for k, s in _score_map(reply).items()}
 
 
 class TestSVSVamanaSmoke(ValkeySearchTestCaseBase):
@@ -200,21 +248,44 @@ class TestSVSVamanaSmoke(ValkeySearchTestCaseBase):
         assert "SQ8" in str(exc_info.value)
 
     @pytest.mark.parametrize("metric", ["IP", "COSINE"])
-    def test_distance_metric_ip_cosine_rejected_at_parse(self, metric):
-        """DISTANCE_METRIC IP / COSINE are fenced in v1: SVS returns
-        similarities (larger = closer) while the reply layer treats
-        __v_score as a distance, which inverts order and score on the
-        native search path. Re-enabled when the per-metric transform
-        and tests land."""
+    def test_alpha_above_one_rejected_for_ip_cosine(self, metric):
+        """IP and COSINE take 0 < ALPHA <= 1.0; checked at FT.CREATE."""
         client: Valkey = self.server.get_new_client()
         with pytest.raises(Exception) as exc_info:
             client.execute_command(
-                "FT.CREATE", f"{metric.lower()}_idx",
+                "FT.CREATE", f"{metric.lower()}_alpha_idx",
                 "SCHEMA", "v", "VECTOR", "SVS_VAMANA",
-                "6", "TYPE", "FLOAT32", "DIM", str(DIM),
-                "DISTANCE_METRIC", metric,
+                "8", "TYPE", "FLOAT32", "DIM", str(DIM),
+                "DISTANCE_METRIC", metric, "ALPHA", "1.5",
             )
-        assert metric in str(exc_info.value)
+        assert "ALPHA" in str(exc_info.value)
+
+    @pytest.mark.parametrize("metric", ["IP", "COSINE"])
+    def test_knn_scores_ip_cosine(self, metric):
+        """__v_score is the distance 1 - similarity: the exact match comes
+        first with 0, and every score matches FLAT on the same data. Under
+        COSINE the zero vector (doc 5) scores 1.0."""
+        client: Valkey = self.server.get_new_client()
+        _create_metric_index(client, "svs_m", "SVS_VAMANA", metric)
+        _create_metric_index(client, "flat_m", "FLAT", metric)
+
+        scores = _knn_scores(client, "svs_m", METRIC_QUERY[metric])
+        flat_scores = _knn_scores(client, "flat_m", METRIC_QUERY[metric])
+        assert list(scores)[0] == 3, scores
+        assert list(scores.values()) == sorted(scores.values()), scores
+        for doc, expected in METRIC_EXPECTED.items():
+            assert scores[doc] == pytest.approx(expected, abs=1e-5), scores
+            assert scores[doc] == pytest.approx(flat_scores[doc], abs=1e-5)
+
+    @pytest.mark.parametrize("metric", ["IP", "COSINE"])
+    def test_zero_query_scores_one(self, metric):
+        """A zero query has no similarity to any document: every score is
+        1.0, never NaN."""
+        client: Valkey = self.server.get_new_client()
+        _create_metric_index(client, "svs_m", "SVS_VAMANA", metric)
+        scores = _knn_scores(client, "svs_m", [0.0] * DIM)
+        for doc, score in scores.items():
+            assert score == pytest.approx(1.0, abs=1e-5), (doc, scores)
 
     def test_alpha_below_one_rejected_at_parse(self):
         """ALPHA < 1.0 under L2 fails inside SVS's build_dynamic and
@@ -382,3 +453,38 @@ class TestSVSVamanaSmoke(ValkeySearchTestCaseBase):
         assert idx_info["size"] == 3
         assert idx_info["algorithm"]["compression"] == \
             f"SVS_COMPRESSION_{compression}"
+
+
+class TestSVSVamanaPlannerPaths(ValkeySearchTestCaseDebugMode):
+    """Changing the planner threshold ratio requires debug-mode."""
+
+    @pytest.mark.parametrize("metric", ["IP", "COSINE"])
+    def test_prefilter_and_index_paths_agree(self, metric):
+        """The same filtered query gives the same scores whether the planner
+        scores the filtered keys itself (pre-filter) or passes the filter to
+        SVS's search. The threshold ratio forces each path in turn."""
+        client: Valkey = self.server.get_new_client()
+        _create_metric_index(client, "svs_m", "SVS_VAMANA", metric)
+
+        def prefilter_count():
+            return int(client.info("SEARCH").get(
+                "search_prefiltering_requests_count", 0))
+
+        ratio = "search.prefiltering-threshold-ratio"
+        client.execute_command("CONFIG", "SET", ratio, "1.0")
+        before = prefilter_count()
+        prefiltered = _knn_scores(client, "svs_m", METRIC_QUERY[metric],
+                                       "@color:{red}")
+        assert prefilter_count() == before + 1
+
+        client.execute_command("CONFIG", "SET", ratio, "0.0")
+        before = prefilter_count()
+        in_index = _knn_scores(client, "svs_m", METRIC_QUERY[metric],
+                                    "@color:{red}")
+        assert prefilter_count() == before
+        client.execute_command("CONFIG", "SET", ratio, "0.001")
+
+        assert list(prefiltered)[0] == list(in_index)[0] == 3
+        for doc, expected in METRIC_EXPECTED.items():
+            assert prefiltered[doc] == pytest.approx(expected, abs=1e-5)
+            assert in_index[doc] == pytest.approx(expected, abs=1e-5)

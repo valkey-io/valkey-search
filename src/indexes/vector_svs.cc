@@ -225,14 +225,15 @@ svs_allocator_t kSvsAllocatorIface{&kSvsAllocatorOps, nullptr};
 
 // Maps valkey-search's DistanceMetric proto value to SVS's enum. Kept
 // tight; distances not supported by SVS (currently: none in v1) return
-// nullopt.
+// nullopt. COSINE vectors are normalized before they reach SVS (see
+// PrepareSvsInput), so COSINE uses SVS's dot product: equal to cosine on
+// unit vectors, and free of SVS cosine's 0/0 NaN on a zero vector.
 std::optional<svs_distance_metric_t> ToSvsDistanceMetric(
     data_model::DistanceMetric metric) {
   switch (metric) {
     case data_model::DISTANCE_METRIC_L2:
       return SVS_DISTANCE_METRIC_EUCLIDEAN;
     case data_model::DISTANCE_METRIC_COSINE:
-      return SVS_DISTANCE_METRIC_COSINE;
     case data_model::DISTANCE_METRIC_IP:
       return SVS_DISTANCE_METRIC_DOT_PRODUCT;
     default:
@@ -379,6 +380,42 @@ absl::Status CheckFiniteVector(const T* src, size_t n_elements) {
     }
   }
   return absl::OkStatus();
+}
+
+// Rejects non-finite vectors, then returns the fp32 view SVS ingests or
+// searches with. When normalize is set (COSINE), the view is scaled to
+// unit length. A zero vector has no direction and is left as zero, so its
+// dot product with any vector is 0 and its score is 1.0.
+template <typename T>
+absl::StatusOr<const float*> PrepareSvsInput(const T* src, size_t n_elements,
+                                             bool normalize,
+                                             std::vector<float>& scratch) {
+  VMSDK_RETURN_IF_ERROR(CheckFiniteVector<T>(src, n_elements));
+  if (!normalize) {
+    return MakeFp32<T>(src, n_elements, scratch);
+  }
+  const float reciprocal_magnitude =
+      CalcReciprocalMagnitude<T>(src, n_elements);
+  scratch.resize(n_elements);
+  for (size_t i = 0; i < n_elements; ++i) {
+    scratch[i] = static_cast<float>(src[i]) * reciprocal_magnitude;
+  }
+  return scratch.data();
+}
+
+// Converts an SVS search result to __v_score, where smaller is closer.
+// SVS returns dot product as a similarity (larger is closer), so IP and
+// COSINE report 1 - dot: 0 for an exact match on unit vectors, 1 for
+// orthogonal or zero vectors. L2 is already a distance and is passed
+// through.
+float SvsToDistance(data_model::DistanceMetric metric, float value) {
+  switch (metric) {
+    case data_model::DISTANCE_METRIC_IP:
+    case data_model::DISTANCE_METRIC_COSINE:
+      return 1.0f - value;
+    default:
+      return value;
+  }
 }
 
 // Algorithm/storage/builder trio shared by first-insert bootstrap and RDB
@@ -704,11 +741,11 @@ absl::StatusOr<std::vector<Neighbor>> VectorSVS<T>::Search(
   }
 
   const T* raw = reinterpret_cast<const T*>(query.data());
-  VMSDK_RETURN_IF_ERROR(
-      CheckFiniteVector<T>(raw, static_cast<size_t>(dimensions_)));
   std::vector<float> scratch;
-  const float* fp32_query =
-      MakeFp32<T>(raw, static_cast<size_t>(dimensions_), scratch);
+  VMSDK_ASSIGN_OR_RETURN(
+      const float* fp32_query,
+      PrepareSvsInput<T>(raw, static_cast<size_t>(dimensions_), normalize_,
+                         scratch));
 
   ScopedSvsError err;
   const size_t effective_window = std::max<size_t>(
@@ -733,8 +770,9 @@ absl::StatusOr<std::vector<Neighbor>> VectorSVS<T>::Search(
   }
 
   std::priority_queue<std::pair<float, hnswlib::labeltype>> knn;
+  // CreateReply re-ranks by score, so every result must be a distance.
   for (size_t i = 0; i < results.total_results; ++i) {
-    knn.push({results.distances[i],
+    knn.push({SvsToDistance(this->distance_metric_, results.distances[i]),
               static_cast<hnswlib::labeltype>(results.indices[i])});
   }
   return this->CreateReply(knn);
@@ -752,11 +790,11 @@ absl::Status VectorSVS<T>::AddRecordImpl(
     uint64_t internal_id, std::shared_ptr<const VectorRecord>&& vector_record) {
 #if defined(__linux__) && defined(__x86_64__)
   const T* raw = reinterpret_cast<const T*>(vector_record->GetRawVector());
-  VMSDK_RETURN_IF_ERROR(
-      CheckFiniteVector<T>(raw, static_cast<size_t>(dimensions_)));
   std::vector<float> scratch;
-  const float* fp32 =
-      MakeFp32<T>(raw, static_cast<size_t>(dimensions_), scratch);
+  VMSDK_ASSIGN_OR_RETURN(
+      const float* fp32,
+      PrepareSvsInput<T>(raw, static_cast<size_t>(dimensions_), normalize_,
+                         scratch));
 
   // Reserve the map slot first so a failed SVS mutation can erase it and
   // the two stay in step; no other mutation touches this id meanwhile.
@@ -834,11 +872,11 @@ absl::Status VectorSVS<T>::ModifyRecordImpl(
   // No replace primitive in the C API and add_points rejects a duplicate id,
   // so modify is delete then add; the gap is invisible to search (phase gate).
   const T* raw = reinterpret_cast<const T*>(vector_record->GetRawVector());
-  VMSDK_RETURN_IF_ERROR(
-      CheckFiniteVector<T>(raw, static_cast<size_t>(dimensions_)));
   std::vector<float> scratch;
-  const float* fp32 =
-      MakeFp32<T>(raw, static_cast<size_t>(dimensions_), scratch);
+  VMSDK_ASSIGN_OR_RETURN(
+      const float* fp32,
+      PrepareSvsInput<T>(raw, static_cast<size_t>(dimensions_), normalize_,
+                         scratch));
 
   {
     SvsMutationLock lock(&resize_mutex_,

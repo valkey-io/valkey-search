@@ -499,11 +499,10 @@ absl::StatusOr<RecordsMap> GetContent(
     if (itr != content.end()) {
       auto identifier = vmsdk::MakeUniqueValkeyString(sortby_identifier);
       auto identifier_view = vmsdk::ToStringView(identifier.get());
-      return_content.emplace(
-          identifier_view,
-          RecordsMapValue(
-              std::move(identifier),
-              vmsdk::RetainUniqueValkeyString(itr->second.value.get())));
+      return_content.emplace(identifier_view,
+                             RecordsMapValue(std::move(identifier),
+                                             vmsdk::RetainUniqueValkeyString(
+                                                 itr->second.value.get())));
       return_content.emplace(
           parameters.sortby_parameter->field,
           RecordsMapValue(

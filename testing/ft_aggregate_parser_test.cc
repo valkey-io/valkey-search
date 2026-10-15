@@ -743,15 +743,15 @@ TEST_F(ParseCommandRegistrationTest, VectorRangeNanRadiusParamRejected) {
   }
 }
 
-// An infinite radius, or one too large for a float, is stored as the largest
-// float, given as a literal or as a $param. It matches every finite distance
-// but not the +inf that stands for a non-finite one.
-TEST_F(ParseCommandRegistrationTest, VectorRangeInfiniteRadiusIsLargestFloat) {
+// An infinite radius is stored as the largest double, given as a literal or as
+// a $param. It matches every finite distance but not the +inf that stands for a
+// non-finite one. A radius beyond the float range is kept for FLOAT64 indexes.
+TEST_F(ParseCommandRegistrationTest, VectorRangeInfiniteRadiusIsLargestDouble) {
   auto schema = MakeSchemaWithVec("vec");
   std::string blob = MakeBlob3();
-  const double kMaxFloat = std::numeric_limits<float>::max();
+  const double kMaxDouble = std::numeric_limits<double>::max();
   const std::vector<std::pair<std::string, double>> cases = {
-      {"inf", kMaxFloat}, {"1e400", kMaxFloat}, {"3.4e38", 3.4e38}};
+      {"inf", kMaxDouble}, {"1e400", kMaxDouble}, {"1e300", 1e300}};
   for (const auto &[radius, expected] : cases) {
     for (bool literal : {true, false}) {
       const std::string query = literal

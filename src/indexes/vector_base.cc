@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -53,68 +54,65 @@ namespace valkey_search {
 
 namespace indexes {
 
+namespace {
+
+// Tracked as a float, the type 1.1 and 1.2 read back from the RDB. Those
+// versions cannot load a FLOAT64 index, so a FLOAT64 magnitude beyond the float
+// range is clamped: converting it would be undefined behavior.
+float TrackedMagnitude(const VectorRecord &vector_record) {
+  return static_cast<float>(
+      std::min(1.0 / vector_record.GetReciprocalMagnitude(),
+               double{std::numeric_limits<float>::max()}));
+}
+
+}  // namespace
+
 template <typename T>
-float CalcReciprocalMagnitude(const T *src, size_t size) {
+MagnitudeOf<T> CalcReciprocalMagnitude(const T *src, size_t size) {
   // Accumulate in float even when T is 2 bytes: squaring a half-precision
   // value overflows its own exponent range well before it overflows float.
-  float sum_sq = 0.0f;
+  using M = MagnitudeOf<T>;
+  M sum_sq = 0;
   for (size_t i = 0; i < size; i++) {
-    float v = static_cast<float>(src[i]);
+    M v = static_cast<M>(src[i]);
     sum_sq += v * v;
   }
-  return (sum_sq == 0.0f) ? 1.0f : (1.0f / std::sqrt(sum_sq));
+  return (sum_sq == 0) ? M{1} : (M{1} / std::sqrt(sum_sq));
 }
 
 template float CalcReciprocalMagnitude<float>(const float *, size_t);
 template float CalcReciprocalMagnitude<float16>(const float16 *, size_t);
 template float CalcReciprocalMagnitude<bfloat16>(const bfloat16 *, size_t);
-
-float CalcReciprocalMagnitude(absl::string_view record,
-                              data_model::VectorDataType data_type) {
-  switch (data_type) {
-    case data_model::VECTOR_DATA_TYPE_FLOAT32:
-      return CalcReciprocalMagnitude(
-          reinterpret_cast<const float *>(record.data()),
-          record.size() / sizeof(float));
-    case data_model::VECTOR_DATA_TYPE_FLOAT16:
-      return CalcReciprocalMagnitude(
-          reinterpret_cast<const float16 *>(record.data()),
-          record.size() / sizeof(float16));
-    case data_model::VECTOR_DATA_TYPE_BFLOAT16:
-      return CalcReciprocalMagnitude(
-          reinterpret_cast<const bfloat16 *>(record.data()),
-          record.size() / sizeof(bfloat16));
-    default:
-      CHECK(false) << "unsupported vector data type";
-  }
-}
+template double CalcReciprocalMagnitude<double>(const double *, size_t);
 
 template <typename T>
 std::vector<char> NormalizeVector(absl::string_view record,
-                                  float reciprocal_magnitude) {
-  if (ABSL_PREDICT_FALSE(reciprocal_magnitude == 0.0f)) {
-    reciprocal_magnitude = 1.0f;
+                                  MagnitudeOf<T> reciprocal_magnitude) {
+  using M = MagnitudeOf<T>;
+  if (ABSL_PREDICT_FALSE(reciprocal_magnitude == 0)) {
+    reciprocal_magnitude = 1;
   }
   size_t dimensions = record.size() / sizeof(T);
   const T *src = reinterpret_cast<const T *>(record.data());
   std::vector<char> ret(record.size());
   T *dst = reinterpret_cast<T *>(ret.data());
   for (size_t i = 0; i < dimensions; i++) {
-    // Scale in float, then round once back into T. Scaling in T would
+    // Scale in MagnitudeOf<T>, then round once back into T. Scaling in T would
     // double-round for the 2-byte types.
-    dst[i] = static_cast<T>(reciprocal_magnitude * static_cast<float>(src[i]));
+    dst[i] = static_cast<T>(reciprocal_magnitude * static_cast<M>(src[i]));
   }
   return ret;
 }
 
 template <typename T>
-std::vector<char> NormalizeVector(absl::string_view record, float *magnitude) {
-  float reciprocal_magnitude = CalcReciprocalMagnitude(
+std::vector<char> NormalizeVector(absl::string_view record,
+                                  MagnitudeOf<T> *magnitude) {
+  MagnitudeOf<T> reciprocal_magnitude = CalcReciprocalMagnitude(
       reinterpret_cast<const T *>(record.data()), record.size() / sizeof(T));
   std::vector<char> ret = NormalizeVector<T>(record, reciprocal_magnitude);
 
   if (magnitude) {
-    *magnitude = 1.0f / reciprocal_magnitude;
+    *magnitude = 1 / reciprocal_magnitude;
   }
   return ret;
 }
@@ -122,25 +120,12 @@ std::vector<char> NormalizeVector(absl::string_view record, float *magnitude) {
 template std::vector<char> NormalizeVector<float>(absl::string_view, float);
 template std::vector<char> NormalizeVector<float16>(absl::string_view, float);
 template std::vector<char> NormalizeVector<bfloat16>(absl::string_view, float);
+template std::vector<char> NormalizeVector<double>(absl::string_view, double);
 template std::vector<char> NormalizeVector<float>(absl::string_view, float *);
 template std::vector<char> NormalizeVector<float16>(absl::string_view, float *);
 template std::vector<char> NormalizeVector<bfloat16>(absl::string_view,
                                                      float *);
-
-std::vector<char> NormalizeVector(absl::string_view record,
-                                  data_model::VectorDataType data_type,
-                                  float reciprocal_magnitude) {
-  switch (data_type) {
-    case data_model::VECTOR_DATA_TYPE_FLOAT32:
-      return NormalizeVector<float>(record, reciprocal_magnitude);
-    case data_model::VECTOR_DATA_TYPE_FLOAT16:
-      return NormalizeVector<float16>(record, reciprocal_magnitude);
-    case data_model::VECTOR_DATA_TYPE_BFLOAT16:
-      return NormalizeVector<bfloat16>(record, reciprocal_magnitude);
-    default:
-      CHECK(false) << "unsupported vector data type";
-  }
-}
+template std::vector<char> NormalizeVector<double>(absl::string_view, double *);
 
 bool PrefilterEvaluator::Evaluate(const query::Predicate &predicate,
                                   const InternedStringPtr &key) {
@@ -202,21 +187,12 @@ query::EvaluationResult PrefilterEvaluator::EvaluateVectorRange(
   if (!vector_index) {
     return query::EvaluationResult(false);
   }
-  auto within = vector_index->IsWithinVectorRange(
-      *key_, query_vector, static_cast<float>(predicate.GetRadius()));
+  auto within = vector_index->IsWithinVectorRange(*key_, query_vector,
+                                                  predicate.GetRadius());
   if (!within.ok() || !within->has_value()) {
     return query::EvaluationResult(false);
   }
   return query::EvaluationResult(true, within->value());
-}
-
-// ComputeDistanceFromRecord without query_magnitude — used by VR search path.
-absl::StatusOr<std::pair<float, hnswlib::labeltype>>
-VectorBase::ComputeDistanceFromRecord(const InternedStringPtr &key,
-                                      absl::string_view query) const {
-  float query_magnitude =
-      normalize_ ? CalcReciprocalMagnitude(query, GetVectorDataType()) : 1.0f;
-  return ComputeDistanceFromRecord(key, query, query_magnitude);
 }
 
 VectorBase::~VectorBase() {
@@ -232,7 +208,7 @@ absl::StatusOr<RecordResult> VectorBase::AddRecord(const InternedStringPtr &key,
     return RecordResult::kInvalidData;
   }
   auto vector_record = data.ConsumeVector();
-  float magnitude = 1.0f / vector_record.GetReciprocalMagnitude();
+  float magnitude = TrackedMagnitude(vector_record);
   VMSDK_ASSIGN_OR_RETURN(auto internal_id, TrackKey(key, magnitude));
   absl::Status add_result =
       AddRecordImpl(internal_id, std::move(vector_record));
@@ -279,7 +255,7 @@ absl::StatusOr<RecordResult> VectorBase::ModifyRecord(
     return RecordResult::kInvalidData;
   }
   auto vector_record = data.ConsumeVector();
-  float magnitude = 1.0f / vector_record.GetReciprocalMagnitude();
+  float magnitude = TrackedMagnitude(vector_record);
   VMSDK_ASSIGN_OR_RETURN(auto internal_id, GetInternalId(key));
   VMSDK_ASSIGN_OR_RETURN(bool res,
                          IsVectorUnchanged(key, magnitude, vector_record));
@@ -531,70 +507,6 @@ uint32_t VectorBase::GetMutationWeight() const {
   return options::GetMutationWeightVector().GetValue();
 }
 
-absl::StatusOr<std::pair<float, hnswlib::labeltype>>
-VectorBase::ComputeDistanceFromRecord(const InternedStringPtr &key,
-                                      absl::string_view query,
-                                      float query_magnitude) const {
-  VMSDK_ASSIGN_OR_RETURN(auto internal_id, GetInternalIdDuringSearch(key));
-  const auto &vector_record = GetVectorLockFree(internal_id);
-  if (!vector_record) {
-    return absl::InternalError(
-        absl::StrCat("Couldn't find internal id: ", internal_id));
-  }
-  if (normalize_) {
-    query_magnitude *= vector_record.GetReciprocalMagnitude();
-  }
-  return (std::pair<float, hnswlib::labeltype>){
-      ComputeDistance(query, vector_record, query_magnitude), internal_id};
-}
-
-absl::StatusOr<float> VectorBase::RecomputeDistance(
-    absl::string_view record, absl::string_view query) const {
-  if (!IsValidSizeVector(record)) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Vector record of size ", record.size(),
-                     " does not match the index dimensions"));
-  }
-  // Built with the default allocator rather than the index's own: this runs on
-  // the main thread while writers may be using that allocator, and one record
-  // per mutated key is not worth sharing.
-  auto vector_record = VectorRecord::Construct(
-      record, ComputeReciprocalMagnitude(record), nullptr);
-  if (!vector_record) {
-    return absl::InternalError("Could not construct a vector record");
-  }
-  float query_magnitude = kDefaultMagnitude;
-  if (normalize_) {
-    query_magnitude = CalcReciprocalMagnitude(query, GetVectorDataType()) *
-                      vector_record.GetReciprocalMagnitude();
-  }
-  return ComputeDistance(query, vector_record, query_magnitude);
-}
-
-bool VectorBase::AddPrefilteredKey(
-    absl::string_view query, float query_magnitude,
-    const InternedStringPtr &key, uint64_t count,
-    std::priority_queue<std::pair<float, hnswlib::labeltype>> &results,
-    absl::flat_hash_set<const char *> &top_keys) const {
-  auto result = ComputeDistanceFromRecord(key, query, query_magnitude);
-  if (!result.ok()) {
-    return false;
-  }
-  if (results.size() < count) {
-    results.emplace(result.value());
-    return true;
-  }
-  if (result.value().first < results.top().first) {
-    auto top = results.top();
-    auto vector_key = GetKeyDuringSearch(top.second);
-    top_keys.erase(vector_key.value()->Str().data());
-    results.pop();
-    results.emplace(result.value());
-    return true;
-  }
-  return false;
-}
-
 size_t VectorBase::GetTrackedKeyCount() const {
   absl::ReaderMutexLock lock(&key_to_metadata_mutex_);
   return key_by_internal_id_.size();
@@ -626,36 +538,10 @@ absl::Status VectorBase::ForEachUnTrackedKey(
   return absl::OkStatus();
 }
 
-std::vector<Neighbor> VectorBase::SearchRangeExhaustive(
-    absl::string_view query, float radius, cancel::Token &cancellation_token,
-    hnswlib::BaseFilterFunctor *filter) const {
-  auto nq = NormalizeQueryIfNeeded(query);
-  const float query_magnitude =
-      normalize_ ? CalcReciprocalMagnitude(nq.view, GetVectorDataType())
-                 : kDefaultMagnitude;
-  std::vector<Neighbor> neighbors;
-  neighbors.reserve(kRangeReserve);
-  for (const auto &[key, metadata] : tracked_metadata_by_key_) {
-    if (cancellation_token->IsCancelled()) {
-      break;
-    }
-    if (filter && !(*filter)(metadata.internal_id)) {
-      continue;
-    }
-    const auto &vector_record = GetVectorLockFree(metadata.internal_id);
-    if (!vector_record) {
-      continue;
-    }
-    float distance = RangeDistance(nq.view, query_magnitude, vector_record);
-    if (distance <= radius) {
-      neighbors.emplace_back(key, distance);
-    }
-  }
-  return neighbors;
-}
-
 template absl::StatusOr<std::vector<Neighbor>> VectorBase::CreateReply<float>(
     std::priority_queue<std::pair<float, hnswlib::labeltype>> &knn_res);
+template absl::StatusOr<std::vector<Neighbor>> VectorBase::CreateReply<double>(
+    std::priority_queue<std::pair<double, hnswlib::labeltype>> &knn_res);
 
 absl::Status CheckSimsimdBf16Capability() {
 #if defined(__SSE2__) || defined(__AVX512F__) || \
@@ -683,19 +569,32 @@ absl::Status CheckSimsimdBf16Capability() {
   return absl::OkStatus();
 }
 
-VectorRecord VectorRecord::Construct(absl::string_view vector,
-                                     float reciprocal_magnitude,
-                                     Allocator *allocator) {
-  size_t total_size = sizeof(VectorRecord::Header) + vector.size();
+template <typename MagnitudeT>
+VectorRecord VectorRecord::Construct(
+    absl::string_view vector,
+    std::type_identity_t<MagnitudeT> reciprocal_magnitude,
+    Allocator *allocator) {
+  using Header = VectorRecordHeader<MagnitudeT>;
+  size_t total_size = sizeof(Header) + vector.size();
   void *mem = allocator ? allocator->Allocate(allocator->ChunkSize())
                         : ::operator new(total_size);
-  float mag = reciprocal_magnitude == 0.0f ? 1.0f : reciprocal_magnitude;
-  new (mem)
-      VectorRecord::Header{/*ref_count_=*/{1}, /*reciprocal_magnitude_=*/mag};
-  char *data = reinterpret_cast<char *>(mem) + sizeof(VectorRecord::Header);
+  MagnitudeT mag = reciprocal_magnitude == MagnitudeT{0} ? MagnitudeT{1}
+                                                         : reciprocal_magnitude;
+  if constexpr (std::is_same_v<MagnitudeT, double>) {
+    new (mem) Header{/*reciprocal_magnitude_=*/mag,
+                     /*ref_count_=*/{1 | kDoubleHeaderBit}};
+  } else {
+    new (mem) Header{/*ref_count_=*/{1}, /*reciprocal_magnitude_=*/mag};
+  }
+  char *data = reinterpret_cast<char *>(mem) + sizeof(Header);
   std::memcpy(data, vector.data(), vector.size());
   return VectorRecord(static_cast<const char *>(data));
 }
+
+template VectorRecord VectorRecord::Construct<float>(absl::string_view, float,
+                                                     Allocator *);
+template VectorRecord VectorRecord::Construct<double>(absl::string_view, double,
+                                                      Allocator *);
 }  // namespace indexes
 
 }  // namespace valkey_search

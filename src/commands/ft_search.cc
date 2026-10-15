@@ -62,7 +62,7 @@ void ReplyAvailNeighbors(ValkeyModuleCtx *ctx,
   }
 }
 
-void ReplyScoreTopLevel(ValkeyModuleCtx *ctx, float score);
+void ReplyScoreTopLevel(ValkeyModuleCtx *ctx, double score);
 
 bool HasTextRelevance(const SearchCommand &parameters) {
   return parameters.IsNonVectorQuery() ||
@@ -82,7 +82,7 @@ void ReplyScore(ValkeyModuleCtx *ctx, ValkeyModuleString &score_as,
 
 // Reply with just the score value as a top-level element (Redis WITHSCORES
 // format: score appears between document ID and attributes array).
-void ReplyScoreTopLevel(ValkeyModuleCtx *ctx, float score) {
+void ReplyScoreTopLevel(ValkeyModuleCtx *ctx, double score) {
   auto score_value = expr::FormatDouble(score);
   ValkeyModule_ReplyWithString(
       ctx, vmsdk::MakeUniqueValkeyString(score_value).get());
@@ -387,7 +387,7 @@ size_t SearchCommand::ReplyRowElements(ValkeyModuleCtx *ctx,
 
   // Score as top-level element when WITHSCORES is specified
   if (with_scores) {
-    ReplyScoreTopLevel(ctx, format.has_relevance ? neighbor.score : 0.0f);
+    ReplyScoreTopLevel(ctx, format.has_relevance ? neighbor.score : 0.0);
     ++elements;
   }
   if (no_content) {

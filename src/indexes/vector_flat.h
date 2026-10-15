@@ -49,7 +49,10 @@ class VectorFlat : public VectorType<T> {
   using VectorType<T>::Init;
 
  public:
-  using FlatIndex = hnswlib::BruteforceSearch<float, VectorRecord>;
+  using typename VectorType<T>::MagnitudeT;
+  using typename VectorType<T>::DistanceT;
+  using typename VectorType<T>::StoredVector;
+  using FlatIndex = hnswlib::BruteforceSearch<DistanceT, StoredVector>;
 
   static absl::StatusOr<std::shared_ptr<VectorFlat<T>>> Create(
       const data_model::VectorIndex &vector_index_proto,
@@ -64,7 +67,7 @@ class VectorFlat : public VectorType<T> {
       int db_num) ABSL_NO_THREAD_SAFETY_ANALYSIS;
   ~VectorFlat() override = default;
 
-  const hnswlib::SpaceInterface<float> *GetSpace() const {
+  const hnswlib::SpaceInterface<DistanceT> *GetSpace() const {
     return space_.get();
   }
   int GetBlockSize() const { return block_size_; }
@@ -90,7 +93,7 @@ class VectorFlat : public VectorType<T> {
   // Lock-free search optimization, as for Search: reads the FLAT store and the
   // tracked-key maps under the phase lock only.
   absl::StatusOr<std::vector<Neighbor>> SearchRange(
-      absl::string_view query, float radius, cancel::Token &cancellation_token,
+      absl::string_view query, double radius, cancel::Token &cancellation_token,
       std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr) override
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
@@ -110,9 +113,9 @@ class VectorFlat : public VectorType<T> {
   // Lock-free search optimization: Phase-based locking guarantees that queries
   // and resizes/mutations are strictly mutually exclusive. Therefore, no data
   // races can occur during the search phase.
-  float ComputeDistance(
+  DistanceT ComputeDistance(
       absl::string_view query, const VectorRecord &vector_record,
-      float query_magnitude) const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
+      MagnitudeT query_magnitude) const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
   VectorRecord &GetVectorLockFree(uint64_t internal_id) const override
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
   VectorRecord &GetVector(uint64_t internal_id) const override

@@ -125,8 +125,8 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
       // AlgoDeleteRecord), so restore them with a reciprocal magnitude of
       // exactly 1.0; the HNSW distance path relies on this invariant. For
       // other indexes the magnitude is not used.
-      return VectorRecord::Construct(
-          vector_data, 1.0f, static_cast<FixedSizeAllocator *>(allocator));
+      return VectorRecord::Construct<MagnitudeT>(
+          vector_data, 1, static_cast<FixedSizeAllocator *>(allocator));
     };
     VMSDK_RETURN_IF_ERROR(index->algo_->LoadIndex(
         input, index->space_.get(), vector_index_proto.initial_cap(),
@@ -157,9 +157,8 @@ absl::Status VectorHNSW<T>::AddRecordImpl(uint64_t internal_id,
     try {
       absl::ReaderMutexLock lock(&resize_mutex_);
 
-      algo_->addPoint(QueryVector(vector_record, GetVectorDataSize(),
-                                  normalize_, GetVectorDataType()),
-                      internal_id, algo_->allow_replace_deleted_);
+      algo_->addPoint(Query(vector_record), internal_id,
+                      algo_->allow_replace_deleted_);
       return absl::OkStatus();
     } catch (const std::exception &e) {
       std::string error_msg = e.what();
@@ -270,8 +269,9 @@ absl::Status VectorHNSW<T>::AlgoDeleteRecord(uint64_t label) {
 
   absl::string_view norm_view(norm_record.data(), norm_record.size());
   auto vector_record =
-      VectorRecord::Construct(norm_view, 1.0f, GetVectorAllocator());
-  algo_->SetDataByInternalId(*hnsw_internal_id, std::move(vector_record));
+      VectorRecord::Construct<MagnitudeT>(norm_view, 1, GetVectorAllocator());
+  algo_->SetDataByInternalId(*hnsw_internal_id,
+                             StoredVector(std::move(vector_record)));
   algo_->markDeletedInternal(*hnsw_internal_id);
   return absl::OkStatus();
 }
@@ -282,9 +282,8 @@ absl::Status VectorHNSW<T>::ModifyRecordImpl(uint64_t internal_id,
   try {
     absl::ReaderMutexLock lock(&resize_mutex_);
     // addPoint() routes an existing label to an in-place update.
-    algo_->addPoint(QueryVector(vector_record, GetVectorDataSize(), normalize_,
-                                GetVectorDataType()),
-                    internal_id, /*replace_deleted=*/false);
+    algo_->addPoint(Query(vector_record), internal_id,
+                    /*replace_deleted=*/false);
   } catch (const std::exception &e) {
     DCHECK(false) << "Unexpected error while modifying a record: " << e.what();
     ++Metrics::GetStats().hnsw_modify_exceptions_cnt;
@@ -332,16 +331,15 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
         query.size(), ") does not match index's expected size (",
         dimensions_ * GetDataTypeSize(), ")."));
   }
-  float reciprocal_magnitude =
+  MagnitudeT reciprocal_magnitude =
       normalize_ ? CalcReciprocalMagnitude(
                        reinterpret_cast<const T *>(query.data()), dimensions_)
                  : kDefaultMagnitude;
   try {
     CancelCondition cancel_condition(cancellation_token);
-    VectorRecord query_record = VectorRecord::Construct(
+    VectorRecord query_record = VectorRecord::Construct<MagnitudeT>(
         query, reciprocal_magnitude, GetVectorAllocator());
-    QueryVector embedding(query_record, query.size(), normalize_,
-                          GetVectorDataType());
+    Query embedding(query_record);
     auto res = algo_->searchKnn(embedding, count, ef_runtime, filter.get(),
                                 &cancel_condition);
     if (!enable_partial_results && cancellation_token->IsCancelled()) {
@@ -357,8 +355,9 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
 
 template <typename T>
 absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
-    absl::string_view query, float radius, cancel::Token &cancellation_token,
+    absl::string_view query, double radius, cancel::Token &cancellation_token,
     std::unique_ptr<hnswlib::BaseFilterFunctor> filter) {
+  const DistanceT range_radius = this->RangeRadius(radius);
   const size_t max_candidates = static_cast<size_t>(
       options::GetMaxNonVectorSearchResultsFetched().GetValue());
 
@@ -370,16 +369,14 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
   // from the query.
   auto perform_search =
       [this, &filter, max_candidates, &cancellation_token](
-          absl::string_view query_view, float reciprocal_magnitude)
+          absl::string_view query_view, MagnitudeT reciprocal_magnitude)
           ABSL_NO_THREAD_SAFETY_ANALYSIS
       -> absl::StatusOr<
-          std::priority_queue<std::pair<float, hnswlib::labeltype>>> {
+          std::priority_queue<std::pair<DistanceT, hnswlib::labeltype>>> {
     try {
       CancelCondition cancel_condition(cancellation_token);
-      QueryVector embedding(
-          VectorRecord::Construct(query_view, reciprocal_magnitude,
-                                  GetVectorAllocator()),
-          query_view.size(), normalize_, GetVectorDataType());
+      Query embedding(VectorRecord::Construct<MagnitudeT>(
+          query_view, reciprocal_magnitude, GetVectorAllocator()));
       auto res = algo_->searchKnn(embedding, max_candidates,
                                   std::optional<size_t>(max_candidates),
                                   filter.get(), &cancel_condition);
@@ -392,10 +389,8 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
   };
 
   auto nq = this->NormalizeQueryIfNeeded(query);
-  float reciprocal_magnitude =
-      this->normalize_
-          ? CalcReciprocalMagnitude(nq.view, this->GetVectorDataType())
-          : kDefaultMagnitude;
+  const MagnitudeT reciprocal_magnitude =
+      this->QueryReciprocalMagnitude(nq.view);
   VMSDK_ASSIGN_OR_RETURN(auto raw_results,
                          perform_search(nq.view, reciprocal_magnitude));
 
@@ -407,7 +402,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
   const bool fetch_limited =
       fetch_full &&
       (raw_results.empty() ||
-       this->ClampCosineDistance(raw_results.top().first) <= radius);
+       this->ClampCosineDistance(raw_results.top().first) <= range_radius);
   if (fetch_limited) {
     query::RecordNonVectorResultsFetchedLimited();
     return this->SearchRangeExhaustive(query, radius, cancellation_token,
@@ -432,8 +427,8 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
       return this->SearchRangeExhaustive(query, radius, cancellation_token,
                                          filter.get());
     }
-    float clamped_dist = this->ClampCosineDistance(static_cast<float>(dist));
-    if (clamped_dist > radius) {
+    const DistanceT clamped_dist = this->ClampCosineDistance(dist);
+    if (clamped_dist > range_radius) {
       continue;
     }
     auto key = this->GetKeyDuringSearch(label);
@@ -459,9 +454,9 @@ void VectorHNSW<T>::ToProtoImpl(
 }
 
 template <typename T>
-float VectorHNSW<T>::ComputeDistance(absl::string_view query,
-                                     const VectorRecord &vector_record,
-                                     float query_magnitude) const {
+typename VectorHNSW<T>::DistanceT VectorHNSW<T>::ComputeDistance(
+    absl::string_view query, const VectorRecord &vector_record,
+    MagnitudeT query_magnitude) const {
   return algo_->fstdistfunc_(query.data(), vector_record.GetRawVector(),
                              algo_->dist_func_param_, query_magnitude);
 }
@@ -482,5 +477,6 @@ size_t VectorHNSW<T>::GetLabelCount() const {
 template class VectorHNSW<float>;
 template class VectorHNSW<float16>;
 template class VectorHNSW<bfloat16>;
+template class VectorHNSW<double>;
 
 }  // namespace valkey_search::indexes

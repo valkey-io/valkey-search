@@ -499,8 +499,7 @@ size_t EvaluateFilterAsPrimary(
             dynamic_cast<indexes::VectorBase *>(index_result.value().get());
         if (vector_index != nullptr && !vr_pred->GetQueryVector().empty()) {
           auto range_result = vector_index->SearchRange(
-              vr_pred->GetQueryVector(),
-              static_cast<float>(vr_pred->GetRadius()),
+              vr_pred->GetQueryVector(), vr_pred->GetRadius(),
               parameters.cancellation_token);
           if (range_result.ok()) {
             auto fetcher =
@@ -606,45 +605,32 @@ void EvaluatePrefilteredKeys(
   }
 }
 
-std::priority_queue<std::pair<float, hnswlib::labeltype>>
-CalcBestMatchingPrefilteredKeys(
+absl::StatusOr<std::vector<indexes::Neighbor>> CalcBestMatchingPrefilteredKeys(
     const SearchParameters &parameters,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
     indexes::VectorBase *vector_index, size_t qualified_entries) {
-  std::priority_queue<std::pair<float, hnswlib::labeltype>> results;
-  float query_magnitude = indexes::kDefaultMagnitude;
-  if (vector_index->GetNormalize()) {
-    query_magnitude = indexes::CalcReciprocalMagnitude(
-        parameters.query, vector_index->GetVectorDataType());
-  }
+  auto results =
+      vector_index->CreateNearestKeys(parameters.query, parameters.k);
   auto results_appender =
-      [&results, &parameters, vector_index, query_magnitude](
-          const InternedStringPtr &key,
-          absl::flat_hash_set<const char *> &top_keys) -> bool {
-    return vector_index->AddPrefilteredKey(parameters.query, query_magnitude,
-                                           key, parameters.k, results,
-                                           top_keys);
+      [&results](const InternedStringPtr &key,
+                 absl::flat_hash_set<const char *> &top_keys) -> bool {
+    return results->Add(key, top_keys);
   };
   EvaluatePrefilteredKeys(parameters, entries_fetchers,
                           std::move(results_appender), qualified_entries,
                           /*stop_on_fetch_limit=*/false);
-  return results;
+  return results->CreateReply();
 }
 
 // For pure-vector queries with INKEYS: compute K nearest within the set,
 // not the global top-K filtered by INKEYS (which silently drops in-set docs
 // outside the global top-K).
-std::priority_queue<std::pair<float, hnswlib::labeltype>>
-CalcBestMatchingInkeys(const SearchParameters &parameters,
-                       indexes::VectorBase *vector_index) {
-  std::priority_queue<std::pair<float, hnswlib::labeltype>> results;
+absl::StatusOr<std::vector<indexes::Neighbor>> CalcBestMatchingInkeys(
+    const SearchParameters &parameters, indexes::VectorBase *vector_index) {
   CHECK(parameters.inkeys.has_value());
-  float query_magnitude = indexes::kDefaultMagnitude;
-  if (vector_index->GetNormalize()) {
-    query_magnitude = indexes::CalcReciprocalMagnitude(
-        parameters.query, vector_index->GetVectorDataType());
-  }
-  // Passed for API compatibility with AddPrefilteredKey, dedup is a no-op here
+  auto results =
+      vector_index->CreateNearestKeys(parameters.query, parameters.k);
+  // Passed for API compatibility with NearestKeys::Add, dedup is a no-op here
   // since INKEYS are already unique (flat_hash_set, iterated once).
   absl::flat_hash_set<const char *> top_keys;
   for (const auto &key_str : *parameters.inkeys) {
@@ -652,10 +638,9 @@ CalcBestMatchingInkeys(const SearchParameters &parameters,
       break;
     }
     InternedStringPtr key = StringInternStore::Intern(key_str);
-    vector_index->AddPrefilteredKey(parameters.query, query_magnitude, key,
-                                    parameters.k, results, top_keys);
+    results->Add(key, top_keys);
   }
-  return results;
+  return results->CreateReply();
 }
 
 absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
@@ -817,7 +802,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
         VMSDK_ASSIGN_OR_RETURN(
             auto raw_neighbors,
             vector_index->SearchRange(vr_pred->GetQueryVector(),
-                                      static_cast<float>(vr_pred->GetRadius()),
+                                      vr_pred->GetRadius(),
                                       parameters.cancellation_token));
         // Key order keeps SORTBY ties and FT.AGGREGATE working sets
         // deterministic regardless of scan order.
@@ -930,16 +915,16 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
         // that is outside the radius (or not tracked in the vector index) has
         // no VR distance: mark has_vr_distance=false so it sorts after all
         // genuine VR matches and carries no yielded distance, matching a
-        // text-only match with no vdist. The +inf sentinel in the float is the
-        // cross-shard marker (fanout.cc); other readers use has_vr_distance.
-        float distance;
+        // text-only match with no vdist. The +inf sentinel in the distance is
+        // the cross-shard marker (fanout.cc); other readers use
+        // has_vr_distance.
+        double distance;
         bool has_vr_distance = true;
         if (eval_result.HasVrScore()) {
           distance = eval_result.vr_distance;
         } else if (vr_vector_index != nullptr) {
           auto within = vr_vector_index->IsWithinVectorRange(
-              key, vr_predicate->GetQueryVector(),
-              static_cast<float>(vr_predicate->GetRadius()));
+              key, vr_predicate->GetQueryVector(), vr_predicate->GetRadius());
           if (within.ok() && within->has_value()) {
             distance = within->value();
           } else {
@@ -1844,15 +1829,12 @@ absl::StatusOr<std::vector<indexes::Neighbor>> DoSearchVector(
         << qualified_entries;
     // Do an exact nearest neighbour search on the reduced search space.
     ++Metrics::GetStats().query_prefiltering_requests_cnt;
-    std::priority_queue<std::pair<float, hnswlib::labeltype>> results;
-    if (has_filter) {
-      results = CalcBestMatchingPrefilteredKeys(
-          parameters, entries_fetchers, vector_index, qualified_entries);
-    } else {
-      results = CalcBestMatchingInkeys(parameters, vector_index);
-    }
-
-    VMSDK_ASSIGN_OR_RETURN(auto neighbors, vector_index->CreateReply(results));
+    VMSDK_ASSIGN_OR_RETURN(
+        auto neighbors,
+        has_filter
+            ? CalcBestMatchingPrefilteredKeys(parameters, entries_fetchers,
+                                              vector_index, qualified_entries)
+            : CalcBestMatchingInkeys(parameters, vector_index));
     ApplyHybridTextScore(parameters, neighbors);
     return neighbors;
   }

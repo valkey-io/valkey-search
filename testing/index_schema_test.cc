@@ -3731,6 +3731,12 @@ TEST(IndexSchemaMinVersionTest, BFloat16VectorRequires13) {
             kRelease13);
 }
 
+TEST(IndexSchemaMinVersionTest, Float64VectorRequires13) {
+  EXPECT_EQ(MinVersionOf(
+                MakeSchemaWithVectorType(data_model::VECTOR_DATA_TYPE_FLOAT64)),
+            kRelease13);
+}
+
 // A text index moves the floor to 1.2, not 1.3 -- i.e. the 1.3 gate is not
 // entangled with any other feature.
 TEST(IndexSchemaMinVersionTest, TextIndexDoesNotRequire13) {

@@ -408,8 +408,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
 absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
     const SearchParameters &parameters);
 
-std::priority_queue<std::pair<float, hnswlib::labeltype>>
-CalcBestMatchingPrefilteredKeys(
+absl::StatusOr<std::vector<indexes::Neighbor>> CalcBestMatchingPrefilteredKeys(
     const SearchParameters &parameters,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
     indexes::VectorBase *vector_index, size_t qualified_entries);

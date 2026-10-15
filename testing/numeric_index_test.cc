@@ -5,6 +5,7 @@
  *
  */
 
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -105,6 +106,64 @@ TEST_F(NumericIndexTest, DetectsInvalidData) {
   EXPECT_EQ(index.ModifyRecordResult("key4", "still_not_a_number").value(),
             RecordResult::kInvalidData);
   EXPECT_FALSE(index.IsTracked("key4"));
+}
+
+// Every spelling that parses to NaN is invalid data, not just "nan". A NaN in
+// the B-tree is never ordered against other values, so it lands out of order
+// and can never be erased.
+TEST_F(NumericIndexTest, RejectsEveryNaNSpelling) {
+  const std::vector<std::string> nans = {"nan",  "NaN",    "-nan", "+nan",
+                                         "-NaN", "nan(1)", " nan", "nan "};
+  for (size_t i = 0; i < nans.size(); ++i) {
+    const std::string key = "add_" + std::to_string(i);
+    EXPECT_EQ(index.AddRecordResult(key, nans[i]).value(),
+              RecordResult::kInvalidData)
+        << "AddRecord '" << nans[i] << "'";
+    EXPECT_FALSE(index.IsTracked(key)) << nans[i];
+  }
+  for (size_t i = 0; i < nans.size(); ++i) {
+    const std::string key = "mod_" + std::to_string(i);
+    VMSDK_EXPECT_OK(index.AddRecord(key, "1"));
+    EXPECT_EQ(index.ModifyRecordResult(key, nans[i]).value(),
+              RecordResult::kInvalidData)
+        << "ModifyRecord '" << nans[i] << "'";
+    EXPECT_FALSE(index.IsTracked(key)) << nans[i];
+  }
+}
+
+// Infinities are ordered values and stay valid numeric data.
+TEST_F(NumericIndexTest, AcceptsInfinities) {
+  EXPECT_EQ(index.AddRecordResult("pos", "inf").value(), RecordResult::kAdded);
+  EXPECT_EQ(index.AddRecordResult("neg", "-inf").value(), RecordResult::kAdded);
+  EXPECT_EQ(index.AddRecordResult("big", "1e309").value(),
+            RecordResult::kAdded);
+  EXPECT_EQ(index.AddRecordResult("one", "1").value(), RecordResult::kAdded);
+  const double inf = std::numeric_limits<double>::infinity();
+  auto all = query::NumericPredicate(&index, "a", "id", -inf, true, inf, true);
+  EXPECT_THAT(Fetch(*index.Search(all, false)),
+              testing::UnorderedElementsAre("pos", "neg", "big", "one"));
+  auto finite =
+      query::NumericPredicate(&index, "a", "id", 0.0, true, 2.0, true);
+  EXPECT_THAT(Fetch(*index.Search(finite, false)),
+              testing::UnorderedElementsAre("one"));
+}
+
+// A NaN offered for a key must leave nothing behind: after the key is
+// removed, range searches return only the keys still in the index.
+TEST_F(NumericIndexTest, NaNLeavesNoStaleEntry) {
+  for (int i = 0; i < 40; ++i) {
+    VMSDK_EXPECT_OK(index.AddRecord("k" + std::to_string(i),
+                                    std::to_string(i < 20 ? i : 100 + i)));
+  }
+  (void)index.AddRecord("bad", "-nan");
+  (void)index.RemoveRecord("bad");
+  const double inf = std::numeric_limits<double>::infinity();
+  auto all = query::NumericPredicate(&index, "a", "id", -inf, true, inf, true);
+  auto keys = Fetch(*index.Search(all, false));
+  EXPECT_EQ(keys.size(), 40u);
+  EXPECT_THAT(keys, testing::Not(testing::Contains("bad")));
+  auto low = query::NumericPredicate(&index, "a", "id", 0.0, true, 19.0, true);
+  EXPECT_EQ(Fetch(*index.Search(low, false)).size(), 20u);
 }
 
 TEST_F(NumericIndexTest, SimpleAddModifyRemove1) {

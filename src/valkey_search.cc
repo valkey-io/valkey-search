@@ -1288,20 +1288,19 @@ absl::Status ValkeySearch::OnLoad(ValkeyModuleCtx *ctx,
 absl::Status ValkeySearch::LoadAndParseArgv(ValkeyModuleCtx *ctx,
                                             ValkeyModuleString **argv,
                                             int argc) {
-  VMSDK_RETURN_IF_ERROR(
-      vmsdk::config::ModuleConfigManager::Instance().ParseAndLoadArgv(ctx, argv,
-                                                                      argc));
-  // Sanity check
-  if ((options::GetReaderThreadCount().GetValue() == 0 &&
-       options::GetWriterThreadCount().GetValue() != 0) ||
-      (options::GetWriterThreadCount().GetValue() == 0 &&
-       options::GetReaderThreadCount().GetValue() != 0)) {
-    return absl::InvalidArgumentError(
-        "Maintaining query integrity is only supported when both the reader "
-        "and writer thread pools are either enabled or disabled "
-        "simultaneously");
-  }
-  return absl::OkStatus();
+  ModuleConfigManager::Instance().SetValidationCallback([]() -> absl::Status {
+    if ((options::GetReaderThreadCount().GetValue() == 0 &&
+         options::GetWriterThreadCount().GetValue() != 0) ||
+        (options::GetWriterThreadCount().GetValue() == 0 &&
+         options::GetReaderThreadCount().GetValue() != 0)) {
+      return absl::InvalidArgumentError(
+          "Maintaining query integrity is only supported when both the reader "
+          "and writer thread pools are either enabled or disabled "
+          "simultaneously");
+    }
+    return absl::OkStatus();
+  });
+  return ModuleConfigManager::Instance().ParseAndLoadArgv(ctx, argv, argc);
 }
 
 bool ValkeySearch::IsChildProcess() {

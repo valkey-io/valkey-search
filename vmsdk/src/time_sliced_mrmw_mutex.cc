@@ -51,25 +51,26 @@ void TimeSlicedMRMWMutex::IncMayProlongCount() {
   ++may_prolong_count_;
 }
 
-void TimeSlicedMRMWMutex::ReaderLock(bool& may_prolong,
-                                     bool ignore_time_quota) {
-  Lock(Mode::kLockRead, may_prolong, ignore_time_quota);
+StopWatch TimeSlicedMRMWMutex::ReaderLock(bool& may_prolong,
+                                          bool ignore_time_quota) {
+  return Lock(Mode::kLockRead, may_prolong, ignore_time_quota);
 }
 
-void TimeSlicedMRMWMutex::WriterLock(bool& may_prolong,
-                                     bool ignore_time_quota) {
-  Lock(Mode::kLockWrite, may_prolong, ignore_time_quota);
+StopWatch TimeSlicedMRMWMutex::WriterLock(bool& may_prolong,
+                                          bool ignore_time_quota) {
+  return Lock(Mode::kLockWrite, may_prolong, ignore_time_quota);
 }
 
-void TimeSlicedMRMWMutex::Lock(Mode target_mode, bool& may_prolong,
-                               bool ignore_time_quota) {
+StopWatch TimeSlicedMRMWMutex::Lock(Mode target_mode, bool& may_prolong,
+                                    bool ignore_time_quota) {
   absl::MutexLock lock(&mutex_);
   const Mode inverse_mode = GetInverseMode(target_mode);
   if (current_mode_ == target_mode) {
-    if (ABSL_PREDICT_FALSE(
-            !ignore_time_quota && ignore_time_quota_count_ == 0 &&
-            HasTimeQuotaExceeded() && GetWaiters(inverse_mode) > 0 &&
-            (may_prolong || may_prolong_count_ == 0))) {
+    if (ABSL_PREDICT_FALSE(!ignore_time_quota &&
+                           ignore_time_quota_count_ == 0 &&
+                           GetWaiters(inverse_mode) > 0 &&
+                           (may_prolong || may_prolong_count_ == 0) &&
+                           HasTimeQuotaExceeded())) {
       SwitchWithWait(target_mode);
     }
   } else {
@@ -83,6 +84,7 @@ void TimeSlicedMRMWMutex::Lock(Mode target_mode, bool& may_prolong,
   }
   last_lock_acquired_.Reset();
   ++active_lock_count_;
+  return last_lock_acquired_;
 }
 
 void TimeSlicedMRMWMutex::Unlock(bool may_prolong, bool ignore_time_quota) {
@@ -100,14 +102,13 @@ void TimeSlicedMRMWMutex::Unlock(bool may_prolong, bool ignore_time_quota) {
   }
   CHECK(active_lock_count_ > 0 ||
         (may_prolong_count_ == 0 && ignore_time_quota_count_ == 0));
-  if (ShouldSwitch() && GetWaiters(GetInverseMode(current_mode_)) > 0) {
+  if (GetWaiters(GetInverseMode(current_mode_)) > 0 && ShouldSwitch()) {
     InitSwitch();
   }
 }
 
 void TimeSlicedMRMWMutex::WaitSwitch(Mode target_mode) {
   auto& wait_with_timer = WaitWithTimer(target_mode);
-  auto has_time_quota_exceeded = HasTimeQuotaExceeded();
   // The following logic determines whether to wait with a timer:
   // 1. This thread is the first one waiting with a timer for the target
   // mode.
@@ -115,7 +116,7 @@ void TimeSlicedMRMWMutex::WaitSwitch(Mode target_mode) {
   // the opposite mode. In this case, the mode switch is triggered by the last
   // remaining active thread, hence the wait with a timer is not needed.
   if (wait_with_timer || (current_mode_ != target_mode &&
-                          has_time_quota_exceeded && active_lock_count_ > 0)) {
+                          active_lock_count_ > 0 && HasTimeQuotaExceeded())) {
     GetCondVar(target_mode).Wait(&mutex_);
   } else {
     wait_with_timer = true;
@@ -126,10 +127,11 @@ void TimeSlicedMRMWMutex::WaitSwitch(Mode target_mode) {
 
 absl::Duration TimeSlicedMRMWMutex::CalcWaitTime() const {
   auto grace_period = CalcEffectiveGraceTime();
-  if (last_lock_acquired_.Duration() >= grace_period) {
+  const absl::Duration elapsed = last_lock_acquired_.Duration();
+  if (elapsed >= grace_period) {
     return grace_period;
   }
-  return (grace_period - last_lock_acquired_.Duration());
+  return grace_period - elapsed;
 }
 
 absl::Duration TimeSlicedMRMWMutex::CalcEffectiveGraceTime() const {

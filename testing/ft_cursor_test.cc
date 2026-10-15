@@ -340,9 +340,15 @@ TEST_F(FTCursorTest, DestructionObeysBackgroundCleanupSetting) {
 
   VMSDK_EXPECT_OK(background.SetValue(true));
   destroyed.store(false);
+  // An idle utility worker can run the scheduled destruction before the check
+  // below, so hold the pool until the cursor is known to be still alive.
+  auto &utility_pool = *ValkeySearch::Instance().GetUtilityThreadPool();
+  VMSDK_EXPECT_OK(utility_pool.SuspendWorkers());
   CursorTable::Instance().Erase(InsertCursor(1, &destroyed));
   EXPECT_FALSE(destroyed);
-  WaitWorkerTasksAreCompleted(*ValkeySearch::Instance().GetUtilityThreadPool());
+  EXPECT_EQ(utility_pool.QueueSize(), 1);
+  VMSDK_EXPECT_OK(utility_pool.ResumeWorkers());
+  WaitWorkerTasksAreCompleted(utility_pool);
   EXPECT_TRUE(destroyed);
 
   VMSDK_EXPECT_OK(background.SetValue(saved));

@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "absl/base/thread_annotations.h"
@@ -81,8 +82,8 @@ class SchemaManager {
           std::atomic<uint64_t>> &(const IndexSchema::Stats &) const>
           get_result_cnt_func) const;
 
-  // dbnum is -1 when all databases were flushed.
-  void OnFlushDBEnded(ValkeyModuleCtx *ctx, int dbnum);
+  // An empty dbnum means every database was flushed.
+  void OnFlushDBEnded(ValkeyModuleCtx *ctx, std::optional<int> dbnum);
   void OnSwapDB(ValkeyModuleSwapDbInfo *swap_db_info);
 
   void OnLoadingEnded(ValkeyModuleCtx *ctx)
@@ -144,7 +145,7 @@ class SchemaManager {
       int db_num, absl::string_view name)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);
 
-  void FlushDBIndexSchemas(ValkeyModuleCtx *ctx, int db_num)
+  void FlushDBIndexSchemas(ValkeyModuleCtx *ctx, int db_num, bool flush_all)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);
 
   void SubscribeToServerEventsIfNeeded();

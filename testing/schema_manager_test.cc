@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -274,7 +275,7 @@ TEST_F(SchemaManagerTest, TestOnFlushAllDBs) {
         SchemaManager::Instance().GetIndexSchema(kOtherDBNum, index_name_);
     VMSDK_EXPECT_OK(previous_schema_db1);
 
-    SchemaManager::Instance().OnFlushDBEnded(&fake_ctx_, -1);
+    SchemaManager::Instance().OnFlushDBEnded(&fake_ctx_, std::nullopt);
 
     if (!coordinator_enabled) {
       // Expect both databases to be flushed

@@ -70,3 +70,36 @@ class TestFlushAllCME(ValkeySearchClusterTestCase):
 
         assert client.execute_command("FT._LIST") == [hnsw_index.name.encode()]
         waiters.wait_for_equal(lambda: self.sum_docs(hnsw_index), 0)
+
+    def test_flushall_multidb_CME(self):
+        """
+            FLUSHALL must clear the indexes of every DB in cluster mode too
+        """
+        num_dbs = 3
+        primary = self.get_primary(2)
+        clients = {}
+        for db_num in range(num_dbs):
+            client = primary.connect()
+            client.select(db_num)
+            clients[db_num] = client
+
+        # Same hash tag and primary as TestMultiDBCME, so every key lands on
+        # the primary these clients are connected to.
+        index = Index("hnsw", [Vector("v", 3, type="HNSW", m=2, efc=1), Numeric("n")],
+                      prefixes=["p:{0}"])
+        NUM_VECTORS = 100
+
+        for db_num in range(num_dbs):
+            index.create(clients[db_num])
+            index.load_data(clients[db_num], NUM_VECTORS)
+            waiters.wait_for_equal(
+                lambda c=clients[db_num]: index.info(c).num_docs, NUM_VECTORS)
+
+        clients[0].execute_command("flushall sync")
+
+        for db_num in range(num_dbs):
+            # Coordinated mode keeps the definition and recreates it empty.
+            assert clients[db_num].execute_command("FT._LIST") == [index.name.encode()], \
+                f"index missing in DB {db_num}"
+            waiters.wait_for_equal(
+                lambda c=clients[db_num]: index.info(c).num_docs, 0)

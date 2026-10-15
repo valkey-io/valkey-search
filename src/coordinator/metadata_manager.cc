@@ -691,6 +691,7 @@ absl::Status MetadataManager::LoadMetadata(
                                             /*trigger_callbacks=*/false,
                                             /*prefer_incoming=*/true));
   }
+
   return absl::OkStatus();
 }
 

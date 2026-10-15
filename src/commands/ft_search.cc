@@ -288,6 +288,15 @@ absl::Status ProcessNeighborsForQuery(ValkeyModuleCtx *ctx,
   query::ProcessNeighborsForReply(
       ctx, command.index_schema->GetAttributeDataType(),
       search_result.neighbors, command, vector_identifier);
+  // A query run synchronously skips ResolveContent, so a SORTBY trimmed in the
+  // background falls back to its full candidate set here.
+  if (search_result.FallBackToSortByCandidates(
+          command, original_size - search_result.neighbors.size())) {
+    original_size = search_result.neighbors.size();
+    query::ProcessNeighborsForReply(
+        ctx, command.index_schema->GetAttributeDataType(),
+        search_result.neighbors, command, vector_identifier);
+  }
   // Adjust total count based on neighbors removed during processing
   // due to filtering or missing attributes.
   search_result.total_count -= (original_size - search_result.neighbors.size());

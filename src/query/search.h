@@ -130,6 +130,18 @@ struct SearchResult {
   bool is_limited_with_buffer;
   // True if neighbors were offset using LIMIT first_index.
   bool is_offsetted;
+  // Every candidate of a SORTBY trimmed in the background. Content loading can
+  // drop what the trim kept (a key deleted or expired since the search), so
+  // ResolveContent falls back to the full set when the page comes up short.
+  std::vector<indexes::Neighbor> sortby_candidates;
+  // How many of the neighbors the trim ordered by sort value. The rest are
+  // candidates without one, passed through untrimmed.
+  size_t sortby_kept{0};
+  // Swaps in sortby_candidates when content loading removed `removed` of the
+  // kept neighbors and left the page short. Returns whether it did; the caller
+  // then resolves the neighbors again.
+  bool FallBackToSortByCandidates(const SearchParameters &parameters,
+                                  size_t removed);
 
   // Constructor with automatic trimming based on query requirements
   SearchResult(size_t total_count, std::vector<indexes::Neighbor> neighbors,
@@ -148,9 +160,12 @@ struct SearchResult {
   SearchResult();
 
  private:
+  // `sort_index`, when set, is the index of the SORTBY field: results are
+  // ordered by its per-key values instead of by score (see SortByIndex).
   template <typename T>
   void TrimResults(std::vector<T> &vec, const SearchParameters &parameters,
-                   bool trim_offset_in_background);
+                   bool trim_offset_in_background,
+                   const indexes::IndexBase *sort_index = nullptr);
 };
 
 //

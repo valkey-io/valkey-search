@@ -6,9 +6,15 @@
  */
 #include "valkey_search_options.h"
 
+#include <memory>
+#include <string>
 #include <string_view>
 #include <vector>
 
+#include "absl/base/no_destructor.h"
+#include "absl/container/flat_hash_map.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/string_view.h"
 #include "valkey_search.h"
 #include "version.h"
 #include "vmsdk/src/concurrency.h"
@@ -906,6 +912,20 @@ config::Version &GetEmulateRelease() {
 
 bool EnabledInVersion(vmsdk::ValkeyVersion version) {
   return GetEmulateRelease().GetValue() >= version;
+}
+
+vmsdk::info_field::Integer &CompatibilityFixCounter(absl::string_view label) {
+  vmsdk::VerifyMainThread();
+  static absl::NoDestructor<absl::flat_hash_map<
+      std::string, std::unique_ptr<vmsdk::info_field::Integer>>>
+      counters;
+  auto [it, inserted] = counters->try_emplace(label);
+  if (inserted) {
+    it->second = std::make_unique<vmsdk::info_field::Integer>(
+        "compatibility", absl::StrCat("compatibility-", label),
+        vmsdk::info_field::IntegerBuilder().App());
+  }
+  return *it->second;
 }
 
 }  // namespace options

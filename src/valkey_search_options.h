@@ -6,6 +6,7 @@
  */
 #pragma once
 
+#include "absl/strings/string_view.h"
 #include "vmsdk/src/info.h"  // IWYU pragma: keep
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/utils.h"
@@ -197,6 +198,11 @@ inline bool EnabledInVersion(int major, int minor, int patch) {
   return EnabledInVersion(vmsdk::ValkeyVersion(major, minor, patch));
 }
 
+/// The INFO counter `compatibility-<label>`, created on first use and shared
+/// by every VALKEY_SEARCH_COMPATIBILITY_FIX expansion with that label. Main
+/// thread only.
+vmsdk::info_field::Integer &CompatibilityFixCounter(absl::string_view label);
+
 }  // namespace options
 }  // namespace valkey_search
 
@@ -206,15 +212,16 @@ inline bool EnabledInVersion(int major, int minor, int patch) {
 //
 //   * emulate-release >= major.minor.patch  -> run `fixed_fn()`
 //   * otherwise                             -> run `old_fn()` and bump the
-//                                              per-site INFO counter named
-//                                              `label`.
+//                                              INFO counter named `label`.
 //
 // Both callables must be nullary and return the same type (void is allowed).
 // `label` must be a string literal; the INFO field is registered under the
 // "compatibility" section with the name `"compatibility-" + label`, so every
 // metric emitted by this macro shares a common prefix. The counter is
-// constructed lazily on the first macro invocation (regardless of path) and
-// only incremented when the legacy branch runs.
+// looked up (and created on the first use of its label) on the first
+// invocation of each expansion, regardless of path, and only incremented
+// when the legacy branch runs. Expansions that share a label share the
+// counter.
 //
 // Usage:
 //   auto result = VALKEY_SEARCH_COMPATIBILITY_FIX(
@@ -227,9 +234,8 @@ inline bool EnabledInVersion(int major, int minor, int patch) {
   ([&]() {                                                                    \
     static constexpr ::vmsdk::ValkeyVersion kVsCompatFixVersion{              \
         (major), (minor), (patch)};                                           \
-    static ::vmsdk::info_field::Integer kVsCompatFixCounter{                  \
-        "compatibility", "compatibility-" label,                              \
-        ::vmsdk::info_field::IntegerBuilder().App()};                         \
+    static ::vmsdk::info_field::Integer &kVsCompatFixCounter =                \
+        ::valkey_search::options::CompatibilityFixCounter(label);             \
     if (::valkey_search::options::EnabledInVersion(kVsCompatFixVersion)) {    \
       return (fixed_fn)();                                                    \
     }                                                                         \

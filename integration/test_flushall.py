@@ -83,15 +83,19 @@ class TestFlushAllCME(ValkeySearchClusterTestCase):
             client.select(db_num)
             clients[db_num] = client
 
-        # Same hash tag and primary as TestMultiDBCME, so every key lands on
-        # the primary these clients are connected to.
         index = Index("hnsw", [Vector("v", 3, type="HNSW", m=2, efc=1), Numeric("n")],
-                      prefixes=["p:{0}"])
+                      prefixes=["p:"])
         NUM_VECTORS = 100
+
+        # Keys carry the same hash tag as TestMultiDBCME so they all land on the
+        # primary these clients are connected to. A prefix cannot hold the tag.
+        def load_tagged_keys(client):
+            for i in range(NUM_VECTORS):
+                client.hset(f"p:{{0}}:{i:08d}", mapping=index.make_data(i))
 
         for db_num in range(num_dbs):
             index.create(clients[db_num])
-            index.load_data(clients[db_num], NUM_VECTORS)
+            load_tagged_keys(clients[db_num])
             waiters.wait_for_equal(
                 lambda c=clients[db_num]: index.info(c).num_docs, NUM_VECTORS)
 

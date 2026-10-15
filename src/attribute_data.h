@@ -59,7 +59,7 @@ class AttributeData {
     // any key that had one; Redis compares the value itself.
     if (auto *vec = std::get_if<indexes::VectorRecordWithSize>(&data_)) {
       if (vec->vector_record) {
-        return absl::string_view(vec->vector_record->GetRawVector(), vec->size);
+        return {vec->vector_record.GetRawVector(), vec->size};
       }
     }
     return {};
@@ -79,9 +79,9 @@ class AttributeData {
     return std::get<vmsdk::UniqueValkeyString>(std::move(data_));
   }
 
-  std::shared_ptr<indexes::VectorRecord> ConsumeVector() {
-    return std::get<indexes::VectorRecordWithSize>(std::move(data_))
-        .vector_record;
+  indexes::VectorRecord ConsumeVector() {
+    return std::move(
+        std::get<indexes::VectorRecordWithSize>(data_).vector_record);
   }
 
   indexes::DeletionType deletion_type{indexes::DeletionType::kNone};

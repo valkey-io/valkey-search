@@ -13,7 +13,9 @@
 
 #include "absl/base/no_destructor.h"
 #include "absl/container/flat_hash_map.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
+#include "vmsdk/src/type_conversions.h"
 
 namespace valkey_search::indexes::scoring {
 
@@ -21,6 +23,12 @@ namespace valkey_search::indexes::scoring {
 // built with); detect ±inf and NaN by IEEE 754 bit pattern instead.
 bool IsInf(float f);
 bool IsNaN(float f);
+
+// Produces a +inf whose bit pattern survives -ffast-math. A source-level
+// std::numeric_limits<float>::infinity() may be folded to a finite value under
+// -ffinite-math-only; assembling the bits by memcpy is immune to that. Used as
+// the on-the-wire "no VR distance" marker; the coordinator compares its bits.
+float PositiveInf();
 
 enum class ScorerType {
   kBm25Std,
@@ -40,6 +48,18 @@ inline absl::string_view ScorerToString(ScorerType scorer) {
 // new scorers will be added here when implemented
 const absl::NoDestructor<absl::flat_hash_map<absl::string_view, ScorerType>>
     kScorerByStr({{"BM25STD", ScorerType::kBm25Std}});
+
+// Resolves the token following a SCORER keyword. Every command that accepts
+// SCORER goes through here, so the set of selectable scorers and the rejection
+// message cannot drift between them. A scorer that exists in ScorerType but is
+// not registered in kScorerByStr (TFIDF, today) is not selectable and is
+// rejected like any unknown name.
+//
+// vmsdk::ToEnum retries the lookup upper-cased, which is what makes the name
+// case-insensitive, and reports "Unknown argument `<token>`" otherwise.
+inline absl::StatusOr<ScorerType> ParseScorerType(absl::string_view token) {
+  return vmsdk::ToEnum<ScorerType>(token, *kScorerByStr);
+}
 
 // Query-invariant, corpus-level inputs for PrecomputeIDF (once per term).
 struct IdfInput {

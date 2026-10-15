@@ -151,7 +151,7 @@ class VectorRegistry {
   bool ShareWithValkey(
       int db_num, const InternedStringPtr &key,
       absl::string_view attribute_identifier,
-      const indexes::VectorRecord *vector_record, size_t vector_size,
+      const indexes::VectorRecord &vector_record, size_t vector_size,
       const data_model::AttributeDataType &attribute_data_type);
   std::optional<indexes::VectorRecordWithSize> ExtractTrackedRecord(
       int db_num, const InternedStringPtr &key,
@@ -161,7 +161,7 @@ class VectorRegistry {
   // with an independent owned copy.
   bool UnshareWithValkey(ValkeyModuleKey *key_obj,
                          absl::string_view attribute_identifier,
-                         const indexes::VectorRecord *vector_record,
+                         const indexes::VectorRecord &vector_record,
                          size_t vector_size);
   bool IsEraseTrackedRecordSafe(
       int db_num, const InternedStringPtr &key, absl::string_view vector_str,

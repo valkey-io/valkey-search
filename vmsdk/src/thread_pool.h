@@ -102,6 +102,8 @@ class ThreadPool {
       thread_monitor_ = std::make_unique<ThreadMonitor>(thread_id);
     }
 
+    /// Written by the worker itself, not by pthread_create; see
+    /// RunWorkerThread in thread_pool.cc.
     pthread_t thread_id = 0;
     std::atomic_bool shutdown_flag = false;
     std::atomic_bool joinable_flag = false;

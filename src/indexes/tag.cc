@@ -13,10 +13,12 @@
 #include <utility>
 #include <vector>
 
+#include "absl/base/optimization.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/ascii.h"
+#include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
@@ -27,12 +29,35 @@
 #include "src/utils/scanner.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
+#include "vmsdk/src/info.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes {
 
 namespace {
+
+// INFO counter for the non-UTF-8 TAG compatibility defect (see
+// COMPATIBILITY.md). Statically constructed because AddRecord/ModifyRecord run
+// on worker threads, where VALKEY_SEARCH_COMPATIBILITY_FIX's lazily
+// constructed counter is unsafe.
+vmsdk::info_field::Integer tag_rejects_non_utf8_compat_counter(
+    "compatibility", "compatibility-tag_rejects_non_utf8",
+    vmsdk::info_field::IntegerBuilder().App());
+
+// Redisearch rejects non-UTF-8 TAG data. This is gated on
+// search.emulate-release so the legacy behavior (index it) is preserved by
+// default.
+bool RejectNonUtf8(absl::string_view data) {
+  if (ABSL_PREDICT_TRUE(utils::IsValidUtf8(data))) {
+    return false;
+  }
+  if (options::EnabledInVersion(1, 3, 0)) {
+    return true;
+  }
+  tag_rejects_non_utf8_compat_counter.Increment();
+  return false;
+}
 
 inline uintptr_t SlotToStorage(void *p) {
   return reinterpret_cast<uintptr_t>(p);
@@ -110,7 +135,7 @@ absl::StatusOr<RecordResult> Tag::AddRecord(const InternedStringPtr &key,
                                             AttributeData &&data) {
   auto str = data.ConsumeString();
   auto data_sv = vmsdk::ToStringView(str.get());
-  if (!utils::IsValidUtf8(data_sv)) {
+  if (RejectNonUtf8(data_sv)) {
     absl::MutexLock lock(&index_mutex_);
     untracked_keys_.insert(key);
     return RecordResult::kInvalidData;
@@ -120,8 +145,8 @@ absl::StatusOr<RecordResult> Tag::AddRecord(const InternedStringPtr &key,
   auto parsed_tags = ParseRecordTags(*interned_data, separator_);
   absl::MutexLock lock(&index_mutex_);
   if (parsed_tags.empty()) {
-    // An empty tag set is a missing value, not invalid data. (Content
-    // validation of TAG fields, e.g. non-UTF8 detection, is deferred.)
+    // An empty tag set is a missing value, not invalid data. (Non-UTF-8
+    // content is handled above by RejectNonUtf8.)
     untracked_keys_.insert(key);
     return RecordResult::kMissing;
   }
@@ -219,7 +244,7 @@ absl::StatusOr<RecordResult> Tag::ModifyRecord(const InternedStringPtr &key,
                                                AttributeData &&data) {
   auto str = data.ConsumeString();
   auto data_sv = vmsdk::ToStringView(str.get());
-  if (!utils::IsValidUtf8(data_sv)) {
+  if (RejectNonUtf8(data_sv)) {
     [[maybe_unused]] auto res =
         RemoveRecord(key, indexes::DeletionType::kIdentifier);
     return RecordResult::kInvalidData;
@@ -515,6 +540,32 @@ size_t Tag::GetTagValueDocCount(absl::string_view value) const {
   size_t count = bag.size();
   (void)bag.Release();
   return count;
+}
+
+size_t Tag::GetPrefixMatchDocCount(absl::string_view prefix_value,
+                                   BorrowedInternedStringPtr key) const {
+  if (prefix_value.empty() || prefix_value.back() != '*') return 0;
+  const absl::string_view prefix =
+      prefix_value.substr(0, prefix_value.size() - 1);
+
+  // Scan the doc's own tags rather than the prefix's rax subtree: a doc carries
+  // a handful of tags while a prefix can match an unbounded slice of the index.
+  // Lock-free by the read-side invariant GetValue / ContainsKey rely on.
+  auto it = tracked_tags_by_keys_.find(key);
+  if (it == tracked_tags_by_keys_.end()) return 0;
+
+  for (const auto &part :
+       absl::StrSplit(it->second.raw_tag_string->Str(), separator_)) {
+    const absl::string_view tag = absl::StripAsciiWhitespace(part);
+    // Empty tags are never indexed (ParseRecordTags drops them), and a bare `*`
+    // query gives an empty prefix that would otherwise match one.
+    if (tag.empty()) continue;
+    if (case_sensitive_ ? absl::StartsWith(tag, prefix)
+                        : absl::StartsWithIgnoreCase(tag, prefix)) {
+      return GetTagValueDocCount(tag);
+    }
+  }
+  return 0;
 }
 
 bool Tag::IsTracked(const InternedStringPtr &key) const {

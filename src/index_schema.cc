@@ -12,7 +12,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <format>
 #include <memory>
 #include <optional>
 #include <string>
@@ -41,6 +40,7 @@
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
+#include "src/indexes/text/language_registry.h"
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
@@ -128,6 +128,7 @@ DEV_INTEGER_COUNTER(rdb_stats, rdb_save_sections);
 DEV_INTEGER_COUNTER(rdb_stats, rdb_load_sections);
 DEV_INTEGER_COUNTER(rdb_stats, rdb_load_sections_skipped);
 DEV_INTEGER_COUNTER(rdb_stats, rdb_save_multi_exec_entries);
+DEV_INTEGER_COUNTER(rdb_stats, rdb_save_multi_exec_orphans_skipped);
 DEV_INTEGER_COUNTER(rdb_stats, rdb_load_multi_exec_entries);
 DEV_INTEGER_COUNTER(rdb_stats, rdb_save_mutation_entries);
 DEV_INTEGER_COUNTER(rdb_stats, rdb_load_mutation_entries);
@@ -279,8 +280,9 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
       VMSDK_ASSIGN_OR_RETURN(
           std::shared_ptr<indexes::IndexBase> index,
           IndexFactory(ctx, res.get(), attribute, std::nullopt));
-      VMSDK_RETURN_IF_ERROR(
-          res->AddIndex(attribute.alias(), attribute.identifier(), index));
+      VMSDK_RETURN_IF_ERROR(res->AddIndex(
+          attribute.alias(), attribute.identifier(), index,
+          {.sortable = attribute.sortable(), .unf = attribute.unf()}));
     }
   }
   // Compiling the FILTER resolves every @reference against the attributes, so
@@ -510,12 +512,14 @@ absl::StatusOr<vmsdk::UniqueValkeyString> IndexSchema::DefaultReplyScoreAs(
 
 absl::Status IndexSchema::AddIndex(absl::string_view attribute_alias,
                                    absl::string_view identifier,
-                                   std::shared_ptr<indexes::IndexBase> index) {
+                                   std::shared_ptr<indexes::IndexBase> index,
+                                   AttributeOptions options) {
   auto [_, res] = attributes_.insert(
       {std::string(attribute_alias),
-       Attribute{attribute_alias, identifier, index,
-                 static_cast<AttributePosition>(
-                     attributes_indexed_data_size_.size())}});
+       Attribute{
+           attribute_alias, identifier, index,
+           static_cast<AttributePosition>(attributes_indexed_data_size_.size()),
+           options}});
   if (!res) {
     return absl::AlreadyExistsError(
         absl::StrCat("Index field `", attribute_alias, "` already exists"));
@@ -1409,14 +1413,11 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   }
 
   ValkeyModule_ReplyWithSimpleString(ctx, "language");
-  switch (language_) {
-    case data_model::LANGUAGE_ENGLISH:
-      ValkeyModule_ReplyWithSimpleString(ctx, "english");
-      break;
-    default:
-      ValkeyModule_ReplyWithSimpleString(ctx, "english");
-      break;
-  }
+  ValkeyModule_ReplyWithSimpleString(
+      ctx,
+      std::string(
+          indexes::text::LanguageRegistry::Instance().Get(language_)->Name())
+          .c_str());
 }
 
 std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {
@@ -1479,6 +1480,14 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
         << "Draining mutation queue before RDB save for index "
         << vmsdk::config::RedactIfNeeded(name_);
     DrainMutationQueue(detached_ctx_.get());
+  }
+  // A foreground save (SAVE, SHUTDOWN, DEBUG RELOAD) runs while writer threads
+  // may still apply queued mutations. Holding the read phase excludes them, so
+  // the save never reads a vector being replaced or a neighbor list being
+  // rewritten. A forked child (BGSAVE) has no writer threads.
+  std::optional<vmsdk::ReaderMutexLock> time_slice_lock;
+  if (!is_bgsave) {
+    time_slice_lock.emplace(&time_sliced_mutex_);
   }
 
   VMSDK_LOG(NOTICE, nullptr)
@@ -1685,15 +1694,31 @@ absl::Status IndexSchema::SaveIndexExtension(RDBChunkOutputStream out) const {
   }
   CHECK(count == 0);
   //
-  // Write out the multi/exec queued keys
+  // Write out the multi/exec queued keys.
   //
-  VMSDK_RETURN_IF_ERROR(
-      out.SaveObject<size_t>(multi_mutations_keys_.Get().size()));
-  rdb_save_multi_exec_entries.Increment(multi_mutations_keys_.Get().size());
-  VMSDK_LOG(DEBUG, nullptr) << "Writing Multi/Exec Queue, records = "
-                            << multi_mutations_keys_.Get().size();
+  // Queue keys can outlive their mutation records. Save only tracked keys;
+  // skipped keys are recovered from the saved key list or backfill on load.
+  std::vector<Key> live_multi_keys;
+  live_multi_keys.reserve(multi_mutations_keys_.Get().size());
+  size_t orphan_keys_skipped = 0;
   for (const auto &key : multi_mutations_keys_.Get()) {
-    CHECK(tracked_mutated_records_.find(key) != tracked_mutated_records_.end());
+    if (tracked_mutated_records_.find(key) == tracked_mutated_records_.end()) {
+      ++orphan_keys_skipped;
+      continue;
+    }
+    live_multi_keys.push_back(key);
+  }
+  if (orphan_keys_skipped != 0) {
+    rdb_save_multi_exec_orphans_skipped.Increment(orphan_keys_skipped);
+    VMSDK_LOG(WARNING, nullptr)
+        << "Skipped " << orphan_keys_skipped
+        << " orphan multi/exec keys not present in mutation map";
+  }
+  VMSDK_RETURN_IF_ERROR(out.SaveObject<size_t>(live_multi_keys.size()));
+  rdb_save_multi_exec_entries.Increment(live_multi_keys.size());
+  VMSDK_LOG(DEBUG, nullptr)
+      << "Writing Multi/Exec Queue, records = " << live_multi_keys.size();
+  for (const auto &key : live_multi_keys) {
     VMSDK_RETURN_IF_ERROR(out.SaveString(key->Str()));
   }
   return absl::OkStatus();
@@ -1820,8 +1845,8 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
   // Select the DB number in the context for subsequent usage.
   int db_num = static_cast<int>(index_schema_proto->db_num());
   if (ValkeyModule_SelectDb(ctx, db_num) != VALKEYMODULE_OK) {
-    return absl::InternalError(std::format(
-        "Unable to select DB {} for loading index schema {}", db_num,
+    return absl::InternalError(absl::StrFormat(
+        "Unable to select DB %d for loading index schema %s", db_num,
         vmsdk::config::RedactIfNeeded(index_schema_proto->name()).data()));
   }
 
@@ -1865,7 +1890,8 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
               IndexFactory(ctx, index_schema.get(), attribute,
                            supplemental_iter.IterateChunks()));
           VMSDK_RETURN_IF_ERROR(index_schema->AddIndex(
-              attribute.alias(), attribute.identifier(), index));
+              attribute.alias(), attribute.identifier(), index,
+              {.sortable = attribute.sortable(), .unf = attribute.unf()}));
           break;
         }
         case data_model::SupplementalContentType::
@@ -2213,8 +2239,7 @@ void IndexSchema::MarkAsDestructing() {
       if (params) {
         params->search_result.status =
             GenerateIndexNotFoundError(db_num_, name_);
-        auto *raw_params = params.get();
-        raw_params->QueryCompleteMainThread(std::move(params));
+        params->QueryCompleteMainThread(std::move(params));
       }
     }
   }
@@ -2370,7 +2395,19 @@ absl::StatusOr<vmsdk::ValkeyVersion> IndexSchema::GetMinVersion(
   // a failed load. Recording 1.3.0 makes that RDB refuse to load instead.
   if (has_low_precision_vector || unpacked->has_filter()) {
     return kRelease13;
-  } else if (has_text_index) {
+  }
+  if (has_text_index) {
+    auto lang =
+        indexes::text::LanguageRegistry::Instance().Get(unpacked->language());
+    if (!lang) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          data_model::Language_Name(unpacked->language()),
+          " is not supported in module version ", kModuleVersion.ToString()));
+    }
+    auto min_lang_version = lang->MinRequiredVersion();
+    if (min_lang_version > kRelease12) {
+      return min_lang_version;
+    }
     return kRelease12;
   } else if (unpacked->has_db_num() && unpacked->db_num() != 0) {
     return kRelease11;

@@ -272,7 +272,7 @@ TEST_F(SchemaManagerTest, TestSaveIndexesBeforeRDB) {
       CreateIndexSchema(index_name_, &fake_ctx_, nullptr, {}, db_num_).value();
   ValkeyModuleIO *fake_rdb = reinterpret_cast<ValkeyModuleIO *>(0xDEADBEEF);
   EXPECT_CALL(*kMockValkeyModule, SaveUnsigned(fake_rdb, testing::_)).Times(0);
-  EXPECT_CALL(*schema, RDBSave(testing::_)).Times(0);
+  EXPECT_CALL(*schema, RDBSave(testing::_, testing::_)).Times(0);
   SafeRDB fake_safe_rdb(fake_rdb);
   VMSDK_EXPECT_OK(SchemaManager::Instance().SaveIndexes(
       &fake_ctx_, &fake_safe_rdb, VALKEYMODULE_AUX_BEFORE_RDB));
@@ -284,7 +284,7 @@ TEST_F(SchemaManagerTest, TestSaveIndexesAfterRDB) {
   auto schema =
       CreateIndexSchema(index_name_, &fake_ctx_, nullptr, {}, db_num_).value();
   ValkeyModuleIO *fake_rdb = reinterpret_cast<ValkeyModuleIO *>(0xDEADBEEF);
-  EXPECT_CALL(*schema, RDBSave(testing::_))
+  EXPECT_CALL(*schema, RDBSave(testing::_, testing::_))
       .WillOnce(testing::Return(absl::OkStatus()));
   SafeRDB fake_safe_rdb(fake_rdb);
   VMSDK_EXPECT_OK(SchemaManager::Instance().SaveIndexes(

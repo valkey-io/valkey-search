@@ -188,6 +188,19 @@ using Func = Value (*)(Expression::EvalContext &ctx,
 
 Value FuncExists(const Value &o) { return Value(!o.IsNil()); }
 
+// Unlike ordinary functions, case() must not evaluate both result expressions:
+// a non-selected expression may refer to a field that is absent from the
+// current record. This is the expression-language equivalent of C's ?:.
+Value ProxyCase(Expression::EvalContext &ctx, const Expression::Record &record,
+                const absl::InlinedVector<expr::ExprPtr, 4> &params) {
+  CHECK(params.size() == 3);
+  auto condition = params[0]->Evaluate(ctx, record);
+  if (condition.IsMissing() && MissingPropagates()) {
+    return Value::Missing();
+  }
+  return params[*condition.AsBool() ? 1 : 2]->Evaluate(ctx, record);
+}
+
 Value ProxyConcat(Expression::EvalContext &ctx,
                   const Expression::Record &record,
                   const absl::InlinedVector<expr::ExprPtr, 4> &params) {
@@ -236,6 +249,7 @@ struct FunctionTableEntry {
 
 static std::map<std::string, FunctionTableEntry> function_table{
     {"exists", {1, 1, &MonadicFunctionProxy<FuncExists, kMissingIsAnArgument>}},
+    {"case", {3, 3, &ProxyCase}},
 
     {"abs", {1, 1, &MonadicFunctionProxy<FuncAbs>}},
     {"ceil", {1, 1, &MonadicFunctionProxy<FuncCeil>}},

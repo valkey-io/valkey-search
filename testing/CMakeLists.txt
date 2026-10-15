@@ -161,6 +161,16 @@ if(UNIX AND NOT APPLE
     target_link_libraries(vector_svs_test PRIVATE vector_svs)
     target_link_libraries(vector_svs_test PRIVATE svs_c_api_static)
     finalize_test_flags(vector_svs_test)
+
+    # SVS threadpool / concurrency test (sequential vtable, concurrent writers).
+    add_executable(vector_svs_threadpool_test
+        ${CMAKE_CURRENT_LIST_DIR}/vector_svs_threadpool_test.cc)
+    target_include_directories(vector_svs_threadpool_test PUBLIC
+                               ${CMAKE_CURRENT_LIST_DIR})
+    target_link_libraries(vector_svs_threadpool_test PRIVATE testing_common_base)
+    target_link_libraries(vector_svs_threadpool_test PRIVATE vector_svs)
+    target_link_libraries(vector_svs_threadpool_test PRIVATE svs_c_api_static)
+    finalize_test_flags(vector_svs_threadpool_test)
 endif()
 
 # 1. Core Test Suite - consolidates core functionality tests

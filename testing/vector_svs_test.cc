@@ -15,7 +15,9 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <numeric>
 #include <optional>
 #include <string>
 #include <thread>
@@ -27,9 +29,14 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/string_view.h"
 #include "absl/strings/strip.h"
+#include "absl/synchronization/notification.h"
+#include "absl/time/clock.h"
+#include "absl/time/time.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
+#include "src/attribute_data.h"
 #include "src/attribute_data_type.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
@@ -42,11 +49,27 @@
 #include "src/utils/string_interning.h"
 #include "svs/c/svs_c.h"
 #include "testing/common.h"
+#include "vmsdk/src/debug.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
 
 namespace valkey_search::indexes {
+
+class VectorSVSTestPeer {
+ public:
+  static svs_index_h Handle(const VectorSVS<float> &index)
+      ABSL_NO_THREAD_SAFETY_ANALYSIS {
+    return index.svs_index_;
+  }
+  static bool MutationsExclusive(const VectorSVS<float> &index) {
+    return index.mutations_exclusive_.load();
+  }
+  static absl::Mutex &ResizeMutex(VectorSVS<float> &index) {
+    return index.resize_mutex_;
+  }
+};
+
 namespace {
 
 constexpr int kDimensions = 8;
@@ -65,6 +88,13 @@ VectorBase *AsBase(const std::shared_ptr<VectorSVS<float>> &p) {
 
 class VectorSVSTest : public ValkeySearchTest {
  public:
+  // Enabling a pause point flips a process-global switch that makes every
+  // BACKGROUND_PAUSEPOINT take a mutex; put it back so later tests keep
+  // their interleavings.
+  void TearDown() override {
+    vmsdk::debug::pause_points_enabled = false;
+    ValkeySearchTest::TearDown();
+  }
   HashAttributeDataType hash_attribute_data_type_;
   const char *attribute_identifier = "attribute_identifier_1";
   data_model::AttributeDataType attribute_data_type =
@@ -795,6 +825,304 @@ TEST_F(VectorSVSTest, StreamLoadAllocatesSameBytesAsBuild) {
   for (auto *record : records) {
     ValkeyModule_FreeString(nullptr, record);
   }
+}
+
+// -- Restored index vs built index: who guards concurrent writers -----------
+
+svs_sync_kind_t SyncKindOf(svs_index_h handle) {
+  svs_error_h err = svs_error_create();
+  svs_sync_kind_t kind = SVS_SYNC_KIND_NONE;
+  EXPECT_TRUE(svs_index_dynamic_get_sync_kind(handle, &kind, err))
+      << svs_error_get_message(err);
+  svs_error_free(err);
+  return kind;
+}
+
+// A built index guards itself (FINE_GRAIN) and mutates under the shared
+// lock. A restored one reports whatever the stream load gave it; the module
+// keeps its mutations exclusive exactly when that is SVS_SYNC_KIND_NONE.
+TEST_F(VectorSVSTest, RestoredIndexMutationsMatchItsSyncKind) {
+  FakeSafeRDB rdb;
+  auto proto =
+      CreateSVSVectorIndexProto(kDimensions, data_model::DISTANCE_METRIC_L2,
+                                data_model::SVS_COMPRESSION_NONE);
+  auto index = VectorSVS<float>::Create(proto, attribute_identifier,
+                                        attribute_data_type, 0);
+  VMSDK_EXPECT_OK(index);
+  auto vectors = DeterministicallyGenerateVectors(1, kDimensions, 1.0);
+  VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(**index, IndexToKey(0),
+                                                 VectorToStr(vectors[0])));
+  svs_index_h built = VectorSVSTestPeer::Handle(**index);
+  ASSERT_NE(built, nullptr);
+  EXPECT_EQ(SyncKindOf(built), SVS_SYNC_KIND_FINE_GRAIN);
+  EXPECT_FALSE(VectorSVSTestPeer::MutationsExclusive(**index));
+
+  VMSDK_EXPECT_OK((*index)->SaveIndex(RDBChunkOutputStream(&rdb)));
+  auto loaded = VectorSVS<float>::LoadFromRDB(
+      &fake_ctx_, &hash_attribute_data_type_, proto, "attribute_identifier_2",
+      SupplementalContentChunkIter(&rdb), 0);
+  VMSDK_EXPECT_OK(loaded);
+  svs_index_h restored = VectorSVSTestPeer::Handle(**loaded);
+  ASSERT_NE(restored, nullptr);
+  EXPECT_EQ(VectorSVSTestPeer::MutationsExclusive(**loaded),
+            SyncKindOf(restored) == SVS_SYNC_KIND_NONE)
+      << "an index SVS does not guard must mutate under the exclusive lock";
+}
+
+// -- Concurrent writers on a loaded index (as #19 does on a built one) -------
+
+struct PreparedRecord {
+  InternedStringPtr key;
+  AttributeData data;
+};
+
+PreparedRecord PrepareRecord(VectorBase &index, int i,
+                             const std::vector<float> &vector) {
+  auto key = IndexToKey(i);
+  auto valkey_str = vmsdk::MakeUniqueValkeyString(VectorToStr(vector));
+  auto vec = VectorRegistry::Instance().DedupOrConstruct(
+      key, valkey_str.get(), data_model::ATTRIBUTE_DATA_TYPE_HASH,
+      index.GetDBNum(), &index);
+  return PreparedRecord{key, AttributeData(std::move(vec))};
+}
+
+template <typename Work>
+std::vector<absl::Status> RunWriters(int writers, Work work) {
+  absl::Notification go;
+  std::vector<absl::Status> statuses(writers);
+  std::vector<std::thread> threads;
+  threads.reserve(writers);
+  for (int w = 0; w < writers; ++w) {
+    threads.emplace_back([&, w] {
+      go.WaitForNotification();
+      statuses[w] = work(w);
+    });
+  }
+  go.Notify();
+  for (auto &t : threads) t.join();
+  return statuses;
+}
+
+constexpr int kLoadWriters = 8;
+constexpr int kLoadPerWriter = 50;
+constexpr int kLoadConcurrentVectors = kLoadWriters * kLoadPerWriter;
+
+TEST_F(VectorSVSTest, EightWritersAddConcurrentlyAfterLoad) {
+  // Save an index holding key 0 (internal id 0), restore it the way the
+  // server does (LoadFromRDB + LoadTrackedKeys, so inc_id_ resumes at 1),
+  // then add 400 vectors from 8 threads; every id must be its own nearest.
+  // Searches run after the writers: in the server the index-schema phase
+  // gate keeps searches and mutations apart, and the base class reads its
+  // label map lock-free on that basis.
+  FakeSafeRDB rdb;
+  auto proto =
+      CreateSVSVectorIndexProto(kDimensions, data_model::DISTANCE_METRIC_L2,
+                                data_model::SVS_COMPRESSION_NONE);
+  auto index = VectorSVS<float>::Create(proto, attribute_identifier,
+                                        attribute_data_type, 0);
+  VMSDK_EXPECT_OK(index);
+  auto vectors = DeterministicallyGenerateVectors(kLoadConcurrentVectors + 1,
+                                                  kDimensions, 10.0);
+  std::vector<ValkeyModuleString *> records(1);
+  records[0] = ValkeyModule_CreateString(
+      nullptr, (const char *)vectors[0].data(), kDimensions * sizeof(float));
+  VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(**index, IndexToKey(0),
+                                                 VectorToStr(vectors[0])));
+  VMSDK_EXPECT_OK((*index)->SaveIndex(RDBChunkOutputStream(&rdb)));
+  VMSDK_EXPECT_OK((*index)->SaveTrackedKeys(RDBChunkOutputStream(&rdb)));
+  ExpectHashGetsForRecords(records);
+
+  auto loaded = VectorSVS<float>::LoadFromRDB(
+      &fake_ctx_, &hash_attribute_data_type_, proto, "attribute_identifier_2",
+      SupplementalContentChunkIter(&rdb), 0);
+  VMSDK_EXPECT_OK(loaded);
+  VMSDK_EXPECT_OK(
+      (*loaded)->LoadTrackedKeys(&fake_ctx_, &hash_attribute_data_type_,
+                                 SupplementalContentChunkIter(&rdb)));
+  ASSERT_EQ(AsBase(*loaded)->GetLabelCount(), 1u);
+
+  std::vector<PreparedRecord> prepared;
+  prepared.reserve(kLoadConcurrentVectors + 1);
+  prepared.emplace_back();  // slot 0 unused: key 0 is the restored vector
+  for (int i = 1; i <= kLoadConcurrentVectors; ++i) {
+    prepared.push_back(PrepareRecord(**loaded, i, vectors[i]));
+  }
+  auto statuses = RunWriters(kLoadWriters, [&](int w) {
+    for (int i = 1 + w * kLoadPerWriter; i <= (w + 1) * kLoadPerWriter; ++i) {
+      auto result =
+          (*loaded)->AddRecord(prepared[i].key, std::move(prepared[i].data));
+      if (!result.ok()) return result.status();
+    }
+    return absl::OkStatus();
+  });
+  for (const auto &status : statuses) EXPECT_TRUE(status.ok()) << status;
+
+  EXPECT_EQ(AsBase(*loaded)->GetLabelCount(),
+            static_cast<size_t>(kLoadConcurrentVectors + 1));
+  for (int i = 0; i <= kLoadConcurrentVectors; ++i) {
+    auto result =
+        (*loaded)->Search(VectorToStr(vectors[i]), 1, CancelNever(), nullptr,
+                          /*ef_runtime=*/kLoadConcurrentVectors + 1);
+    ASSERT_TRUE(result.ok()) << result.status();
+    ASSERT_EQ(result->size(), 1u) << "id " << i;
+    EXPECT_EQ((*result)[0].external_id, IndexToKey(i)) << "id " << i;
+  }
+  ValkeyModule_FreeString(nullptr, records[0]);
+}
+
+// A foreground SAVE runs on the main thread while writer threads mutate, and
+// writers update the label map outside resize_mutex_. Each case parks a writer
+// where the map and SVS disagree on whether any entry is live, then saves:
+// the save must succeed and its RDB must load back.
+struct SaveRaceCase {
+  const char *name;
+  const char *pause_point;
+  bool remove;  // true: park a remove after its SVS delete; false: an add
+};
+
+class VectorSVSSaveRaceTest : public VectorSVSTest,
+                              public testing::WithParamInterface<SaveRaceCase> {
+};
+
+TEST_P(VectorSVSSaveRaceTest, SaveWhileWriterIsBetweenMapAndSvs) {
+  const char *pause_point = GetParam().pause_point;
+  const bool remove_case = GetParam().remove;
+  auto vectors = DeterministicallyGenerateVectors(2, kDimensions, 5.0);
+  auto proto =
+      CreateSVSVectorIndexProto(kDimensions, data_model::DISTANCE_METRIC_L2,
+                                data_model::SVS_COMPRESSION_NONE);
+  auto index = VectorSVS<float>::Create(proto, attribute_identifier,
+                                        attribute_data_type, 0);
+  ASSERT_TRUE(index.ok()) << index.status();
+  VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(**index, IndexToKey(0),
+                                                 VectorToStr(vectors[0])));
+  if (!remove_case) {
+    // Leave an SVS handle with no live entries for the add to land in.
+    VMSDK_EXPECT_OK((*index)->RemoveRecord(IndexToKey(0), DeletionType::kNone));
+  }
+
+  // The vector record is built on the main thread, as the writer pool's
+  // callers do; only the mutation runs on the writer thread.
+  PreparedRecord to_add = PrepareRecord(**index, 1, vectors[1]);
+  vmsdk::debug::PausePointControl(pause_point, true);
+  absl::Status writer_status;
+  std::thread writer([&] {
+    if (remove_case) {
+      writer_status =
+          (*index)->RemoveRecord(IndexToKey(0), DeletionType::kNone).status();
+    } else {
+      writer_status =
+          (*index)->AddRecord(to_add.key, std::move(to_add.data)).status();
+    }
+  });
+  const absl::Time deadline = absl::Now() + absl::Seconds(10);
+  while (vmsdk::debug::PausePointWaiters(pause_point).value_or(0) == 0 &&
+         absl::Now() < deadline) {
+    absl::SleepFor(absl::Milliseconds(1));
+  }
+  const bool parked =
+      vmsdk::debug::PausePointWaiters(pause_point).value_or(0) == 1;
+
+  FakeSafeRDB rdb;
+  auto save_status = (*index)->SaveIndex(RDBChunkOutputStream(&rdb));
+  vmsdk::debug::PausePointControl(pause_point, false);
+  writer.join();
+
+  ASSERT_TRUE(parked) << "writer never reached " << pause_point;
+  EXPECT_TRUE(writer_status.ok()) << writer_status;
+  ASSERT_TRUE(save_status.ok()) << save_status;
+  auto loaded = VectorSVS<float>::LoadFromRDB(
+      &fake_ctx_, &hash_attribute_data_type_, proto, "attribute_identifier_2",
+      SupplementalContentChunkIter(&rdb), 0);
+  EXPECT_TRUE(loaded.ok()) << loaded.status();
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    SaveRaceCases, VectorSVSSaveRaceTest,
+    testing::Values(SaveRaceCase{"RemoveOfLastEntry",
+                                 "svs_remove_after_svs_delete",
+                                 /*remove=*/true},
+                    SaveRaceCase{"AddIntoEmptyHandle",
+                                 "svs_add_after_map_reserve",
+                                 /*remove=*/false}),
+    [](const testing::TestParamInfo<SaveRaceCase> &info) {
+      return std::string(info.param.name);
+    });
+
+// Observes the lock mode rather than the flag: with the test thread holding
+// the shared side of resize_mutex_, an add on a built index proceeds (it
+// takes the shared side too) while an add on a restored index waits for the
+// exclusive side until the test lets go.
+void HoldSharedWhile(absl::Mutex &mu, const std::function<void()> &body)
+    ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  mu.ReaderLock();
+  body();
+  mu.ReaderUnlock();
+}
+
+TEST_F(VectorSVSTest, RestoredIndexMutatesUnderTheExclusiveLock) {
+  FakeSafeRDB rdb;
+  auto proto =
+      CreateSVSVectorIndexProto(kDimensions, data_model::DISTANCE_METRIC_L2,
+                                data_model::SVS_COMPRESSION_NONE);
+  auto built = VectorSVS<float>::Create(proto, attribute_identifier,
+                                        attribute_data_type, 0);
+  VMSDK_EXPECT_OK(built);
+  auto vectors = DeterministicallyGenerateVectors(3, kDimensions, 2.0);
+  std::vector<ValkeyModuleString *> records(1);
+  records[0] = ValkeyModule_CreateString(
+      nullptr, (const char *)vectors[0].data(), kDimensions * sizeof(float));
+  VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(**built, IndexToKey(0),
+                                                 VectorToStr(vectors[0])));
+  VMSDK_EXPECT_OK((*built)->SaveIndex(RDBChunkOutputStream(&rdb)));
+  VMSDK_EXPECT_OK((*built)->SaveTrackedKeys(RDBChunkOutputStream(&rdb)));
+  ExpectHashGetsForRecords(records);
+  auto restored = VectorSVS<float>::LoadFromRDB(
+      &fake_ctx_, &hash_attribute_data_type_, proto, "attribute_identifier_2",
+      SupplementalContentChunkIter(&rdb), 0);
+  VMSDK_EXPECT_OK(restored);
+  VMSDK_EXPECT_OK(
+      (*restored)->LoadTrackedKeys(&fake_ctx_, &hash_attribute_data_type_,
+                                   SupplementalContentChunkIter(&rdb)));
+
+  // The writer is parked at svs_add_after_map_reserve, just before it takes
+  // resize_mutex_, so it is demonstrably running when the test takes the
+  // shared side and lets it go. `wait` bounds the add from there: generous
+  // where it must finish (a slow runner is not a failure), short where it
+  // must not (the writer is only ever blocked, never slow).
+  constexpr absl::string_view kPark = "svs_add_after_map_reserve";
+  auto add_while_shared_held = [&](VectorSVS<float> &index, int id,
+                                   absl::Duration wait) {
+    PreparedRecord record = PrepareRecord(index, id, vectors[id]);
+    absl::Notification done;
+    absl::Status status;
+    bool finished_while_held = false;
+    vmsdk::debug::PausePointControl(kPark, true);
+    std::thread writer([&] {
+      status = index.AddRecord(record.key, std::move(record.data)).status();
+      done.Notify();
+    });
+    const absl::Time deadline = absl::Now() + absl::Seconds(10);
+    while (vmsdk::debug::PausePointWaiters(kPark).value_or(0) == 0 &&
+           absl::Now() < deadline) {
+      absl::SleepFor(absl::Milliseconds(1));
+    }
+    EXPECT_EQ(vmsdk::debug::PausePointWaiters(kPark).value_or(0), 1u)
+        << "writer never reached the pause point";
+    HoldSharedWhile(VectorSVSTestPeer::ResizeMutex(index), [&] {
+      vmsdk::debug::PausePointControl(kPark, false);  // release the writer
+      finished_while_held = done.WaitForNotificationWithTimeout(wait);
+    });
+    writer.join();
+    VMSDK_EXPECT_OK(status);
+    return finished_while_held;
+  };
+  EXPECT_TRUE(add_while_shared_held(**built, 1, absl::Seconds(10)))
+      << "a built index mutates under the shared lock";
+  EXPECT_FALSE(add_while_shared_held(**restored, 1, absl::Milliseconds(300)))
+      << "a restored index must wait for the exclusive lock";
+  EXPECT_EQ(AsBase(*restored)->GetLabelCount(), 2u);
+  ValkeyModule_FreeString(nullptr, records[0]);
 }
 
 }  // namespace

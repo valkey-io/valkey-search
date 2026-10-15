@@ -129,9 +129,12 @@ target_link_libraries(vector_svs PUBLIC valkey_module)
 # warnings-as-errors flags (via svs_compile_options), which would cascade
 # to vector_svs.cc's compile line if the two were mixed. Keep them in a
 # dedicated static library so those flags stay scoped, and have vector_svs
-# link it plus OpenMP. On other platforms vector_svs.cc compiles as a
-# stub whose factories return absl::UnimplementedError; arch is detected
-# in the source via __linux__ && __x86_64__ rather than a project flag.
+# link it. On other platforms vector_svs.cc compiles as a stub whose
+# factories return absl::UnimplementedError; arch is detected in the
+# source via __linux__ && __x86_64__ rather than a project flag.
+#
+# Built without OpenMP: threading comes from the module through the C API's
+# threadpool vtable, so libgomp must not enter DT_NEEDED (ci/check_svs_link.sh).
 if(UNIX AND NOT APPLE
    AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
     set(SVS_C_API_DIR "${CMAKE_SOURCE_DIR}/third_party/svs/bindings/c")
@@ -149,14 +152,18 @@ if(UNIX AND NOT APPLE
         ${SVS_C_API_DIR}/include
         ${CMAKE_BINARY_DIR}/third_party/svs-c-api-build/include)
     target_include_directories(svs_c_api_static PRIVATE ${SVS_C_API_DIR}/src)
-    target_compile_definitions(svs_c_api_static PRIVATE SVS_ENABLE_OMP=1)
     target_compile_options(svs_c_api_static PRIVATE -fvisibility=hidden)
-    find_package(OpenMP REQUIRED)
+    get_target_property(_svs_c_api_opts svs_c_api_static COMPILE_OPTIONS)
+    list(REMOVE_ITEM _svs_c_api_opts -fopenmp)
+    set_target_properties(svs_c_api_static PROPERTIES
+        COMPILE_OPTIONS "${_svs_c_api_opts}")
+    # Interim; see the header.
+    target_compile_options(svs_c_api_static PRIVATE
+        "SHELL:-include ${CMAKE_CURRENT_LIST_DIR}/svs_shim/svs_omp_shim.h")
     target_link_libraries(svs_c_api_static PRIVATE
         svs::svs
         svs_compile_options
         svs_x86_options_base)
-    target_link_libraries(svs_c_api_static PUBLIC OpenMP::OpenMP_CXX)
 
     target_link_libraries(vector_svs PRIVATE svs_c_api_static)
 endif()

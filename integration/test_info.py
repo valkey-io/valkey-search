@@ -39,12 +39,12 @@ class TestVSSBasic(ValkeySearchTestCaseBase):
             "search_hnsw_search_exceptions_count",
             "search_hnsw_create_exceptions_count",
             "search_string_interning_store_size",
-            "search_vector_externing_entry_count",
-            "search_vector_externing_hash_extern_errors",
-            "search_vector_externing_generated_value_cnt",
-            "search_vector_externing_num_lru_entries",
-            "search_vector_externing_lru_promote_cnt",
-            "search_vector_externing_deferred_entry_cnt",
+            "search_vector_registry_entry_cnt",
+            "search_vector_registry_pending_unshare_cnt",
+            "search_vector_registry_shared_externally_cnt",
+            "search_vector_registry_shared_externally_errors",
+            "search_vector_registry_sharing_active",
+            "search_vector_registry_dedup_cnt",
             "search_number_of_attributes",
             "search_number_of_indexes",
             "search_total_indexed_documents",
@@ -101,13 +101,20 @@ class TestAppMetrics(ValkeySearchTestCaseDebugMode):
             m.decode('utf-8') if isinstance(m, bytes) else m 
             for m in actual_metrics
         )
-        # Expected baseline: 70 APP metrics as of current implementation
+        # Expected baseline: 71 APP metrics as of current implementation
         # This list should be updated intentionally when metrics are added/removed
         expected_metrics = {
             # Counts uses of the legacy (incompatible) invalid-data handling
             # while search.emulate-release is below the fix version. See
             # COMPATIBILITY.md.
             "compatibility-invalid_data_drops_key",
+            # Count English MINSTEMSIZE checks and fuzzy terms that use 1.2's
+            # byte lengths while search.emulate-release is below 1.3.0.
+            "compatibility-min_stem_size_code_points",
+            "compatibility-fuzzy_code_point_distance",
+            # Counts non-UTF-8 TAG values indexed while search.emulate-release
+            # is below 1.3.0.
+            "compatibility-tag_rejects_non_utf8",
             "coordinator_bytes_in",
             "coordinator_bytes_out",
             "coordinator_client_get_global_metadata_failure_count",
@@ -130,12 +137,12 @@ class TestAppMetrics(ValkeySearchTestCaseDebugMode):
             "coordinator_threads_cpu_time_sec",
             "hnsw_add_exceptions_count",
             "hnsw_create_exceptions_count",
-            "hnsw_duplicate_label_on_load_count",
             "hnsw_modify_exceptions_count",
             "hnsw_remove_exceptions_count",
             "hnsw_search_exceptions_count",
             "number_of_attributes",
             "number_of_indexes",
+            "num_cursors",
             "total_active_write_threads",
             "total_indexed_documents",
             "background_indexing_status",
@@ -165,12 +172,12 @@ class TestAppMetrics(ValkeySearchTestCaseDebugMode):
             "writer_queue_size",
             "writer_resumed_cnt",
             "writer_suspension_expired_cnt",
-            "vector_externing_deferred_entry_cnt",
-            "vector_externing_entry_count",
-            "vector_externing_generated_value_cnt",
-            "vector_externing_hash_extern_errors",
-            "vector_externing_lru_promote_cnt",
-            "vector_externing_num_lru_entries",
+            "vector_registry_dedup_cnt",
+            "vector_registry_entry_cnt",
+            "vector_registry_pending_unshare_cnt",
+            "vector_registry_shared_externally_cnt",
+            "vector_registry_shared_externally_errors",
+            "vector_registry_sharing_active",
         }
         # Verify no metrics are missing
         missing = expected_metrics - actual_metrics_set

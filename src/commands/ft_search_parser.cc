@@ -22,7 +22,9 @@
 #include "absl/strings/string_view.h"
 #include "ft_create_parser.h"
 #include "ft_search_parser.h"
+#include "src/indexes/scoring/scorer.h"
 #include "src/query/search.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/module_config.h"
@@ -34,6 +36,7 @@ namespace valkey_search {
 constexpr absl::string_view kMaxKnnConfig{"max-vector-knn"};
 constexpr int kDefaultKnnLimit{10000};
 constexpr int kMaxKnn{100000};
+constexpr absl::string_view kMaxTimeoutMsConfig{"max-timeout-ms"};
 
 /// Register the "--max-knn" flag. Controls the max KNN parameter for vector
 /// search.
@@ -45,59 +48,29 @@ static auto max_knn =
         .WithValidationCallback(CHECK_RANGE(1, kMaxKnn, kMaxKnnConfig))
         .Build();
 
+/// Register the "--max-timeout-ms" flag. Controls the maximum allowed TIMEOUT
+/// value, in milliseconds, for FT.SEARCH and FT.AGGREGATE.
+static auto max_timeout_ms =
+    vmsdk::config::NumberBuilder(kMaxTimeoutMsConfig,   // name
+                                 query::kMaxTimeoutMs,  // default timeout
+                                 1,                     // min timeout
+                                 query::kMaxTimeoutMs)  // max timeout
+        .WithValidationCallback(
+            CHECK_RANGE(1, query::kMaxTimeoutMs, kMaxTimeoutMsConfig))
+        .Build();
+
 namespace options {
 vmsdk::config::Number &GetMaxKnn() {
   return dynamic_cast<vmsdk::config::Number &>(*max_knn);
 }
 
+vmsdk::config::Number &GetMaxTimeoutMs() {
+  return dynamic_cast<vmsdk::config::Number &>(*max_timeout_ms);
+}
+
 }  // namespace options
 
 namespace {
-
-absl::Status Verify(query::SearchParameters &parameters) {
-  // Only verify the vector KNN parameters for vector based queries.
-  if (!parameters.IsNonVectorQuery()) {
-    if (parameters.query.empty()) {
-      return absl::InvalidArgumentError("Invalid Query Syntax");
-    }
-    if (parameters.ef.has_value()) {
-      auto max_ef_runtime_value = options::GetMaxEfRuntime().GetValue();
-      VMSDK_RETURN_IF_ERROR(
-          vmsdk::VerifyRange(parameters.ef.value(), 1, max_ef_runtime_value))
-          << "`EF_RUNTIME` must be a positive integer greater than 0 and "
-             "cannot "
-             "exceed "
-          << max_ef_runtime_value << ".";
-    }
-    auto max_knn_value = options::GetMaxKnn().GetValue();
-    VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(parameters.k, 1, max_knn_value))
-        << "KNN parameter must be a positive integer greater than 0 and cannot "
-           "exceed "
-        << max_knn_value << ".";
-  }
-  if (parameters.timeout_ms > query::kMaxTimeoutMs) {
-    return absl::InvalidArgumentError(
-        absl::StrCat(query::kTimeoutParam,
-                     " must be a positive integer greater than 0 and "
-                     "cannot exceed ",
-                     query::kMaxTimeoutMs, "."));
-  }
-  if (parameters.dialect < 2 || parameters.dialect > 4) {
-    return absl::InvalidArgumentError(
-        "DIALECT requires a non negative integer >=2 and <= 4");
-  }
-
-  // Validate all parameters used, nuke the map to avoid dangling pointers
-  while (!parameters.parse_vars.params.empty()) {
-    auto begin = parameters.parse_vars.params.begin();
-    if (begin->second.first == 0) {
-      return absl::NotFoundError(
-          absl::StrCat("Parameter `", begin->first, "` not used."));
-    }
-    parameters.parse_vars.params.erase(begin);
-  }
-  return absl::OkStatus();
-}
 
 std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructLimitParser() {
   return std::make_unique<vmsdk::ParamParser<SearchCommand>>(
@@ -169,8 +142,25 @@ std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructReturnParser() {
       [](SearchCommand &parameters, vmsdk::ArgsIterator &itr) -> absl::Status {
         uint32_t cnt{0};
         VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, cnt));
+        VALKEY_SEARCH_COMPATIBILITY_FIX(
+            1, 3, 0, "ft_search_return_last_wins",
+            [&]() {
+              // Repeated RETURN clauses are last-one-wins: a later clause
+              // replaces an earlier one, including an earlier `RETURN 0`.
+              // The no-fields decision is folded into no_content after the
+              // whole command is parsed (ParseCommand), so it cannot cancel
+              // a sticky NOCONTENT keyword.
+              parameters.return_attributes.clear();
+              parameters.return_no_fields = (cnt == 0);
+            },
+            [&]() {
+              // Legacy: `RETURN 0` latched no_content for the whole command
+              // and repeated RETURN clauses accumulated fields.
+              if (cnt == 0) {
+                parameters.no_content = true;
+              }
+            });
         if (cnt == 0) {
-          parameters.no_content = true;
           return absl::OkStatus();
         }
         for (uint32_t i = 0; i < cnt; ++i) {
@@ -201,6 +191,29 @@ std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructReturnParser() {
       });
 }
 
+std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructWithCursorParser() {
+  return std::make_unique<vmsdk::ParamParser<SearchCommand>>(
+      [](SearchCommand &parameters, vmsdk::ArgsIterator &itr) -> absl::Status {
+        VMSDK_ASSIGN_OR_RETURN(parameters.cursor_options,
+                               ParseCursorOptions(itr));
+        return absl::OkStatus();
+      });
+}
+
+std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructInkeysParser() {
+  return std::make_unique<vmsdk::ParamParser<SearchCommand>>(
+      [](SearchCommand &parameters, vmsdk::ArgsIterator &itr) -> absl::Status {
+        uint32_t count{0};
+        VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, count));
+        parameters.inkeys.emplace();
+        for (uint32_t i = 0; i < count; ++i) {
+          VMSDK_ASSIGN_OR_RETURN(auto key, itr.PopNext());
+          parameters.inkeys->insert(std::string(vmsdk::ToStringView(key)));
+        }
+        return absl::OkStatus();
+      });
+}
+
 vmsdk::KeyValueParser<SearchCommand> CreateSearchParser() {
   vmsdk::KeyValueParser<SearchCommand> parser;
   parser.AddParamParser(query::kDialectParam,
@@ -226,6 +239,8 @@ vmsdk::KeyValueParser<SearchCommand> CreateSearchParser() {
                         GENERATE_FLAG_PARSER(SearchCommand, no_content));
   parser.AddParamParser(query::kWithSortKeysParam,
                         GENERATE_FLAG_PARSER(SearchCommand, with_sort_keys));
+  parser.AddParamParser(query::kWithScoresParam,
+                        GENERATE_FLAG_PARSER(SearchCommand, with_scores));
   parser.AddParamParser(query::kReturnParam, ConstructReturnParser());
   parser.AddParamParser(query::kSortByParam, ConstructSortByParser());
   parser.AddParamParser(query::kParamsParam, ConstructParamsParser());
@@ -235,6 +250,22 @@ vmsdk::KeyValueParser<SearchCommand> CreateSearchParser() {
                         GENERATE_FLAG_PARSER(SearchCommand, verbatim));
   parser.AddParamParser(query::kSlop,
                         GENERATE_VALUE_PARSER(SearchCommand, slop));
+  // Not GENERATE_ENUM_PARSER: the token goes through the shared
+  // indexes::scoring::ParseScorerType so FT.SEARCH and FT.HYBRID accept and
+  // reject exactly the same scorer names. The value-parse step, and so the
+  // error text, is what the macro does.
+  parser.AddParamParser(
+      query::kScorer,
+      std::make_unique<vmsdk::ParamParser<SearchCommand>>(
+          [](SearchCommand &value, vmsdk::ArgsIterator &itr) -> absl::Status {
+            absl::string_view str;
+            VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, str));
+            VMSDK_ASSIGN_OR_RETURN(value.scorer,
+                                   indexes::scoring::ParseScorerType(str));
+            return absl::OkStatus();
+          }));
+  parser.AddParamParser(kWithCursorParam, ConstructWithCursorParser());
+  parser.AddParamParser(query::kInkeysParam, ConstructInkeysParser());
 
   return parser;
 }
@@ -246,10 +277,45 @@ static vmsdk::KeyValueParser<SearchCommand> SearchParser = CreateSearchParser();
 absl::Status SearchCommand::PostParseQueryString() {
   VMSDK_RETURN_IF_ERROR(query::SearchParameters::PostParseQueryString());
 
+  // The vector score reply field (KNN `AS`, or the default __<field>_score) is
+  // a synthesized field. If it collides with a declared schema attribute,
+  // SORTBY / WITHSORTKEYS on that name would route to the vector distance
+  // instead of the field, silently corrupting the order. Reject it (Redis does
+  // the same at parse time). GetIndex looks up the alias in the real
+  // attribute map (GetIdentifier is virtual and may be mocked in tests).
+  if (score_as && IsVectorQuery()) {
+    auto score_as_view = vmsdk::ToStringView(score_as.get());
+    if (index_schema->GetIndex(score_as_view).ok()) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Property `", score_as_view, "` already exists in schema"));
+    }
+  }
+
+  // Check the VR yield-distance alias against the schema for the same reason.
+  {
+    const std::string vr_field = query::GetVrScoreFieldName(*this);
+    if (!vr_field.empty() && index_schema->GetIndex(vr_field).ok()) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Property `", vr_field, "` already exists in schema"));
+    }
+  }
+
   if (sortby_parameter.has_value()) {
-    // Validate sortby field exists in the index schema
-    VMSDK_RETURN_IF_ERROR(
-        index_schema->GetIdentifier(sortby_parameter->field).status());
+    // Allow sorting by the vector range distance alias (yield_distance_as)
+    // without requiring it to be a real index field.
+    const std::string vr_score_field = query::GetVrScoreFieldName(*this);
+    const bool is_vr_score_field =
+        !vr_score_field.empty() && sortby_parameter->field == vr_score_field;
+    // The vector score field (KNN distance, reported via score_as) is also a
+    // synthesized reply field, not a schema attribute, so it is sortable
+    // without being declared. Validate any other field against the schema.
+    const bool is_vector_score =
+        score_as &&
+        sortby_parameter->field == vmsdk::ToStringView(score_as.get());
+    if (!is_vr_score_field && !is_vector_score) {
+      VMSDK_RETURN_IF_ERROR(
+          index_schema->GetIdentifier(sortby_parameter->field).status());
+    }
   }
 
   return absl::OkStatus();
@@ -269,6 +335,10 @@ absl::Status VerifyQueryString(query::SearchParameters &parameters) {
              "cannot "
              "exceed "
           << max_ef_runtime_value << ".";
+      if (parameters.hybrid_policy == query::HybridPolicy::kAdHocBruteForce) {
+        return absl::InvalidArgumentError(
+            "EF_RUNTIME is irrelevant for the ADHOC_BF hybrid policy");
+      }
     }
     auto max_knn_value = options::GetMaxKnn().GetValue();
     VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(parameters.k, 1, max_knn_value))
@@ -276,27 +346,22 @@ absl::Status VerifyQueryString(query::SearchParameters &parameters) {
            "exceed "
         << max_knn_value << ".";
   }
-  if (parameters.timeout_ms > query::kMaxTimeoutMs) {
+  const auto max_timeout_ms = options::GetMaxTimeoutMs().GetValue();
+  if (parameters.timeout_ms > static_cast<uint64_t>(max_timeout_ms)) {
     return absl::InvalidArgumentError(
         absl::StrCat(query::kTimeoutParam,
                      " must be a positive integer greater than 0 and "
                      "cannot exceed ",
-                     query::kMaxTimeoutMs, "."));
+                     max_timeout_ms, "."));
   }
   if (parameters.dialect < 2 || parameters.dialect > 4) {
     return absl::InvalidArgumentError(
         "DIALECT requires a non negative integer >=2 and <= 4");
   }
 
-  // Validate all parameters used, nuke the map to avoid dangling pointers
-  while (!parameters.parse_vars.params.empty()) {
-    auto begin = parameters.parse_vars.params.begin();
-    if (begin->second.first == 0) {
-      return absl::NotFoundError(
-          absl::StrCat("Parameter `", begin->first, "` not used."));
-    }
-    parameters.parse_vars.params.erase(begin);
-  }
+  // An unused PARAM is allowed. Tear down parse_vars to avoid
+  // dangling pointers in the argument buffer.
+  parameters.parse_vars.ClearAtEndOfParse();
   return absl::OkStatus();
 }
 
@@ -307,6 +372,13 @@ absl::Status SearchCommand::ParseCommand(vmsdk::ArgsIterator &itr) {
         absl::StrCat("Unexpected parameter at position ", (itr.Position() + 1),
                      ":", vmsdk::ToStringView(itr.Get().value())));
   }
+
+  // last "RETURN 0" will also behave like NOCONTENT.
+  // notice return_no_fields can be overwritten within a command
+  // when there are multiple RETURN's, hence it's merged at the end
+  // instead of on the fly
+  no_content = no_content || return_no_fields;
+
   VMSDK_RETURN_IF_ERROR(PreParseQueryString());
   VMSDK_RETURN_IF_ERROR(PostParseQueryString());
   VMSDK_RETURN_IF_ERROR(VerifyQueryString(*this));

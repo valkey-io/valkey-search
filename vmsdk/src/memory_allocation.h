@@ -11,7 +11,7 @@
 #include <cstdint>
 
 namespace vmsdk {
-void ResetValkeyAllocStats();
+
 // Report used memory counter.
 uint64_t GetUsedMemoryCnt();
 

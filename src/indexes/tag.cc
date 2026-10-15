@@ -12,10 +12,12 @@
 #include <string>
 #include <utility>
 
+#include "absl/base/optimization.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/ascii.h"
+#include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
@@ -23,13 +25,38 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/text/rax/rax.h"
 #include "src/query/predicate.h"
+#include "src/utils/scanner.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
+#include "vmsdk/src/info.h"
+#include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes {
 
 namespace {
+
+// INFO counter for the non-UTF-8 TAG compatibility defect (see
+// COMPATIBILITY.md). Statically constructed because AddRecord/ModifyRecord run
+// on worker threads, where VALKEY_SEARCH_COMPATIBILITY_FIX's lazily
+// constructed counter is unsafe.
+vmsdk::info_field::Integer tag_rejects_non_utf8_compat_counter(
+    "compatibility", "compatibility-tag_rejects_non_utf8",
+    vmsdk::info_field::IntegerBuilder().App());
+
+// Redisearch rejects non-UTF-8 TAG data. This is gated on
+// search.emulate-release so the legacy behavior (index it) is preserved by
+// default.
+bool RejectNonUtf8(absl::string_view data) {
+  if (ABSL_PREDICT_TRUE(utils::IsValidUtf8(data))) {
+    return false;
+  }
+  if (options::EnabledInVersion(1, 3, 0)) {
+    return true;
+  }
+  tag_rejects_non_utf8_compat_counter.Increment();
+  return false;
+}
 
 inline uintptr_t SlotToStorage(void *p) {
   return reinterpret_cast<uintptr_t>(p);
@@ -105,12 +132,20 @@ void Tag::DeindexTagForKey(absl::string_view tag,
 }
 
 absl::StatusOr<RecordResult> Tag::AddRecord(const InternedStringPtr &key,
-                                            absl::string_view data) {
-  auto interned_data = StringInternStore::Intern(data, nullptr);
+                                            AttributeData &&data) {
+  auto str = data.ConsumeString();
+  auto data_sv = vmsdk::ToStringView(str.get());
+  if (RejectNonUtf8(data_sv)) {
+    absl::MutexLock lock(&index_mutex_);
+    untracked_keys_.insert(key);
+    return RecordResult::kInvalidData;
+  }
+
+  auto interned_data = StringInternStore::Intern(data_sv, nullptr);
   if (!HasRecordTags(*interned_data, separator_)) {
     absl::MutexLock lock(&index_mutex_);
-    // An empty tag set is a missing value, not invalid data. (Content
-    // validation of TAG fields, e.g. non-UTF8 detection, is deferred.)
+    // An empty tag set is a missing value, not invalid data. (Non-UTF-8
+    // content is handled above by RejectNonUtf8.)
     untracked_keys_.insert(key);
     return RecordResult::kMissing;
   }
@@ -217,8 +252,16 @@ bool Tag::HasRecordTags(absl::string_view data, char separator) {
 }
 
 absl::StatusOr<RecordResult> Tag::ModifyRecord(const InternedStringPtr &key,
-                                               absl::string_view data) {
-  auto interned_data = StringInternStore::Intern(data, nullptr);
+                                               AttributeData &&data) {
+  auto str = data.ConsumeString();
+  auto data_sv = vmsdk::ToStringView(str.get());
+  if (RejectNonUtf8(data_sv)) {
+    [[maybe_unused]] auto res =
+        RemoveRecord(key, indexes::DeletionType::kIdentifier);
+    return RecordResult::kInvalidData;
+  }
+
+  auto interned_data = StringInternStore::Intern(data_sv, nullptr);
   if (!HasRecordTags(*interned_data, separator_)) {
     [[maybe_unused]] auto res =
         RemoveRecord(key, indexes::DeletionType::kIdentifier);
@@ -335,6 +378,25 @@ std::optional<absl::string_view> Tag::GetRawTagString(
     return *it->second.raw_tag_string;
   }
   return std::nullopt;
+}
+
+bool Tag::ContainsKey(absl::string_view value,
+                      BorrowedInternedStringPtr key) const {
+  // Lock-free by the same read-side invariant GetValue relies on: the index is
+  // not mutated while the time-sliced mutex is held in read mode.
+  std::string norm = Normalize(value);
+  void *slot = nullptr;
+  if (raxFind(tree_, reinterpret_cast<unsigned char *>(norm.data()),
+              norm.size(), &slot) != 1) {
+    return false;
+  }
+  // The slot's 8 bytes ARE the bag storage; adopt to test membership, then
+  // Release to leave the live storage planted in the rax slot (mirrors
+  // Tag::GetTagValueDocCount / Tag::Search).
+  auto bag = BagOfInternedStringPtrs::Adopt(SlotToStorage(slot));
+  bool found = bag.contains(key);
+  (void)bag.Release();
+  return found;
 }
 
 // -- Search / EntriesFetcher / EntriesFetcherIterator --------------------
@@ -505,6 +567,46 @@ size_t Tag::GetUnTrackedKeyCount() const {
   return untracked_keys_.size();
 }
 
+size_t Tag::GetTagValueDocCount(absl::string_view value) const {
+  std::string norm = Normalize(value);
+  void *slot = nullptr;
+  if (raxFind(tree_, reinterpret_cast<unsigned char *>(norm.data()),
+              norm.size(), &slot) != 1) {
+    return 0;
+  }
+  // The slot's 8 bytes ARE the bag storage; adopt to read size, then Release to
+  // leave the live storage planted in the rax slot (mirrors Tag::Search).
+  auto bag = BagOfInternedStringPtrs::Adopt(SlotToStorage(slot));
+  size_t count = bag.size();
+  (void)bag.Release();
+  return count;
+}
+
+size_t Tag::GetPrefixMatchDocCount(absl::string_view prefix_value,
+                                   BorrowedInternedStringPtr key) const {
+  if (prefix_value.empty() || prefix_value.back() != '*') return 0;
+  const absl::string_view prefix =
+      prefix_value.substr(0, prefix_value.size() - 1);
+
+  // Scan the doc's own tags rather than the prefix's rax subtree: a doc carries
+  // a handful of tags while a prefix can match an unbounded slice of the index.
+  // Lock-free by the read-side invariant GetValue / ContainsKey rely on.
+  auto it = tracked_tags_by_keys_.find(key);
+  if (it == tracked_tags_by_keys_.end()) return 0;
+
+  for (const auto &part :
+       absl::StrSplit(it->second.raw_tag_string->Str(), separator_)) {
+    const absl::string_view tag = absl::StripAsciiWhitespace(part);
+    // Empty tags are never indexed (ParseRecordTags drops them), and a bare `*`
+    // query gives an empty prefix that would otherwise match one.
+    if (tag.empty()) continue;
+    if (case_sensitive_ ? absl::StartsWith(tag, prefix)
+                        : absl::StartsWithIgnoreCase(tag, prefix)) {
+      return GetTagValueDocCount(tag);
+    }
+  }
+  return 0;
+}
 bool Tag::IsTracked(const InternedStringPtr &key) const {
   absl::MutexLock lock(&index_mutex_);
   return tracked_tags_by_keys_.contains(key);

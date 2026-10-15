@@ -41,7 +41,13 @@ RUN apt update && \
         clangd \
         jq \
         ccache \
+        lcov \
         memtier-benchmark && \
+    # Install precompiled dependencies for fast builds
+    ARCH=$(dpkg --print-architecture) && \
+    wget -q "https://github.com/valkey-io/valkey-search/releases/download/1.0.0-rc1/valkey-search-deps-ubuntu-noble-${ARCH}.deb" -O /tmp/valkey-search-deps.deb && \
+    dpkg -i /tmp/valkey-search-deps.deb && \
+    rm -f /tmp/valkey-search-deps.deb && \
     # Update certificates
     update-ca-certificates && \
     # Clean up apt cache to reduce image size

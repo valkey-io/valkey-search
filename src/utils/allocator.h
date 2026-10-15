@@ -9,6 +9,7 @@
 #define VALKEYSEARCH_SRC_UTILS_ALLOCATOR_H_
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <stack>
 
@@ -39,7 +40,7 @@ struct AllocatorChunk;
 class Allocator {
  public:
   virtual char *Allocate(size_t size) = 0;
-  static bool Free(char *ptr);
+  static void Free(char *ptr);
   virtual ~Allocator() = default;
   virtual size_t ChunkSize() const = 0;
 
@@ -72,6 +73,8 @@ class FixedSizeAllocator : public IntrusiveRefCount, public Allocator {
     return active_allocations_;
   }
   size_t ChunkCount() const ABSL_LOCKS_EXCLUDED(mutex_);
+  static uint64_t GlobalActiveAllocations();
+  static uint64_t GlobalChunkCount();
   ~FixedSizeAllocator() override;
   size_t ChunkSize() const override { return size_; }
 

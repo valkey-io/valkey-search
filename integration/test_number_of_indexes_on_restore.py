@@ -5,7 +5,9 @@ Verify search_number_of_indexes is updated during RDB restore if search indexes 
 import time
 import threading
 from valkeytestframework.conftest import resource_port_tracker
-from valkey_search_test_case import ValkeySearchTestCaseDebugMode
+from valkey_search_test_case import ValkeySearchTestCaseDebugMode, ValkeySearchClusterTestCaseDebugMode
+from valkey.cluster import ValkeyCluster
+from valkey.client import Valkey
 from indexes import *
 from util import waiters
 
@@ -59,3 +61,34 @@ class TestNumberOfIndexesOnRestore(ValkeySearchTestCaseDebugMode):
         waiters.wait_for_true(lambda: index_1.backfill_complete(self.client))
         waiters.wait_for_true(lambda: index_2.backfill_complete(self.client))
         assert self.client.info("search")["search_number_of_indexes"] == 2
+
+
+class TestNumberOfIndexesOnRestoreCluster(ValkeySearchClusterTestCaseDebugMode):
+
+    def test_number_of_indexes_at_rest_coordinator_mode(self):
+        """
+        Verify that after RDB restore in coordinator mode, search_number_of_indexes
+        equals the true index count (not inflated by stale restore counters from
+        non-index sections like GLOBAL_METADATA).
+        """
+        cluster: ValkeyCluster = self.new_cluster_client()
+        node0: Valkey = self.new_client_for_primary(0)
+
+        index_1.create(node0, True)
+        index_2.create(node0, True)
+        index_1.load_data(cluster, NUM_DOCS)
+        index_2.load_data(cluster, NUM_DOCS)
+
+        assert node0.info("search")["search_number_of_indexes"] == 2
+
+        node0.execute_command("SAVE")
+
+        # DEBUG RELOAD on coordinator node to trigger RDB restore with GLOBAL_METADATA section
+        node0.execute_command("DEBUG", "RELOAD")
+
+        # Wait for backfill to complete
+        for idx in [index_1, index_2]:
+            waiters.wait_for_true(lambda: idx.backfill_complete(node0))
+
+        # At rest, search_number_of_indexes should equal the true index count
+        assert node0.info("search")["search_number_of_indexes"] == 2

@@ -12,14 +12,19 @@
 #include <string>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"
+#include "absl/container/inlined_vector.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "gtest/gtest.h"
 #include "src/index_schema.pb.h"
+#include "src/indexes/scoring/scorer.h"
+#include "src/indexes/text/fuzzy.h"
 #include "src/indexes/text/invasive_ptr.h"
+#include "src/indexes/text/language_registry.h"
 #include "src/indexes/text/text_index.h"
+#include "src/query/predicate.h"
 #include "src/utils/string_interning.h"
-#include "testing/common.h"
 
 namespace valkey_search::indexes {
 
@@ -45,11 +50,10 @@ class TextTest : public ::testing::Test {
     // Create default text index schema for testing
     std::vector<std::string> empty_stop_words;
     text_index_schema_ = std::make_shared<text::TextIndexSchema>(
-        data_model::LANGUAGE_ENGLISH,
-        " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",  // Default punctuation
-        false,                                        // with_offsets
-        empty_stop_words,
-        4);  // min_stem_size
+        text::LanguageRegistry::Instance().Get(data_model::LANGUAGE_ENGLISH),
+        " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~", empty_stop_words,
+        false,  // with_offsets
+        4);     // min_stem_size
 
     // Create default TextIndex prototype
     text_index_proto_ = std::make_unique<data_model::TextIndex>();
@@ -65,18 +69,19 @@ class TextTest : public ::testing::Test {
 
   // Helper to create custom schema with specific settings
   std::shared_ptr<text::TextIndexSchema> CreateCustomSchema(
-      const std::string& punctuation = "", bool stemming = true,
-      const std::vector<std::string>& stop_words = {},
+      const std::string &punctuation = "", bool stemming = true,
+      const std::vector<std::string> &stop_words = {},
       bool with_offsets = false) {
     std::string punct = punctuation.empty()
                             ? " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
                             : punctuation;
     return std::make_shared<text::TextIndexSchema>(
-        data_model::LANGUAGE_ENGLISH, punct, with_offsets, stop_words, 4);
+        text::LanguageRegistry::Instance().Get(data_model::LANGUAGE_ENGLISH),
+        punct, stop_words, with_offsets, 4);
   }
 
   // Helper to check if a token exists in the prefix tree
-  bool TokenExists(const std::string& token,
+  bool TokenExists(const std::string &token,
                    std::shared_ptr<text::TextIndexSchema> schema = nullptr) {
     auto active_schema = schema ? schema : text_index_schema_;
     auto iter =
@@ -86,7 +91,7 @@ class TextTest : public ::testing::Test {
 
   // Helper to get postings for a token
   text::InvasivePtr<text::Postings> GetPostingsForToken(
-      const std::string& token,
+      const std::string &token,
       std::shared_ptr<text::TextIndexSchema> schema = nullptr) {
     auto active_schema = schema ? schema : text_index_schema_;
     auto iter =
@@ -99,10 +104,11 @@ class TextTest : public ::testing::Test {
 
   // Stages a single Text attribute update from the key and then commits the key
   // update to the schema-level text index structures.
-  void AddRecordAndCommitKey(Text* text_index, const InternedStringPtr& key,
+  void AddRecordAndCommitKey(Text *text_index, const InternedStringPtr &key,
                              absl::string_view data,
                              std::shared_ptr<text::TextIndexSchema> schema) {
-    auto result = text_index->AddRecord(key, data);
+    auto result = text_index->AddRecord(
+        key, AttributeData(vmsdk::MakeUniqueValkeyString(data)));
     ASSERT_TRUE(result.ok()) << result.status();
     ASSERT_EQ(result.value(), indexes::RecordResult::kAdded);
     schema->CommitKeyData(key);
@@ -110,7 +116,7 @@ class TextTest : public ::testing::Test {
 
   // Adds the record to the default text index
   void AddRecordAndCommitKey(
-      const InternedStringPtr& key, absl::string_view data,
+      const InternedStringPtr &key, absl::string_view data,
       std::shared_ptr<text::TextIndexSchema> schema = nullptr) {
     auto active_schema = schema ? schema : text_index_schema_;
     AddRecordAndCommitKey(text_index_.get(), key, data, active_schema);
@@ -118,10 +124,10 @@ class TextTest : public ::testing::Test {
 
   // Validate that the index structure matches expected results
   void ValidateIndexStructure(
-      const TextIndexTestCase& test_case,
+      const TextIndexTestCase &test_case,
       std::shared_ptr<text::TextIndexSchema> schema = nullptr) {
     // Validate each expected token exists with correct properties
-    for (const auto& token : test_case.expected_tokens) {
+    for (const auto &token : test_case.expected_tokens) {
       EXPECT_TRUE(TokenExists(token, schema))
           << "Token '" << token
           << "' should exist in index for: " << test_case.description;
@@ -136,7 +142,7 @@ class TextTest : public ::testing::Test {
           << "' in: " << test_case.description;
 
       // Choose the appropriate frequency map based on the mode
-      const auto& expected_frequencies =
+      const auto &expected_frequencies =
           test_case.with_offsets ? test_case.expected_frequencies_positional
                                  : test_case.expected_frequencies_boolean;
 
@@ -162,7 +168,7 @@ class TextIndexParameterizedTest
       public ::testing::WithParamInterface<TextIndexTestCase> {};
 
 TEST_P(TextIndexParameterizedTest, ValidateIndexStructure) {
-  const auto& test_case = GetParam();
+  const auto &test_case = GetParam();
 
   std::shared_ptr<text::TextIndexSchema> active_schema = text_index_schema_;
 
@@ -183,7 +189,9 @@ TEST_P(TextIndexParameterizedTest, ValidateIndexStructure) {
     ValidateIndexStructure(test_case, active_schema);
   } else {
     // For failure cases, test directly without the helper
-    auto result = text_index_->AddRecord(key, test_case.input_text);
+    auto result = text_index_->AddRecord(
+        key,
+        AttributeData(vmsdk::MakeUniqueValkeyString(test_case.input_text)));
     EXPECT_FALSE(result.ok())
         << "Test case should fail: " << test_case.description;
   }
@@ -267,7 +275,7 @@ INSTANTIATE_TEST_SUITE_P(
             "Case sensitivity in tokenization"},
         TextIndexTestCase{
             "Hello мир 世界 test",
-            {"hello", "test"},            // Unicode handling may vary by lexer
+            {"hello", "test"},  // Unicode handling may vary by Language
             {{"hello", 1}, {"test", 1}},  // positional
             {{"hello", 1}, {"test", 1}},  // boolean
             1,
@@ -367,10 +375,10 @@ TEST_F(TextTest, StemmingBehavior) {
   // Create schema with stemming enabled
   std::vector<std::string> empty_stop_words;
   auto stemming_schema = std::make_shared<text::TextIndexSchema>(
-      data_model::LANGUAGE_ENGLISH, " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",
+      text::LanguageRegistry::Instance().Get(data_model::LANGUAGE_ENGLISH),
+      " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~", empty_stop_words,
       false,  // with_offsets
-      empty_stop_words,
-      4);  // min_stem_size
+      4);     // min_stem_size
 
   data_model::TextIndex stem_proto;
   stem_proto.set_no_stem(false);  // Enable stemming
@@ -384,7 +392,7 @@ TEST_F(TextTest, StemmingBehavior) {
 
   // Stemming behavior depends on the stemmer implementation
   // This test ensures stemming doesn't break the indexing pipeline
-  auto& prefix_tree = stemming_schema->GetTextIndex()->GetPrefix();
+  auto &prefix_tree = stemming_schema->GetTextIndex()->GetPrefix();
 
   // Should create some tokens (exact form depends on stemmer)
   bool has_tokens = false;
@@ -400,6 +408,374 @@ TEST_F(TextTest, StemmingBehavior) {
   }
 
   EXPECT_TRUE(has_tokens) << "Should create stemmed tokens";
+}
+
+// Fuzzy must decode UTF-8 across radix-tree edge boundaries. Two Arabic words
+// sharing only their first byte (0xD8) cause that byte to live on its own
+// edge, with the second byte of each word starting the next edge. A walker
+// that decodes per-edge sees two invalid bytes instead of one Arabic code
+// point and miscounts the edit distance.
+TEST_F(TextTest, FuzzySearchAcrossMultiByteEdgeSplit) {
+  AddRecordAndCommitKey(StringInternStore::Intern("doc:1"), "بالعالم");
+  AddRecordAndCommitKey(StringInternStore::Intern("doc:2"), "اختبار");
+
+  const auto &tree = text_index_schema_->GetTextIndex()->GetPrefix();
+  auto results = text::FuzzySearch::Search(tree, "بالعالم", /*max_distance=*/0,
+                                           /*max_words=*/100,
+                                           text::LengthUnit::kCodePoints);
+  ASSERT_EQ(results.key_iterators.size(), 1u);
+  EXPECT_EQ(results.key_iterators[0].GetKey()->Str(), "doc:1");
+}
+
+// Edit distance is measured in the given LengthUnit. "¡hola" and "hola"
+// differ by one inserted code point (¡ = U+00A1), which is two bytes.
+// Query entry points never pass a malformed pattern, but Search must not abort
+// on one: kBytes compares it byte by byte, and kCodePoints cannot decode it, so
+// it matches nothing.
+struct FuzzyLengthUnitTestCase {
+  std::string test_name;
+  std::string indexed_word;
+  std::string pattern;
+  size_t max_distance;
+  text::LengthUnit unit;
+  bool expect_match;
+};
+
+class FuzzyLengthUnitTest
+    : public TextTest,
+      public ::testing::WithParamInterface<FuzzyLengthUnitTestCase> {};
+
+TEST_P(FuzzyLengthUnitTest, MatchesWithinDistance) {
+  const auto &tc = GetParam();
+  AddRecordAndCommitKey(StringInternStore::Intern("doc:1"), tc.indexed_word);
+
+  const auto &tree = text_index_schema_->GetTextIndex()->GetPrefix();
+  auto results = text::FuzzySearch::Search(tree, tc.pattern, tc.max_distance,
+                                           /*max_words=*/100, tc.unit);
+  if (tc.expect_match) {
+    ASSERT_EQ(results.key_iterators.size(), 1u);
+    EXPECT_EQ(results.key_iterators[0].GetKey()->Str(), "doc:1");
+  } else {
+    EXPECT_EQ(results.key_iterators.size(), 0u);
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    LengthUnits, FuzzyLengthUnitTest,
+    ::testing::ValuesIn(std::vector<FuzzyLengthUnitTestCase>{
+        {"code_points_distance_0", "¡hola", "hola", 0,
+         text::LengthUnit::kCodePoints, false},
+        {"code_points_distance_1", "¡hola", "hola", 1,
+         text::LengthUnit::kCodePoints, true},
+        {"bytes_distance_1", "¡hola", "hola", 1, text::LengthUnit::kBytes,
+         false},
+        {"bytes_distance_2", "¡hola", "hola", 2, text::LengthUnit::kBytes,
+         true},
+        {"malformed_pattern_code_points", "foo", "fo\xFFo", 1,
+         text::LengthUnit::kCodePoints, false},
+        {"malformed_pattern_bytes", "foo", "fo\xFFo", 1,
+         text::LengthUnit::kBytes, true},
+    }),
+    [](const ::testing::TestParamInfo<FuzzyLengthUnitTestCase> &info) {
+      return info.param.test_name;
+    });
+
+// 3-byte code points that share a multi-byte prefix exercise the Rax
+// edge-split decode path. ぁ (U+3041, E3 81 81) and あ (U+3042, E3 81 82)
+// share the first two bytes E3 81, so the radix tree splits the shared prefix
+// onto its own edge and the differing third byte starts the next edge. The
+// fuzzy walker must reassemble the full 3-byte code point across that split
+// rather than decoding partial bytes per edge.
+TEST_F(TextTest, FuzzySearchAcrossThreeByteEdgeSplit) {
+  AddRecordAndCommitKey(StringInternStore::Intern("doc:1"), "ぁ");
+  AddRecordAndCommitKey(StringInternStore::Intern("doc:2"), "あ");
+
+  const auto &tree = text_index_schema_->GetTextIndex()->GetPrefix();
+  auto results = text::FuzzySearch::Search(tree, "ぁ", /*max_distance=*/0,
+                                           /*max_words=*/100,
+                                           text::LengthUnit::kCodePoints);
+  ASSERT_EQ(results.key_iterators.size(), 1u);
+  EXPECT_EQ(results.key_iterators[0].GetKey()->Str(), "doc:1");
+}
+
+// ==========================================================================
+// Scenario 1: Transposition straddling an edge split.
+// "café" and "cafx" share prefix "caf"; the tree splits edges there.
+// Querying "caéf" (transposition of é and f) forces the two swapped code
+// points to land on opposite sides of the edge boundary. The prev_tree_cp
+// carry and partial-byte buffering must combine correctly to detect that
+// a single transposition (distance 1) suffices.
+TEST_F(TextTest, FuzzyTranspositionAcrossEdgeSplit) {
+  // Insert two words that share prefix "caf" so the tree creates an edge
+  // split at that boundary. "café" has é (2-byte) after "caf".
+  AddRecordAndCommitKey(StringInternStore::Intern("doc:1"), "café");
+  AddRecordAndCommitKey(StringInternStore::Intern("doc:2"), "cafx");
+
+  const auto &tree = text_index_schema_->GetTextIndex()->GetPrefix();
+
+  // "caéf" is "café" with the last two code points transposed.
+  // The transposition crosses the edge split at "caf"|"é..." vs "caf"|"x".
+  auto exact = text::FuzzySearch::Search(tree, "caéf", /*max_distance=*/0,
+                                         /*max_words=*/100,
+                                         text::LengthUnit::kCodePoints);
+  EXPECT_EQ(exact.key_iterators.size(), 0u);
+
+  auto fuzzy = text::FuzzySearch::Search(tree, "caéf", /*max_distance=*/1,
+                                         /*max_words=*/100,
+                                         text::LengthUnit::kCodePoints);
+  ASSERT_EQ(fuzzy.key_iterators.size(), 1u);
+  EXPECT_EQ(fuzzy.key_iterators[0].GetKey()->Str(), "doc:1");
+}
+
+// ==========================================================================
+// Scenario 2: 4-byte code point (emoji) split across edges.
+// Two emoji that share a 3-byte prefix force the radix tree to split the
+// 4-byte sequence. The fuzzy walker must reassemble the full 4-byte code
+// point across the edge boundary.
+TEST_F(TextTest, FuzzySearchAcrossFourByteEdgeSplit) {
+  // 😀 = F0 9F 98 80, 😁 = F0 9F 98 81
+  // They share first 3 bytes F0 9F 98; the tree splits there.
+  AddRecordAndCommitKey(StringInternStore::Intern("doc:1"),
+                        "\xF0\x9F\x98\x80");  // 😀
+  AddRecordAndCommitKey(StringInternStore::Intern("doc:2"),
+                        "\xF0\x9F\x98\x81");  // 😁
+
+  const auto &tree = text_index_schema_->GetTextIndex()->GetPrefix();
+
+  // Exact match for 😀 at distance 0
+  auto results = text::FuzzySearch::Search(
+      tree, "\xF0\x9F\x98\x80", /*max_distance=*/0, /*max_words=*/100,
+      text::LengthUnit::kCodePoints);
+  ASSERT_EQ(results.key_iterators.size(), 1u);
+  EXPECT_EQ(results.key_iterators[0].GetKey()->Str(), "doc:1");
+
+  // Distance 1: searching for 😀 should find both 😀 (exact) and 😁
+  // (1 substitution in code point space)
+  auto fuzzy = text::FuzzySearch::Search(tree, "\xF0\x9F\x98\x80",
+                                         /*max_distance=*/1, /*max_words=*/100,
+                                         text::LengthUnit::kCodePoints);
+  ASSERT_EQ(fuzzy.key_iterators.size(), 2u);
+}
+
+// ==========================================================================
+// Scenario 3: Pruning on a partial-only edge.
+// When an edge contains only partial bytes of a multi-byte sequence (the
+// shared prefix of two code points), the min_dist init-from-prev must still
+// prune correctly: if the subtree can't possibly satisfy max_distance, the
+// walker must not descend.
+TEST_F(TextTest, FuzzyPruningOnPartialEdge) {
+  // Insert two 3-byte chars that share 2 bytes: ぁ (E3 81 81) and あ (E3 81 82)
+  // plus a totally different word so the tree has a branch to prune.
+  AddRecordAndCommitKey(StringInternStore::Intern("doc:ja1"), "ぁ");
+  AddRecordAndCommitKey(StringInternStore::Intern("doc:ja2"), "あ");
+  AddRecordAndCommitKey(StringInternStore::Intern("doc:en"), "xyz");
+
+  const auto &tree = text_index_schema_->GetTextIndex()->GetPrefix();
+
+  // Searching "ぁ" at distance 0 — "xyz" subtree should be pruned
+  // (completely different code points, distance would be >> 0).
+  auto results = text::FuzzySearch::Search(tree, "ぁ", /*max_distance=*/0,
+                                           /*max_words=*/100,
+                                           text::LengthUnit::kCodePoints);
+  ASSERT_EQ(results.key_iterators.size(), 1u);
+  EXPECT_EQ(results.key_iterators[0].GetKey()->Str(), "doc:ja1");
+
+  // At distance 1, "あ" is reachable (1 substitution) but "xyz" is still
+  // unreachable (3 substitutions for a 1-cp query = distance 3).
+  auto fuzzy = text::FuzzySearch::Search(tree, "ぁ", /*max_distance=*/1,
+                                         /*max_words=*/100,
+                                         text::LengthUnit::kCodePoints);
+  ASSERT_EQ(fuzzy.key_iterators.size(), 2u);
+  // Verify "xyz" is not in results
+  for (const auto &r : fuzzy.key_iterators) {
+    EXPECT_NE(r.GetKey()->Str(), "doc:en");
+  }
+}
+
+// ==========================================================================
+// Scenario 4: max_distance > 1 with multibyte characters.
+// All previous fuzzy multibyte tests use distance 0/1. This exercises
+// distance 2 with multi-byte code points to ensure the DP matrix handles
+// larger edit distances correctly across byte boundaries.
+TEST_F(TextTest, FuzzyMultiByteDistance2) {
+  // "München" — contains ü (U+00FC, 2 bytes)
+  AddRecordAndCommitKey(StringInternStore::Intern("doc:1"), "münchen");
+
+  const auto &tree = text_index_schema_->GetTextIndex()->GetPrefix();
+
+  // "munchen" differs by: ü→u (1 substitution). Distance 1 should match.
+  auto d1 = text::FuzzySearch::Search(tree, "munchen", /*max_distance=*/1,
+                                      /*max_words=*/100,
+                                      text::LengthUnit::kCodePoints);
+  ASSERT_EQ(d1.key_iterators.size(), 1u);
+  EXPECT_EQ(d1.key_iterators[0].GetKey()->Str(), "doc:1");
+
+  // "munchn" differs by: ü→u (1 sub) + deletion of 'e'. Distance 2 matches.
+  auto d2_match = text::FuzzySearch::Search(tree, "munchn", /*max_distance=*/2,
+                                            /*max_words=*/100,
+                                            text::LengthUnit::kCodePoints);
+  ASSERT_EQ(d2_match.key_iterators.size(), 1u);
+  EXPECT_EQ(d2_match.key_iterators[0].GetKey()->Str(), "doc:1");
+
+  // Same query at distance 1 should NOT match (needs 2 edits).
+  auto d1_miss = text::FuzzySearch::Search(tree, "munchn", /*max_distance=*/1,
+                                           /*max_words=*/100,
+                                           text::LengthUnit::kCodePoints);
+  EXPECT_EQ(d1_miss.key_iterators.size(), 0u);
+
+  // "mcn" needs 4 edits from "münchen" (delete ü, delete n, delete h, delete
+  // e). Distance 2 should NOT match.
+  auto d2_miss = text::FuzzySearch::Search(tree, "mcn", /*max_distance=*/2,
+                                           /*max_words=*/100,
+                                           text::LengthUnit::kCodePoints);
+  EXPECT_EQ(d2_miss.key_iterators.size(), 0u);
+}
+
+// ==========================================================================
+// Multi-language schema integration: verifies that non-English processors are
+// wired correctly through TextIndexSchema (factory, stop words, punctuation,
+// stem tree).
+
+class TextMultiLanguageTest : public ::testing::Test {
+ protected:
+  std::shared_ptr<text::TextIndexSchema> CreateSchema(
+      data_model::Language language) {
+    auto lang = text::LanguageRegistry::Instance().Get(language);
+    return std::make_shared<text::TextIndexSchema>(
+        text::LanguageRegistry::Instance().Get(language),
+        lang->GetDefaultPunctuation(), lang->GetDefaultStopWords(), false, 4);
+  }
+
+  std::unique_ptr<Text> CreateTextIndex(
+      std::shared_ptr<text::TextIndexSchema> schema, bool stemming = true) {
+    data_model::TextIndex proto;
+    proto.set_no_stem(!stemming);
+    return std::make_unique<Text>(proto, schema);
+  }
+
+  void IndexDocument(Text *text_index,
+                     std::shared_ptr<text::TextIndexSchema> schema,
+                     const std::string &key_name, absl::string_view data) {
+    auto key = StringInternStore::Intern(key_name);
+    auto result = text_index->AddRecord(
+        key, AttributeData(vmsdk::MakeUniqueValkeyString(data)));
+    ASSERT_TRUE(result.ok()) << result.status();
+    ASSERT_EQ(result.value(), indexes::RecordResult::kAdded);
+    schema->CommitKeyData(key);
+  }
+
+  bool TokenExists(std::shared_ptr<text::TextIndexSchema> schema,
+                   const std::string &token) {
+    auto iter = schema->GetTextIndex()->GetPrefix().GetWordIterator(token);
+    return !iter.Done();
+  }
+};
+
+TEST_F(TextMultiLanguageTest, StemExpansionNonEnglish) {
+  auto schema = CreateSchema(data_model::LANGUAGE_FRENCH);
+  schema->SetStemTextFieldMask(1);
+  auto text_index = CreateTextIndex(schema);
+
+  IndexDocument(text_index.get(), schema, "doc:1", "continuellement");
+  IndexDocument(text_index.get(), schema, "doc:2", "continuelle");
+
+  absl::InlinedVector<absl::string_view, text::kStemVariantsInlineCapacity>
+      words;
+  schema->GetAllStemVariants("continuellement", words, 1, false);
+  EXPECT_GE(words.size(), 1u);
+}
+
+TEST_F(TextMultiLanguageTest, DeleteCleansNonEnglishStemTree) {
+  auto schema = CreateSchema(data_model::LANGUAGE_FRENCH);
+  schema->SetStemTextFieldMask(1);
+  auto text_index = CreateTextIndex(schema);
+
+  auto key = StringInternStore::Intern("doc:1");
+  {
+    auto result = text_index->AddRecord(
+        key, AttributeData(vmsdk::MakeUniqueValkeyString("continuellement")));
+    ASSERT_TRUE(result.ok());
+    schema->CommitKeyData(key);
+  }
+
+  EXPECT_TRUE(TokenExists(schema, "continuellement"));
+
+  schema->DeleteKeyData(key);
+
+  EXPECT_FALSE(TokenExists(schema, "continuellement"));
+}
+
+// Builds a scored stem query iterator over a fresh stemming schema + corpus.
+class StemScoringTest : public TextTest {
+ protected:
+  std::unique_ptr<text::TextIterator> BuildScoredStemQuery(
+      std::shared_ptr<text::TextIndexSchema> schema, Text *text,
+      const std::string &query) {
+    query::TermPredicate pred(schema, /*field_mask=*/~0ULL, query,
+                              /*exact=*/false);
+    pred.SetScorer(scoring::GetScorer(scoring::ScorerType::kBm25Std));
+    return pred.BuildTextIterator(schema->GetTextIndex(), ~0ULL,
+                                  /*require_positions=*/false,
+                                  /*or_weight_multiplier=*/1.0f);
+  }
+
+  std::pair<std::shared_ptr<text::TextIndexSchema>, std::unique_ptr<Text>>
+  MakeStemIndex() {
+    auto schema = CreateCustomSchema("", /*stemming=*/true);
+    data_model::TextIndex proto;
+    proto.set_no_stem(false);
+    auto text = std::make_unique<Text>(proto, schema);
+    schema->SetStemTextFieldMask(1ULL << text->GetTextFieldNumber());
+    return {schema, std::move(text)};
+  }
+};
+
+// A stemmed query sums three BM25 leaves per the industry standard: the exact
+// word, the stem root literal, and the stem inflection group. Values verified
+// against the industry-standard reference.
+TEST_F(StemScoringTest, ThreeLeafScoresMatchStandard) {
+  auto [schema, text] = MakeStemIndex();
+  AddRecordAndCommitKey(text.get(), StringInternStore::Intern("d1"), "running",
+                        schema);
+  AddRecordAndCommitKey(text.get(), StringInternStore::Intern("d2"), "runs",
+                        schema);
+  AddRecordAndCommitKey(text.get(), StringInternStore::Intern("d3"), "run",
+                        schema);
+
+  auto iter = BuildScoredStemQuery(schema, text.get(), "running");
+  absl::flat_hash_map<std::string, float> scores;
+  while (!iter->DoneKeys()) {
+    scores[std::string(iter->CurrentKey()->Str())] = iter->GetScore();
+    iter->NextKey();
+  }
+
+  ASSERT_EQ(scores.size(), 3u);
+  // d1 "running": exact leaf (idf 0.98) + stem leaf (idf 0.47, dt=2 distinct).
+  EXPECT_NEAR(scores["d1"], 1.450833f, 1e-3f);
+  // d3 "run": scored only on the stem root literal leaf (its own idf 0.98).
+  EXPECT_NEAR(scores["d3"], 0.980829f, 1e-3f);
+  // d2 "runs": scored only on the stem inflection leaf.
+  EXPECT_NEAR(scores["d2"], 0.470004f, 1e-3f);
+  // exact-form doc outranks the root-literal doc, which outranks the
+  // inflection.
+  EXPECT_GT(scores["d1"], scores["d3"]);
+  EXPECT_GT(scores["d3"], scores["d2"]);
+}
+
+// When the exact surface word is absent, matches still score via the stem group
+// alone (the has_original_ == false path); no exact leaf, finite positive
+// score.
+TEST_F(StemScoringTest, MissingOriginalWordScoresStemOnly) {
+  auto [schema, text] = MakeStemIndex();
+  AddRecordAndCommitKey(text.get(), StringInternStore::Intern("d1"), "runs",
+                        schema);
+
+  auto iter = BuildScoredStemQuery(schema, text.get(), "running");
+  ASSERT_FALSE(iter->DoneKeys());
+  const float score = iter->GetScore();
+  iter->NextKey();
+  EXPECT_TRUE(iter->DoneKeys());
+  EXPECT_GT(score, 0.0f);
 }
 
 }  // namespace valkey_search::indexes

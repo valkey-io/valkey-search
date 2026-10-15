@@ -104,9 +104,11 @@ def find_free_port():
         return s.getsockname()[1]
 
 def start_server(server_bin, module_bin, reader_threads, writer_threads, port):
-    conf_path = f"/tmp/valkey_e2e_{port}.conf"
-    pid_path = f"/tmp/valkey_e2e_{port}.pid"
-    log_path = f"/tmp/valkey_e2e_{port}.log"
+    import tempfile
+    tmp_dir = tempfile.mkdtemp(prefix=f"valkey_e2e_{port}_")
+    conf_path = os.path.join(tmp_dir, f"valkey_e2e_{port}.conf")
+    pid_path = os.path.join(tmp_dir, f"valkey_e2e_{port}.pid")
+    log_path = os.path.join(tmp_dir, f"valkey_e2e_{port}.log")
     
     try:
         tmp_client = redis.Redis(host="127.0.0.1", port=port, socket_timeout=2)
@@ -146,13 +148,14 @@ loadmodule {module_bin} --reader-threads {reader_threads} --writer-threads {writ
     raise RuntimeError(f"Failed to start valkey-server on port {port}. Log: {log_path}")
 
 def stop_server(client, conf_path):
+    import shutil
     try:
         client.shutdown(save=False)
     except Exception:
         pass
     time.sleep(0.5)
     if os.path.exists(conf_path):
-        os.remove(conf_path)
+        shutil.rmtree(os.path.dirname(conf_path), ignore_errors=True)
 
 def generate_dataset_if_missing(dataset_dir, num_docs=15000):
     db_file = os.path.join(dataset_dir, "documents.txt")

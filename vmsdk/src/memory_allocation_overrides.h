@@ -9,124 +9,79 @@
 #define VMSDK_SRC_MEMORY_ALLOCATION_OVERRIDES_H_
 
 #include <cstddef>
-#include <cstdio>
 #include <cstdlib>
-#include <new>
-#include <type_traits>
 
-#include "vmsdk/src/memory_allocation.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
-#if defined(__clang__)
-#define WEAK_SYMBOL __attribute__((weak))
-#else
-#define WEAK_SYMBOL
+// VMSDK_USE_VALKEY_ALLOC_OVERRIDES is defined when this build routes the
+// module's heap through ValkeyModule_Alloc/Free. When it is not defined, the
+// allocator definitions in memory_allocation_c_api.cc are compiled out and
+// everything runs on the system allocator.
+//
+// Sanitizer builds opt out so that the sanitizer's own allocator sees every
+// allocation -- defining malloc here would fight its interceptors.
+//
+// macOS opts out as well. It is a build-only target:
+// .github/workflows/macos.yml runs build.sh with no tests, and the module is
+// never executed there. That matters because the deferral of static
+// initializers that makes the Valkey allocator usable from the very start of
+// module load (see vmsdk/deferred_init.lds and vmsdk/src/deferred_init.cc) is
+// implemented with a GNU linker script, and Mach-O has no equivalent.
+//
+// IF macOS EVER BECOMES A PRODUCTION TARGET, this problem must be solved for
+// that platform before the overrides can be enabled there. The Mach-O analogue
+// of the .init_array rename is the __DATA,__mod_init_func section, which would
+// need to be renamed at link time (ld64 -rename_section) and walked explicitly
+// from ValkeyModule_OnLoad the same way deferred_init.cc does. Simply defining
+// VMSDK_USE_VALKEY_ALLOC_OVERRIDES on macOS without that would reintroduce the
+// bug this design removes: static initializers allocating from the system
+// allocator and later being freed with ValkeyModule_Free.
+#if !defined(SAN_BUILD) && !defined(__APPLE__)
+#define VMSDK_USE_VALKEY_ALLOC_OVERRIDES 1
 #endif
-
-extern "C" {
-// NOLINTNEXTLINE
-WEAK_SYMBOL void* (*__real_malloc)(size_t) = malloc;
-// NOLINTNEXTLINE
-WEAK_SYMBOL void (*__real_free)(void*) = free;
-// NOLINTNEXTLINE
-WEAK_SYMBOL void* (*__real_calloc)(size_t, size_t) = calloc;
-// NOLINTNEXTLINE
-WEAK_SYMBOL void* (*__real_realloc)(void*, size_t) = realloc;
-// NOLINTNEXTLINE
-WEAK_SYMBOL void* (*__real_aligned_alloc)(size_t, size_t) = aligned_alloc;
-// NOLINTNEXTLINE
-WEAK_SYMBOL int (*__real_posix_memalign)(void**, size_t,
-                                         size_t) = posix_memalign;
-// NOLINTNEXTLINE
-WEAK_SYMBOL void* (*__real_valloc)(size_t) = valloc;
-// NOLINTNEXTLINE
-__attribute__((weak)) size_t empty_usable_size(void* ptr) noexcept;
-}  // extern "C"
-
-// Different exception specifier between CLANG & GCC
-#ifdef __clang__
-#define PMES
-#else
-#define PMES noexcept
-#endif
-
-extern "C" {
-// See https://www.gnu.org/software/libc/manual/html_node/Replacing-malloc.html
-// NOLINTNEXTLINE
-void* __wrap_malloc(size_t size) noexcept;
-// NOLINTNEXTLINE
-void __wrap_free(void* ptr) noexcept;
-// NOLINTNEXTLINE
-void* __wrap_calloc(size_t __nmemb, size_t size) noexcept;
-// NOLINTNEXTLINE
-void* __wrap_realloc(void* ptr, size_t size) noexcept;
-// NOLINTNEXTLINE
-void* __wrap_aligned_alloc(size_t __alignment, size_t __size) noexcept;
-// NOLINTNEXTLINE
-int __wrap_malloc_usable_size(void* ptr) noexcept;
-// NOLINTNEXTLINE
-int __wrap_posix_memalign(void** r, size_t __alignment, size_t __size) PMES;
-// NOLINTNEXTLINE
-void* __wrap_valloc(size_t size) noexcept;
-}  // extern "C"
-
-#ifndef SAN_BUILD
-// NOLINTNEXTLINE
-#define malloc(...) __wrap_malloc(__VA_ARGS__)
-// NOLINTNEXTLINE
-#define calloc(...) __wrap_calloc(__VA_ARGS__)
-// NOLINTNEXTLINE
-#define realloc(...) __wrap_realloc(__VA_ARGS__)
-// NOLINTNEXTLINE
-#define free(...) __wrap_free(__VA_ARGS__)
-// NOLINTNEXTLINE
-#define aligned_alloc(...) __wrap_aligned_alloc(__VA_ARGS__)
-// NOLINTNEXTLINE
-#define posix_memalign(...) __wrap_posix_memalign(__VA_ARGS__)
-// NOLINTNEXTLINE
-#define valloc(...) __wrap_valloc(__VA_ARGS__)
-
-void* operator new(size_t size) noexcept(false);
-void operator delete(void* p) noexcept;
-void operator delete(void* p, size_t size) noexcept;
-void* operator new[](size_t size) noexcept(false);
-void operator delete[](void* p) noexcept;
-void operator delete[](void* p, size_t size) noexcept;
-void* operator new(size_t size, const std::nothrow_t& nt) noexcept;
-void* operator new[](size_t size, const std::nothrow_t& nt) noexcept;
-void operator delete(void* p, const std::nothrow_t& nt) noexcept;
-void operator delete[](void* p, const std::nothrow_t& nt) noexcept;
-void* operator new(size_t size, std::align_val_t alignment) noexcept(false);
-void* operator new(size_t size, std::align_val_t alignment,
-                   const std::nothrow_t&) noexcept;
-void operator delete(void* p, std::align_val_t alignment) noexcept;
-void operator delete(void* p, std::align_val_t alignment,
-                     const std::nothrow_t&) noexcept;
-void operator delete(void* p, size_t size, std::align_val_t alignment) noexcept;
-void* operator new[](size_t size, std::align_val_t alignment) noexcept(false);
-void* operator new[](size_t size, std::align_val_t alignment,
-                     const std::nothrow_t&) noexcept;
-void operator delete[](void* p, std::align_val_t alignment) noexcept;
-void operator delete[](void* p, std::align_val_t alignment,
-                       const std::nothrow_t&) noexcept;
-void operator delete[](void* p, size_t size,
-                       std::align_val_t alignment) noexcept;
-#endif  // !SAN_BUILD
 
 namespace vmsdk {
-// Updates the custom allocator to perform any future allocations using the
-// Valkey allocator.
-void UseValkeyAlloc();
 
-// Switch back to the default allocator. No guarantees around atomicity. Only
-// safe in single-threaded or testing environments.
-void ResetValkeyAlloc();
+// An allocation that is never reported to the memory accounting, which is what
+// makes it safe to use from inside the accounting itself.
+//
+// The module defines malloc, and every call to it reports, so the counters
+// cannot use malloc without re-entering themselves. ValkeyModule_Alloc is the
+// same heap without the reporting, so it breaks that cycle.
+//
+// It is always established by the time this runs. In the module the only path
+// here is from inside the module's own malloc, which has just called it, and
+// static initializers are deferred until after the allocator switch (see
+// vmsdk/deferred_init.lds). In the unit tests, which link this without the
+// module's malloc, vmsdk/src/testing_infra/module.h installs a plain
+// malloc-backed implementation before main -- late enough to need no
+// allocation during static initialization, which is why ShardedAtomic's
+// containers carry inline capacity.
+inline void* RawSystemMalloc(std::size_t size) {
+  return ValkeyModule_Alloc(size);
+}
 
-struct DisableRawSystemAllocatorReporting {
-};  // Pass this (or void) to DISABLE reporting
-// RawSystemAllocator implements an allocator that will not go through
-// the SystemAllocTracker, for use by the SystemAllocTracker to prevent
-// infinite recursion when tracking pointers.
-template <typename T, typename Tag = void>
+inline void RawSystemFree(void* ptr) { ValkeyModule_Free(ptr); }
+
+}  // namespace vmsdk
+
+namespace vmsdk {
+
+// RawSystemAllocator allocates without reporting to the memory accounting.
+//
+// This is not an optimization and it cannot be replaced with std::allocator.
+// The accounting counters are themselves ShardedAtomics, so
+// ReportAllocMemorySize -> ShardedAtomic::Add allocates: it constructs a
+// thread_local ThreadLocalNode, whose constructor registers it in a vector, and
+// it grows that node's value array under resize_mutex. Route those allocations
+// through a reporting allocator and each one calls ReportAllocMemorySize again,
+// re-entering either a thread_local's own initialization or a non-reentrant
+// absl::Mutex. Tried it: the module hangs on a futex during load, accumulating
+// no CPU time, before the server ever accepts connections.
+//
+// Reporting is not optional here, which is why there is no knob for it: an
+// instance that reported would be exactly the cycle above.
+template <typename T>
 struct RawSystemAllocator {
   // NOLINTNEXTLINE
   typedef T value_type;
@@ -136,18 +91,10 @@ struct RawSystemAllocator {
   constexpr RawSystemAllocator(const RawSystemAllocator<U>&) noexcept {}
   // NOLINTNEXTLINE
   T* allocate(std::size_t n) {
-    if constexpr (!std::is_same_v<Tag, DisableRawSystemAllocatorReporting>) {
-      ReportAllocMemorySize(n * sizeof(T));
-    }
-    return static_cast<T*>(__real_malloc(n * sizeof(T)));
+    return static_cast<T*>(RawSystemMalloc(n * sizeof(T)));
   }
   // NOLINTNEXTLINE
-  void deallocate(T* p, std::size_t) {
-    if constexpr (!std::is_same_v<Tag, DisableRawSystemAllocatorReporting>) {
-      ReportFreeMemorySize(sizeof(T));
-    }
-    __real_free(p);
-  }
+  void deallocate(T* p, std::size_t) { RawSystemFree(p); }
 };
 
 }  // namespace vmsdk

@@ -62,6 +62,7 @@ class ExprTest : public vmsdk::ValkeyTest {
         return absl::NotFoundError("param not found");
       }
     }
+    bool UseFilterComparisonSemantics() const override { return false; }
   } cc;
   std::unique_ptr<Record> record_;
 
@@ -190,6 +191,103 @@ TEST_F(ExprTest, NotOperatorRequiresOperand) {
     EXPECT_FALSE(compiled.ok())
         << "Expression unexpectedly compiled: '" << expr << "'";
   }
+}
+
+// ---------------------------------------------------------------------------
+// FT.CREATE FILTER semantics.
+//
+// ExprTest above pins APPLY semantics (UseFilterComparisonSemantics() ==
+// false). This fixture is its FILTER counterpart: it compiles with the flag
+// on, so CmpOp() selects the FilterFunc* comparisons rather than the APPLY
+// ones. Without it the FILTER-only branches have no unit coverage at all and
+// are exercised only by the compatibility suite, which needs Docker to run.
+// ---------------------------------------------------------------------------
+class FilterExprTest : public ExprTest {
+ protected:
+  struct FilterCompileContext : public CompileContext {
+    bool UseFilterComparisonSemantics() const override { return true; }
+  } fcc;
+
+  // Compile `expr` under FILTER semantics and evaluate it against record_.
+  Value Eval(absl::string_view expr) {
+    auto compiled = Expression::Compile(fcc, expr);
+    EXPECT_TRUE(compiled.ok())
+        << "failed to compile '" << expr << "': " << compiled.status();
+    if (!compiled.ok()) {
+      return Value(Value::Nil("compile failed"));
+    }
+    Expression::EvalContext ec;
+    return (*compiled)->Evaluate(ec, *record_);
+  }
+
+  void SetUp() override {
+    ExprTest::SetUp();
+    // "missing" is resolvable at compile time but absent at evaluation time,
+    // so Ref::GetValue returns a Nil -- the same shape a FILTER sees for a
+    // field the document does not carry.
+    fcc.known_attr.insert("missing");
+  }
+};
+
+// A comparison involving a missing field is FALSE, not "unknown". The
+// document is simply not admitted; nothing propagates.
+TEST_F(FilterExprTest, MissingFieldComparisonIsFalse) {
+  for (absl::string_view expr :
+       {"@missing == 1", "@missing != 1", "@missing < 1", "@missing <= 1",
+        "@missing > 1", "@missing >= 1"}) {
+    auto v = Eval(expr);
+    EXPECT_FALSE(v.IsNil()) << "'" << expr << "' must not yield Nil";
+    EXPECT_EQ(v, Value(false)) << "'" << expr << "' must be false";
+  }
+  // A present field still produces a definite answer.
+  EXPECT_EQ(Eval("@one == 1"), Value(true));
+  EXPECT_EQ(Eval("@one == 2"), Value(false));
+}
+
+// Negating a missing-field comparison gives true, because the comparison was
+// false. This is what admits every key for `!(@absent == 'x')`.
+TEST_F(FilterExprTest, NegationOfMissingFieldIsTrue) {
+  EXPECT_EQ(Eval("!(@missing == 1)"), Value(true));
+  EXPECT_EQ(Eval("!(@missing != 1)"), Value(true));
+  EXPECT_EQ(Eval("!(@one == 1)"), Value(false));
+  EXPECT_EQ(Eval("!(@one == 2)"), Value(true));
+}
+
+// Two-valued && / ||, and order-insensitive -- there is no unknown left to
+// propagate, so swapping the operands cannot change the answer. Regression
+// guard for the three-valued FilterLogical node this replaced, which made
+// `false && missing` differ from `missing && false`.
+TEST_F(FilterExprTest, LogicalOperatorsAreTwoValuedAndOrderInsensitive) {
+  EXPECT_EQ(Eval("(@one == 2) && (@missing == 1)"), Value(false));
+  EXPECT_EQ(Eval("(@missing == 1) && (@one == 2)"), Value(false));
+
+  EXPECT_EQ(Eval("(@one == 1) || (@missing == 1)"), Value(true));
+  EXPECT_EQ(Eval("(@missing == 1) || (@one == 1)"), Value(true));
+  EXPECT_EQ(Eval("(@missing == 1) || (@one == 2)"), Value(false));
+
+  // A definite operand on both sides behaves normally.
+  EXPECT_EQ(Eval("(@one == 1) && (@two == 2)"), Value(true));
+  EXPECT_EQ(Eval("(@one == 1) && (@two == 1)"), Value(false));
+  EXPECT_EQ(Eval("(@one == 2) || (@two == 2)"), Value(true));
+}
+
+// An unordered comparison -- reachable only via a NaN, since Nil is guarded
+// above and no filter attribute reference yields an array -- reads as equal,
+// matching Redisearch: ==, <= and >= are true while !=, < and > are false.
+// Regression guard for FilterFuncNe, which used to answer != as true here
+// and so admitted a document that Redisearch rejects. `0/0` is the NaN.
+TEST_F(FilterExprTest, UnorderedComparisonReadsAsEqual) {
+  EXPECT_EQ(Eval("(0/0) == 0"), Value(true));
+  EXPECT_EQ(Eval("(0/0) != 0"), Value(false));
+  EXPECT_EQ(Eval("(0/0) <= 0"), Value(true));
+  EXPECT_EQ(Eval("(0/0) >= 0"), Value(true));
+  EXPECT_EQ(Eval("(0/0) < 0"), Value(false));
+  EXPECT_EQ(Eval("(0/0) > 0"), Value(false));
+
+  // Unlike a missing field, a NaN is a real computed value: it never yields
+  // the Nil that would keep the document.
+  EXPECT_FALSE(Eval("(0/0) == 0").IsNil());
+  EXPECT_FALSE(Eval("(0/0) != 0").IsNil());
 }
 
 }  // namespace expr

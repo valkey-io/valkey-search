@@ -8,22 +8,33 @@
 #ifndef VALKEY_SEARCH_INDEXES_TEXT_INDEX_H_
 #define VALKEY_SEARCH_INDEXES_TEXT_INDEX_H_
 
+#include <absl/container/inlined_vector.h>
+#include <absl/status/statusor.h>
+
 #include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/node_hash_map.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
+#include "rax/rax.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/text/invasive_ptr.h"
-#include "src/indexes/text/lexer.h"
+#include "src/indexes/text/language.h"
 #include "src/indexes/text/posting.h"
 #include "src/indexes/text/rax_target_mutex_pool.h"
 #include "src/indexes/text/rax_wrapper.h"
-
-struct sb_stemmer;
+#include "src/utils/string_interning.h"
+#include "vmsdk/src/memory_tracker.h"
 
 namespace valkey_search::indexes::text {
 
@@ -41,6 +52,8 @@ struct TextIndexMetadata {
   alignas(64) std::atomic<uint64_t> total_positions{0};
   alignas(64) std::atomic<uint64_t> num_unique_terms{0};
   alignas(64) std::atomic<uint64_t> total_term_frequency{0};
+  alignas(64) std::atomic<uint64_t> total_doc_len{
+      0};  // Sum of all doc_lens for avg_doc_len
 
   // Memory pools for text index components
   MemoryPool posting_memory_pool_{0};
@@ -73,7 +86,7 @@ class TextIndex {
   void MutateTarget(
       absl::string_view word, const InvasivePtr<Postings> &target,
       const std::optional<std::string> &reverse_word = std::nullopt,
-      item_count_op op = NONE);
+      item_count_op operation = NONE);
 
  private:
   Rax prefix_tree_;
@@ -82,8 +95,12 @@ class TextIndex {
 
 class TextIndexSchema {
  public:
-  TextIndexSchema(data_model::Language language, const std::string &punctuation,
-                  bool with_offsets, const std::vector<std::string> &stop_words,
+  // `language` is the shared instance for the index's LANGUAGE; `punctuation`
+  // and `stop_words` are the index's own settings (FT.CREATE overrides or the
+  // language defaults).
+  TextIndexSchema(std::shared_ptr<const Language> language,
+                  const std::string &punctuation,
+                  const std::vector<std::string> &stop_words, bool with_offsets,
                   uint32_t min_stem_size);
 
   ~TextIndexSchema();
@@ -92,27 +109,79 @@ class TextIndexSchema {
                                           absl::string_view data,
                                           size_t text_field_number, bool stem,
                                           bool suffix);
-  void CommitKeyData(const InternedStringPtr &key);
+  // Commits staged key data into the text index structures.
+  // Returns the document length and norm (max term frequency).
+  struct CommitResult {
+    uint32_t doc_len{0};
+    uint32_t norm{0};
+  };
+  CommitResult CommitKeyData(const InternedStringPtr &key);
   void DeleteKeyData(const InternedStringPtr &key);
 
   uint8_t AllocateTextFieldNumber() { return num_text_fields_++; }
   bool HasTextOffsets() const { return with_offsets_; }
   uint8_t GetNumTextFields() const { return num_text_fields_; }
   std::shared_ptr<TextIndex> GetTextIndex() const { return text_index_; }
-  Lexer GetLexer() const { return lexer_; }
+  const Language &GetLanguage() const { return *language_; }
+  const TokenizerConfig &GetTokenizerConfig() const {
+    return *tokenizer_config_;
+  }
 
   // Access to metadata for memory pool usage
   TextIndexMetadata &GetMetadata() { return metadata_; }
 
+  // Index-wide, query-invariant scoring inputs. avg_doc_len is 0 for an empty
+  // index, which callers treat as "scoring disabled".
+  struct IndexScoringStats {
+    uint32_t total_docs = 0;
+    float avg_doc_len = 0.0f;
+  };
+  // BM25's N must be ALL indexed docs (IndexSchema::GetIndexKeyInfoSize()),
+  // matching the extra-step path and Redis, not just text-bearing keys.
+  // IndexSchema wires that count in via SetTotalDocsProvider (TextIndexSchema
+  // cannot see index_key_info_); GetTrackedKeyCount is the fallback if unset.
+  void SetTotalDocsProvider(std::function<uint32_t()> provider) {
+    total_docs_provider_ = std::move(provider);
+  }
+  IndexScoringStats GetIndexScoringStats() const {
+    const uint32_t total_docs =
+        total_docs_provider_ ? total_docs_provider_() : GetTrackedKeyCount();
+    const float avg_doc_len =
+        total_docs > 0
+            ? static_cast<float>(metadata_.total_doc_len.load()) / total_docs
+            : 0.0f;
+    return {total_docs, avg_doc_len};
+  }
+
+  // Takes a borrowed key so neither scoring path (post-filter walk in
+  // search.cc, in-iterator hot path in term.cc) incurs ref-count churn; owning
+  // callers wrap their key in a BorrowedInternedStringPtr.
+  // No locking needed if called from read phase of time-slice mutex.
+  uint32_t GetKeyDocLen(BorrowedInternedStringPtr key, bool lock) const {
+    std::optional<std::lock_guard<std::mutex>> per_key_guard;
+    if (lock) {
+      per_key_guard.emplace(per_key_text_indexes_mutex_);
+    }
+    auto itr = per_key_scoring_info_.find(key);
+    return itr != per_key_scoring_info_.end() ? itr->second.doc_len : 0;
+  }
+
+  uint32_t GetKeyNorm(const InternedStringPtr &key) const {
+    auto itr = per_key_scoring_info_.find(key);
+    return itr != per_key_scoring_info_.end() ? itr->second.norm : 0;
+  }
+
   // Access stem tree for word expansion during search
   const Rax &GetStemTree() const { return stem_tree_; }
 
-  // Get stem root and all stem parents for a search term
+  // Get stem root and all stem parents for a search term. out_distinct_docs, if
+  // set, receives StemParents::distinct_docs (untouched if the root is absent).
   std::string GetAllStemVariants(
       absl::string_view search_term,
       absl::InlinedVector<absl::string_view, kStemVariantsInlineCapacity>
           &words_to_search,
-      uint64_t stem_enabled_mask, bool lock_needed);
+      uint64_t stem_enabled_mask, bool lock_needed,
+      uint32_t *out_distinct_docs = nullptr);
 
   // Get the minimum stem size across all fields
   uint32_t GetMinStemSize() const { return min_stem_size_; }
@@ -166,10 +235,31 @@ class TextIndexSchema {
   //
   absl::node_hash_map<Key, TextIndex> per_key_text_indexes_;
 
-  // Prevent concurrent mutations to per-key text index map
-  std::mutex per_key_text_indexes_mutex_;
+  // Per-key scoring metadata (doc_len and norm), populated alongside
+  // per_key_text_indexes_ during CommitKeyData/DeleteKeyData.
+  struct KeyScoringInfo {
+    uint32_t doc_len{0};
+    uint32_t norm{0};
+  };
 
-  Lexer lexer_;
+  // flat_hash_map (not node_hash_map): KeyScoringInfo is 8 bytes and needs no
+  // pointer stability, so storing it inline avoids a per-document cache miss on
+  // the GetKeyDocLen() scoring hot path.
+  // Transparent functors so GetKeyDocLen() can probe with a borrowed key.
+  // TODO: combine with per_key_text_index_ to have a single map (e.g.
+  // per_key_text_data_)
+  //       to save space
+  absl::flat_hash_map<Key, KeyScoringInfo, InternedStringPtrHash,
+                      InternedStringPtrEq>
+      per_key_scoring_info_;
+
+  // Prevent concurrent mutations to per-key text index map and scoring info
+  mutable std::mutex per_key_text_indexes_mutex_;
+
+  std::shared_ptr<const Language> language_;
+  // Shared with the language when the index uses its default punctuation and
+  // stop words; owned by this index otherwise.
+  std::shared_ptr<const TokenizerConfig> tokenizer_config_;
 
   // Key updates are fanned out to each attribute's IndexBase object. Since text
   // indexing operates at the schema-level, any new text data to insert for a
@@ -200,6 +290,10 @@ class TextIndexSchema {
   // IndexSchema::stem_text_field_mask_)
   uint64_t stem_text_field_mask_ = 0;
 
+  // Returns the total indexed doc count (all docs, not just text-bearing) for
+  // BM25's N. Wired by IndexSchema via SetTotalDocsProvider.
+  std::function<uint32_t()> total_docs_provider_;
+
  public:
   // FT.INFO stats for text index
   uint64_t GetTotalPositions() const;
@@ -213,16 +307,13 @@ class TextIndexSchema {
   uint64_t GetTotalTextIndexMemoryUsage() const;
 
   // Total number of keys with text fields indexed in this schema.
-  // No locking needed because only called from read phase.
-  size_t GetTrackedKeyCount() const { return per_key_text_indexes_.size(); }
-
-  // Locking-enabled version of GetTrackedKeyCount.
-  size_t GetTrackedKeyCount(bool lock) {
+  // No locking needed when called from read phase.
+  size_t GetTrackedKeyCount(bool lock = false) const {
     std::optional<std::lock_guard<std::mutex>> per_key_guard;
     if (lock) {
       per_key_guard.emplace(per_key_text_indexes_mutex_);
     }
-    return GetTrackedKeyCount();
+    return per_key_text_indexes_.size();
   }
 
   // Helper function to lookup text index for a key.

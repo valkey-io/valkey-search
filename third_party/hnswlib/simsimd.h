@@ -12,19 +12,17 @@
 #include "third_party/simsimd/include/simsimd/simsimd.h"
 #include "third_party/simsimd/include/simsimd/types.h"
 
-
-inline float InnerProductDistanceSimsimd(const void *pVect1, const void *pVect2,
-                                         const void *qty_ptr) {
-  simsimd_size_t dim = *static_cast<const size_t *>(qty_ptr);
-  const simsimd_f32_t *vec1 = static_cast<const simsimd_f32_t *>(pVect1);
-  const simsimd_f32_t *vec2 = static_cast<const simsimd_f32_t *>(pVect2);
-  simsimd_distance_t distance;
-  simsimd_dot_f32(vec1, vec2, dim, &distance);
-  return 1.0f -  distance;
-}
+// Defined in c/inner_product_distance.c, which fuses the reciprocal magnitude
+// scaling into the best f32 dot-product kernel for the running CPU (Skylake,
+// Haswell, SVE, NEON or serial) to avoid a per-call stack spill.
+extern "C" float InnerProductDistanceSimsimd(const void *pVect1,
+                                             const void *pVect2,
+                                             const void *qty_ptr,
+                                             float reciprocal_mag_product);
 
 inline float L2SqrSimsimd(const void *pVect1, const void *pVect2,
-                          const void *qty_ptr) {
+                          const void *qty_ptr,
+                          [[maybe_unused]] float product_magnitude) {
   simsimd_size_t dim = *static_cast<const size_t *>(qty_ptr);
   const simsimd_f32_t *vec1 = static_cast<const simsimd_f32_t *>(pVect1);
   const simsimd_f32_t *vec2 = static_cast<const simsimd_f32_t *>(pVect2);

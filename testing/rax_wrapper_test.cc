@@ -24,15 +24,7 @@
 #include <vector>
 
 #include "gtest/gtest.h"
-#include "vmsdk/src/memory_allocation.h"
 #include "vmsdk/src/testing_infra/utils.h"
-
-// Override the weak symbol empty_usable_size (defined in
-// memory_allocation_overrides.cc) with actual memory tracking for
-// RaxMallocMemoryTracking.
-extern "C" size_t empty_usable_size(void *ptr) noexcept {
-  return malloc_usable_size(ptr);
-}
 
 namespace valkey_search::indexes::text {
 namespace {
@@ -589,25 +581,25 @@ TEST_F(RaxTest, FindTarget) {
             nullptr);  // extension of existing word
 }
 
-TEST_F(RaxTest, RaxMallocMemoryTracking) {
-  // Validates that rax_malloc.h correctly routes allocations through
-  // the VMSDK memory tracking system.
+TEST_F(RaxTest, RaxAllocSizeReporting) {
+  // Validates rax_malloc.h's rax_ptr_alloc_size wiring: rax must be able to
+  // report the usable size of its own allocations.
+  //
+  // This deliberately does not assert against vmsdk::GetUsedMemoryCnt().
+  // rax_malloc.h now uses the plain allocator names, which inside the module
+  // bind to the definitions in vmsdk/src/memory_allocation_c_api.cc and so feed
+  // the VMSDK accounting. That file is linked only into the module, not into
+  // test executables -- see src/CMakeLists.txt -- so here the names resolve to
+  // libc and nothing is accounted. That the module binds them correctly is
+  // enforced at link time by ci/check_module_allocators.sh.
+  // The fixture's rax_ starts empty; its only heap allocation is from raxNew().
+  size_t empty_size = rax_.GetAllocSize();
+  EXPECT_GT(empty_size, 0u)
+      << "Rax should report the usable size of its allocations";
 
-  uint64_t initial_memory = vmsdk::GetUsedMemoryCnt();
-  {
-    // Create empty Rax. The only heap allocations are from raxNew().
-    Rax empty_rax{nullptr};
-    uint64_t after_create_memory = vmsdk::GetUsedMemoryCnt();
-    std::cout << "Memory increased by "
-              << (after_create_memory - initial_memory) << " bytes"
-              << std::endl;
-    EXPECT_GT(after_create_memory, initial_memory)
-        << "Creating Rax should increase the tracked allocated memory";
-    EXPECT_EQ(empty_rax.GetAllocSize(), after_create_memory - initial_memory);
-  }
-  // The memory should return to zero after falling out of scope.
-  EXPECT_EQ(initial_memory, vmsdk::GetUsedMemoryCnt())
-      << "Destroying Rax should free all rax allocations";
+  AddWords({{"hello", 1}, {"world", 2}});
+  EXPECT_GT(rax_.GetAllocSize(), empty_size)
+      << "Adding entries should increase the reported allocation size";
 }
 
 }  // namespace

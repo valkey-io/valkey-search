@@ -21,6 +21,7 @@
 #include "src/index_schema.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
+#include "src/indexes/scoring/scorer.h"
 #include "src/indexes/tag.h"
 #include "src/query/predicate.h"
 #include "src/query/search.h"
@@ -56,7 +57,69 @@ std::optional<query::SortByParameter> SortByFromGRPC(
   return sortby;
 }
 
+// Exhaustive switch so a newly added ScorerType fails to compile here instead
+// of silently reaching the shard as the default scorer.
+Scorer ScorerToGRPC(indexes::scoring::ScorerType scorer) {
+  switch (scorer) {
+    case indexes::scoring::ScorerType::kBm25Std:
+      return coordinator::SCORER_BM25STD;
+    case indexes::scoring::ScorerType::kTfidf:
+      return coordinator::SCORER_TFIDF;
+  }
+  return coordinator::SCORER_BM25STD;
+}
+
+// An unset or unrecognized value (older or newer peer) means the default
+// scorer.
+indexes::scoring::ScorerType ScorerFromGRPC(Scorer scorer) {
+  switch (scorer) {
+    case coordinator::SCORER_TFIDF:
+      return indexes::scoring::ScorerType::kTfidf;
+    default:
+      return indexes::scoring::ScorerType::kBm25Std;
+  }
+}
+
+HybridPolicy HybridPolicyToGRPC(query::HybridPolicy hybrid_policy) {
+  switch (hybrid_policy) {
+    case query::HybridPolicy::kBatches:
+      return coordinator::HYBRID_POLICY_BATCHES;
+    case query::HybridPolicy::kAdHocBruteForce:
+      return coordinator::HYBRID_POLICY_ADHOC_BF;
+    case query::HybridPolicy::kAuto:
+      return coordinator::HYBRID_POLICY_AUTO;
+  }
+  return coordinator::HYBRID_POLICY_AUTO;
+}
+
+query::HybridPolicy HybridPolicyFromGRPC(HybridPolicy hybrid_policy) {
+  switch (hybrid_policy) {
+    case coordinator::HYBRID_POLICY_BATCHES:
+      return query::HybridPolicy::kBatches;
+    case coordinator::HYBRID_POLICY_ADHOC_BF:
+      return query::HybridPolicy::kAdHocBruteForce;
+    default:
+      return query::HybridPolicy::kAuto;
+  }
+}
+
+static absl::StatusOr<std::unique_ptr<query::Predicate>> BuildPredicateFromGRPC(
+    const Predicate& predicate, std::shared_ptr<IndexSchema> index_schema,
+    absl::flat_hash_set<std::string>& attribute_identifiers);
+
 absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
+    const Predicate& predicate, std::shared_ptr<IndexSchema> index_schema,
+    absl::flat_hash_set<std::string>& attribute_identifiers) {
+  VMSDK_ASSIGN_OR_RETURN(
+      auto result,
+      BuildPredicateFromGRPC(predicate, index_schema, attribute_identifiers));
+  if (predicate.has_weight()) {
+    result->SetWeight(predicate.weight());
+  }
+  return result;
+}
+
+static absl::StatusOr<std::unique_ptr<query::Predicate>> BuildPredicateFromGRPC(
     const Predicate& predicate, std::shared_ptr<IndexSchema> index_schema,
     absl::flat_hash_set<std::string>& attribute_identifiers) {
   switch (predicate.predicate_case()) {
@@ -163,7 +226,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
         return absl::InvalidArgumentError("Index does not have any text field");
       }
       auto identifiers = index_schema->GetTextIdentifiersByFieldMask(
-          predicate.term().field_mask());
+          predicate.prefix().field_mask());
       attribute_identifiers.insert(identifiers.begin(), identifiers.end());
       return std::make_unique<query::PrefixPredicate>(
           text_index_schema, predicate.prefix().field_mask(),
@@ -175,7 +238,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
         return absl::InvalidArgumentError("Index does not have any text field");
       }
       auto identifiers = index_schema->GetTextIdentifiersByFieldMask(
-          predicate.term().field_mask());
+          predicate.suffix().field_mask());
       attribute_identifiers.insert(identifiers.begin(), identifiers.end());
       return std::make_unique<query::SuffixPredicate>(
           text_index_schema, predicate.suffix().field_mask(),
@@ -187,7 +250,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
         return absl::InvalidArgumentError("Index does not have any text field");
       }
       auto identifiers = index_schema->GetTextIdentifiersByFieldMask(
-          predicate.term().field_mask());
+          predicate.infix().field_mask());
       attribute_identifiers.insert(identifiers.begin(), identifiers.end());
       return std::make_unique<query::InfixPredicate>(
           text_index_schema, predicate.infix().field_mask(),
@@ -199,11 +262,35 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
         return absl::InvalidArgumentError("Index does not have any text field");
       }
       auto identifiers = index_schema->GetTextIdentifiersByFieldMask(
-          predicate.term().field_mask());
+          predicate.fuzzy().field_mask());
       attribute_identifiers.insert(identifiers.begin(), identifiers.end());
       return std::make_unique<query::FuzzyPredicate>(
           text_index_schema, predicate.fuzzy().field_mask(),
           predicate.fuzzy().content(), predicate.fuzzy().distance());
+    }
+    case Predicate::kVectorRange: {
+      const auto& vr = predicate.vector_range();
+      VMSDK_ASSIGN_OR_RETURN(auto identifier,
+                             index_schema->GetIdentifier(vr.attribute_alias()));
+      attribute_identifiers.insert(identifier);
+      std::optional<std::string> score_as;
+      if (vr.has_score_as()) {
+        score_as = vr.score_as();
+      }
+      std::optional<double> epsilon;
+      if (vr.has_epsilon()) {
+        epsilon = vr.epsilon();
+      }
+      auto vr_predicate = std::make_unique<query::VectorRangePredicate>(
+          vr.attribute_alias(), identifier, vr.radius(), vr.vector_param_name(),
+          score_as, epsilon);
+      if (!vr.query_vector().empty()) {
+        vr_predicate->SetQueryVector(vr.query_vector());
+      }
+      if (!vr.radius_param_name().empty()) {
+        vr_predicate->SetRadiusParamName(vr.radius_param_name());
+      }
+      return vr_predicate;
     }
     case Predicate::PREDICATE_NOT_SET:
       return absl::InvalidArgumentError("Predicate not set");
@@ -232,7 +319,9 @@ absl::Status GRPCSearchRequestToParameters(
   parameters->query = request.query();
   parameters->dialect = request.dialect();
   parameters->k = request.k();
-  parameters->ef = request.ef();
+  if (request.has_ef()) {
+    parameters->ef = request.ef();
+  }
   parameters->limit = query::LimitParameter{request.limit().first_index(),
                                             request.limit().number()};
   parameters->no_content = request.no_content();
@@ -254,11 +343,44 @@ absl::Status GRPCSearchRequestToParameters(
   parameters->slot_fingerprint = request.slot_fingerprint();
   parameters->filter_parse_results.query_operations =
       static_cast<QueryOperations>(request.query_operations());
+  parameters->filter_parse_results.is_match_all = request.is_match_all();
   parameters->sortby_parameter = SortByFromGRPC(request);
+  // Detect VectorRangePredicate nodes in the deserialized predicate tree so the
+  // search path can handle single-VR queries. Single-VR model: the matched
+  // distance is carried in Neighbor::distance, not a score-slot side channel.
+  if (parameters->filter_parse_results.root_predicate) {
+    parameters->has_vector_range =
+        query::CountVectorRangePredicates(
+            parameters->filter_parse_results.root_predicate.get()) > 0;
+  }
+  parameters->scorer = ScorerFromGRPC(request.scorer());
+  parameters->vector_score_only = request.vector_score_only();
+  if (request.has_inkeys()) {
+    auto& dest = parameters->inkeys.emplace();
+    dest.reserve(request.inkeys().keys().size());
+    for (const auto& key : request.inkeys().keys()) {
+      dest.insert(key);
+    }
+  }
+  parameters->hybrid_policy = HybridPolicyFromGRPC(request.hybrid_policy());
   return absl::OkStatus();
 }
 
+static std::unique_ptr<Predicate> BuildGRPCPredicate(
+    const query::Predicate& predicate);
+
 std::unique_ptr<Predicate> PredicateToGRPCPredicate(
+    const query::Predicate& predicate) {
+  auto proto = BuildGRPCPredicate(predicate);
+  if (proto != nullptr) {
+    // Carry the query-modifier weight ($weight:N) to the shard so per-shard
+    // scoring matches standalone; without this the leaf/group weight is lost.
+    proto->set_weight(predicate.GetWeight());
+  }
+  return proto;
+}
+
+static std::unique_ptr<Predicate> BuildGRPCPredicate(
     const query::Predicate& predicate) {
   switch (predicate.GetType()) {
     // TODO: Support CME Fanouts of TextPredicate
@@ -367,6 +489,31 @@ std::unique_ptr<Predicate> PredicateToGRPCPredicate(
     case query::PredicateType::kNone: {
       return nullptr;
     }
+    case query::PredicateType::kVectorRange: {
+      auto vr_predicate =
+          dynamic_cast<const query::VectorRangePredicate*>(&predicate);
+      auto proto = std::make_unique<Predicate>();
+      proto->mutable_vector_range()->set_attribute_alias(
+          std::string(vr_predicate->GetAlias()));
+      proto->mutable_vector_range()->set_radius(vr_predicate->GetRadius());
+      proto->mutable_vector_range()->set_vector_param_name(
+          std::string(vr_predicate->GetVectorParamName()));
+      if (vr_predicate->GetScoreAs().has_value()) {
+        proto->mutable_vector_range()->set_score_as(
+            vr_predicate->GetScoreAs().value());
+      }
+      if (vr_predicate->GetEpsilon().has_value()) {
+        proto->mutable_vector_range()->set_epsilon(
+            vr_predicate->GetEpsilon().value());
+      }
+      proto->mutable_vector_range()->set_query_vector(
+          std::string(vr_predicate->GetQueryVector()));
+      if (!vr_predicate->GetRadiusParamName().empty()) {
+        proto->mutable_vector_range()->set_radius_param_name(
+            std::string(vr_predicate->GetRadiusParamName()));
+      }
+      return proto;
+    }
   }
   CHECK(false);
 }
@@ -376,7 +523,6 @@ std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
   auto request = std::make_unique<SearchIndexPartitionRequest>();
   request->set_db_num(parameters.db_num);
   request->set_index_schema_name(parameters.index_schema_name);
-  request->set_db_num(parameters.db_num_);
   request->set_attribute_alias(parameters.attribute_alias);
   request->set_score_as(vmsdk::ToStringView(parameters.score_as.get()));
   request->set_query(parameters.query);
@@ -403,15 +549,33 @@ std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
     auto return_parameter = request->add_return_parameters();
     return_parameter->set_identifier(
         vmsdk::ToStringView(return_attribute.identifier.get()));
+    // The receiving node consumes this as `attribute_alias` and uses it to look
+    // up the index to fetch from. It must therefore be the *source* attribute
+    // alias, never the (possibly renamed) output alias -- otherwise a rename
+    // onto the name of another declared field would fetch that other field.
+    // The output alias never crosses the wire: the requesting node labels the
+    // reply from its own copy of `return_attributes`.
     return_parameter->set_alias(
-        vmsdk::ToStringView(return_attribute.alias.get()));
+        vmsdk::ToStringView(return_attribute.attribute_alias
+                                ? return_attribute.attribute_alias.get()
+                                : return_attribute.identifier.get()));
   }
   *request->mutable_index_fingerprint_version() =
       parameters.index_fingerprint_version;
   request->set_slot_fingerprint(parameters.slot_fingerprint);
   request->set_query_operations(
       static_cast<uint64_t>(parameters.filter_parse_results.query_operations));
+  request->set_is_match_all(parameters.filter_parse_results.is_match_all);
   SortByToGRPC(parameters.sortby_parameter, request.get());
+  request->set_scorer(ScorerToGRPC(parameters.scorer));
+  request->set_vector_score_only(parameters.vector_score_only);
+  if (parameters.inkeys.has_value()) {
+    auto* inkeys_filter = request->mutable_inkeys();
+    for (const auto& key : *parameters.inkeys) {
+      inkeys_filter->add_keys(key);
+    }
+  }
+  request->set_hybrid_policy(HybridPolicyToGRPC(parameters.hybrid_policy));
   return request;
 }
 

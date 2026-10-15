@@ -1,6 +1,16 @@
 valkey_search_create_proto_library("src/index_schema.proto"
                                    "index_schema_cc_proto")
 
+set(SRCS_SCORING
+    ${CMAKE_CURRENT_LIST_DIR}/scoring/scorer.h
+    ${CMAKE_CURRENT_LIST_DIR}/scoring/scorer.cc
+    ${CMAKE_CURRENT_LIST_DIR}/scoring/bm25std_scorer.h
+    ${CMAKE_CURRENT_LIST_DIR}/scoring/bm25std_scorer.cc)
+
+valkey_search_add_static_library(scoring "${SRCS_SCORING}")
+target_include_directories(scoring PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(scoring PUBLIC vmsdklib)
+
 add_library(index_base INTERFACE ${SRCS_INDEX_BASE})
 target_include_directories(index_base INTERFACE ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(index_base INTERFACE index_schema_cc_proto)
@@ -20,7 +30,6 @@ target_link_libraries(vector_base PUBLIC tag)
 target_link_libraries(vector_base PUBLIC attribute_data_type)
 target_link_libraries(vector_base PUBLIC index_schema_cc_proto)
 target_link_libraries(vector_base PUBLIC rdb_serialization)
-target_link_libraries(vector_base PUBLIC vector_externalizer)
 target_link_libraries(vector_base PUBLIC predicate)
 target_link_libraries(vector_base PUBLIC allocator)
 target_link_libraries(vector_base PUBLIC intrusive_ref_count)
@@ -30,6 +39,18 @@ target_link_libraries(vector_base PUBLIC iostream)
 target_link_libraries(vector_base PUBLIC valkey_module)
 target_link_libraries(vector_base PUBLIC vmsdklib)
 
+set(SRCS_VECTOR_TYPE ${CMAKE_CURRENT_LIST_DIR}/vector_type.cc
+                     ${CMAKE_CURRENT_LIST_DIR}/vector_type.h)
+
+valkey_search_add_static_library(vector_type "${SRCS_VECTOR_TYPE}")
+target_include_directories(vector_type PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(vector_type PUBLIC index_base)
+target_link_libraries(vector_type PUBLIC vector_base)
+target_link_libraries(vector_type PUBLIC index_schema_cc_proto)
+target_link_libraries(vector_type PUBLIC hnswlib_vmsdk)
+target_link_libraries(vector_type PUBLIC vmsdklib)
+target_link_libraries(vector_type PUBLIC valkey_module)
+
 set(SRCS_VECTOR_HNSW ${CMAKE_CURRENT_LIST_DIR}/vector_hnsw.cc
                      ${CMAKE_CURRENT_LIST_DIR}/vector_hnsw.h)
 
@@ -37,9 +58,11 @@ valkey_search_add_static_library(vector_hnsw "${SRCS_VECTOR_HNSW}")
 target_include_directories(vector_hnsw PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(vector_hnsw PUBLIC index_base)
 target_link_libraries(vector_hnsw PUBLIC vector_base)
+target_link_libraries(vector_hnsw PUBLIC vector_type)
 target_link_libraries(vector_hnsw PUBLIC attribute_data_type)
 target_link_libraries(vector_hnsw PUBLIC metrics)
 target_link_libraries(vector_hnsw PUBLIC rdb_serialization)
+target_link_libraries(vector_hnsw PUBLIC scoring)
 target_link_libraries(vector_hnsw PUBLIC string_interning)
 target_link_libraries(vector_hnsw PUBLIC hnswlib_vmsdk)
 target_link_libraries(vector_hnsw PUBLIC vmsdklib)
@@ -87,6 +110,7 @@ valkey_search_add_static_library(vector_flat "${SRCS_VECTOR_FLAT}")
 target_include_directories(vector_flat PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(vector_flat PUBLIC index_base)
 target_link_libraries(vector_flat PUBLIC vector_base)
+target_link_libraries(vector_flat PUBLIC vector_type)
 target_link_libraries(vector_flat PUBLIC attribute_data_type)
 target_link_libraries(vector_flat PUBLIC metrics)
 target_link_libraries(vector_flat PUBLIC rdb_serialization)
@@ -112,8 +136,12 @@ set(SRCS_TEXT ${CMAKE_CURRENT_LIST_DIR}/text/text_index.h
               ${CMAKE_CURRENT_LIST_DIR}/text/orproximity.cc
               ${CMAKE_CURRENT_LIST_DIR}/text/term.cc
               ${CMAKE_CURRENT_LIST_DIR}/text/term.h
-              ${CMAKE_CURRENT_LIST_DIR}/text/lexer.cc
-              ${CMAKE_CURRENT_LIST_DIR}/text/lexer.h
+              ${CMAKE_CURRENT_LIST_DIR}/text/language_registry.cc
+              ${CMAKE_CURRENT_LIST_DIR}/text/language_registry.h
+              ${CMAKE_CURRENT_LIST_DIR}/text/snowball_language.cc
+              ${CMAKE_CURRENT_LIST_DIR}/text/snowball_language.h
+              ${CMAKE_CURRENT_LIST_DIR}/text/snowball_stem.cc
+              ${CMAKE_CURRENT_LIST_DIR}/text/snowball_stem.h
               ${CMAKE_CURRENT_LIST_DIR}/text/unicode_normalizer.cc
               ${CMAKE_CURRENT_LIST_DIR}/text/unicode_normalizer.h
               ${CMAKE_CURRENT_LIST_DIR}/text/fuzzy.h
@@ -130,3 +158,4 @@ target_link_libraries(text PUBLIC snowball)
 target_link_libraries(text PUBLIC scanner)
 target_link_libraries(text PUBLIC icu)
 target_link_libraries(text PUBLIC rax_lib)
+target_link_libraries(text PUBLIC scoring)

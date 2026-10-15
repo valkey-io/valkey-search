@@ -48,8 +48,13 @@ class PostingTest : public ValkeySearchTest {
 
   // Helper to insert key with PositionMap
   void InsertKeyWithPositionMap(const InternedStringPtr &key,
-                                PositionMap &&pos_map, size_t num_fields = 5) {
-    postings_->InsertKey(key, &pos_map);
+                                PositionMap &&pos_map, size_t num_fields = 5,
+                                uint32_t doc_len = 0) {
+    uint32_t tf = 0;
+    for (const auto &[_, field_mask] : pos_map) {
+      tf += field_mask.CountSetFields();
+    }
+    postings_->InsertKey(key, &pos_map, tf, doc_len);
   }
 };
 

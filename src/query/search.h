@@ -17,13 +17,17 @@
 #include <utility>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
 #include "absl/functional/any_invocable.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
 #include "src/commands/filter_parser.h"
 #include "src/index_schema.h"
 #include "src/indexes/index_base.h"
+#include "src/indexes/scoring/scorer.h"
 #include "src/indexes/vector_base.h"
 #include "src/query/predicate.h"
 #include "src/utils/cancel.h"
@@ -41,6 +45,13 @@ enum class SearchMode {
 };
 
 enum class SortOrder { kAscending, kDescending };
+
+enum class HybridPolicy {
+  kAuto,
+  kBatches,
+  kAdHocBruteForce,
+};
+
 struct SortByParameter {
   std::string field;
   SortOrder order{SortOrder::kAscending};
@@ -55,6 +66,10 @@ constexpr absl::string_view kFailedPreconditionMsg{
 constexpr absl::string_view kTimeoutMsg{
     "Search operation cancelled due to timeout"};
 constexpr absl::string_view kQueueDepthMsg{"Search query queue depth exceeded"};
+// Reported when the reader thread pool refuses to schedule a search because it
+// has entered stop mode (this node is shutting down).
+constexpr absl::string_view kShuttingDownMsg{
+    "Search request rejected: the reader thread pool is shutting down"};
 constexpr uint32_t kDialect{2};
 
 // Parser keywords
@@ -72,10 +87,13 @@ constexpr absl::string_view kSomeShards{"SOMESHARDS"};
 constexpr absl::string_view kConsistent{"CONSISTENT"};
 constexpr absl::string_view kInconsistent{"INCONSISTENT"};
 constexpr absl::string_view kWithSortKeysParam{"WITHSORTKEYS"};
+constexpr absl::string_view kWithScoresParam{"WITHSCORES"};
 constexpr absl::string_view kVectorFilterDelimiter{"=>"};
 constexpr absl::string_view kSlop{"SLOP"};
+constexpr absl::string_view kScorer{"SCORER"};
 constexpr absl::string_view kInorder{"INORDER"};
 constexpr absl::string_view kVerbatim{"VERBATIM"};
+constexpr absl::string_view kInkeysParam{"INKEYS"};
 
 struct LimitParameter {
   uint64_t first_index{0};
@@ -88,7 +106,7 @@ struct ReturnAttribute {
   vmsdk::UniqueValkeyString alias;
 };
 
-inline std::ostream& operator<<(std::ostream& os, const ReturnAttribute& r) {
+inline std::ostream &operator<<(std::ostream &os, const ReturnAttribute &r) {
   os << vmsdk::ToStringView(r.identifier.get());
   if (r.alias) {
     os << "[alias: " << vmsdk::ToStringView(r.alias.get()) << ']';
@@ -115,23 +133,23 @@ struct SearchResult {
 
   // Constructor with automatic trimming based on query requirements
   SearchResult(size_t total_count, std::vector<indexes::Neighbor> neighbors,
-               const SearchParameters& parameters,
+               const SearchParameters &parameters,
                bool trim_offset_in_background = false);
   // Constructor for borrowed results — trims then materializes survivors.
   SearchResult(size_t total_count,
                std::vector<indexes::BorrowedNeighbor> borrowed,
-               const SearchParameters& parameters,
+               const SearchParameters &parameters,
                bool trim_offset_in_background = false);
   // Get the range of neighbors to serialize in response.
   SerializationRange GetSerializationRange(
-      const SearchParameters& parameters,
+      const SearchParameters &parameters,
       std::optional<size_t> override_size = std::nullopt) const;
 
   SearchResult();
 
  private:
   template <typename T>
-  void TrimResults(std::vector<T>& vec, const SearchParameters& parameters,
+  void TrimResults(std::vector<T> &vec, const SearchParameters &parameters,
                    bool trim_offset_in_background);
 };
 
@@ -183,13 +201,20 @@ namespace detail {
 class SearchParametersInFlightGuard {
  public:
   SearchParametersInFlightGuard();
-  SearchParametersInFlightGuard(const SearchParametersInFlightGuard&);
-  SearchParametersInFlightGuard(SearchParametersInFlightGuard&&) noexcept;
-  SearchParametersInFlightGuard& operator=(
-      const SearchParametersInFlightGuard&) = default;
-  SearchParametersInFlightGuard& operator=(
-      SearchParametersInFlightGuard&&) noexcept = default;
+  SearchParametersInFlightGuard(const SearchParametersInFlightGuard &);
+  SearchParametersInFlightGuard(SearchParametersInFlightGuard &&) noexcept;
+  SearchParametersInFlightGuard &operator=(
+      const SearchParametersInFlightGuard &) = default;
+  SearchParametersInFlightGuard &operator=(
+      SearchParametersInFlightGuard &&) noexcept = default;
   ~SearchParametersInFlightGuard();
+  // Drops this object out of the count early, for an operation whose query is
+  // over while the object itself lives on (a cursor holding its output). The
+  // flag keeps the destructor from decrementing the count a second time.
+  void Terminate();
+
+ private:
+  bool terminated_{false};
 };
 }  // namespace detail
 
@@ -209,14 +234,23 @@ struct SearchParameters {
   bool enable_consistency{options::GetPreferConsistentResults().GetValue()};
   int k{0};
   std::optional<unsigned> ef;
+  HybridPolicy hybrid_policy{HybridPolicy::kAuto};
   LimitParameter limit;
+  std::optional<absl::flat_hash_set<std::string>> inkeys;
   uint64_t timeout_ms{0};
   bool no_content{false};
   FilterParseResults filter_parse_results;
+  // True when the filter tree contains a (single) VectorRangePredicate. In the
+  // single-VR model the matched distance is carried in Neighbor::distance;
+  // there is no per-predicate score-slot side channel.
+  bool has_vector_range{false};
   std::vector<ReturnAttribute> return_attributes;
   bool inorder{false};
   std::optional<uint32_t> slop;
   bool verbatim{false};
+  // Seeded from the `default-scorer` config; an explicit SCORER overrides it.
+  indexes::scoring::ScorerType scorer{static_cast<indexes::scoring::ScorerType>(
+      options::GetDefaultScorer().GetValue())};
   coordinator::IndexFingerprintVersion index_fingerprint_version;
   uint64_t slot_fingerprint;
   SearchResult search_result;
@@ -229,6 +263,7 @@ struct SearchParameters {
     absl::string_view query_vector_string;
     absl::string_view k_string;
     absl::string_view ef_string;
+    absl::string_view hybrid_policy_string;
     //
     // A Map of param names to values. The target of the map is a pair
     // that is the string of the value AND a reference count so that we can
@@ -243,22 +278,38 @@ struct SearchParameters {
       query_vector_string = absl::string_view();
       k_string = absl::string_view();
       ef_string = absl::string_view();
+      hybrid_policy_string = absl::string_view();
       params.clear();
     }
   } parse_vars;
+  // Set for a VSIM arm carrying a FILTER: the filter decides which documents
+  // the vector search considers and must not touch the score, so the hybrid
+  // text score is suppressed even when the filter holds a text predicate. See
+  // ApplyHybridTextScore.
+  bool vector_score_only{false};
   bool IsNonVectorQuery() const { return attribute_alias.empty(); }
   bool IsVectorQuery() const { return !IsNonVectorQuery(); }
   // Indicates whether the search requires complete results (neighbors/keys) to
   // be able to return correct results. An example of this is when sorting on a
-  // particular is needed on the results. This should be overridden in derived
-  // classes if needed. The default implementation returns false.
+  // particular field is needed on the results. This should be overridden in
+  // derived classes if needed. The default implementation returns false.
   virtual bool RequiresCompleteResults() const {
-    return sortby_parameter.has_value();
+    return sortby_parameter.has_value() || inkeys.has_value();
+  }
+
+  // True when the search needs no post-search processing: a NOCONTENT reply
+  // where nothing (e.g. SORTBY) requires loading and reordering the full result
+  // set first. When true, the query can complete on the background thread and
+  // skip content loading.
+  virtual bool NoProcessingRequired() const {
+    return no_content && !sortby_parameter.has_value();
   }
 
   virtual absl::Status PreParseQueryString();
   virtual absl::Status PostParseQueryString();
-  ContentProcessing GetContentProcessing() const;
+  // Virtual so specialized parameter types (e.g. FT.HYBRID's fused-result
+  // resolver) can force a particular content-processing mode.
+  virtual ContentProcessing GetContentProcessing() const;
 
   // The sortby parameter, populated by FT.SEARCH SORTBY clause or
   // deserialized from gRPC requests. Available to all query operations.
@@ -291,7 +342,11 @@ struct SearchParameters {
   SearchParameters(uint64_t timeout_ms, cancel::Token token, uint32_t db_num)
       : timeout_ms(timeout_ms), cancellation_token(token), db_num_(db_num) {}
 
-  SearchParameters(SearchParameters&&) = default;
+  SearchParameters(SearchParameters &&) = default;
+
+  // Declares the query operation finished, so that it no longer counts in
+  // GetSearchParametersInFlight() even though this object is still alive.
+  void DeclareOperationTerminated() { in_flight_guard_.Terminate(); }
 
  private:
   // Keeps GetSearchParametersInFlight() in sync with this object's lifetime.
@@ -309,44 +364,134 @@ struct SerializationRange {
   static SerializationRange All() {
     return {0, std::numeric_limits<size_t>::max()};
   }
-  auto operator<=>(const SerializationRange& other) const = default;
+  auto operator<=>(const SerializationRange &other) const = default;
 };
 
 // Callback to be called when the search is done.
 using SearchResponseCallback =
     absl::AnyInvocable<void(absl::Status, std::unique_ptr<SearchParameters>)>;
 
-absl::Status Search(SearchParameters& parameters, SearchMode search_mode);
+absl::Status Search(SearchParameters &parameters, SearchMode search_mode);
 
+// Schedules `parameters` on `thread_pool`; the search and its completion run
+// on a pool worker. Returns UnavailableError (kShuttingDownMsg) if the pool
+// refuses the task because it is in stop mode: in that case the search will
+// never run and nothing will call the parameters' completion path, so the
+// caller owns terminating whatever is waiting on the query. `parameters` is
+// consumed either way.
 absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
-                         vmsdk::ThreadPool* thread_pool,
+                         vmsdk::ThreadPool *thread_pool,
                          SearchMode search_mode);
+
+// Test-only: returns an error if arm `arm_index` is forced to fail, else OK.
+absl::Status ForcedMultiArmFailure(size_t arm_index);
 
 absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
     absl::StatusOr<std::vector<indexes::Neighbor>> results,
-    const SearchParameters& parameters);
+    const SearchParameters &parameters);
 
 class Predicate;
 // Defined in the header to support testing
 size_t EvaluateFilterAsPrimary(
-    const SearchParameters& parameters, const Predicate* predicate,
-    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>& entries_fetchers,
-    bool negate);
+    const SearchParameters &parameters, const Predicate *predicate,
+    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
+    bool negate, float or_weight_multiplier = 1.0f);
 
 // Defined in the header to support testing
 absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
-    indexes::VectorBase* vector_index, const SearchParameters& parameters);
+    indexes::VectorBase *vector_index, const SearchParameters &parameters);
+
+// Vector Range query (no KNN): returns the keys matching the filter, with the
+// VR distance in Neighbor::distance, in key order. A query that is only the VR
+// predicate is answered by VectorBase::SearchRange; a compound one evaluates
+// the full predicate tree per fetched key.
+absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
+    const SearchParameters &parameters);
 
 std::priority_queue<std::pair<float, hnswlib::labeltype>>
 CalcBestMatchingPrefilteredKeys(
-    const SearchParameters& parameters,
-    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>& entries_fetchers,
-    indexes::VectorBase* vector_index, size_t qualified_entries);
+    const SearchParameters &parameters,
+    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
+    indexes::VectorBase *vector_index, size_t qualified_entries);
 
-bool QueryHasTextPredicate(const SearchParameters& parameters);
+bool QueryHasTextPredicate(const SearchParameters &parameters);
+
+// Returns the distance score field name for the single VR predicate in the
+// query: the $yield_distance_as (or AS) name if set, otherwise "" (empty).
+// Redisearch parity: a VECTOR_RANGE distance is surfaced ONLY under an explicit
+// alias — there is no default "__<alias>_score" field — so an empty name here
+// suppresses the field wherever emission is gated on a non-empty name. Also
+// returns "" when the query has no VR predicate.
+std::string GetVrScoreFieldName(const SearchParameters &parameters);
+
+// Count the number of VectorRangePredicate nodes in the predicate tree. Used
+// at parse time to reject unsupported multi-VR queries (single-VR only).
+// Returns 0 when predicate is null.
+size_t CountVectorRangePredicates(const Predicate *predicate);
 
 // Check if no results should be returned based on limit parameters
-bool ShouldReturnNoResults(const SearchParameters& parameters);
+bool ShouldReturnNoResults(const SearchParameters &parameters);
+
+// Increments the developer-visible "nonvector_results_fetched_limited_count"
+// INFO counter. The counter object is file-static to search.cc; this accessor
+// lets other translation units (e.g. the HNSW range search) report the same
+// "fetch hit the max-candidates cap" signal against the one shared counter,
+// rather than registering a duplicate field.
+void RecordNonVectorResultsFetchedLimited();
+
+// Scans for the vector filter delimiter `=>` that is followed by `[` (after
+// optional whitespace). Returns the position of `=>` or npos if not found.
+// Exposed for testing.
+size_t FindVectorDelimiter(absl::string_view expr);
+
+// Scores admitted candidate documents by walking the predicate tree.
+// For each TermPredicate leaf, looks up each candidate's term frequency
+// and feeds the scorer. Writes scores into candidates in-place. Sorting and
+// trimming to the requested limit happen later in SearchResult::TrimResults.
+void ScoreTextQuery(const IndexSchema &index_schema,
+                    const Predicate *root_predicate,
+                    const indexes::scoring::Scorer *scorer,
+                    std::vector<indexes::BorrowedNeighbor> &candidates);
+
+// Recomputes composed relevance scores for single already-matched documents by
+// walking the predicate tree through the exact same Scorer seam ScoreTextQuery
+// uses: ResolveLeaves (dt/IDF) -> ScoreNode (per-leaf ScoreLeaf / weight +
+// AND/OR composition) -> Scorer::ComposeDocumentScore. Every input
+// (total_docs, avg_doc_len, per-term IDF, term frequency, doc_len, document
+// score) is sourced IDENTICALLY to ScoreTextQuery, so values returned here are
+// on the same scale as shard-side scores and rank correctly against
+// non-recomputed neighbors.
+//
+// All document-independent inputs (posting lists, per-term IDF, corpus stats)
+// are resolved ONCE at construction, so scoring N mutated documents in a reply
+// costs one resolve instead of N. Construct lazily on the first document that
+// needs a recompute and reuse for the rest of the reply.
+//
+// The constructor and Score() each acquire the index reader lock internally,
+// so callers must NOT already hold it: TimeSlicedMRMWMutex is non-reentrant
+// and a nested acquire can deadlock in SwitchWithWait() when the inverse mode
+// is waiting and the time quota is exceeded. Used by the main-thread
+// content-fetch revalidation path (response_generator.cc VerifyFilter) where a
+// document mutated between scoring and fetch needs a fresh, scale-consistent
+// score. Score() returns
+// nullopt for an empty corpus or when ScoreNode reports a non-match (mirroring
+// ScoreTextQuery's per-candidate result); callers treat nullopt as "score 0",
+// never a drop.
+class SingleDocumentScorer {
+ public:
+  SingleDocumentScorer(const IndexSchema &index_schema,
+                       const Predicate *root_predicate,
+                       const indexes::scoring::Scorer *scorer);
+  ~SingleDocumentScorer();
+  SingleDocumentScorer(const SingleDocumentScorer &) = delete;
+  SingleDocumentScorer &operator=(const SingleDocumentScorer &) = delete;
+
+  std::optional<float> Score(const InternedStringPtr &key) const;
+
+ private:
+  struct State;
+  std::unique_ptr<State> state_;
+};
 
 }  // namespace valkey_search::query
 #endif  // VALKEYSEARCH_SRC_QUERY_SEARCH_H_

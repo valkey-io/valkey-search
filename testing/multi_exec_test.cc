@@ -43,7 +43,7 @@ class MultiExecTest : public ValkeySearchTest {
     index_schema = CreateVectorHNSWSchema(index_schema_name_str, &fake_ctx_,
                                           mutations_thread_pool)
                        .value();
-    mock_index = std::make_shared<MockIndex>();
+    mock_index = std::make_shared<MockIndex>(indexes::IndexerType::kTag);
     const char *identifier = "test_identifier";
     VMSDK_EXPECT_OK(
         index_schema->AddIndex("attribute_name", identifier, mock_index));
@@ -72,13 +72,14 @@ class MultiExecTest : public ValkeySearchTest {
           return VALKEYMODULE_OK;
         });
     EXPECT_CALL(*mock_index, AddRecord(testing::_, testing::_))
-        .WillRepeatedly(
-            [this](const InternedStringPtr &key, absl::string_view record) {
-              absl::MutexLock lock(&mutex);
-              added_keys.push_back(std::string(*key));
-              added_records.push_back(std::string(record));
-              return indexes::RecordResult::kAdded;
-            });
+        .WillRepeatedly([this](const InternedStringPtr &key,
+                               AttributeData &&data) {
+          absl::MutexLock lock(&mutex);
+          added_keys.push_back(std::string(*key));
+          auto str = data.ConsumeString();
+          added_records.push_back(std::string(vmsdk::ToStringView(str.get())));
+          return indexes::RecordResult::kAdded;
+        });
   }
   void TearDown() override {
     ValkeySearchTest::TearDown();

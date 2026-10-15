@@ -9,10 +9,12 @@
 #include <absl/strings/ascii.h>
 
 #include "module_config.h"
+#include "src/commands/commands.h"
 #include "src/coordinator/metadata_manager.h"
 #include "src/index_schema.h"
 #include "src/schema_manager.h"
 #include "src/utils/string_interning.h"
+#include "src/vector_registry.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/info.h"
@@ -313,6 +315,25 @@ absl::Status StringPoolStats(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
   return absl::OkStatus();
 }
 
+absl::Status VectorSharingStatsCmd(ValkeyModuleCtx *ctx,
+                                   vmsdk::ArgsIterator &itr) {
+  VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
+  auto stats = VectorRegistry::Instance().GetStats();
+
+  ValkeyModule_ReplyWithArray(ctx, 8);
+  ValkeyModule_ReplyWithCString(ctx, "entry_cnt");
+  ValkeyModule_ReplyWithLongLong(ctx, stats.entry_cnt);
+  ValkeyModule_ReplyWithCString(ctx, "hash_sharing_errors");
+  ValkeyModule_ReplyWithLongLong(ctx, stats.hash_sharing_errors);
+  ValkeyModule_ReplyWithCString(ctx, "hash_sharing_hits");
+  ValkeyModule_ReplyWithLongLong(ctx, stats.hash_sharing_hits);
+  ValkeyModule_ReplyWithCString(ctx, "pending_unshare_cnt");
+  ValkeyModule_ReplyWithLongLong(
+      ctx, VectorRegistry::Instance().GetPendingUnsharesCount());
+
+  return absl::OkStatus();
+}
+
 absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
   VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
   static std::vector<std::pair<std::string, std::string>> help_text{
@@ -327,9 +348,12 @@ absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
        "control pause points"},
       {"FT._DEBUG TEXTINFO <index> ...", "show info about schema-level text"},
       {"FT._DEBUG STRINGPOOLSTATS", "Show InternStringPool Stats"},
+      {"FT._DEBUG VECTOR_SHARING_STATS", "Show VectorRegistry Sharing Stats"},
       {"FT_DEBUG SHOW_METADATA",
        "list internal metadata manager table namespace"},
       {"FT_DEBUG SHOW_INDEXSCHEMAS", "list internal index schema tables"},
+      {"FT._DEBUG SHOW_CURSORS",
+       "list each cursor's id and milliseconds until expiration"},
       {"FT._DEBUG LIST_METRICS [APP|DEV] [NAMES_ONLY]",
        "List all APP or DEV metrics with optional names-only format"},
       {"FT._DEBUG LIST_CONFIGS [VERBOSE] [APP|DEV|HIDDEN]",
@@ -348,7 +372,7 @@ absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                         int argc) {
   std::string msg;
   for (int i = 1; i < argc; ++i) {
-    msg += " ";
+    msg += ' ';
     msg += vmsdk::ToStringView(argv[i]);
   }
   VMSDK_LOG(WARNING, ctx) << "FT._DEBUG: " << msg;
@@ -365,6 +389,8 @@ absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     return ControlledCmd(ctx, itr);
   } else if (keyword == "STRINGPOOLSTATS") {
     return StringPoolStats(ctx, itr);
+  } else if (keyword == "VECTOR_SHARING_STATS") {
+    return VectorSharingStatsCmd(ctx, itr);
   } else if (keyword == "TEXTINFO") {
     return IndexSchema::TextInfoCmd(ctx, itr);
   } else if (keyword == "SHOW_METADATA") {
@@ -372,6 +398,9 @@ absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
         ctx, itr);
   } else if (keyword == "SHOW_INDEXSCHEMAS") {
     return valkey_search::SchemaManager::Instance().ShowIndexSchemas(ctx, itr);
+  } else if (keyword == "SHOW_CURSORS") {
+    VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
+    return ShowCursorsCmd(ctx);
   } else if (keyword == "HELP") {
     return HelpCmd(ctx, itr);
   } else if (keyword == "LIST_METRICS") {

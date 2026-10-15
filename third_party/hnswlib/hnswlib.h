@@ -1,8 +1,10 @@
+#pragma once
+
+#include <atomic>
 #include <cstdlib>
 
+#include "absl/status/status.h"
 #include "iostream.h"
-
-#pragma once
 
 #ifdef VMSDK_ENABLE_MEMORY_ALLOCATION_OVERRIDES
 #include "vmsdk/src/memory_allocation_overrides.h"  // IWYU pragma: keep
@@ -147,16 +149,12 @@ class BaseFilterFunctor {
   virtual ~BaseFilterFunctor(){};
 };
 
-// VALKEYSEARCH BEGIN
-//
 // When true, early cancellation is requested
-//
 class BaseCancellationFunctor {
-  public:
+ public:
   virtual bool isCancelled() { return false; }
   virtual ~BaseCancellationFunctor(){};
 };
-// VALKEYSEARCH END
 
 template <typename dist_t>
 class BaseSearchStopCondition {
@@ -197,7 +195,10 @@ static void readBinaryPOD(std::istream &in, T &podRef) {
 }
 
 template <typename MTYPE>
-using DISTFUNC = MTYPE (*)(const void *, const void *, const void *);
+using DISTFUNC = MTYPE (*)(const void *, const void *, const void *,
+                           MTYPE magnitude);
+template <typename MTYPE>
+using ProductFUNC = MTYPE (*)(const void *, const void *, const void *);
 
 template <typename MTYPE>
 class SpaceInterface {
@@ -212,38 +213,35 @@ class SpaceInterface {
   virtual ~SpaceInterface() {}
 };
 
-template <typename dist_t>
+template <typename dist_t, typename QueryVectorT, typename StoredVectorT>
 class AlgorithmInterface {
  public:
-  virtual void addPoint(const void *datapoint, labeltype label,
+  virtual void addPoint(QueryVectorT &&datapoint, labeltype label,
                         bool replace_deleted = false) = 0;
 
   virtual std::priority_queue<std::pair<dist_t, labeltype>> searchKnn(
-      const void *, size_t, BaseFilterFunctor *isIdAllowed = nullptr,
-      BaseCancellationFunctor *isCancelled = nullptr // VALKEYSEARCH
-    ) const = 0;
+      const QueryVectorT &query_data, size_t k,
+      BaseFilterFunctor *isIdAllowed = nullptr,
+      BaseCancellationFunctor *isCancelled = nullptr) const = 0;
 
   // Return k nearest neighbor in the order of closer fist
   virtual std::vector<std::pair<dist_t, labeltype>> searchKnnCloserFirst(
-      const void *query_data, size_t k,
+      const QueryVectorT &query_data, size_t k,
       BaseFilterFunctor *isIdAllowed = nullptr,
-      BaseCancellationFunctor *isCancelled = nullptr // VALKEYSEARCH
-    ) const;
+      BaseCancellationFunctor *isCancelled = nullptr) const;
 
-  virtual absl::Status SaveIndex(OutputStream &output) = 0;
-  virtual ~AlgorithmInterface() {}
+  virtual ~AlgorithmInterface() = default;
 };
 
-template <typename dist_t>
+template <typename dist_t, typename QueryVectorT, typename StoredVectorT>
 std::vector<std::pair<dist_t, labeltype>>
-AlgorithmInterface<dist_t>::searchKnnCloserFirst(
-    const void *query_data, size_t k, BaseFilterFunctor *isIdAllowed,
-    BaseCancellationFunctor *isCancelled // VALKEYSEARCH
-  ) const {
+AlgorithmInterface<dist_t, QueryVectorT, StoredVectorT>::searchKnnCloserFirst(
+    const QueryVectorT &query_data, size_t k, BaseFilterFunctor *isIdAllowed,
+    BaseCancellationFunctor *isCancelled) const {
   std::vector<std::pair<dist_t, labeltype>> result;
 
   // here searchKnn returns the result in the order of further first
-  auto ret = searchKnn(query_data, k, isIdAllowed, isCancelled); // VALKEYSEARCH
+  auto ret = searchKnn(query_data, k, isIdAllowed, isCancelled);
   {
     size_t sz = ret.size();
     result.resize(sz);
@@ -271,7 +269,9 @@ class ChunkedArray {
   ChunkedArray(const ChunkedArray &) = delete;
   ChunkedArray &operator=(const ChunkedArray &) = delete;
 
-  size_t getCapacity() const { return element_count_; }
+  size_t getCapacity() const {
+    return element_count_.load(std::memory_order_relaxed);
+  }
 
   size_t getSizePerElement() const { return element_byte_size_; }
 
@@ -292,11 +292,12 @@ class ChunkedArray {
       delete[] chunk;
     }
     chunks_.clear();
-    element_count_ = 0;
+    element_count_.store(0, std::memory_order_relaxed);
   }
 
   void resize(size_t new_element_count) {
-    size_t chunk_count = getChunkCount(element_count_);
+    size_t chunk_count =
+        getChunkCount(element_count_.load(std::memory_order_relaxed));
     size_t new_chunk_count = getChunkCount(new_element_count);
 
     chunks_.resize(new_chunk_count);
@@ -305,7 +306,7 @@ class ChunkedArray {
       // Note that we don't initialize the memory on purpose. The caller
       // is expected to track the initialization state.
     }
-    element_count_ = new_element_count;
+    element_count_.store(new_element_count, std::memory_order_relaxed);
   }
 
  private:
@@ -315,7 +316,7 @@ class ChunkedArray {
 
   size_t element_byte_size_;
   size_t elements_per_chunk_;
-  size_t element_count_;
+  std::atomic<size_t> element_count_;
   std::deque<char *> chunks_;
 };
 

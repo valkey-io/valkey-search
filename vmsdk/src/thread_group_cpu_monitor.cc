@@ -116,8 +116,8 @@ return absl::UnimplementedError(
 constexpr double kMicroToSec = 1000000.0;
 
 ThreadGroupCPUMonitor::ThreadGroupCPUMonitor(
-    const std::string& thread_name_pattern)
-    : thread_name_pattern_(thread_name_pattern) {}
+    absl::string_view thread_name_pattern)
+    : thread_name_pattern_(std::string(thread_name_pattern)) {}
 
 void ThreadGroupCPUMonitor::UpdateTotalCPUTimeSec() {
   absl::MutexLock lock(&mutex_);

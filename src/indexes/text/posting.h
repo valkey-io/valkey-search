@@ -8,6 +8,7 @@
 #define VALKEYSEARCH_SRC_INDEXES_TEXT_POSTING_H_
 
 #include <cstdint>
+#include <optional>
 
 #include "absl/base/optimization.h"
 #include "absl/container/btree_map.h"
@@ -222,6 +223,11 @@ class PositionIterator {
   uint64_t stream_field_mask_{0};
 };
 
+struct PostingDocStats {
+  uint32_t tf;
+  uint32_t doc_len;
+};
+
 struct Postings {
   struct KeyIterator;
 
@@ -246,9 +252,12 @@ struct Postings {
   bool IsEmpty() const;
 
   // Insert the key with PositionMap (direct, zero intermediate allocation)
-  void InsertKey(const Key &key, const PositionMap *pos_map);
-  void InsertKey(DocId doc_id, const PositionMap *pos_map);
-  void InsertKey(const EncodedDocId &enc_doc_id, const PositionMap *pos_map);
+  void InsertKey(const Key &key, const PositionMap *pos_map, uint32_t tf = 0,
+                 uint32_t doc_len = 0);
+  void InsertKey(DocId doc_id, const PositionMap *pos_map, uint32_t tf = 0,
+                 uint32_t doc_len = 0);
+  void InsertKey(const EncodedDocId &enc_doc_id, const PositionMap *pos_map,
+                 uint32_t tf = 0, uint32_t doc_len = 0);
 
   // Remove a key and all positions for it
   void RemoveKey(const Key &key, TextIndexMetadata *metadata);
@@ -262,6 +271,14 @@ struct Postings {
 
   // Total frequency of the term across all keys and positions
   size_t GetTotalTermFrequency() const;
+
+  // Look up the posting entry (tf + doc_len) for a specific key in one find,
+  // only used in extra-step scoring. Returns nullopt if the key is absent.
+  // One Postings is shared by every TEXT field, so key presence alone does not
+  // mean the term occurred in a requested field: nullopt unless it falls in
+  // `field_mask`. `~0ULL` means any field and skips the per-position scan.
+  std::optional<PostingDocStats> GetPostingDocStats(
+      BorrowedInternedStringPtr key, uint64_t field_mask) const;
 
   // Defrag this contents of this object. Returns the updated "this" pointer.
   Postings *Defrag();
@@ -302,6 +319,12 @@ struct Postings {
     // Get Position Iterator
     PositionIterator GetPositionIterator() const;
 
+    // get tf for the current key, only used in iterator scoring
+    size_t GetTermFrequency() const;
+
+    // get the document length for the current key (scoring hot path)
+    uint32_t GetDocLen() const;
+
    private:
     friend struct Postings;
     void DecodeDocRecordAtOffset();
@@ -310,6 +333,8 @@ struct Postings {
     const PostingChunk *current_chunk_{nullptr};
     uint32_t byte_offset_{0};
     DocId current_doc_id_{kInvalidDocId};
+    uint32_t current_tf_{0};
+    uint32_t current_doc_len_{0};
     uint64_t current_pos_count_{0};
     const uint8_t *pos_data_ptr_{nullptr};
     uint32_t next_doc_offset_{0};

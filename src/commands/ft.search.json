@@ -7,8 +7,12 @@
     ],
     "history": [
       [
-        "1.2.0", 
+        "1.2.0",
         "Added Text Indexing and Search support"
+      ],
+      [
+        "1.3.0-RC1",
+        "Added INKEYS, SCORER, WITHSCORES and WITHCURSOR options, BM25STD scoring, VECTOR_RANGE queries and HYBRID_POLICY"
       ]
     ],
     "arguments": [
@@ -61,6 +65,27 @@
         "token": "DIALECT",
         "type": "integer",
         "optional": true
+      },
+      {
+        "name": "INKEYS",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "inkeys_token",
+            "type": "pure-token",
+            "token": "INKEYS"
+          },
+          {
+            "name": "count",
+            "type": "integer"
+          },
+          {
+            "name": "keys",
+            "type": "string",
+            "multiple": true
+          }
+        ]
       },
       {
         "name": "INORDER",
@@ -198,16 +223,48 @@
         "optional": true
       },
       {
+        "name": "SCORER",
+        "token": "SCORER",
+        "type": "string",
+        "optional": true
+      },
+      {
         "name": "VERBATIM",
         "type": "pure-token",
         "optional": true,
         "token": "VERBATIM"
       },
       {
+        "name": "WITHSCORES",
+        "type": "pure-token",
+        "optional": true,
+        "token": "WITHSCORES"
+      },
+      {
         "name": "WITHSORTKEYS",
         "type": "pure-token",
         "optional": true,
         "token": "WITHSORTKEYS"
+      },
+      {
+        "name": "WITHCURSOR",
+        "token": "WITHCURSOR",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "count",
+            "token": "COUNT",
+            "type": "integer",
+            "optional": true
+          },
+          {
+            "name": "maxidle",
+            "token": "MAXIDLE",
+            "type": "integer",
+            "optional": true
+          }
+        ]
       }
     ],
     "arity": -3,

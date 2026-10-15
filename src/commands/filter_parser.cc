@@ -27,8 +27,10 @@
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
-#include "src/indexes/text/lexer.h"
+#include "src/indexes/text/language.h"
+#include "src/indexes/text/unicode_normalizer.h"
 #include "src/query/predicate.h"
+#include "src/utils/scanner.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/status/status_macros.h"
 
@@ -143,6 +145,13 @@ std::string PrintPredicateTree(const query::Predicate* predicate, int indent) {
     case query::PredicateType::kTag: {
       const auto* tag = static_cast<const query::TagPredicate*>(predicate);
       result += indent_str + "TAG(" + std::string(tag->GetAlias()) + ")\n";
+      break;
+    }
+    case query::PredicateType::kVectorRange: {
+      const auto* vr =
+          static_cast<const query::VectorRangePredicate*>(predicate);
+      result += indent_str + "VECTOR_RANGE(" + std::string(vr->GetAlias()) +
+                ", radius=" + std::to_string(vr->GetRadius()) + ")\n";
       break;
     }
     case query::PredicateType::kText: {
@@ -280,6 +289,22 @@ absl::StatusOr<double> FilterParser::ParseNumber() {
       absl::StrCat("Invalid number: ", number_str));
 }
 
+absl::StatusOr<std::string> FilterParser::ParseToken(
+    absl::string_view stop_chars, absl::string_view error_msg) {
+  SkipWhitespace();
+  std::string token;
+  while (!IsEnd() && !std::isspace(static_cast<unsigned char>(Peek()))) {
+    if (stop_chars.find(Peek()) != absl::string_view::npos) {
+      break;
+    }
+    token += expression_[pos_++];
+  }
+  if (token.empty()) {
+    return absl::InvalidArgumentError(error_msg);
+  }
+  return token;
+}
+
 absl::StatusOr<std::unique_ptr<query::NumericPredicate>>
 FilterParser::ParseNumericPredicate(const std::string& attribute_alias) {
   auto index = index_schema_.GetIndex(attribute_alias);
@@ -324,6 +349,191 @@ FilterParser::ParseNumericPredicate(const std::string& attribute_alias) {
   return std::make_unique<query::NumericPredicate>(
       numeric_index, attribute_alias, identifier, start, is_inclusive_start,
       end, is_inclusive_end);
+}
+
+absl::StatusOr<FilterParser::VectorRangeQueryAttributes>
+FilterParser::ParseVectorRangeQueryAttributes() {
+  // Parse {$yield_distance_as: <name>; $epsilon: <value>} query attributes.
+  // The '=>' and the opening '{' have already been consumed by the caller.
+  VectorRangeQueryAttributes attrs;
+  SkipWhitespace();
+  while (!IsEnd() && Peek() != '}') {
+    // Each attribute starts with '$'
+    if (!Match('$')) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Expected '$' in query attributes at position ", pos_ + 1));
+    }
+    // Read the attribute name (stops at ':', '}', or whitespace)
+    VMSDK_ASSIGN_OR_RETURN(
+        auto attr_name, ParseToken(":}", "Expected attribute name after '$'"));
+    SkipWhitespace();
+    if (!Match(':')) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Expected ':' after attribute name at position ", pos_ + 1));
+    }
+    SkipWhitespace();
+    if (absl::AsciiStrToLower(attr_name) == "yield_distance_as") {
+      // Parse the value — stops at ';', '}', or whitespace
+      VMSDK_ASSIGN_OR_RETURN(
+          auto value, ParseToken(";}", "$yield_distance_as value is missing"));
+      attrs.yield_distance_as = std::move(value);
+    } else if (absl::AsciiStrToLower(attr_name) == "epsilon") {
+      // Parse the numeric value — stops at ';', '}', or whitespace
+      VMSDK_ASSIGN_OR_RETURN(
+          auto value_str,
+          ParseToken(";}", "$epsilon must be a valid non-negative number"));
+      double epsilon_val;
+      if (!absl::SimpleAtod(value_str, &epsilon_val)) {
+        return absl::InvalidArgumentError(
+            "$epsilon must be a valid non-negative number");
+      }
+      if (epsilon_val < 0) {
+        return absl::InvalidArgumentError(
+            "$epsilon must be a valid non-negative number");
+      }
+      attrs.epsilon = epsilon_val;
+    } else {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Unknown query attribute '$", attr_name, "'"));
+    }
+    SkipWhitespace();
+    // Consume optional ';' separator between attributes
+    Match(';');
+    SkipWhitespace();
+  }
+  if (!Match('}')) {
+    return absl::InvalidArgumentError("Expected '}' to close query attributes");
+  }
+  return attrs;
+}
+
+absl::StatusOr<std::unique_ptr<query::VectorRangePredicate>>
+FilterParser::ParseVectorRangePredicate(const std::string& attribute_alias) {
+  // At entry: "@<attribute_alias>:[VECTOR_RANGE" has already been consumed by
+  // ParseExpression. We now parse the remainder of the bracket contents:
+  //   <radius> $<blob_param> [AS <name>] ]
+  // (EF_RUNTIME is parsed and ignored), followed by optional suffix
+  // query attributes: ]=>{$yield_distance_as: ...}
+  auto index = index_schema_.GetIndex(attribute_alias);
+  if (!index.ok()) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "'", attribute_alias, "' is not indexed as a vector field"));
+  }
+  if (!index.value()->IsVectorIndex()) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "'", attribute_alias, "' is not indexed as a vector field"));
+  }
+  auto identifier = index_schema_.GetIdentifier(attribute_alias).value();
+  filter_identifiers_.insert(identifier);
+
+  // Parse radius: either a literal number or $param reference
+  SkipWhitespace();
+  if (IsEnd() || Peek() == ']') {
+    return absl::InvalidArgumentError("VECTOR_RANGE radius is missing");
+  }
+  double radius = 0;
+  std::string radius_param_name;
+  if (Peek() == '$') {
+    // Radius is a $param reference — resolved later in PostParseQueryString
+    ++pos_;
+    VMSDK_ASSIGN_OR_RETURN(radius_param_name,
+                           ParseToken("]", "VECTOR_RANGE radius is missing"));
+  } else {
+    VMSDK_ASSIGN_OR_RETURN(radius, ParseNumber());
+    if (radius < 0) {
+      return absl::InvalidArgumentError(
+          "VECTOR_RANGE radius must be non-negative");
+    }
+  }
+
+  // Parse vector blob parameter name ($blob_param)
+  SkipWhitespace();
+  if (IsEnd() || Peek() == ']') {
+    return absl::InvalidArgumentError(
+        "VECTOR_RANGE vector blob parameter is missing");
+  }
+  if (!Match('$')) {
+    return absl::InvalidArgumentError(
+        "VECTOR_RANGE vector blob parameter is missing");
+  }
+  std::string vector_param_name;
+  VMSDK_ASSIGN_OR_RETURN(
+      vector_param_name,
+      ParseToken("]", "VECTOR_RANGE vector blob parameter is missing"));
+
+  // Parse optional parameters: EF_RUNTIME <value>, AS <name>
+  std::optional<std::string> score_as;
+  std::optional<double> epsilon;
+  SkipWhitespace();
+  while (!IsEnd() && Peek() != ']') {
+    // Try to match known optional parameter keywords
+    if (MatchInsensitive("EF_RUNTIME")) {
+      // Parsed and ignored: HNSW SearchRange sets ef from
+      // search.max-nonvector-search-results-fetched.
+      VMSDK_ASSIGN_OR_RETURN(auto ef_value,
+                             ParseToken("]", "EF_RUNTIME argument is missing"));
+      (void)ef_value;
+    } else if (MatchInsensitive("AS")) {
+      VMSDK_ASSIGN_OR_RETURN(auto as_name,
+                             ParseToken("]", "AS argument is missing"));
+      score_as = std::move(as_name);
+    } else {
+      // Unknown optional parameter — collect the token for the error message
+      VMSDK_ASSIGN_OR_RETURN(auto unknown_param, ParseToken("]", ""));
+      return absl::InvalidArgumentError(
+          absl::StrCat("Unexpected argument '", unknown_param, "'"));
+    }
+    SkipWhitespace();
+  }
+
+  if (!Match(']')) {
+    return absl::InvalidArgumentError(absl::StrCat("Expected ']' got '",
+                                                   expression_.substr(pos_, 1),
+                                                   "'. Position: ", pos_));
+  }
+
+  // Parse optional suffix query attributes: =>{$yield_distance_as: ...}
+  // This is the canonical Redis-compatible syntax for vector range queries.
+  SkipWhitespace();
+  if (!IsEnd() && pos_ + 1 < expression_.length() && expression_[pos_] == '=' &&
+      expression_[pos_ + 1] == '>') {
+    pos_ += 2;  // consume '=>'
+    SkipWhitespace();
+    if (!IsEnd() && Peek() == '{') {
+      ++pos_;  // consume '{'
+      VMSDK_ASSIGN_OR_RETURN(auto attrs, ParseVectorRangeQueryAttributes());
+      if (attrs.yield_distance_as.has_value()) {
+        score_as = std::move(attrs.yield_distance_as);
+      }
+      if (attrs.epsilon.has_value()) {
+        // For compatibility, $epsilon is an HNSW-only knob and must be strictly
+        // positive: reject it on FLAT indexes and reject a value of 0. (The
+        // value is not yet forwarded to the range traversal; see
+        // SearchVectorRangeQuery.)
+        if (index.value()->GetIndexerType() != indexes::IndexerType::kHNSW) {
+          return absl::InvalidArgumentError(
+              "Invalid option (Error parsing vector similarity parameters)");
+        }
+        if (attrs.epsilon.value() <= 0) {
+          return absl::InvalidArgumentError(
+              "Invalid option (Error parsing vector similarity parameters)");
+        }
+        epsilon = attrs.epsilon;
+      }
+    } else {
+      return absl::InvalidArgumentError(
+          "Expected '{' after '=>' for query attributes");
+    }
+  }
+
+  query_operations_ |= QueryOperations::kContainsVectorRange;
+  auto predicate = std::make_unique<query::VectorRangePredicate>(
+      attribute_alias, identifier, radius, vector_param_name, score_as,
+      epsilon);
+  if (!radius_param_name.empty()) {
+    predicate->SetRadiusParamName(std::move(radius_param_name));
+  }
+  return predicate;
 }
 
 absl::StatusOr<absl::string_view> FilterParser::ParseTagString() {
@@ -443,6 +653,20 @@ absl::StatusOr<FilterParseResults> FilterParser::Parse() {
     results.is_match_all = true;
     return results;
   }
+  // Malformed UTF-8, compat-gated (see COMPATIBILITY.md):
+  //   >= 1.3.0: reject the whole expression (all field types).
+  //   <  1.3.0: 1.2 behavior — only TEXT tokens substitute U+FFFD (below);
+  //             tag/numeric keep raw bytes for exact match.
+  expression_valid_utf8_ = utils::Scanner::IsValidUtf8(expression_);
+  if (!expression_valid_utf8_) {
+    VMSDK_RETURN_IF_ERROR(VALKEY_SEARCH_COMPATIBILITY_FIX(
+        1, 3, 0, "filter_parser_invalid_utf8_expression",
+        []() -> absl::Status {
+          return absl::InvalidArgumentError(
+              "Invalid UTF-8 in query expression");
+        },
+        []() -> absl::Status { return absl::OkStatus(); }));
+  }
   filter_identifiers_.clear();
   pos_ = 0;
   VMSDK_ASSIGN_OR_RETURN(auto parse_result, ParseExpression(0));
@@ -544,6 +768,41 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::WrapPredicate(
       logical_operator, std::move(children), options_.slop, options_.inorder);
 };
 
+// --- Multi-byte helpers for non-ASCII punctuation detection ---
+
+bool FilterParser::IsNonAsciiDelimiter(
+    const indexes::text::PunctuationSet& punct) {
+  // Decode the multi-byte codepoint at pos_ and check if it's a delimiter.
+  utils::Scanner s(expression_.substr(pos_));
+  utils::Scanner::Char cp = s.NextUtf8();
+  if (cp == utils::Scanner::kInvalidCp || cp == utils::Scanner::kEOF) {
+    return false;
+  }
+  if (punct.Contains(static_cast<uint32_t>(cp))) {
+    pos_ += s.LastUtf8ByteLen();
+    return true;
+  }
+  return false;
+}
+
+void FilterParser::ConsumeNonAsciiByte(std::string& dest) {
+  // Malformed bytes are kept raw here and sanitized per token in
+  // NormalizeTextToken, matching how 1.2 built and then case-folded a token.
+  utils::Scanner s(expression_.substr(pos_));
+  s.NextUtf8();
+  uint8_t len = s.LastUtf8ByteLen();
+  dest.append(expression_.data() + pos_, len);
+  pos_ += len;
+}
+
+void FilterParser::NormalizeTextToken(const indexes::text::Language& language,
+                                      std::string& token) const {
+  if (!expression_valid_utf8_ && !utils::Scanner::IsValidUtf8(token)) {
+    token = indexes::text::UnicodeNormalizer::ReplaceInvalidUtf8(token);
+  }
+  language.NormalizeInPlace(token);
+}
+
 // Handles backslash escaping for both quoted and unquoted text
 // Escape Syntax:
 // \\ -> \
@@ -551,33 +810,30 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::WrapPredicate(
 // \<non-punctuation> -> (break to new token)<non-punctuation>...
 // \<EOL> -> Return error
 absl::StatusOr<bool> FilterParser::HandleBackslashEscape(
-    const indexes::text::Lexer& lexer, std::string& processed_content) {
+    const indexes::text::PunctuationSet& punct,
+    std::string& processed_content) {
   if (!Match('\\', false)) {
     // No backslash, continue normal processing of the same token.
     return true;
   }
   if (!IsEnd()) {
-    char next_ch = Peek();
-    if (next_ch == '\\' || lexer.IsPunctuation(next_ch)) {
-      // If Double backslash, retain the double backslash
-      // If Single backslash with punct on right, retain the char on right
-      processed_content.push_back(next_ch);
-      ++pos_;
-      // Continue parsing the same token.
-      return true;
-    } else {
-      // Backslash before non-punctuation
-      if (lexer.IsPunctuation('\\')) {
-        // Backslash is punctuation → break to new token (standard unicode
-        // segmentation)
-        return false;
-      } else {
-        // Backslash not punctuation → keep letter, continue
-        processed_content.push_back(next_ch);
-        ++pos_;
-        return true;
-      }
+    // Delegate to the shared escape resolver so that both ASCII and non-ASCII
+    // escaped punctuation (e.g. Arabic ، U+060C) are handled consistently
+    // with the ingestion tokenizer.
+    uint8_t n =
+        indexes::text::ResolveBackslashEscape(expression_.substr(pos_), punct);
+    if (n == 0) {
+      // Backslash is punctuation → break to new token (standard unicode
+      // segmentation)
+      return false;
     }
+    // If Double backslash, retain the double backslash
+    // If Single backslash with punct on right, retain the char on right
+    // If Backslash not punctuation → keep letter, continue
+    processed_content.append(expression_.data() + pos_, n);
+    pos_ += n;
+    // Continue parsing the same token.
+    return true;
   } else {
     // Unescaped backslash at end of input is invalid.
     return absl::InvalidArgumentError(
@@ -586,34 +842,51 @@ absl::StatusOr<bool> FilterParser::HandleBackslashEscape(
 }
 
 // Returns a token within an exact phrase parsing it until reaching the
-// token boundary while handling escape chars.
+// token boundary while handling escape chars. `delim` is the character that
+// closes the phrase: `"` for double-quoted phrases, `'` for apostrophe-phrases
+// (the latter is enabled by the search.emulate-release >= 1.3.0 gate in
+// ParseTextTokens; see COMPATIBILITY.md).
 // Quoted Text Syntax:
-// word1 word2" word3 -> word1
-// word2" word3 -> word2
-// Token boundaries (separated by space): " <punctuation> \<non-punctuation>
+// word1 word2<delim> word3 -> word1
+// word2<delim> word3 -> word2
+// Token boundaries (separated by space): <delim> <punctuation>
+// \<non-punctuation>
 absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-    const std::optional<std::string>& field_or_default) {
-  const auto& lexer = text_index_schema->GetLexer();
+    const std::optional<std::string>& field_or_default, char delim) {
+  const auto& language = text_index_schema->GetLanguage();
+  const auto& punct = text_index_schema->GetTokenizerConfig().punct_set;
   std::string processed_content;
+
   while (!IsEnd()) {
     VMSDK_ASSIGN_OR_RETURN(bool should_continue,
-                           HandleBackslashEscape(lexer, processed_content));
+                           HandleBackslashEscape(punct, processed_content));
     if (!should_continue) {
       break;
     }
     // Break to complete an exact phrase or start a new exact phrase.
     char ch = Peek();
-    if (ch == '"') break;
+    if (ch == delim) break;
     if (ch == '\\') continue;  // Don't break on backslash
-    if (lexer.IsPunctuation(ch)) break;
+    // Check if the character is a word boundary (punctuation).
+    if (utils::Scanner::IsAscii(static_cast<unsigned char>(ch))) {
+      if (punct.Contains(static_cast<unsigned char>(ch))) break;
+    } else {
+      // Non-ASCII: decode codepoint and check for non-ASCII punctuation
+      // (e.g., French «», Arabic ،). If it's a delimiter, break.
+      if (IsNonAsciiDelimiter(punct)) break;
+      // Not a delimiter — consume the full multi-byte sequence as word content.
+      ConsumeNonAsciiByte(processed_content);
+      continue;
+    }
     processed_content.push_back(ch);
     ++pos_;
   }
+
   if (processed_content.empty()) {
     return FilterParser::TokenResult{nullptr, false};
   }
-  lexer.NormalizeLowerCaseInPlace(processed_content);
+  NormalizeTextToken(language, processed_content);
   FieldMaskPredicate field_mask;
   VMSDK_RETURN_IF_ERROR(
       SetupTextFieldConfiguration(field_mask, field_or_default, false));
@@ -639,16 +912,18 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
 absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
     const std::optional<std::string>& field_or_default) {
-  const auto& lexer = text_index_schema->GetLexer();
+  const auto& language = text_index_schema->GetLanguage();
+  const auto& punct = text_index_schema->GetTokenizerConfig().punct_set;
   std::string processed_content;
   bool starts_with_star = false;
   bool ends_with_star = false;
   size_t leading_percent_count = 0;
   size_t trailing_percent_count = 0;
   bool break_on_query_syntax = false;
+
   while (!IsEnd()) {
     VMSDK_ASSIGN_OR_RETURN(bool should_continue,
-                           HandleBackslashEscape(lexer, processed_content));
+                           HandleBackslashEscape(punct, processed_content));
     if (!should_continue) {
       break;
     }
@@ -706,14 +981,24 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
       }
     }
     if (ch == '\\') continue;  // Don't break on backslash
-    // Break on all punctuation characters.
-    if (lexer.IsPunctuation(ch)) break;
+    // Check if the character is a word boundary (punctuation).
+    if (utils::Scanner::IsAscii(static_cast<unsigned char>(ch))) {
+      if (punct.Contains(static_cast<unsigned char>(ch))) break;
+    } else {
+      // Non-ASCII: decode codepoint and check for non-ASCII punctuation.
+      if (IsNonAsciiDelimiter(punct)) break;
+      // Not a delimiter — consume the full multi-byte sequence as word content.
+      ConsumeNonAsciiByte(processed_content);
+      continue;
+    }
     // Regular character
     processed_content.push_back(ch);
     ++pos_;
   }
-  lexer.NormalizeLowerCaseInPlace(processed_content);
+
+  NormalizeTextToken(language, processed_content);
   FieldMaskPredicate field_mask;
+
   // Build predicate directly based on detected pattern
   if (leading_percent_count > 0) {
     if (trailing_percent_count == leading_percent_count &&
@@ -763,7 +1048,8 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
   } else {
     // Term predicate handling:
     bool exact = options_.verbatim;
-    if (lexer.IsStopWord(processed_content) || processed_content.empty()) {
+    if (text_index_schema->GetTokenizerConfig().IsStopWord(processed_content) ||
+        processed_content.empty()) {
       // Skip stop words and empty words.
       return FilterParser::TokenResult{nullptr, break_on_query_syntax};
     }
@@ -818,6 +1104,8 @@ absl::Status FilterParser::SetupTextFieldConfiguration(
 // a text predicate.
 // Text Parsing Syntax:
 //   Quoted: "word1 word2" -> ComposedAND(exact, slop=0, inorder=true)
+//   Apostrophe-quoted (>= 1.3.0 with emulate-release):
+//     'word1 word2' -> ComposedAND(exact, slop=0, inorder=true)
 //   Unquoted: word1 word2 -> TermPredicate(word1) - stops at first token
 // Token boundaries for unquoted text: <punctuation> ( ) | @ " - { } [ ] : ; $
 // Quoted phrases (Exact Phrase) parse all tokens within quotes, unquoted
@@ -829,17 +1117,44 @@ FilterParser::ParseTextTokens(
   if (!text_index_schema) {
     return absl::InvalidArgumentError("Index does not have any text field");
   }
+  // Redisearch treats unescaped `'` as a secondary phrase delimiter, paired
+  // left-to-right and structurally equivalent to `"`. An apostrophe with no
+  // matching close ahead is silently treated as a separator — so we look
+  // ahead before entering phrase mode. Pre-1.3.0 valkey-search dropped
+  // unescaped apostrophes as ordinary punctuation, which silently changed
+  // the parse of queries like `great'wall great'wall`. Gate behind
+  // search.emulate-release per COMPATIBILITY.md.
+  const bool apostrophe_phrases_enabled = VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 3, 0, "ft_search_apostrophe_phrase", [&] { return true; },
+      [&] { return false; });
+  auto has_matching_apostrophe_ahead = [&](size_t start) {
+    for (size_t i = start; i < expression_.size(); ++i) {
+      if (expression_[i] == '\\' && i + 1 < expression_.size()) {
+        ++i;  // skip escaped char
+        continue;
+      }
+      if (expression_[i] == '\'') return true;
+    }
+    return false;
+  };
   absl::InlinedVector<std::unique_ptr<query::TextPredicate>,
                       indexes::text::kProximityTermsInlineCapacity>
       terms;
-  bool in_quotes = false;
+  // 0 when not inside a phrase; otherwise the character (`"` or `'`) that
+  // opened the phrase. The same character must close it.
+  char phrase_delim = 0;
   bool exact_phrase = false;
   while (!IsEnd()) {
     char c = Peek();
-    if (c == '"') {
-      in_quotes = !in_quotes;
+    const bool is_phrase_open =
+        (phrase_delim == 0 &&
+         (c == '"' || (apostrophe_phrases_enabled && c == '\'' &&
+                       has_matching_apostrophe_ahead(pos_ + 1))));
+    const bool is_phrase_close = (phrase_delim != 0 && c == phrase_delim);
+    if (is_phrase_open || is_phrase_close) {
+      phrase_delim = is_phrase_open ? c : 0;
       ++pos_;
-      if (in_quotes && terms.empty()) {
+      if (is_phrase_open && terms.empty()) {
         exact_phrase = true;
         continue;
       }
@@ -848,8 +1163,9 @@ FilterParser::ParseTextTokens(
     size_t token_start = pos_;
     VMSDK_ASSIGN_OR_RETURN(
         auto result,
-        in_quotes
-            ? ParseQuotedTextToken(text_index_schema, field_or_default)
+        (phrase_delim != 0)
+            ? ParseQuotedTextToken(text_index_schema, field_or_default,
+                                   phrase_delim)
             : ParseUnquotedTextToken(text_index_schema, field_or_default));
     if (result.predicate) {
       terms.push_back(std::move(result.predicate));
@@ -863,7 +1179,16 @@ FilterParser::ParseTextTokens(
     // If this happens, we are either done (at the end of the prefilter string)
     // or were on a punctuation character which should be consumed.
     if (token_start == pos_) {
-      ++pos_;
+      // For non-ASCII punctuation, advance by the full codepoint byte length
+      // so multi-byte punctuation (e.g. Arabic ، U+060C) is consumed
+      // atomically — advancing 1 byte would split the sequence.
+      if (!utils::Scanner::IsAscii(static_cast<unsigned char>(Peek()))) {
+        utils::Scanner s(expression_.substr(pos_));
+        s.NextUtf8();
+        pos_ += s.LastUtf8ByteLen();
+      } else {
+        ++pos_;
+      }
     }
   }
   std::unique_ptr<query::Predicate> pred;
@@ -903,6 +1228,97 @@ FilterParser::ParseTextTokens(
   return pred;
 }
 
+// If the parser is positioned at a `=> { ... }` QMA block, consume it and
+// apply the parsed weight to `predicate`.
+absl::Status FilterParser::MaybeConsumeQMABlock(query::Predicate& predicate) {
+  SkipWhitespace();
+  size_t saved_pos = pos_;
+  if (IsEnd() || pos_ + 1 >= expression_.size() || expression_[pos_] != '=' ||
+      expression_[pos_ + 1] != '>') {
+    return absl::OkStatus();
+  }
+  // Look ahead past => and optional whitespace for {.
+  size_t lookahead = pos_ + 2;
+  while (lookahead < expression_.size() &&
+         std::isspace(expression_[lookahead])) {
+    lookahead++;
+  }
+  // Only `=> {` is a QMA block. `=> [` is the vector KNN delimiter (handled
+  // upstream), so leave the position untouched in that case.
+  if (lookahead >= expression_.size() || expression_[lookahead] != '{') {
+    pos_ = saved_pos;
+    return absl::OkStatus();
+  }
+  pos_ = lookahead + 1;
+  VMSDK_ASSIGN_OR_RETURN(auto weight, ParseQMABlock());
+  predicate.SetWeight(static_cast<float>(weight));
+  return absl::OkStatus();
+}
+
+// Parses a QMA block. Expects the parser position to be after `=> {`.
+// Parses `$weight:` followed by a non-negative float, expects closing `}`.
+// Returns the weight value on success.
+absl::StatusOr<double> FilterParser::ParseQMABlock() {
+  // Parse attribute name starting with $
+  if (!Match('$')) {
+    if (IsEnd() || Peek() == '}') {
+      return absl::InvalidArgumentError("Missing QMA attribute name");
+    }
+    return absl::InvalidArgumentError(
+        absl::StrCat("Unexpected character in QMA block at position ", pos_ + 1,
+                     ": expected '$'"));
+  }
+  // Parse the attribute name
+  std::string attr_name;
+  while (!IsEnd() && Peek() != ':' && !std::isspace(Peek()) && Peek() != '}') {
+    attr_name += expression_[pos_++];
+  }
+  // Only $weight is supported (case-insensitive)
+  if (absl::AsciiStrToLower(attr_name) != "weight") {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Unsupported QMA attribute: `$", attr_name, "`"));
+  }
+  // Expect colon after attribute name
+  if (!Match(':')) {
+    return absl::InvalidArgumentError(
+        "Expected ':' following QMA attribute name");
+  }
+  SkipWhitespace();
+  // Parse the weight value
+  if (IsEnd() || Peek() == ';' || Peek() == '}') {
+    return absl::InvalidArgumentError("Missing value for QMA attribute name");
+  }
+  // Parse the number manually. Non-numeric input fails SimpleAtod below and
+  // negative values (a leading '-') are caught by value < 0.
+  std::string number_str;
+  if (!IsEnd() && Peek() == '-') {
+    number_str += expression_[pos_++];
+  }
+  while (!IsEnd() && (std::isdigit(Peek()) || Peek() == '.')) {
+    number_str += expression_[pos_++];
+  }
+  double value;
+  if (!absl::SimpleAtod(number_str, &value)) {
+    return absl::InvalidArgumentError(
+        "Invalid weight value: expected a non-negative number");
+  }
+  if (value < 0.0) {
+    return absl::InvalidArgumentError("Weight must be a non-negative number");
+  }
+  // SetWeight narrows to float, so a value above FLT_MAX would become inf and
+  // then produce a NaN score wherever it meets a zero document score. Reject it
+  // here instead.
+  if (value > static_cast<double>(std::numeric_limits<float>::max())) {
+    return absl::InvalidArgumentError("Weight must be a finite number");
+  }
+  // Consume optional semicolon
+  Match(';');
+  if (!Match('}')) {
+    return absl::InvalidArgumentError("Missing closing '}' in QMA block");
+  }
+  return value;
+}
+
 // Parsing rules:
 // 1. Predicate evaluation is done with left-associative grouping while the OR
 // operator has lower precedence than the AND operator. precedence. For
@@ -918,6 +1334,10 @@ FilterParser::ParseTextTokens(
 // 7. A tag field has the following pattern: @field_name:{tag1|tag2|tag3}.
 // 8. A text field has the following pattern : @field_name:phrase. Where phrase
 // can be a combination of different words, *, % for different text operations.
+// A text field can also scope a group: @field_name:(a|b|c) applies the field
+// to every bare term inside, e.g. @f:(a|b) => OR(@f:a, @f:b). An explicit
+// @other:term inside the group is a syntax error (rejected, matching
+// RediSearch).
 // 9. The tag separator character is configurable with a default value of '|'.
 // 10. A field name can be wrapped with `()` to group multiple predicates.
 // 11. Space between predicates is considered as AND while '|' is considered as
@@ -929,7 +1349,7 @@ FilterParser::ParseTextTokens(
 // 14. Numeric filters are inclusive. Exclusive min or max are expressed with (
 // prepended to the number, for example, [(100 (200].
 absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
-    uint32_t level) {
+    uint32_t level, const std::optional<std::string>& default_field) {
   if (level++ >= options::GetQueryStringDepth().GetValue()) {
     return absl::InvalidArgumentError("Query string is too complex");
   }
@@ -950,7 +1370,8 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
     std::unique_ptr<query::Predicate> predicate;
     bool negate = Match('-');
     if (Match('(')) {
-      VMSDK_ASSIGN_OR_RETURN(auto sub_result, ParseExpression(level));
+      VMSDK_ASSIGN_OR_RETURN(auto sub_result,
+                             ParseExpression(level, default_field));
       if (!Match(')')) {
         return absl::InvalidArgumentError(
             absl::StrCat("Expected ')' after expression got '",
@@ -962,6 +1383,8 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
         return absl::InvalidArgumentError(
             absl::StrCat("Empty brackets detected at Position: ", pos_ - 1));
       }
+      // Check for QMA block: => { ... } after closing )
+      VMSDK_RETURN_IF_ERROR(MaybeConsumeQMABlock(*predicate));
       if (result.prev_predicate) {
         node_count_++;
       }
@@ -983,7 +1406,8 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
       if (negate) {
         return UnexpectedChar(expression_, pos_ - 1);
       }
-      VMSDK_ASSIGN_OR_RETURN(auto sub_result, ParseExpression(level));
+      VMSDK_ASSIGN_OR_RETURN(auto sub_result,
+                             ParseExpression(level, default_field));
       predicate = std::move(sub_result.prev_predicate);
       if (!predicate) {
         return absl::InvalidArgumentError("Missing OR term");
@@ -1005,20 +1429,54 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
       // bracket and we do not want stale results to propagate.
       result.not_rightmost_bracket = true;
     } else {
-      std::optional<std::string> field_name;
+      std::optional<std::string> field_name = default_field;
       bool non_text = false;
+      bool field_scoped_group = false;
       if (Peek() == '@') {
+        // A field modifier inside a field-scoped group is a syntax error,
+        // matching RediSearch (e.g. @f1:(a|@f2:b) is rejected).
+        if (default_field.has_value()) {
+          return UnexpectedChar(expression_, pos_);
+        }
         std::string parsed_field;
         VMSDK_ASSIGN_OR_RETURN(parsed_field, ParseFieldName());
         field_name = parsed_field;
         if (Match('[')) {
           node_count_++;
-          VMSDK_ASSIGN_OR_RETURN(predicate, ParseNumericPredicate(*field_name));
+          // Peek for VECTOR_RANGE keyword before falling through to numeric
+          SkipWhitespace();
+          auto saved_pos = pos_;
+          if (MatchInsensitive("VECTOR_RANGE")) {
+            SkipWhitespace();
+            VMSDK_ASSIGN_OR_RETURN(predicate,
+                                   ParseVectorRangePredicate(*field_name));
+          } else {
+            pos_ = saved_pos;
+            VMSDK_ASSIGN_OR_RETURN(predicate,
+                                   ParseNumericPredicate(*field_name));
+          }
           non_text = true;
         } else if (Match('{')) {
           node_count_++;
           VMSDK_ASSIGN_OR_RETURN(predicate, ParseTagPredicate(*field_name));
           non_text = true;
+        } else if (Match('(')) {
+          // Field-scoped group: @field:(a|b|c) applies the field to each text
+          // term inside the parentheses.
+          VMSDK_ASSIGN_OR_RETURN(auto sub_result,
+                                 ParseExpression(level, field_name));
+          if (!Match(')')) {
+            return absl::InvalidArgumentError(absl::StrCat(
+                "Expected ')' after expression got '",
+                expression_.substr(pos_, 1), "'. Position: ", pos_));
+          }
+          predicate = std::move(sub_result.prev_predicate);
+          if (!predicate) {
+            return absl::InvalidArgumentError(absl::StrCat(
+                "Empty brackets detected at Position: ", pos_ - 1));
+          }
+          non_text = true;
+          field_scoped_group = true;
         }
       }
       if (!non_text) {
@@ -1029,7 +1487,11 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
         }
         predicate = std::move(*predicate_opt);
       }
-      if (result.prev_predicate) {
+      // Attach an optional QMA block (=> { ... }) to this bare term, matching
+      // RediSearch which allows attributes on a term, not only on a group.
+      VMSDK_RETURN_IF_ERROR(MaybeConsumeQMABlock(*predicate));
+      const bool had_prev_predicate = result.prev_predicate != nullptr;
+      if (had_prev_predicate) {
         node_count_++;
       }
       VMSDK_ASSIGN_OR_RETURN(
@@ -1040,7 +1502,9 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
       // After the above wrap predicate there will always be a previous
       // predicate. Hence we set it to false.
       result.not_rightmost_bracket = false;
-      no_prev_grp = false;
+      // A leading field-scoped group is its own subtree: keep no_prev_grp set
+      // so a following AND term does not flatten into it (mirrors plain '(').
+      no_prev_grp = field_scoped_group && !had_prev_predicate;
     }
     SkipWhitespace();
     auto max_node_count = options::GetQueryStringTermsCount().GetValue();

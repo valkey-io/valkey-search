@@ -32,15 +32,20 @@
 #define RAX_ALLOC_H
 #include <stddef.h>
 
-/* Override with the wrappers provided by VMSDK. */
-extern void* __wrap_malloc(size_t size);
-extern void __wrap_free(void* ptr);
-extern void* __wrap_realloc(void* ptr, size_t size);
-extern int __wrap_malloc_usable_size(void* ptr);
+/* Plain libc names: inside the module these bind to the allocator defined in
+ * vmsdk/src/memory_allocation_c_api.cc, which routes to ValkeyModule_Alloc. */
+#include <stdlib.h>
 
-#define rax_malloc __wrap_malloc
-#define rax_realloc __wrap_realloc
-#define rax_free __wrap_free
-#define rax_ptr_alloc_size(ptr) ((size_t)__wrap_malloc_usable_size(ptr))
+#ifdef __APPLE__
+#include <malloc/malloc.h>
+#define rax_ptr_alloc_size(ptr) malloc_size(ptr)
+#else
+#include <malloc.h>
+#define rax_ptr_alloc_size(ptr) malloc_usable_size(ptr)
+#endif
+
+#define rax_malloc malloc
+#define rax_realloc realloc
+#define rax_free free
 
 #endif

@@ -5,12 +5,16 @@
  *
  */
 
+#include <optional>
 #include <thread>
 #include <vector>
 
+#include "absl/container/inlined_vector.h"
+#include "absl/strings/string_view.h"
 #include "gtest/gtest.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/text.h"
+#include "src/indexes/text/language_registry.h"
 #include "src/indexes/text/text_index.h"
 #include "src/utils/string_interning.h"
 #include "testing/common.h"
@@ -27,14 +31,115 @@ class TextIndexSchemaTest : public vmsdk::ValkeyTest {
   std::shared_ptr<TextIndexSchema> CreateSchema() {
     std::vector<std::string> empty_stop_words;
     return std::make_shared<TextIndexSchema>(
-        data_model::LANGUAGE_ENGLISH,
-        " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~", false, empty_stop_words,
+        LanguageRegistry::Instance().Get(data_model::LANGUAGE_ENGLISH),
+        " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~", empty_stop_words, false,
         4);
+  }
+
+  // Stages a stemmed field 0 and commits, as an indexed document would.
+  void CommitStemmed(TextIndexSchema &schema, const InternedStringPtr &key,
+                     absl::string_view content) {
+    schema.DeleteKeyData(key);
+    auto staged = schema.StageAttributeData(key, content, 0, /*stem=*/true,
+                                            /*suffix=*/false);
+    ASSERT_TRUE(staged.ok());
+    schema.CommitKeyData(key);
+  }
+
+  // The stem-inflection leaf's df for a word's root, as scoring reads it.
+  // Returns nullopt when the root has no stem-tree entry.
+  std::optional<uint32_t> StemDistinctDocs(TextIndexSchema &schema,
+                                           absl::string_view word) {
+    absl::InlinedVector<absl::string_view, kStemVariantsInlineCapacity>
+        variants;
+    uint32_t distinct_docs = 0;
+    schema.GetAllStemVariants(word, variants, /*stem_enabled_mask=*/1,
+                              /*lock_needed=*/true, &distinct_docs);
+    if (variants.empty()) return std::nullopt;
+    return distinct_docs;
   }
 };
 
+// A document counts once per stem root however many inflections it holds, so
+// the count is documents, not (document, inflection) pairs.
+TEST_F(TextIndexSchemaTest, StemDistinctDocsCountsDocumentOncePerRoot) {
+  auto schema = CreateSchema();
+  data_model::TextIndex proto;
+  auto text = std::make_shared<Text>(proto, schema);
+  schema->SetStemTextFieldMask(1);
+
+  CommitStemmed(*schema, StringInternStore::Intern("doc1"), "running runs");
+  CommitStemmed(*schema, StringInternStore::Intern("doc2"), "runs");
+  CommitStemmed(*schema, StringInternStore::Intern("doc3"), "swimming");
+
+  // doc1 holds two inflections of "run" but is one document; summing the two
+  // posting lists instead would give 3.
+  EXPECT_EQ(StemDistinctDocs(*schema, "running"), 2);
+  EXPECT_EQ(StemDistinctDocs(*schema, "swimming"), 1);
+}
+
+// Deletion must undo exactly the one increment the document made.
+TEST_F(TextIndexSchemaTest, StemDistinctDocsDecrementsOnDelete) {
+  auto schema = CreateSchema();
+  data_model::TextIndex proto;
+  auto text = std::make_shared<Text>(proto, schema);
+  schema->SetStemTextFieldMask(1);
+
+  auto key1 = StringInternStore::Intern("doc1");
+  auto key2 = StringInternStore::Intern("doc2");
+  CommitStemmed(*schema, key1, "running runs");
+  CommitStemmed(*schema, key2, "runs");
+  ASSERT_EQ(StemDistinctDocs(*schema, "running"), 2);
+
+  // Re-indexing doc2 with another inflection of the same root nets to 2: the
+  // delete decrements and the commit re-increments.
+  CommitStemmed(*schema, key2, "running");
+  EXPECT_EQ(StemDistinctDocs(*schema, "running"), 2);
+
+  // Re-indexing doc2 off the root decrements without re-incrementing.
+  CommitStemmed(*schema, key2, "hello");
+  EXPECT_EQ(StemDistinctDocs(*schema, "running"), 1);
+
+  // Put doc2 back on the root for the deletion checks below.
+  CommitStemmed(*schema, key2, "runs");
+  ASSERT_EQ(StemDistinctDocs(*schema, "running"), 2);
+
+  // Dropping the two-inflection document decrements once, not twice.
+  schema->DeleteKeyData(key1);
+  EXPECT_EQ(StemDistinctDocs(*schema, "running"), 1);
+
+  // The last document leaves no parents, so the root drops out of the tree.
+  schema->DeleteKeyData(key2);
+  EXPECT_EQ(StemDistinctDocs(*schema, "running"), std::nullopt);
+}
+
 // Concurrent CommitKeyData calls with overlapping words must
 //  not crash or corrupt the index.
+// Indexes using the language defaults share one TokenizerConfig owned by the
+// language; an index with custom settings builds its own.
+TEST_F(TextIndexSchemaTest, DefaultTokenizerConfigIsShared) {
+  auto language =
+      LanguageRegistry::Instance().Get(data_model::LANGUAGE_ENGLISH);
+  auto make = [&](const std::string &punctuation,
+                  const std::vector<std::string> &stop_words) {
+    return std::make_shared<TextIndexSchema>(language, punctuation, stop_words,
+                                             false, 4);
+  };
+  auto a =
+      make(language->GetDefaultPunctuation(), language->GetDefaultStopWords());
+  auto b =
+      make(language->GetDefaultPunctuation(), language->GetDefaultStopWords());
+  auto custom = make(" ,", {});
+
+  EXPECT_EQ(&a->GetTokenizerConfig(),
+            language
+                ->TokenizerConfigFor(language->GetDefaultPunctuation(),
+                                     language->GetDefaultStopWords())
+                .get());
+  EXPECT_EQ(&a->GetTokenizerConfig(), &b->GetTokenizerConfig());
+  EXPECT_NE(&custom->GetTokenizerConfig(), &a->GetTokenizerConfig());
+}
+
 TEST_F(TextIndexSchemaTest, ConcurrentCommitKeyData) {
   auto schema = CreateSchema();
   data_model::TextIndex proto;
@@ -61,6 +166,118 @@ TEST_F(TextIndexSchemaTest, ConcurrentCommitKeyData) {
 
   // Unique words across all documents: the, cat, sat, ran, dog, barked, howled
   EXPECT_EQ(schema->GetNumUniqueTerms(), 7);
+}
+
+TEST_F(TextIndexSchemaTest, CommitKeyDataReturnsDocLen) {
+  auto schema = CreateSchema();
+  data_model::TextIndex proto;
+  auto text = std::make_shared<Text>(proto, schema);
+
+  // With with_offsets=false, all tokens get position 0.
+  // "hello world hello" has 2 unique tokens -> doc_len = 2
+  // (duplicate "hello" merges into same position entry)
+  auto key = StringInternStore::Intern("doc1");
+  auto result =
+      schema->StageAttributeData(key, "hello world hello", 0, false, false);
+  ASSERT_TRUE(result.ok());
+  auto commit = schema->CommitKeyData(key);
+  EXPECT_EQ(commit.doc_len, 2);
+  EXPECT_EQ(commit.norm, 1);  // Each unique token appears once (position 0)
+}
+
+TEST_F(TextIndexSchemaTest, CommitKeyDataReturnsZeroForEmptyStage) {
+  auto schema = CreateSchema();
+
+  // CommitKeyData without staging returns 0
+  auto key = StringInternStore::Intern("no_data");
+  auto commit = schema->CommitKeyData(key);
+  EXPECT_EQ(commit.doc_len, 0);
+  EXPECT_EQ(commit.norm, 0);
+}
+
+TEST_F(TextIndexSchemaTest, TotalDocLenAccumulatesAcrossDocuments) {
+  auto schema = CreateSchema();
+  data_model::TextIndex proto;
+  auto text = std::make_shared<Text>(proto, schema);
+
+  // doc1: "hello world" -> 2 terms
+  auto key1 = StringInternStore::Intern("doc1");
+  auto r1 = schema->StageAttributeData(key1, "hello world", 0, false, false);
+  ASSERT_TRUE(r1.ok());
+  schema->CommitKeyData(key1);
+
+  // doc2: "foo bar baz" -> 3 terms
+  auto key2 = StringInternStore::Intern("doc2");
+  auto r2 = schema->StageAttributeData(key2, "foo bar baz", 0, false, false);
+  ASSERT_TRUE(r2.ok());
+  schema->CommitKeyData(key2);
+
+  // total_doc_len should be 2 + 3 = 5
+  EXPECT_EQ(schema->GetMetadata().total_doc_len.load(), 5);
+}
+
+TEST_F(TextIndexSchemaTest, TotalDocLenDecrementsOnDelete) {
+  auto schema = CreateSchema();
+  data_model::TextIndex proto;
+  auto text = std::make_shared<Text>(proto, schema);
+
+  // doc1: "hello world foo" -> 3 terms
+  auto key1 = StringInternStore::Intern("doc1");
+  auto r1 =
+      schema->StageAttributeData(key1, "hello world foo", 0, false, false);
+  ASSERT_TRUE(r1.ok());
+  uint32_t doc_len = schema->CommitKeyData(key1).doc_len;
+  EXPECT_EQ(doc_len, 3);
+  EXPECT_EQ(schema->GetMetadata().total_doc_len.load(), 3);
+
+  // DeleteKeyData decrements total_doc_len internally
+  schema->DeleteKeyData(key1);
+  EXPECT_EQ(schema->GetMetadata().total_doc_len.load(), 0);
+}
+
+TEST_F(TextIndexSchemaTest, DocLenWithMultipleFields) {
+  auto schema = CreateSchema();
+  data_model::TextIndex proto;
+
+  // Create two Text instances to allocate field numbers 0 and 1
+  auto text1 = std::make_shared<Text>(proto, schema);
+  auto text2 = std::make_shared<Text>(proto, schema);
+
+  auto key = StringInternStore::Intern("doc1");
+
+  // Field 0: "hello world" -> 2 terms
+  auto r1 = schema->StageAttributeData(key, "hello world", 0, false, false);
+  ASSERT_TRUE(r1.ok());
+
+  // Field 1: "foo bar baz" -> 3 terms
+  auto r2 = schema->StageAttributeData(key, "foo bar baz", 1, false, false);
+  ASSERT_TRUE(r2.ok());
+
+  // doc_len should be total across both fields = 5
+  auto commit = schema->CommitKeyData(key);
+  EXPECT_EQ(commit.doc_len, 5);
+  // norm = max token freq; each token appears once per field = 1
+  EXPECT_EQ(commit.norm, 1);
+}
+
+TEST_F(TextIndexSchemaTest, NormReflectsMaxTermFrequency) {
+  // with_offsets=true so duplicate tokens get distinct positions
+  std::vector<std::string> empty_stop_words;
+  auto schema = std::make_shared<TextIndexSchema>(
+      LanguageRegistry::Instance().Get(data_model::LANGUAGE_ENGLISH),
+      " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~", empty_stop_words, true, 4);
+  data_model::TextIndex proto;
+  auto text = std::make_shared<Text>(proto, schema);
+
+  // "hello hello hello world" -> "hello" appears 3 times, "world" 1 time
+  auto key = StringInternStore::Intern("doc1");
+  auto r = schema->StageAttributeData(key, "hello hello hello world", 0, false,
+                                      false);
+  ASSERT_TRUE(r.ok());
+  auto commit = schema->CommitKeyData(key);
+  // doc_len = 4 (total tokens), norm = 3 (max freq is "hello" with 3)
+  EXPECT_EQ(commit.doc_len, 4);
+  EXPECT_EQ(commit.norm, 3);
 }
 
 TEST_F(TextIndexSchemaTest, FieldAllocationAcrossMultipleTexts) {

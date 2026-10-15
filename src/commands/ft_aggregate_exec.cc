@@ -7,12 +7,30 @@
 #include "src/commands/ft_aggregate_exec.h"
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 #include <queue>
+#include <random>
 
 #include "absl/container/flat_hash_map.h"
+#include "absl/log/check.h"
 #include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/ascii.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/str_join.h"
+#include "absl/strings/strip.h"
+#include "absl/time/clock.h"
+#include "src/attribute_data_type.h"
 #include "src/commands/ft_aggregate_parser.h"
+#include "src/cursor.h"
+#include "src/indexes/index_base.h"
+#include "src/query/response_generator.h"
+#include "src/valkey_search_options.h"
+#include "vmsdk/src/debug.h"
 #include "vmsdk/src/info.h"
+#include "vmsdk/src/type_conversions.h"
+#include "vmsdk/src/utils.h"
 
 // #define DBG std::cerr
 #define DBG 0 && std::cerr
@@ -35,15 +53,58 @@ DEV_INTEGER_COUNTER(agg_stats, agg_sort_by_records);
 namespace valkey_search {
 namespace aggregate {
 
-expr::Value Attribute::GetValue(expr::Expression::EvalContext& ctx,
-                                const expr::Expression::Record& record) const {
-  auto rec = reinterpret_cast<const Record&>(record);
+expr::Value Attribute::GetValue(expr::Expression::EvalContext &ctx,
+                                const expr::Expression::Record &record) const {
+  auto rec = reinterpret_cast<const Record &>(record);
   return rec.fields_.at(record_index_);
 };
 
 expr::Expression::EvalContext ctx;
 
-std::ostream& operator<<(std::ostream& os, const RecordSet& rs) {
+TEST_COUNTER(ForceTimeoutAggregateCancels);
+
+// Records a stage evaluates between cancellation-token polls.
+//
+// The token used to be consulted only between stages, so a timeout could not
+// take effect until the stage in flight had drained the whole record set.
+// FT.HYBRID feels that most: its arms run uncapped pre-fusion, so the pipeline
+// can be handed far more records than a LIMITed FT.AGGREGATE would produce.
+//
+// Polling per record would put a virtual call -- and, for the timeout token, a
+// clock read -- beside every expression evaluation on the hot path. 1024
+// amortises that to a thousandth of the per-record cost while bounding the
+// overrun to 1024 records, which is well under a millisecond of work for any
+// expression these stages evaluate.
+inline constexpr size_t kCancellationPollInterval = 1024;
+
+inline constexpr absl::string_view kCancelledMessage =
+    "Aggregate operation cancelled due to timeout";
+
+// Polls the pipeline's cancellation token from inside a stage's record loop.
+//
+// Stages reach the token through the RecordSet's parameters rather than a
+// wider Stage::Execute() signature. A record set built without parameters (the
+// unit tests) or parameters built without a timeout carry no token; both mean
+// "not cancellable".
+//
+// The ForceTimeoutAggregate debug hook is deliberately not re-tested here: it
+// is set before the query runs, so the between-stage check in
+// ExecuteAggregationStages always trips on it before any stage starts.
+//
+// The error text matches the between-stage check exactly, so a caller cannot
+// tell where in the pipeline the cancellation landed, and the same counter is
+// incremented, so a cancellation is counted once wherever it is observed.
+inline absl::Status CheckCancelled(const RecordSet &records) {
+  if (records.agg_params_ == nullptr ||
+      records.agg_params_->cancellation_token == nullptr ||
+      !records.agg_params_->cancellation_token->IsCancelled()) {
+    return absl::OkStatus();
+  }
+  ForceTimeoutAggregateCancels.Increment(1);
+  return absl::CancelledError(kCancelledMessage);
+}
+
+std::ostream &operator<<(std::ostream &os, const RecordSet &rs) {
   os << "<RecordSet> " << rs.size() << "\n";
   for (size_t i = 0; i < rs.size(); ++i) {
     os << i << ": ";
@@ -54,8 +115,8 @@ std::ostream& operator<<(std::ostream& os, const RecordSet& rs) {
   return os;
 }
 
-void Record::Dump(std::ostream& os,
-                  const AggregateParameters* agg_params) const {
+void Record::Dump(std::ostream &os,
+                  const AggregateParameters *agg_params) const {
   os << '[';
   for (size_t i = 0; i < fields_.size(); ++i) {
     if (!fields_[i].IsNil()) {
@@ -70,14 +131,14 @@ void Record::Dump(std::ostream& os,
   }
   if (!extra_fields_.empty()) {
     os << " Extra:" << extra_fields_.size() << ' ';
-    for (const auto& [field, value] : extra_fields_) {
+    for (const auto &[field, value] : extra_fields_) {
       os << " " << field << ":" << value;
     }
   }
   os << ']';
 }
 
-absl::Status Limit::Execute(RecordSet& records) const {
+absl::Status Limit::Execute(RecordSet &records) const {
   DBG << "Executing LIMIT with offset: " << offset_ << " and limit: " << limit_
       << "\n";
   agg_limit_stages.Increment();
@@ -92,29 +153,57 @@ absl::Status Limit::Execute(RecordSet& records) const {
   return absl::OkStatus();
 }
 
-void SetField(Record& record, Attribute& dest, expr::Value value) {
+// 1.3.0 fix: Redisearch drops a record whose APPLY expression reached for a
+// field the key does not have, rather than replying with the alias unset.
+static bool ApplyDropsMissingField() {
+  return VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 3, 0, "apply_drops_missing_field", [] { return true; },
+      [] { return false; });
+}
+
+void SetField(Record &record, Attribute &dest, expr::Value value) {
   if (record.fields_.size() <= dest.record_index_) {
-    record.fields_.resize(dest.record_index_ + 1);
+    record.fields_.resize(dest.record_index_ + 1, expr::Value::Missing());
   }
   record.fields_[dest.record_index_] = value;
 }
 
-absl::Status Apply::Execute(RecordSet& records) const {
+absl::Status Apply::Execute(RecordSet &records) const {
   DBG << "Executing APPLY with expr: " << *expr_ << "\n";
   agg_apply_stages.Increment();
   agg_apply_records.Increment(records.size());
-  for (auto& r : records) {
-    SetField(*r, *name_, expr_->Evaluate(ctx, *r));
+  // Redisearch drops a record whose APPLY expression referenced a field the
+  // key does not have, rather than replying with the alias unset. Only a
+  // *missing* value does this: an expression that ran and produced nothing --
+  // abs() of a string, say -- keeps the record and replies nan or nil.
+  RecordSet kept(records.agg_params_);
+  size_t polled = 0;
+  while (!records.empty()) {
+    if (++polled % kCancellationPollInterval == 0) {
+      VMSDK_RETURN_IF_ERROR(CheckCancelled(records));
+    }
+    auto r = records.pop_front();
+    auto value = expr_->Evaluate(ctx, *r);
+    if (value.IsMissing() && ApplyDropsMissingField()) {
+      continue;
+    }
+    SetField(*r, *name_, value);
+    kept.push_back(std::move(r));
   }
+  records.swap(kept);
   return absl::OkStatus();
 }
 
-absl::Status Filter::Execute(RecordSet& records) const {
+absl::Status Filter::Execute(RecordSet &records) const {
   DBG << "Executing FILTER with expr: " << *expr_ << "\n";
   agg_filter_stages.Increment();
   agg_filter_input_records.Increment(records.size());
   RecordSet filtered(records.agg_params_);
+  size_t polled = 0;
   while (!records.empty()) {
+    if (++polled % kCancellationPollInterval == 0) {
+      VMSDK_RETURN_IF_ERROR(CheckCancelled(records));
+    }
     auto r = records.pop_front();
     auto result = expr_->Evaluate(ctx, *r);
     if (result.IsTrue()) {
@@ -128,11 +217,29 @@ absl::Status Filter::Execute(RecordSet& records) const {
 
 template <typename T>
 struct SortFunctor {
-  const absl::InlinedVector<SortBy::SortKey, 4>* sortkeys_;
-  bool operator()(const T& l, const T& r) const {
-    for (auto& sk : *sortkeys_) {
+  const absl::InlinedVector<SortBy::SortKey, 4> *sortkeys_;
+  bool operator()(const T &l, const T &r) const {
+    for (auto &sk : *sortkeys_) {
       auto lvalue = sk.expr_->Evaluate(ctx, *l);
       auto rvalue = sk.expr_->Evaluate(ctx, *r);
+      // A record that has no value for this key sorts after one that does,
+      // ascending and descending alike, which is what Redisearch does.
+      //
+      // Without this the pair is `kUNORDERED`, which read as a tie: every
+      // record missing the key compared equal to every other record, so a
+      // stable sort left them wherever they happened to be and they came back
+      // interleaved with the sorted ones. Answering the direction here rather
+      // than through the switch below is deliberate -- "missing goes last" is
+      // not a smaller-or-larger claim, so DESC must not flip it.
+      const bool l_missing = lvalue.IsNil();
+      const bool r_missing = rvalue.IsNil();
+      if (l_missing != r_missing) {
+        return r_missing;
+      }
+      if (l_missing) {
+        // Both missing: undecided on this key, try the next one.
+        continue;
+      }
       auto cmp = expr::Compare(lvalue, rvalue);
       switch (cmp) {
         case expr::Ordering::kEQUAL:
@@ -148,36 +255,98 @@ struct SortFunctor {
   }
 };
 
-absl::Status SortBy::Execute(RecordSet& records) const {
+absl::Status SortBy::Execute(RecordSet &records) const {
   DBG << "Executing SORTBY with sortkeys: " << sortkeys_.size() << "\n";
   agg_sort_by_stages.Increment();
   agg_sort_by_records.Increment(records.size());
   if (records.size() > max_) {
     // Sadly std::priority_queue can't operate on unique_ptr's. so we need an
     // extra copy
-    SortFunctor<Record*> sorter{&sortkeys_};
-    std::priority_queue<Record*, std::vector<Record*>, SortFunctor<Record*>>
+    SortFunctor<Record *> sorter{&sortkeys_};
+    std::priority_queue<Record *, std::vector<Record *>, SortFunctor<Record *>>
         heap(sorter);
-    for (auto i = 0; i < max_; ++i) {
-      heap.push(records.pop_front().release());
+    absl::Status status = absl::OkStatus();
+    size_t polled = 0;
+    for (auto i = 0; i < max_ && status.ok(); ++i) {
+      if (++polled % kCancellationPollInterval == 0) {
+        status = CheckCancelled(records);
+      }
+      if (status.ok()) {
+        heap.push(records.pop_front().release());
+      }
     }
-    while (!records.empty()) {
+    while (status.ok() && !records.empty()) {
+      if (++polled % kCancellationPollInterval == 0) {
+        status = CheckCancelled(records);
+        if (!status.ok()) {
+          break;
+        }
+      }
       heap.push(records.pop_front().release());
       auto top = RecordPtr(heap.top());  // no leak....
       heap.pop();
     }
+    // Drained even when cancelled: the heap holds raw pointers this function
+    // owns, so leaving early without handing them back would leak them. On the
+    // cancelled path the record set is left in whatever order the partial fill
+    // produced, which is fine -- the caller discards it with the error.
     while (!heap.empty()) {
       records.emplace_front(RecordPtr(heap.top()));
       heap.pop();
     }
-  } else {
-    SortFunctor<RecordPtr> sorter{&sortkeys_};
-    std::stable_sort(records.begin(), records.end(), sorter);
+    return status;
   }
-  return absl::OkStatus();
+  // A std::stable_sort cannot be interrupted without replacing the comparator
+  // or chunking the input, neither of which is worth the cost here, so this
+  // branch stays as responsive as its two end points: a cancellation arriving
+  // during the sort is not seen until it finishes. It is bounded by SORTBY's
+  // MAX (this branch only runs when the input is already no larger than it).
+  VMSDK_RETURN_IF_ERROR(CheckCancelled(records));
+  SortFunctor<RecordPtr> sorter{&sortkeys_};
+  std::stable_sort(records.begin(), records.end(), sorter);
+  return CheckCancelled(records);
 }
 
-absl::Status GroupBy::Execute(RecordSet& records) const {
+// Redisearch treats an array group key as a multi-value field: the record joins
+// one group per element, and one per combination when several key fields hold
+// arrays. Reducer arguments are not expanded -- they still see the whole array.
+static absl::StatusOr<std::vector<GroupKey>> ExpandGroupKeys(
+    const absl::InlinedVector<expr::Value, 4> &key_values) {
+  // A record with several large array keys would otherwise produce the product
+  // of their lengths in group keys.
+  const size_t max_expansion = options::GetMaxGroupKeyExpansion().GetValue();
+  std::vector<GroupKey> keys(1);
+  for (const auto &value : key_values) {
+    absl::InlinedVector<expr::Value, 4> alternatives;
+    if (!value.IsArray()) {
+      alternatives.emplace_back(value);
+    } else if (value.IsEmptyArray()) {
+      // Nothing to group into: Redisearch keys these as nil.
+      alternatives.emplace_back(expr::Value::Nil("empty array group key"));
+    } else {
+      auto array = value.GetArray();
+      alternatives.assign(array->begin(), array->end());
+    }
+    // Divide rather than multiply: the product would wrap before the compare.
+    // alternatives is never empty -- every branch above pushes an element.
+    if (keys.size() > max_expansion / alternatives.size()) {
+      return absl::ResourceExhaustedError(
+          absl::StrCat("GROUPBY over multi-value fields exceeds ",
+                       max_expansion, " group keys for a single record"));
+    }
+    std::vector<GroupKey> expanded;
+    expanded.reserve(keys.size() * alternatives.size());
+    for (const auto &key : keys) {
+      for (const auto &alternative : alternatives) {
+        expanded.emplace_back(key).keys_.emplace_back(alternative);
+      }
+    }
+    keys.swap(expanded);
+  }
+  return keys;
+}
+
+absl::Status GroupBy::Execute(RecordSet &records) const {
   DBG << "Executing GROUPBY with groups: " << groups_.size()
       << " and reducers: " << reducers_.size() << "\n";
 
@@ -187,41 +356,73 @@ absl::Status GroupBy::Execute(RecordSet& records) const {
   size_t record_field_count = 0;
   agg_group_by_stages.Increment();
   agg_group_by_input_records.Increment(records.size());
+  size_t polled = 0;
   while (!records.empty()) {
+    if (++polled % kCancellationPollInterval == 0) {
+      VMSDK_RETURN_IF_ERROR(CheckCancelled(records));
+    }
     auto record = records.pop_front();
     if (record_field_count == 0) {
       record_field_count = record->fields_.size();
     } else {
       CHECK(record_field_count == record->fields_.size());
     }
-    GroupKey k;
     // todo: How do we handle keys that have a missing attribute in the key??
     // Skip them?
-    for (auto& g : groups_) {
-      k.keys_.emplace_back(g->GetValue(ctx, *record));
+    absl::InlinedVector<expr::Value, 4> key_values;
+    bool multi_value = false;
+    for (auto &g : groups_) {
+      key_values.emplace_back(g->GetValue(ctx, *record));
+      multi_value |= key_values.back().IsArray();
     }
-    DBG << "Record: " << *record << " GroupKey: " << k << "\n";
-    auto [group_it, inserted] = groups.try_emplace(std::move(k));
-    if (inserted) {
-      DBG << "Was inserted, now have " << groups.size() << " groups\n";
-      for (auto& reducer : reducers_) {
-        group_it->second.emplace_back(reducer->MakeInstance());
-      }
+    std::vector<GroupKey> keys;
+    if (multi_value) {
+      VMSDK_ASSIGN_OR_RETURN(keys, ExpandGroupKeys(key_values));
+    } else {
+      keys.emplace_back().keys_ = std::move(key_values);
     }
-    for (auto i = 0; i < reducers_.size(); ++i) {
+    // The record joins every group its keys expand to, with one evaluation of
+    // the reducer arguments shared between them.
+    absl::InlinedVector<ArgVector, 4> args_by_reducer;
+    for (auto &reducer : reducers_) {
       ArgVector args;
-      for (auto& nargs : reducers_[i]->args_) {
+      for (auto &nargs : reducer->args_) {
         args.emplace_back(nargs->Evaluate(ctx, *record));
       }
-      group_it->second[i]->ProcessRecord(args);
+      args_by_reducer.emplace_back(std::move(args));
+    }
+    for (auto &k : keys) {
+      DBG << "Record: " << *record << " GroupKey: " << k << "\n";
+      auto [group_it, inserted] = groups.try_emplace(std::move(k));
+      if (inserted) {
+        DBG << "Was inserted, now have " << groups.size() << " groups\n";
+        for (auto &reducer : reducers_) {
+          group_it->second.emplace_back(reducer->MakeInstance());
+        }
+      }
+      for (auto i = 0; i < reducers_.size(); ++i) {
+        group_it->second[i]->ProcessRecord(args_by_reducer[i]);
+      }
     }
   }
-  for (auto& group : groups) {
+  for (auto &group : groups) {
+    // The output loop is unbounded too: GROUPBY over a high-cardinality key
+    // emits as many records as it consumed.
+    if (++polled % kCancellationPollInterval == 0) {
+      VMSDK_RETURN_IF_ERROR(CheckCancelled(records));
+    }
     DBG << "Making record for group " << group.first << "\n";
     RecordPtr record = std::make_unique<Record>(record_field_count);
     CHECK(groups_.size() == group.first.keys_.size());
     for (auto i = 0; i < groups_.size(); ++i) {
-      SetField(*record, *groups_[i], group.first.keys_[i]);
+      // The group exists, so its key is an output of this stage rather than a
+      // field the key never had: Redisearch names it with a nil rather than
+      // leaving it out. ExpandGroupKeys already says this for an empty array.
+      auto key = group.first.keys_[i];
+      if (key.IsMissing()) {
+        key = expr::Value(expr::Value::Nil("absent group key"));
+      }
+      SetField(*record, *groups_[i], key);
     }
     CHECK(reducers_.size() == group.second.size());
     agg_reducer_stages.Increment(reducers_.size());
@@ -237,66 +438,175 @@ absl::Status GroupBy::Execute(RecordSet& records) const {
 
 class Count : public GroupBy::ReducerInstance {
   size_t count_{0};
-  void ProcessRecord(const ArgVector& values) override { count_++; }
+  void ProcessRecord(const ArgVector &values) override { count_++; }
   expr::Value GetResult() const override { return expr::Value(double(count_)); }
 };
 
+class RandomSample : public GroupBy::ReducerInstance {
+ public:
+  static constexpr size_t kMaxSampleSize = 1000;
+
+  explicit RandomSample(size_t sample_size)
+      : samples_(std::make_shared<std::vector<expr::Value>>()),
+        sample_size_(sample_size) {}
+
+  void ProcessRecord(const ArgVector &values) override {
+    if (values[0].IsNil()) return;
+    // Reservoir sampling algorithm (Algorithm R)
+    seen_count_++;
+    if (seen_count_ <= sample_size_) {
+      samples_->push_back(values[0]);
+    } else {
+      std::uniform_int_distribution<size_t> dist(0, seen_count_ - 1);
+      size_t j = dist(Rng());
+      if (j < sample_size_) {
+        (*samples_)[j] = values[0];
+      }
+    }
+  }
+
+  expr::Value GetResult() const override { return expr::Value(samples_); }
+
+ private:
+  // Thread-local RNG shared across all RandomSample instances in a query,
+  // avoiding per-instance std::random_device overhead.
+  static std::mt19937 &Rng() {
+    thread_local std::mt19937 rng(std::random_device{}());
+    return rng;
+  }
+
+  std::shared_ptr<std::vector<expr::Value>> samples_;
+  size_t sample_size_;
+  size_t seen_count_ = 0;
+};
+
+// 1.3.0 fix: MIN and MAX are strictly numeric in Redisearch. Anything that is
+// not a number reads as 0 rather than becoming the reducer's result, and a
+// group that saw no value at all answers 0 rather than dropping its alias.
+// One counter covers both halves of the one rule.
+static bool MinMaxIsNumeric() {
+  return VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 3, 0, "reduce_minmax_numeric", [] { return true; },
+      [] { return false; });
+}
+
+static expr::Value NumericReducerArg(const expr::Value &value) {
+  // Nil passes through for the caller to skip, and a value that is already a
+  // number needs no decision, so neither consults the gate. An array has no
+  // 1.2.1 behavior to preserve -- arrays cannot occur there, TOLIST being
+  // newer than that release -- so that half is not gated either.
+  if (value.IsNil() || value.IsDouble()) {
+    return value;
+  }
+  if (value.IsArray()) {
+    // Redis 8 folds only numbers, and an array is not one, so it contributes
+    // nothing and the group answers the identity. (redis-stack read an array
+    // as 0, which is what this used to return.) Ungated like the rest of the
+    // array handling: TOLIST is newer than 1.2.1, so there is no released
+    // behavior to preserve.
+    return expr::Value(expr::Value::Nil("reducer: array is not a number"));
+  }
+  if (!MinMaxIsNumeric()) {
+    return value;
+  }
+  auto number = value.AsDouble();
+  // Redis 8 folds only numbers into MIN/MAX: an input that will not convert
+  // contributes nothing, leaving the fold empty rather than pulling the result
+  // to 0. (redis-stack read it as 0, which is why this once returned one.)
+  return number ? expr::Value(*number)
+                : expr::Value(expr::Value::Nil("reducer: not a number"));
+}
+
 class Min : public GroupBy::ReducerInstance {
   expr::Value min_;
-  void ProcessRecord(const ArgVector& values) override {
-    if (values[0].IsNil()) {
+  void ProcessRecord(const ArgVector &raw) override {
+    const expr::Value value = NumericReducerArg(raw[0]);
+    if (value.IsNil()) {
       return;
     }
     if (min_.IsNil()) {
-      DBG << "First Value Min is " << values[0] << "\n";
-      min_ = values[0];
-    } else if (min_ > values[0]) {
-      DBG << " New Min: " << values[0] << "\n";
-      min_ = values[0];
+      DBG << "First Value Min is " << value << "\n";
+      min_ = value;
+    } else if (min_ > value) {
+      DBG << " New Min: " << value << "\n";
+      min_ = value;
     } else {
-      DBG << "Not new Min: " << values[0] << "\n";
+      DBG << "Not new Min: " << value << "\n";
     }
   }
-  expr::Value GetResult() const override { return min_; }
+  // A group that folded no value at all replies with the identity of min.
+  // Written as an explicit constant because -ffast-math assumes finite
+  // arithmetic, so computing an infinity is not reliable.
+  expr::Value GetResult() const override {
+    if (!min_.IsNil()) {
+      return min_;
+    }
+    return MinMaxIsNumeric()
+               ? expr::Value(std::numeric_limits<double>::infinity())
+               : min_;
+  }
 };
 
 struct ReducerInstanceVector : GroupBy::ReducerInstance {
   std::vector<ArgVector> collected_values_;
-  void ProcessRecord(const ArgVector& values) override {
+  void ProcessRecord(const ArgVector &values) override {
     collected_values_.push_back(values);
   }
 };
 
 class Max : public GroupBy::ReducerInstance {
   expr::Value max_;
-  void ProcessRecord(const ArgVector& values) override {
-    if (values[0].IsNil()) {
+  void ProcessRecord(const ArgVector &raw) override {
+    const expr::Value value = NumericReducerArg(raw[0]);
+    if (value.IsNil()) {
       return;
     }
     if (max_.IsNil()) {
-      max_ = values[0];
-    } else if (max_ < values[0]) {
-      max_ = values[0];
+      max_ = value;
+    } else if (max_ < value) {
+      max_ = value;
     }
   }
-  expr::Value GetResult() const override { return max_; }
+  // As for Min: nothing folded replies with the identity, not a missing field.
+  expr::Value GetResult() const override {
+    if (!max_.IsNil()) {
+      return max_;
+    }
+    return MinMaxIsNumeric()
+               ? expr::Value(-std::numeric_limits<double>::infinity())
+               : max_;
+  }
 };
+
+// SUM and AVG over a group that folded no value at all answer nan in Redis 8,
+// not 0. (redis-stack answered 0, which is what this used to return.)
+static expr::Value EmptyFoldSumAvg() {
+  return VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 3, 0, "reduce_sum_avg_empty_nan",
+      [] { return expr::Value(std::nan("")); },
+      [] { return expr::Value(0.0); });
+}
 
 class Sum : public GroupBy::ReducerInstance {
   double sum_{0};
-  void ProcessRecord(const ArgVector& values) override {
+  size_t count_{0};
+  void ProcessRecord(const ArgVector &values) override {
     auto val = values[0].AsDouble();
     if (val) {
       sum_ += *val;
+      count_++;
     }
   }
-  expr::Value GetResult() const override { return expr::Value(sum_); }
+  // The count tells "summed to zero" from "summed nothing".
+  expr::Value GetResult() const override {
+    return count_ ? expr::Value(sum_) : EmptyFoldSumAvg();
+  }
 };
 
 class Avg : public GroupBy::ReducerInstance {
   double sum_{0};
   size_t count_{0};
-  void ProcessRecord(const ArgVector& values) override {
+  void ProcessRecord(const ArgVector &values) override {
     auto val = values[0].AsDouble();
     if (val) {
       sum_ += *val;
@@ -304,20 +614,31 @@ class Avg : public GroupBy::ReducerInstance {
     }
   }
   expr::Value GetResult() const override {
-    return expr::Value(count_ ? sum_ / count_ : 0.0);
+    return count_ ? expr::Value(sum_ / count_) : EmptyFoldSumAvg();
   }
 };
 
 class Stddev : public GroupBy::ReducerInstance {
   double sum_{0}, sq_sum_{0};
   size_t count_{0};
-  void ProcessRecord(const ArgVector& values) override {
-    auto val = values[0].AsDouble();
+  void Accumulate(const expr::Value &value) {
+    // Redisearch spreads an array across the sample, unlike SUM and AVG, which
+    // read it as a single unconvertible value and so contribute nothing.
+    if (value.IsArray()) {
+      for (const auto &element : *value.GetArray()) {
+        Accumulate(element);
+      }
+      return;
+    }
+    auto val = value.AsDouble();
     if (val) {
       sum_ += *val;
       sq_sum_ += (*val) * (*val);
       count_++;
     }
+  }
+  void ProcessRecord(const ArgVector &values) override {
+    Accumulate(values[0]);
   }
   expr::Value GetResult() const override {
     if (count_ <= 1) {
@@ -329,9 +650,60 @@ class Stddev : public GroupBy::ReducerInstance {
   }
 };
 
+class FirstValue : public GroupBy::ReducerInstance {
+  expr::Value result_value_;
+  bool seen_first_{false};
+  // Sorted mode state.
+  expr::Value comparison_value_;
+  bool is_sorted_{false};
+  bool is_desc_{false};
+
+ public:
+  void SetSorted(bool is_desc) {
+    is_sorted_ = true;
+    is_desc_ = is_desc;
+  }
+
+  void ProcessRecord(const ArgVector &values) override {
+    if (!is_sorted_) {
+      // Simple mode: first record wins unconditionally, including nil.
+      if (!seen_first_) {
+        result_value_ = values[0];
+        seen_first_ = true;
+      }
+      return;
+    }
+    // Sorted mode: args layout is [return_field, sort_field].
+    const expr::Value &comparison_val = values[1];
+    if (comparison_val.IsNil()) {
+      return;
+    }
+    if (comparison_value_.IsNil()) {
+      result_value_ = values[0];
+      comparison_value_ = comparison_val;
+      return;
+    }
+    // Strict < / > preserves first-encountered tie-breaking semantics.
+    if (is_desc_ ? (comparison_val > comparison_value_)
+                 : (comparison_val < comparison_value_)) {
+      result_value_ = values[0];
+      comparison_value_ = comparison_val;
+    }
+  }
+
+  // Unlike MIN and MAX, Redisearch names the alias with a nil here rather
+  // than an identity value. The default Value is Nil(kMissing), which
+  // ReplyWithValue drops, so say why there is no value instead.
+  expr::Value GetResult() const override {
+    return result_value_.IsMissing()
+               ? expr::Value(expr::Value::Nil("no values"))
+               : result_value_;
+  }
+};
+
 class CountDistinct : public GroupBy::ReducerInstance {
   absl::flat_hash_set<expr::Value> values_;
-  void ProcessRecord(const ArgVector& values) override {
+  void ProcessRecord(const ArgVector &values) override {
     if (!values[0].IsNil()) {
       values_.insert(values[0]);
     }
@@ -344,7 +716,7 @@ class CountDistinct : public GroupBy::ReducerInstance {
 class ToList : public GroupBy::ReducerInstance {
   absl::flat_hash_set<expr::Value> unique_values_;
   std::vector<expr::Value> ordered_values_;
-  void ProcessRecord(const ArgVector& values) override {
+  void ProcessRecord(const ArgVector &values) override {
     if (values[0].IsNil()) {
       return;
     }
@@ -352,7 +724,7 @@ class ToList : public GroupBy::ReducerInstance {
     // its individual elements rather than the array as a whole.
     if (values[0].IsArray()) {
       auto arr = values[0].GetArray();
-      for (const auto& elem : *arr) {
+      for (const auto &elem : *arr) {
         if (elem.IsNil()) {
           continue;
         }
@@ -373,6 +745,98 @@ class ToList : public GroupBy::ReducerInstance {
   }
 };
 
+struct RandomSampleReducer : GroupBy::Reducer {
+  size_t sample_size_ = 0;
+  std::unique_ptr<GroupBy::ReducerInstance> MakeInstance() override {
+    return std::make_unique<RandomSample>(sample_size_);
+  }
+};
+
+// Custom parser for RANDOM_SAMPLE: compiles both args as expressions (so the
+// base Reducer::operator<< produces a correct auto-alias), then evaluates the
+// sample-size arg at parse time to validate it.
+absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> RandomSampleReducerParser(
+    std::string_view name, AggregateParameters &parameters,
+    vmsdk::ArgsIterator &itr) {
+  auto r = std::make_unique<RandomSampleReducer>();
+  r->name_ = name;
+
+  uint32_t cnt{0};
+  VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, cnt));
+  if (cnt != 2) {
+    return absl::OutOfRangeError(absl::StrCat("incorrect number of arguments (",
+                                              cnt, ") to reducer ", name));
+  }
+  std::string field_text;
+  std::string size_text;
+  for (uint32_t i = 0; i < cnt; ++i) {
+    VMSDK_ASSIGN_OR_RETURN(auto arg, itr.PopNext(),
+                           _ << "Missing Reducer argument " << i);
+    auto arg_sv = vmsdk::ToStringView(arg);
+    if (i == 0) {
+      field_text = arg_sv;
+    } else {
+      size_text = arg_sv;
+    }
+    VMSDK_ASSIGN_OR_RETURN(auto expr,
+                           expr::Expression::Compile(parameters, arg_sv),
+                           _ << " in GROUPBY stage");
+    r->args_.emplace_back(std::move(expr));
+  }
+
+  // Evaluate the sample-size expression (arg 1) at parse time.
+  expr::Expression::EvalContext ctx;
+  Record record(parameters.record_info_by_index_.size());
+  auto size_opt = r->args_[1]->Evaluate(ctx, record).AsDouble();
+  if (!size_opt.has_value() || !std::isfinite(*size_opt) || *size_opt < 0 ||
+      *size_opt != std::floor(*size_opt)) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        name, " sample size must be a non-negative integer constant"));
+  }
+  if (*size_opt > static_cast<double>(RandomSample::kMaxSampleSize)) {
+    return absl::OutOfRangeError(absl::StrCat(
+        name, " sample size must be <= ", RandomSample::kMaxSampleSize));
+  }
+  r->sample_size_ = static_cast<size_t>(*size_opt);
+
+  if (itr.PopIfNextIgnoreCase(valkey_search::aggregate::kAsParam)) {
+    VMSDK_ASSIGN_OR_RETURN(auto alias, itr.PopNext(),
+                           _ << "Missing Reducer alias");
+    VMSDK_ASSIGN_OR_RETURN(auto output, parameters.MakeReference(
+                                            vmsdk::ToStringView(alias), true));
+    r->output_ =
+        std::unique_ptr<Attribute>(dynamic_cast<Attribute *>(output.release()));
+  } else {
+    // Name of a REDUCE with no AS clause. New release 1.3.0 builds it as
+    // "__generated_alias" + reducer + comma-joined args with the leading '@'
+    // stripped, lowercasing the whole thing; the legacy form is
+    // "REDUCER(args)". See COMPATIBILITY.md.
+    const std::vector<absl::string_view> alias_args{field_text, size_text};
+    std::string default_name = VALKEY_SEARCH_COMPATIBILITY_FIX(
+        1, 3, 0, "aggregate_reducer_default_alias",
+        [&] {
+          auto name = absl::StrCat(
+              "__generated_alias", r->name_,
+              absl::StrJoin(alias_args, ",",
+                            [](std::string *out, absl::string_view arg) {
+                              absl::StrAppend(out, absl::StripPrefix(arg, "@"));
+                            }));
+          absl::AsciiStrToLower(&name);
+          return name;
+        },
+        [&] {
+          return absl::StrCat(r->name_, "(", absl::StrJoin(alias_args, ","),
+                              ")");
+        });
+    VMSDK_ASSIGN_OR_RETURN(auto output,
+                           parameters.MakeReference(default_name, true));
+    r->output_ =
+        std::unique_ptr<Attribute>(dynamic_cast<Attribute *>(output.release()));
+  }
+
+  return std::unique_ptr<GroupBy::Reducer>(std::move(r));
+}
+
 template <typename T>
 struct BasicReducer : GroupBy::Reducer {
   // BasicReducer(std::string name) : GroupBy::Reducer(std::move(name)) {}
@@ -383,8 +847,8 @@ struct BasicReducer : GroupBy::Reducer {
 
 template <typename T, size_t min_nargs = 0, size_t max_nargs = 0>
 absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> BasicReducerParser(
-    std::string_view name, AggregateParameters& parameters,
-    vmsdk::ArgsIterator& itr) {
+    std::string_view name, AggregateParameters &parameters,
+    vmsdk::ArgsIterator &itr) {
   std::unique_ptr<BasicReducer<T>> r = std::make_unique<BasicReducer<T>>();
   r->name_ = name;
 
@@ -411,25 +875,132 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> BasicReducerParser(
     VMSDK_ASSIGN_OR_RETURN(auto output, parameters.MakeReference(
                                             vmsdk::ToStringView(alias), true));
     r->output_ =
-        std::unique_ptr<Attribute>(dynamic_cast<Attribute*>(output.release()));
+        std::unique_ptr<Attribute>(dynamic_cast<Attribute *>(output.release()));
+  } else {
+    // Name of a REDUCE with no AS clause. New release 1.3.0 builds it as
+    // "__generated_alias" + reducer + comma-joined args with the leading '@'
+    // stripped, lowercasing the whole thing; the legacy form is
+    // "REDUCER(args)". See COMPATIBILITY.md.
+    std::string default_name = VALKEY_SEARCH_COMPATIBILITY_FIX(
+        1, 3, 0, "aggregate_reducer_default_alias",
+        [&] {
+          auto name = absl::StrCat(
+              "__generated_alias", r->name_,
+              absl::StrJoin(arg_texts, ",",
+                            [](std::string *out, absl::string_view arg) {
+                              absl::StrAppend(out, absl::StripPrefix(arg, "@"));
+                            }));
+          absl::AsciiStrToLower(&name);
+          return name;
+        },
+        [&] {
+          return absl::StrCat(r->name_, "(", absl::StrJoin(arg_texts, ","),
+                              ")");
+        });
+    VMSDK_ASSIGN_OR_RETURN(auto output,
+                           parameters.MakeReference(default_name, true));
+    r->output_ =
+        std::unique_ptr<Attribute>(dynamic_cast<Attribute *>(output.release()));
+  }
+
+  return std::unique_ptr<GroupBy::Reducer>(std::move(r));
+}
+
+struct FirstValueReducer : GroupBy::Reducer {
+  bool is_desc_{false};
+  bool is_sorted_{false};
+
+  std::unique_ptr<GroupBy::ReducerInstance> MakeInstance() override {
+    auto instance = std::make_unique<FirstValue>();
+    if (is_sorted_) {
+      instance->SetSorted(is_desc_);
+    }
+    return instance;
+  }
+};
+
+// Custom parser for FIRST_VALUE.
+// Syntax: FIRST_VALUE <nargs> <field> [BY <sort_field> [ASC|DESC]]
+// nargs=1: simple mode, nargs=3: sorted (default ASC), nargs=4: sorted with
+// explicit direction.
+absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> FirstValueReducerParser(
+    std::string_view name, AggregateParameters &parameters,
+    vmsdk::ArgsIterator &itr) {
+  auto r = std::make_unique<FirstValueReducer>();
+  r->name_ = name;
+
+  uint32_t cnt{0};
+  VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, cnt));
+  if (cnt != 1 && cnt != 3 && cnt != 4) {
+    return absl::OutOfRangeError(absl::StrCat("incorrect number of arguments (",
+                                              cnt, ") to reducer ", name));
+  }
+
+  // arg 0: the field whose value to return.
+  VMSDK_ASSIGN_OR_RETURN(auto field_tok, itr.PopNext(),
+                         _ << "Missing Reducer argument 0");
+  auto field_sv = vmsdk::ToStringView(field_tok);
+  std::vector<std::string> arg_texts;
+  arg_texts.emplace_back(field_sv);
+  VMSDK_ASSIGN_OR_RETURN(auto field_expr,
+                         expr::Expression::Compile(parameters, field_sv),
+                         _ << " in FIRST_VALUE reducer");
+  r->args_.push_back(std::move(field_expr));
+
+  if (cnt >= 3) {
+    // Expect "BY" keyword.
+    if (!itr.PopIfNextIgnoreCase("BY")) {
+      return absl::InvalidArgumentError(
+          "FIRST_VALUE: expected BY keyword after field");
+    }
+
+    // arg 1: the field to sort by.
+    VMSDK_ASSIGN_OR_RETURN(auto sort_tok, itr.PopNext(),
+                           _ << "Missing sort field after BY");
+    auto sort_sv = vmsdk::ToStringView(sort_tok);
+    arg_texts.emplace_back(sort_sv);
+    VMSDK_ASSIGN_OR_RETURN(auto sort_expr,
+                           expr::Expression::Compile(parameters, sort_sv),
+                           _ << " in FIRST_VALUE reducer");
+    r->args_.push_back(std::move(sort_expr));
+    r->is_sorted_ = true;
+
+    if (cnt == 4) {
+      if (itr.PopIfNextIgnoreCase("DESC")) {
+        r->is_desc_ = true;
+      } else if (itr.PopIfNextIgnoreCase("ASC")) {
+        r->is_desc_ = false;
+      } else {
+        return absl::InvalidArgumentError("FIRST_VALUE: expected ASC or DESC");
+      }
+    }
+  }
+
+  if (itr.PopIfNextIgnoreCase(valkey_search::aggregate::kAsParam)) {
+    VMSDK_ASSIGN_OR_RETURN(auto alias, itr.PopNext(),
+                           _ << "Missing Reducer alias");
+    VMSDK_ASSIGN_OR_RETURN(auto output, parameters.MakeReference(
+                                            vmsdk::ToStringView(alias), true));
+    r->output_ =
+        std::unique_ptr<Attribute>(dynamic_cast<Attribute *>(output.release()));
   } else {
     // TODO(https://github.com/valkey-io/valkey-search/issues/965): Workaround
     // for memory allocator issue causing ostringstream to crash.
-    // std::ostringstream os;
-    // os << *r;
-    // VMSDK_ASSIGN_OR_RETURN(auto output,
-    //                        parameters.MakeReference(os.str(), true));
     std::string default_name(r->name_);
     default_name += '(';
     for (size_t i = 0; i < arg_texts.size(); ++i) {
       if (i > 0) default_name += ',';
       default_name += arg_texts[i];
     }
+    if (cnt == 4) {
+      default_name += ',';
+      default_name += r->is_desc_ ? "DESC" : "ASC";
+    }
     default_name += ')';
     VMSDK_ASSIGN_OR_RETURN(auto output,
                            parameters.MakeReference(default_name, true));
     r->output_ =
-        std::unique_ptr<Attribute>(dynamic_cast<Attribute*>(output.release()));
+        std::unique_ptr<Attribute>(dynamic_cast<Attribute *>(output.release()));
   }
 
   return std::unique_ptr<GroupBy::Reducer>(std::move(r));
@@ -439,12 +1010,393 @@ absl::flat_hash_map<std::string, GroupBy::ReducerInfo> GroupBy::reducerTable{
     {"AVG", &BasicReducerParser<Avg, 1, 1>},
     {"COUNT", &BasicReducerParser<Count, 0, 0>},
     {"COUNT_DISTINCT", &BasicReducerParser<CountDistinct, 1, 1>},
+    {"FIRST_VALUE", &FirstValueReducerParser},
     {"MIN", &BasicReducerParser<Min, 1, 1>},
     {"MAX", &BasicReducerParser<Max, 1, 1>},
+    {"RANDOM_SAMPLE", &RandomSampleReducerParser},
     {"STDDEV", &BasicReducerParser<Stddev, 1, 1>},
     {"SUM", &BasicReducerParser<Sum, 1, 1>},
     {"TOLIST", &BasicReducerParser<ToList, 1, 1>},
 };
+
+// ---------------------------------------------------------------------------
+// Reply-pipeline helpers (moved here from ft_aggregate.cc so FT.HYBRID can
+// reuse them once it has fused the per-arm results into a single neighbor
+// list).
+// ---------------------------------------------------------------------------
+
+CONTROLLED_BOOLEAN(ForceTimeoutAggregate, false);
+DEV_INTEGER_COUNTER(agg_stats, agg_input_records);
+DEV_INTEGER_COUNTER(agg_stats, agg_output_records);
+
+// Forward declaration for recursive serialization
+void SerializeValueToResp(ValkeyModuleCtx *ctx, const expr::Value &value);
+
+void SerializeArrayToResp(ValkeyModuleCtx *ctx, const expr::Value::Array vec) {
+  ValkeyModule_ReplyWithArray(ctx, vec->size());
+  for (const auto &elem : *vec) {
+    SerializeValueToResp(ctx, elem);
+  }
+}
+
+void SerializeValueToResp(ValkeyModuleCtx *ctx, const expr::Value &value) {
+  if (value.IsArray()) {
+    SerializeArrayToResp(ctx, value.GetArray());
+  } else if (value.IsBool()) {
+    ValkeyModule_ReplyWithLongLong(ctx, value.GetBool() ? 1 : 0);
+  } else if (value.IsDouble()) {
+    // IsDouble() guarantees AsString() returns a value.
+    auto value_str = *value.AsString();
+    ValkeyModule_ReplyWithStringBuffer(ctx, value_str.data(), value_str.size());
+  } else if (value.IsString()) {
+    auto value_sv = value.GetStringView();
+    ValkeyModule_ReplyWithStringBuffer(ctx, value_sv.data(), value_sv.size());
+  } else {
+    // Fallback for Nil and unknown types
+    ValkeyModule_ReplyWithNull(ctx);
+  }
+}
+
+bool ReplyWithValue(ValkeyModuleCtx *ctx,
+                    data_model::AttributeDataType data_type,
+                    std::string_view name, indexes::IndexerType indexer_type,
+                    const expr::Value &value, int dialect) {
+  if (value.IsNil()) {
+    // 1.3.0 fix: a field the key never had stays out of the reply, but
+    // something that evaluated to nothing is named with a nil value, which is
+    // what Redisearch does. Before the fix every nil was left out.
+    return VALKEY_SEARCH_COMPATIBILITY_FIX(
+        1, 3, 0, "aggregate_nil_alias_named",
+        [&] {
+          if (value.IsMissing()) {
+            return false;
+          }
+          ValkeyModule_ReplyWithSimpleString(ctx, name.data());
+          ValkeyModule_ReplyWithNull(ctx);
+          return true;
+        },
+        [] { return false; });
+  }
+
+  // Handle array values with RESP array serialization
+  if (value.IsArray()) {
+    ValkeyModule_ReplyWithSimpleString(ctx, name.data());
+    SerializeArrayToResp(ctx, value.GetArray());
+    return true;
+  }
+
+  if (data_type == data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH) {
+    ValkeyModule_ReplyWithSimpleString(ctx, name.data());
+    // Guarded by IsNil() check above; AsStringView always succeeds here.
+    auto value_sv = *value.AsStringView();
+    ValkeyModule_ReplyWithStringBuffer(ctx, value_sv.data(), value_sv.size());
+  } else {
+    if (name != "$") {
+      indexes::AssertValidIndexerType(indexer_type);
+    }
+    std::string_view value_view = *value.AsStringView();
+    ValkeyModule_ReplyWithSimpleString(ctx, name.data());
+    if (dialect == 2) {
+      ValkeyModule_ReplyWithStringBuffer(ctx, value_view.data(),
+                                         value_view.size());
+    } else {
+      std::string s = absl::StrCat("[", value_view, "]");
+      ValkeyModule_ReplyWithStringBuffer(ctx, s.data(), s.size());
+    }
+  }
+  return true;
+}
+
+// Process the query setup for vector vs non-vector queries and set up indices
+absl::StatusOr<std::pair<size_t, size_t>> PrepareNeighborRecords(
+    ValkeyModuleCtx *ctx, std::vector<indexes::Neighbor> &neighbors,
+    AggregateParameters &parameters) {
+  size_t key_index = 0, scores_index = 0;
+
+  std::optional<std::string> vector_identifier;
+
+  if (parameters.load_key) {
+    key_index = AggregateParameters::kKeyColumn;
+  }
+  if (parameters.IsVectorQuery()) {
+    VMSDK_ASSIGN_OR_RETURN(
+        vector_identifier,
+        parameters.index_schema->GetIdentifier(parameters.attribute_alias));
+
+    scores_index = AggregateParameters::kScoreColumn;
+  } else if (parameters.addscores_) {
+    // ADDSCORES: expose the relevance score (__score) to the pipeline.
+    scores_index = AggregateParameters::kScoreColumn;
+  }
+
+  // If no content needs to be fetched from the keys to be used in the
+  // aggregation pipeline, there is no need to revalidate keys and recompute
+  // scores.
+  if (!parameters.NoProcessingRequired()) {
+    query::ProcessNeighborsForReply(
+        ctx, parameters.index_schema->GetAttributeDataType(), neighbors,
+        parameters, vector_identifier);
+  }
+
+  return std::make_pair(key_index, scores_index);
+}
+
+// Process a single field value and convert it to the appropriate type
+absl::StatusOr<expr::Value> ProcessFieldValue(
+    std::string_view value, indexes::IndexerType indexer_type,
+    data_model::AttributeDataType data_type) {
+  switch (indexer_type) {
+    case indexes::IndexerType::kNumeric: {
+      auto numeric_value = vmsdk::To<double>(value);
+      if (numeric_value.ok()) {
+        return expr::Value(numeric_value.value());
+      } else {
+        return absl::InvalidArgumentError("Invalid numeric value");
+      }
+    }
+    default:
+      // JSON string values are already JSON-decoded when fetched/indexed
+      // (NormalizeJsonRecord), so they are treated the same as HASH values
+      // here. Decoding again would double-decode and corrupt escapes.
+      return expr::Value(value);
+  }
+}
+
+// Create records from neighbors and populate their fields
+absl::Status CreateRecordsFromNeighbors(
+    std::vector<indexes::Neighbor> &neighbors, AggregateParameters &parameters,
+    size_t key_index, size_t scores_index, RecordSet &records) {
+  auto data_type = parameters.index_schema->GetAttributeDataType().ToProto();
+
+  for (auto &n : neighbors) {
+    // One slot per record column. Not record_indexes_by_alias_.size(): that
+    // map holds a name per resolvable alias, which is neither an over- nor an
+    // under-count of the columns (a rename adds a key without adding a column;
+    // two columns reading one field add a column per output name). Size by the
+    // column table itself.
+    auto rec =
+        std::make_unique<Record>(parameters.record_info_by_index_.size());
+
+    if (parameters.load_key) {
+      rec->fields_.at(key_index) = expr::Value(n.external_id->Str());
+    }
+
+    if (parameters.IsVectorQuery() || parameters.addscores_) {
+      rec->fields_.at(scores_index) = expr::Value(n.score);
+    }
+
+    // Write the single VR distance into its registered record attribute slot.
+    // In the single-VR model the matched distance is carried in
+    // Neighbor::distance; a non-VR OR-branch match outside the radius carries
+    // no VR distance (has_vr_distance == false) and is omitted. Gate on the
+    // flag, not the float: the build uses -ffast-math (-ffinite-math-only), so
+    // a float sentinel comparison is unreliable.
+    if (!parameters.vr_score_field_name_.empty() && n.has_vr_distance) {
+      auto it = parameters.record_indexes_by_alias_.find(
+          parameters.vr_score_field_name_);
+      if (it != parameters.record_indexes_by_alias_.end()) {
+        rec->fields_.at(it->second) = expr::Value(n.distance);
+      }
+    }
+
+    if (n.attribute_contents.has_value() && !parameters.no_content) {
+      bool should_drop_record = false;
+
+      // 1/ Each column pulls its own value out of the fetched records, keyed
+      //    by the identifier that column sources. Columns whose identifier was
+      //    not fetched (__key, the score, and columns synthesized by a later
+      //    pipeline stage) are left as they are.
+      //
+      //    The record was sized from record_info_by_index_, so indexing it by
+      //    a field index is in range. CHECK rather than assert: asserts are
+      //    compiled out of release builds, which is how the slot-bookkeeping
+      //    corruption in #1251 went undetected into an out-of-bounds write.
+      CHECK(rec->fields_.size() <= parameters.record_info_by_index_.size());
+      for (size_t i = 0; i < rec->fields_.size(); ++i) {
+        // The score column is already written, and an explicitly named score
+        // beats a database field of the same name: `LOAD *` over a document
+        // that happens to carry a field called `__score` (or whatever
+        // YIELD_SCORE_AS named the column) must not overwrite the score with
+        // it. Step 2 below drops the losing value rather than emitting it as
+        // a second column, because `record_identifiers_` holds the score's
+        // name. A vector query always has a score column at `scores_index`,
+        // and ADDSCORES adds one for non-vector queries as well.
+        if ((parameters.IsVectorQuery() || parameters.addscores_) &&
+            i == scores_index) {
+          continue;
+        }
+        const auto &info = parameters.record_info_by_index_[i];
+        auto itr = n.attribute_contents->find(info.identifier_);
+        if (itr == n.attribute_contents->end()) {
+          continue;
+        }
+        auto processed_value =
+            ProcessFieldValue(vmsdk::ToStringView(itr->second.value.get()),
+                              info.data_type_, data_type);
+        if (processed_value.ok()) {
+          rec->fields_[i] = std::move(*processed_value);
+        } else if (info.data_type_ != indexes::IndexerType::kNumeric) {
+          // For JSON unquote failures, drop the entire record
+          should_drop_record = true;
+          break;
+        }
+        // For numeric failures, skip the field but continue with the record
+      }
+
+      if (should_drop_record) {
+        continue;  // Skip adding this record to the set
+      }
+
+      // 2/ Anything fetched that no column sources is passed through as an
+      //    extra field. This is how LOAD * surfaces the contents of a key,
+      //    since it builds no columns of its own.
+      for (auto &[name, records_map_value] : *n.attribute_contents) {
+        if (parameters.record_identifiers_.contains(name)) {
+          continue;
+        }
+        rec->extra_fields_.push_back(std::make_pair(
+            std::string(name),
+            expr::Value(vmsdk::ToStringView(records_map_value.value.get()))));
+      }
+    }
+
+    records.push_back(std::move(rec));
+  }
+
+  return absl::OkStatus();
+}
+
+// Execute all aggregation stages on the record set
+absl::Status ExecuteAggregationStages(AggregateParameters &parameters,
+                                      RecordSet &records) {
+  agg_input_records.Increment(records.size());
+  for (auto &stage : parameters.stages_) {
+    if (parameters.cancellation_token->IsCancelled() ||
+        ForceTimeoutAggregate.GetValue()) {
+      ForceTimeoutAggregateCancels.Increment(1);
+      return absl::CancelledError(kCancelledMessage);
+    }
+    VMSDK_RETURN_IF_ERROR(stage->Execute(records));
+  }
+  agg_output_records.Increment(records.size());
+  return absl::OkStatus();
+}
+
+namespace {
+
+// The rows of an FT.AGGREGATE / FT.HYBRID ... WITHCURSOR not yet read by the
+// client.
+class CursorAggregateResult : public Cursor {
+ public:
+  CursorAggregateResult(std::unique_ptr<AggregateParameters> parameters,
+                        RecordSet records)
+      : Cursor(parameters->index_schema_name, parameters->index_schema,
+               *parameters->cursor_options),
+        parameters_(std::move(parameters)),
+        records_(std::move(records)) {
+    parameters_->adopted_by_cursor = true;
+    // Don't keep a dropped index alive; READ supplies the live schema.
+    parameters_->index_schema = nullptr;
+    // The query itself is over; only its saved output is still held.
+    parameters_->DeclareOperationTerminated();
+  }
+  size_t RemainingRows() const override { return records_.size(); }
+  void ReplyRows(ValkeyModuleCtx *ctx,
+                 const std::shared_ptr<IndexSchema> &index_schema,
+                 size_t count) override {
+    parameters_->index_schema = index_schema;
+    parameters_->ReplyRecords(ctx, records_, std::min(count, records_.size()));
+    parameters_->index_schema = nullptr;
+  }
+  void ReleaseMainThreadState() override {
+    parameters_->ReleaseMainThreadState();
+  }
+
+ private:
+  std::unique_ptr<AggregateParameters> parameters_;
+  RecordSet records_;
+};
+
+}  // namespace
+
+// Replies [count, row...] with the first `count` records, removing them.
+void AggregateParameters::ReplyRecords(ValkeyModuleCtx *ctx, RecordSet &records,
+                                       size_t count) {
+  auto &parameters = *this;
+  ValkeyModule_ReplyWithArray(ctx, 1 + count);
+  ValkeyModule_ReplyWithLongLong(ctx, static_cast<long long>(count));
+
+  for (size_t n = 0; n < count; ++n) {
+    auto rec = records.pop_front();
+    ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_ARRAY_LEN);
+
+    size_t array_count = 0;
+
+    CHECK(rec->fields_.size() <= parameters.record_info_by_index_.size());
+    for (size_t i = 0; i < rec->fields_.size(); ++i) {
+      if (parameters.suppressed_reply_column_ == i) {
+        continue;
+      }
+      if (ReplyWithValue(
+              ctx, parameters.index_schema->GetAttributeDataType().ToProto(),
+              parameters.record_info_by_index_[i].output_name_,
+              parameters.record_info_by_index_[i].data_type_, rec->fields_[i],
+              parameters.dialect)) {
+        array_count += 2;
+      }
+    }
+
+    for (const auto &[name, value] : rec->extra_fields_) {
+      if (ReplyWithValue(
+              ctx, parameters.index_schema->GetAttributeDataType().ToProto(),
+              name, indexes::IndexerType::kNone, value, parameters.dialect)) {
+        array_count += 2;
+      }
+    }
+
+    ValkeyModule_ReplySetArrayLength(ctx, array_count);
+  }
+}
+
+absl::Status RunAggregatePipeline(ValkeyModuleCtx *ctx,
+                                  std::vector<indexes::Neighbor> &neighbors,
+                                  AggregateParameters &parameters) {
+  // 1. Process query setup and get key/score indices
+  VMSDK_ASSIGN_OR_RETURN(auto indices,
+                         PrepareNeighborRecords(ctx, neighbors, parameters));
+  auto [key_index, scores_index] = indices;
+
+  // 2. Create records from neighbors
+  RecordSet records(&parameters);
+  VMSDK_RETURN_IF_ERROR(CreateRecordsFromNeighbors(
+      neighbors, parameters, key_index, scores_index, records));
+
+  // 3. Execute aggregation stages
+  VMSDK_RETURN_IF_ERROR(ExecuteAggregationStages(parameters, records));
+
+  // 4. Generate the response
+  if (!parameters.cursor_options.has_value()) {
+    parameters.ReplyRecords(ctx, records, records.size());
+    return absl::OkStatus();
+  }
+  // WITHCURSOR: [[count, row...], cursor_id]
+  ValkeyModule_ReplyWithArray(ctx, 2);
+  parameters.ReplyRecords(
+      ctx, records,
+      std::min(static_cast<size_t>(parameters.cursor_options->count),
+               records.size()));
+  if (records.empty()) {
+    ValkeyModule_ReplyWithLongLong(ctx, 0);
+    return absl::OkStatus();
+  }
+  const int db_num = parameters.db_num;
+  auto cursor = std::make_unique<CursorAggregateResult>(
+      std::unique_ptr<AggregateParameters>(&parameters), std::move(records));
+  auto id =
+      CursorTable::Instance().Insert(std::move(cursor), db_num, absl::Now());
+  ValkeyModule_ReplyWithLongLong(ctx, static_cast<long long>(id));
+  return absl::OkStatus();
+}
 
 }  // namespace aggregate
 }  // namespace valkey_search

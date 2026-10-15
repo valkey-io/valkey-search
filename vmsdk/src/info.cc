@@ -12,6 +12,7 @@
 
 #include "absl/container/btree_map.h"
 #include "absl/container/flat_hash_set.h"
+#include "absl/strings/str_cat.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/utils.h"
@@ -202,7 +203,7 @@ bool Validate(ValkeyModuleCtx* ctx) {
         VMSDK_LOG(WARNING, ctx) << "Non-unique name: " << name;
         failed = true;
       }
-      VMSDK_LOG(WARNING, ctx)
+      VMSDK_LOG(DEBUG, ctx)
           << "Defined Info Field: " << name << " Flags:" << info->GetFlags();
     }
   }
@@ -333,7 +334,7 @@ static size_t DumpNames(ValkeyModuleCtx* ctx,
                           << "/" << field->GetName();
   ValkeyModule_ReplyWithCString(ctx, "Section");
   ValkeyModule_ReplyWithCString(ctx, field->GetSection().data());
-  std::string external_name = options.name + "." + field->GetName();
+  std::string external_name = absl::StrCat(options.name, ".", field->GetName());
   ValkeyModule_ReplyWithCString(ctx, "Name");
   ValkeyModule_ReplyWithCString(ctx, external_name.data());
   return 4;

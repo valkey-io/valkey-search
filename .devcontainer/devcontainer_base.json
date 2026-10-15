@@ -29,6 +29,18 @@
       ]
     }
   },
+  "mounts": [
+    "source=${localEnv:HOME}/.ccache-valkey-devcontainer,target=/home/ubuntu/.ccache,type=bind"
+  ],
+  "runArgs": [
+    "--network", "host",
+    "--security-opt", "seccomp=unconfined",
+    "--cap-add", "SYS_PTRACE"
+  ],
+  "remoteEnv": {
+    "BUILD_DIR_SUFFIX": "-container"
+  },
+  "initializeCommand": "mkdir -p ~/.ccache-valkey-devcontainer",
   "remoteUser": "ubuntu",
   "postCreateCommand": "export USER=ubuntu && ./ci/entrypoint.sh && /bin/bash"
 }

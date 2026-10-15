@@ -8,9 +8,11 @@
 #ifndef VALKEY_SEARCH_INDEXES_TEXT_TERM_H_
 #define VALKEY_SEARCH_INDEXES_TEXT_TERM_H_
 
+#include <cstdint>
 #include <utility>
 
 #include "absl/container/inlined_vector.h"
+#include "src/indexes/scoring/scorer.h"
 #include "src/indexes/text.h"
 #include "src/indexes/text/posting.h"
 #include "src/indexes/text/text_iterator.h"
@@ -40,13 +42,31 @@ true. Thus, position iteration is a union of all position iterators obtained
 from all the posting iterators that are on the current key and field mask.
 
 */
+
+// Inputs used only for scoring. The default (null schema/scorer) disables
+// scoring, and GetScore() falls back to the constant stub.
+struct TermScoringParams {
+  float leaf_weight = 1.0f;
+  uint32_t num_doc_contain_term = 0;
+  // Stem scoring inputs; mutually exclusive with per_term_dt below, since an
+  // expansion never stems.
+  uint32_t stem_num_doc_contain_term = 0;
+  uint32_t root_num_doc_contain_term = 0;
+  bool has_root = false;
+  const TextIndexSchema *text_index_schema = nullptr;
+  const scoring::Scorer *scorer = nullptr;
+  // Expansion (prefix/suffix/fuzzy) scoring input: one dt per matched term.
+  absl::InlinedVector<uint32_t, kWordExpansionInlineCapacity> per_term_dt;
+};
+
 class TermIterator : public TextIterator {
  public:
   TermIterator(
       absl::InlinedVector<Postings::KeyIterator, kWordExpansionInlineCapacity>
           &&key_iterators,
       const FieldMaskPredicate query_field_mask, const bool require_positions,
-      const FieldMaskPredicate stem_field_mask = 0, bool has_original = false);
+      const FieldMaskPredicate stem_field_mask = 0, bool has_original = false,
+      const TermScoringParams &scoring = {});
   /* Implementation of TextIterator APIs */
   FieldMaskPredicate QueryFieldMask() const override;
   // Key-level iteration
@@ -70,10 +90,11 @@ class TermIterator : public TextIterator {
     }
     return current_key_ != nullptr;
   }
-  /* Implementation of APIs unique to TermIterator */
-  // It is possible to implement a `CurrentKeyIterVecIdx` API that returns the
-  // index of the vector of the posting iterator (provided on init) that matches
-  // the current position
+
+  // Computes the leaf BM25 score for the current document via the active
+  // scorer. Falls back to the constant stub (1.0 for any match) when no
+  // scoring context is supplied.
+  float GetScore() const override;
 
  private:
   const FieldMaskPredicate query_field_mask_;
@@ -88,6 +109,32 @@ class TermIterator : public TextIterator {
   FieldMaskPredicate current_field_mask_;
   const bool require_positions_;
   const bool has_original_;
+  // Whether a stem root literal iterator is present (index has_original_?1:0).
+  const bool has_root_;
+
+  // Scoring inputs. leaf_weight_ is the query-tree weight applied to this leaf;
+  // num_doc_contain_term_ (dt) is the per-term document count captured at build
+  // time; text_index_schema_ supplies the query-invariant corpus stats and the
+  // per-document doc_len (null disables scoring).
+  const float leaf_weight_;
+  const uint32_t num_doc_contain_term_;
+  const TextIndexSchema *const text_index_schema_;
+
+  // Query-selected scorer and the query-invariant inputs cached at
+  // construction: idf_ (per-term) and avg_doc_len_ (corpus-wide). GetScore()
+  // combines them with the per-document term frequency and doc_len via
+  // ScoreLeaf(). Null scorer_ means scoring is disabled (constant-stub
+  // fallback).
+  const scoring::Scorer *scorer_{nullptr};
+  float idf_{0.0f};
+  // Separate IDFs for the stem inflection group and the stem root literal leaf.
+  float idf_stem_{0.0f};
+  float idf_root_{0.0f};
+  float avg_doc_len_{0.0f};
+
+  // Per-matched-term IDF for prefix/suffix/fuzzy, index-aligned with
+  // key_iterators_. Non-empty selects expansion mode in GetScore().
+  absl::InlinedVector<float, kWordExpansionInlineCapacity> per_term_idf_;
 
   // Pending queue: heap of valid iterators not currently being processed,
   // ordered by ascending DocId to match Postings::KeyIterator order.

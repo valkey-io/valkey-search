@@ -209,4 +209,5 @@ macro(finalize_test_flags __TARGET)
     target_link_options(${__TARGET} PRIVATE "-fsanitize=${SAN_BUILD}")
 
   endif()
+  add_test(NAME ${__TARGET} COMMAND "${CMAKE_BINARY_DIR}/tests/${__TARGET}")
 endmacro()

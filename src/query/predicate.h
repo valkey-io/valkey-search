@@ -8,13 +8,15 @@
 #ifndef VALKEYSEARCH_SRC_QUERY_PREDICATE_H_
 #define VALKEYSEARCH_SRC_QUERY_PREDICATE_H_
 #include <cstddef>
+#include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "absl/container/flat_hash_set.h"
 #include "absl/strings/string_view.h"
+#include "src/indexes/text/language.h"
 #include "src/indexes/text/text_iterator.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -33,6 +35,10 @@ class TextIndexSchema;
 class TextIndex;
 }  // namespace valkey_search::indexes::text
 
+namespace valkey_search::indexes::scoring {
+class Scorer;
+}  // namespace valkey_search::indexes::scoring
+
 namespace valkey_search {
 enum class QueryOperations : uint64_t;
 }  // namespace valkey_search
@@ -46,16 +52,31 @@ enum class PredicateType {
   kComposedOr,
   kNegate,
   kText,
+  kVectorRange,
   kNone
 };
 
 class TextPredicate;
 class TagPredicate;
 class NumericPredicate;
+class VectorRangePredicate;
 
 struct EvaluationResult {
   bool matches;
+  // Per-document relevance score carried out of a main-thread revalidation
+  // (see response_generator.cc VerifyFilter). Only meaningful when
+  // matches == true and the caller requested a recompute; it is filled with a
+  // value produced through the same Scorer seam as the shard-side
+  // ScoreTextQuery (search.cc SingleDocumentScorer), so it is on the same
+  // scale. Left at 0.0f on the membership-only fast path.
+  float score{0.0f};
   std::unique_ptr<valkey_search::indexes::text::TextIterator> filter_iterator;
+
+  // For VectorRange predicates: the computed distance to the query vector.
+  // has_vr_distance is true only when this result came from a VR predicate
+  // that matched (single-VR model: at most one VR distance per document).
+  bool has_vr_distance{false};
+  float vr_distance{0.0f};
 
   // Constructor 1: For non-text predicates (no iterator)
   explicit EvaluationResult(bool result)
@@ -66,6 +87,15 @@ struct EvaluationResult {
       bool result,
       std::unique_ptr<valkey_search::indexes::text::TextIterator> iterator)
       : matches(result), filter_iterator(std::move(iterator)) {}
+
+  // Constructor 3: For VectorRange predicates (carries the matched distance)
+  EvaluationResult(bool result, float distance)
+      : matches(result),
+        filter_iterator(nullptr),
+        has_vr_distance(true),
+        vr_distance(distance) {}
+
+  bool HasVrScore() const { return has_vr_distance; }
 
   // Helper function to build EvaluationResult for text predicates
   EvaluationResult BuildTextEvaluationResult(
@@ -83,6 +113,8 @@ class Evaluator {
   virtual EvaluationResult EvaluateTags(const TagPredicate &predicate) = 0;
   virtual EvaluationResult EvaluateNumeric(
       const NumericPredicate &predicate) = 0;
+  virtual EvaluationResult EvaluateVectorRange(
+      const VectorRangePredicate &predicate) = 0;
   // Access target key for proximity validation (only for Text)
   virtual const InternedStringPtr &GetTargetKey() const = 0;
   virtual bool IsPrefilterEvaluator() const { return false; }
@@ -106,9 +138,12 @@ class Predicate {
   virtual EvaluationResult Evaluate(Evaluator &evaluator) const = 0;
   virtual ~Predicate() = default;
   PredicateType GetType() const { return type_; }
+  float GetWeight() const { return weight_; }
+  void SetWeight(float weight) { weight_ = weight; }
 
  private:
   PredicateType type_;
+  float weight_{1.0f};
 };
 
 class NegatePredicate : public Predicate {
@@ -184,6 +219,63 @@ class TagPredicate : public Predicate {
   absl::flat_hash_set<std::string> tags_;
 };
 
+class VectorRangePredicate : public Predicate {
+ public:
+  VectorRangePredicate(absl::string_view attribute_alias,
+                       absl::string_view identifier, double radius,
+                       absl::string_view vector_param_name,
+                       std::optional<std::string> score_as,
+                       std::optional<double> epsilon);
+
+  EvaluationResult Evaluate(Evaluator &evaluator) const override;
+
+  absl::string_view GetAlias() const { return alias_; }
+  absl::string_view GetIdentifier() const {
+    return vmsdk::ToStringView(identifier_.get());
+  }
+  double GetRadius() const { return radius_; }
+  absl::string_view GetVectorParamName() const { return vector_param_name_; }
+  const std::optional<std::string> &GetScoreAs() const { return score_as_; }
+  // epsilon is parsed, validated, stored, and serialized on the wire, but it is
+  // not forwarded to the range traversal (see SearchVectorRangeQuery); the HNSW
+  // range search does not yet honor it. Kept so queries carrying $epsilon parse
+  // and round-trip unchanged.
+  std::optional<double> GetEpsilon() const { return epsilon_; }
+
+  void SetQueryVector(std::string query);
+  absl::string_view GetQueryVector() const { return query_vector_; }
+
+  void SetScoreAs(std::optional<std::string> score_as) {
+    score_as_ = std::move(score_as);
+  }
+  void SetEpsilon(std::optional<double> epsilon) { epsilon_ = epsilon; }
+  // An infinite radius, or one too large for a float, is stored as the
+  // largest float. It matches every finite distance, while the +inf that
+  // VectorBase::ClampCosineDistance reports for a NaN or +inf distance stays
+  // outside it.
+  void SetRadius(double radius) {
+    constexpr double kMaxRadius = std::numeric_limits<float>::max();
+    radius_ = radius > kMaxRadius ? kMaxRadius : radius;
+  }
+
+  // Returns the PARAMS key for the radius, if the radius was specified as
+  // $param. Empty if the radius was a literal.
+  absl::string_view GetRadiusParamName() const { return radius_param_name_; }
+  void SetRadiusParamName(std::string name) {
+    radius_param_name_ = std::move(name);
+  }
+
+ private:
+  std::string alias_;
+  vmsdk::UniqueValkeyString identifier_;
+  double radius_;
+  std::string vector_param_name_;
+  std::optional<std::string> score_as_;
+  std::optional<double> epsilon_;
+  std::string query_vector_;
+  std::string radius_param_name_;  // non-empty when radius is a $param
+};
+
 using FieldMaskPredicate = uint64_t;
 
 class TextPredicate : public Predicate {
@@ -197,10 +289,25 @@ class TextPredicate : public Predicate {
   virtual std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema()
       const = 0;
   virtual const FieldMaskPredicate GetFieldMask() const = 0;
+  // Enclosing OR group weights, folded in here because an OR is a sum: it
+  // distributes onto the leaf exactly, unlike an AND with slop.
   virtual std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const std::shared_ptr<indexes::text::TextIndex> &text_index,
-      FieldMaskPredicate field_mask, bool require_positions) const = 0;
+      FieldMaskPredicate field_mask, bool require_positions,
+      float or_weight_multiplier) const = 0;
   virtual size_t EstimateSize(bool is_vec_query) const = 0;
+
+  // Query-selected scorer, stamped on during planning so the scored
+  // TermIterator built by BuildTextIterator uses it instead of a hardcoded
+  // scorer. Null => unscored (constant stub). Mutable/const: it is a
+  // query-scoped selection set while walking an otherwise-const predicate tree.
+  void SetScorer(const indexes::scoring::Scorer *scorer) const {
+    scorer_ = scorer;
+  }
+  const indexes::scoring::Scorer *GetScorer() const { return scorer_; }
+
+ private:
+  mutable const indexes::scoring::Scorer *scorer_ = nullptr;
 };
 
 class TermPredicate : public TextPredicate {
@@ -221,7 +328,8 @@ class TermPredicate : public TextPredicate {
       bool require_positions) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const std::shared_ptr<indexes::text::TextIndex> &text_index,
-      FieldMaskPredicate field_mask, bool require_positions) const override;
+      FieldMaskPredicate field_mask, bool require_positions,
+      float or_weight_multiplier) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
   bool IsExact() const { return exact_; }
   size_t EstimateSize(bool is_vec_query) const override;
@@ -251,7 +359,8 @@ class PrefixPredicate : public TextPredicate {
       bool require_positions) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const std::shared_ptr<indexes::text::TextIndex> &text_index,
-      FieldMaskPredicate field_mask, bool require_positions) const override;
+      FieldMaskPredicate field_mask, bool require_positions,
+      float or_weight_multiplier) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
   size_t EstimateSize(bool is_vec_query) const override;
 
@@ -279,7 +388,8 @@ class SuffixPredicate : public TextPredicate {
       bool require_positions) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const std::shared_ptr<indexes::text::TextIndex> &text_index,
-      FieldMaskPredicate field_mask, bool require_positions) const override;
+      FieldMaskPredicate field_mask, bool require_positions,
+      float or_weight_multiplier) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
   size_t EstimateSize(bool is_vec_query) const override;
 
@@ -307,7 +417,8 @@ class InfixPredicate : public TextPredicate {
       bool require_positions) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const std::shared_ptr<indexes::text::TextIndex> &text_index,
-      FieldMaskPredicate field_mask, bool require_positions) const override;
+      FieldMaskPredicate field_mask, bool require_positions,
+      float or_weight_multiplier) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
   size_t EstimateSize(bool is_vec_query) const override;
 
@@ -328,6 +439,9 @@ class FuzzyPredicate : public TextPredicate {
   }
   absl::string_view GetTextString() const { return term_; }
   uint32_t GetDistance() const { return distance_; }
+  // Unit for the edit distance, resolved from the index language when the
+  // predicate is built. See COMPATIBILITY.md.
+  indexes::text::LengthUnit GetLengthUnit() const { return length_unit_; }
   EvaluationResult Evaluate(Evaluator &evaluator) const override;
   // Evaluate against per-key TextIndex
   EvaluationResult Evaluate(
@@ -336,7 +450,8 @@ class FuzzyPredicate : public TextPredicate {
       bool require_positions) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const std::shared_ptr<indexes::text::TextIndex> &text_index,
-      FieldMaskPredicate field_mask, bool require_positions) const override;
+      FieldMaskPredicate field_mask, bool require_positions,
+      float or_weight_multiplier) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
   size_t EstimateSize(bool is_vec_query) const override;
 
@@ -345,6 +460,7 @@ class FuzzyPredicate : public TextPredicate {
   FieldMaskPredicate field_mask_;
   std::string term_;
   uint32_t distance_;
+  indexes::text::LengthUnit length_unit_;
 };
 
 enum class LogicalOperator { kAnd, kOr };

@@ -112,6 +112,28 @@ TEXT_DATASETS = {
         }
     },
     # ,.<>{}[]"':;!@#$%^&*()-+=~
+    # Words joined by a Unicode (non-ASCII) whitespace character. Querying one
+    # half tells whether the engine splits on that character.
+    'unicode whitespace': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                'apple\u00a0banana',   # U+00A0 NO-BREAK SPACE
+                'chair\u00a0desk',
+                'music\u2009movie',    # U+2009 THIN SPACE
+                'river\u202fmountain', # U+202F NARROW NO-BREAK SPACE
+                'castle\u3000garden',  # U+3000 IDEOGRAPHIC SPACE
+                'winter\u2028summer',  # U+2028 LINE SEPARATOR
+            ],
+            'body': [
+                'bright\u00a0morning',
+                'silver\u2009coin',
+                'green\u3000forest',
+            ],
+            'color': ['red', 'blue', 'green'],
+            'price': (0, 10)
+        }
+    },
     'punctuation': {
         'schema': TEXT_SCHEMA,
         'field_values': {
@@ -178,6 +200,450 @@ TEXT_DATASETS = {
     }
 }
 
+# Multi-language text datasets for compatibility testing.
+#
+# These datasets are used by the compat suite to generate random queries that
+# should produce identical results between Valkey Search and RediSearch. To
+# achieve this, the vocabulary is curated to avoid known behavioral differences:
+#
+# Divergences handled at the vocab level:
+#
+# 1. Snowball 3.0.1 vs 2.1.0 (Dutch only)
+#    Valkey uses Kraaij-Pohlmann which strips ge-/be-/ver- prefixes. RediSearch
+#    is observed to use Porter-style stemming which does not strip these.
+#    Excluded specific Dutch terms whose K-P stems collide with other dataset
+#    terms (e.g. geschilderd, schilder, gebouwd).
+#
+# 2. CaseMap::utf8Fold decomposition (affects all languages)
+#    Valkey's ICU case folding converts ß→ss, ﬁ→fi, and similar. RediSearch is
+#    observed to use simple lowercasing which preserves these characters. Avoided
+#    characters like ß and ligatures in all language datasets.
+#
+# 3. Default stop words (affects all languages)
+#    Valkey applies per-language Lucene stop words by default. RediSearch is
+#    observed to only filter English stop words. Avoided any term that appears
+#    in the language's Lucene stop word list.
+#
+# 4. NOSTEM query-time stemming bypass (affects all languages)
+#    When running bare (non-field) queries against RediSearch on NOSTEM fields,
+#    stemmed matches are observed (suggesting query-time stemming bypasses
+#    NOSTEM). Valkey strictly enforces NOSTEM at both index and query time.
+#    Avoided vocab pairs where stem(term_A) == term_B within the same dataset
+#    (e.g. kekuatan stems to kuat in Indonesian).
+#
+# 5. Fuzzy search over stemmed forms (affects all languages, handled at generation time)
+#    When running fuzzy queries against RediSearch, matches are observed against
+#    stemmed forms of indexed terms in addition to originals. Valkey only matches
+#    against original forms. The fuzzy generator filters vocab at generation time
+#    to words whose 1-char mutations cannot land within edit-distance 1 of any
+#    stem (see _compute_safe_fuzzy_vocab in generate_text.py).
+#
+# Each dataset includes vocabulary that exercises language-specific features:
+# - Diacritics and special characters for normalization/case-folding
+# - Inflected forms to exercise Snowball stemming
+# - Script-specific characters where applicable
+# Word lists are ~30 words per field, organized by semantic category,
+# with no overlap between title and body fields.
+TEXT_DATASETS_MULTILANG = {
+    'french text': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                # food/drink — accents, cedilla
+                'café', 'crème', 'gâteau', 'pâtisserie', 'bière', 'fromage',
+                # places — circumflex, accents
+                'château', 'hôpital', 'forêt', 'île', 'cathédrale', 'musée',
+                # people/roles — accents, ligature
+                'médecin', 'employé', 'étudiant', 'professeur', 'ingénieur', 'boulanger',
+                # nature
+                'rivière', 'montagne', 'lumière', 'étoile', 'nuage', 'tempête',
+                # verbs (inflected — exercises stemmer)
+                'mangeons', 'travaillé', 'chercher', 'finissent', 'commencé', 'découvrir',
+            ],
+            'body': [
+                # objects — accents
+                'fenêtre', 'clé', 'vélo', 'échelle', 'réfrigérateur', 'bibliothèque',
+                # animals
+                'chèvre', 'léopard', 'hérisson', 'écureuil', 'pélican', 'girafe',
+                # abstract — accents, circumflex
+                'liberté', 'égalité', 'fraternité', 'intérêt', 'beauté', 'vérité',
+                # actions (inflected)
+                'courir', 'nager', 'réfléchir', 'construire', 'détruire', 'répondre',
+                # descriptors — accents
+                'rapide', 'lent', 'bruyant', 'silencieux', 'chaud', 'froid',
+            ],
+            'color': ['rouge', 'bleu', 'vert', 'jaune', 'noir',
+                      'blanc', 'violet', 'orange', 'rose', 'brun'],
+            'price': (0, 50)
+        }
+    },
+    'german text': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                # places/buildings — umlauts, compounds
+                'Gebäude', 'Brücke', 'Universität', 'Küche', 'Bücherei', 'Rathaus',
+                # transport — umlauts, compounds
+                'Flughafen', 'Führerschein', 'Fahrrad', 'Schiff', 'Eisenbahn', 'Autobahn',
+                # people — umlauts
+                'Mädchen', 'Ärzte', 'Schüler', 'Händler', 'Bäcker', 'Künstler',
+                # nature — umlauts
+                'Vögel', 'Bäume', 'Flüsse', 'Gärten', 'Wälder', 'Blüten',
+                # verbs (inflected)
+                'arbeiten', 'geöffnet', 'verstehen', 'gewünscht', 'übersetzen', 'anfangen',
+            ],
+            'body': [
+                # objects — umlauts
+                'Schlüssel', 'Kühlschrank', 'Gemälde', 'Rätsel', 'Bücher', 'Möbel',
+                # food
+                'Käse', 'Brötchen', 'Würstchen', 'Knödel', 'Gemüse', 'Lebkuchen',
+                # abstract — umlauts
+                'Stärke', 'Schönheit', 'Fähigkeit', 'Höflichkeit', 'Gemütlichkeit', 'Freiheit',
+                # actions (inflected)
+                'laufen', 'schwimmen', 'gekämpft', 'geändert', 'zerstört', 'gefahren',
+                # descriptors — umlauts
+                'schnell', 'langsam', 'böse', 'schön', 'grün', 'müde',
+            ],
+            'color': ['rot', 'blau', 'grün', 'gelb', 'schwarz',
+                      'lila', 'orange', 'rosa', 'braun', 'golden'],
+            'price': (0, 50)
+        }
+    },
+    'spanish text': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                # places — tildes, accents
+                'ciudad', 'montaña', 'señal', 'estación', 'río', 'jardín',
+                # people — ñ, accents
+                'niño', 'señor', 'compañero', 'médico', 'músico', 'capitán',
+                # food
+                'manzana', 'plátano', 'piña', 'limón', 'naranja', 'cereza',
+                # nature — accents
+                'pájaro', 'corazón', 'árbol', 'océano', 'volcán', 'relámpago',
+                # verbs (inflected — exercises stemmer)
+                'corriendo', 'trabajaron', 'comiendo', 'vivieron', 'pensando', 'escribió',
+            ],
+            'body': [
+                # objects — accents
+                'teléfono', 'lámpara', 'vehículo', 'periódico', 'cámara', 'máquina',
+                # animals — accents
+                'águila', 'murciélago', 'pingüino', 'delfín', 'tiburón', 'camaleón',
+                # abstract — accents
+                'información', 'educación', 'solución', 'dirección', 'tradición', 'comunicación',
+                # actions (inflected)
+                'construir', 'destruir', 'nadar', 'conducir', 'resolver', 'descubrir',
+                # descriptors — accents
+                'rápido', 'difícil', 'fácil', 'débil', 'útil', 'ágil',
+            ],
+            'color': ['rojo', 'azul', 'verde', 'amarillo', 'negro',
+                      'blanco', 'morado', 'naranja', 'rosa', 'marrón'],
+            'price': (0, 50)
+        }
+    },
+    'italian text': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                # places — accented finals
+                'città', 'università', 'caffè', 'stazione', 'piazza', 'mercato',
+                # people
+                'ragazzo', 'dottore', 'professore', 'musicista', 'pittore', 'giornalista',
+                # food
+                'formaggio', 'pomodoro', 'arancia', 'ciliegia', 'limone', 'fragola',
+                # nature — accents
+                'montagna', 'temporale', 'fiore', 'albero', 'farfalla', 'nuvola',
+                # verbs (inflected — exercises stemmer)
+                'mangiando', 'lavorato', 'correre', 'dormire', 'scrivendo', 'costruito',
+            ],
+            'body': [
+                # objects — accents
+                'tavolo', 'finestra', 'specchio', 'orologio', 'chiave', 'quaderno',
+                # animals
+                'gatto', 'cavallo', 'aquila', 'squalo', 'tigre', 'tartaruga',
+                # abstract — accents
+                'libertà', 'felicità', 'verità', 'società', 'qualità', 'possibilità',
+                # actions (inflected)
+                'nuotare', 'saltare', 'guidare', 'volare', 'dipingere', 'scoprire',
+                # descriptors
+                'veloce', 'lento', 'forte', 'debole', 'caldo', 'freddo',
+            ],
+            'color': ['rosso', 'blu', 'verde', 'giallo', 'nero',
+                      'bianco', 'viola', 'arancione', 'rosa', 'marrone'],
+            'price': (0, 50)
+        }
+    },
+    'portuguese text': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                # places — cedilla, tildes, accents
+                'estação', 'coração', 'ação', 'praça', 'palácio', 'ição',
+                # people — tildes, accents
+                'capitão', 'irmão', 'médico', 'músico', 'engenheiro', 'professor',
+                # food — accents
+                'maçã', 'limão', 'pêssego', 'abacaxi', 'morango', 'melão',
+                # nature — tildes, accents
+                'trovão', 'relâmpago', 'vulcão', 'montanha', 'floresta', 'oceano',
+                # verbs (inflected — exercises stemmer)
+                'trabalhando', 'correram', 'comendo', 'escreveu', 'construído', 'descobrir',
+            ],
+            'body': [
+                # objects — cedilla, accents
+                'televisão', 'geração', 'informação', 'câmera', 'computador', 'relógio',
+                # animals — accents
+                'tubarão', 'falcão', 'leão', 'camaleão', 'golfinho', 'tartaruga',
+                # abstract — tildes, accents
+                'educação', 'comunicação', 'tradição', 'solução', 'evolução', 'proteção',
+                # actions (inflected)
+                'nadar', 'correr', 'voar', 'construir', 'destruir', 'resolver',
+                # descriptors — accents
+                'rápido', 'difícil', 'fácil', 'possível', 'útil', 'agradável',
+            ],
+            'color': ['vermelho', 'azul', 'verde', 'amarelo', 'preto',
+                      'branco', 'roxo', 'laranja', 'rosa', 'marrom'],
+            'price': (0, 50)
+        }
+    },
+    'russian text': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                # places — Cyrillic
+                'город', 'деревня', 'площадь', 'станция', 'библиотека', 'больница',
+                # people
+                'учитель', 'студент', 'инженер', 'художник', 'музыкант', 'писатель',
+                # food
+                'яблоко', 'молоко', 'хлеб', 'масло', 'сахар', 'картофель',
+                # nature
+                'дерево', 'река', 'гора', 'облако', 'звезда', 'цветок',
+                # verbs (inflected — exercises stemmer)
+                'работает', 'бежали', 'читает', 'построил', 'написала', 'открывать',
+            ],
+            'body': [
+                # objects
+                'стол', 'окно', 'дверь', 'книга', 'лампа', 'зеркало',
+                # animals
+                'кошка', 'собака', 'лошадь', 'медведь', 'орёл', 'волк',
+                # abstract
+                'свобода', 'правда', 'счастье', 'красота', 'мудрость', 'справедливость',
+                # actions (inflected)
+                'плавать', 'летать', 'строить', 'бегать', 'прыгать', 'водить',
+                # descriptors
+                'быстрый', 'медленный', 'тихий', 'громкий', 'тёплый', 'холодный',
+            ],
+            'color': ['красный', 'синий', 'зелёный', 'жёлтый', 'чёрный',
+                      'белый', 'фиолетовый', 'оранжевый', 'розовый', 'коричневый'],
+            'price': (0, 50)
+        }
+    },
+    'swedish text': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                # places — Å, Ä, Ö
+                'sjukhus', 'järnväg', 'övergång', 'flygplats', 'bibliotek', 'slöjd',
+                # people — Ö
+                'läkare', 'lärare', 'ingenjör', 'författare', 'konstnär', 'hantverkare',
+                # food — Ä, Ö
+                'äpple', 'smörgås', 'köttbulle', 'räkmacka', 'grädde', 'knäckebröd',
+                # nature — Å, Ö
+                'ångbåt', 'blåbär', 'björk', 'öken', 'sjö', 'ström',
+                # verbs (inflected — exercises stemmer)
+                'arbetar', 'öppnade', 'stängde', 'förstår', 'översatte', 'byggde',
+            ],
+            'body': [
+                # objects — Ö, Ä
+                'nyckel', 'möbel', 'dörr', 'fönster', 'vägg', 'spegel',
+                # animals — Ö
+                'häst', 'fågel', 'björn', 'älg', 'räv', 'varg',
+                # abstract — Ö, Ä
+                'förändring', 'möjlighet', 'rättvisa', 'skönhet', 'säkerhet', 'gemenskap',
+                # actions (inflected)
+                'simma', 'springa', 'flyga', 'köra', 'bygga', 'måla',
+                # descriptors — Å, Ä
+                'snabb', 'långsam', 'stark', 'svår', 'varm', 'kall',
+            ],
+            'color': ['röd', 'blå', 'grön', 'gul', 'svart',
+                      'vit', 'lila', 'orange', 'rosa', 'brun'],
+            'price': (0, 50)
+        }
+    },
+    'turkish text': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                # places — ş, ç, ğ, ö, ü, ı (dotless i is key for case-fold testing)
+                'şehir', 'hastane', 'üniversite', 'köprü', 'çarşı', 'müze',
+                # people — ö, ü, ç
+                'öğretmen', 'mühendis', 'doçent', 'müdür', 'çiftçi', 'öğrenci',
+                # food — ö, ü, ş
+                'börek', 'çiçek', 'şeftali', 'üzüm', 'portakal', 'kiraz',
+                # nature — dotless ı, ğ, ö
+                'ışık', 'dağ', 'göl', 'nehir', 'orman', 'çiçek',
+                # verbs (inflected — exercises stemmer + Turkish ı/İ)
+                'çalışmak', 'öğrenmek', 'başlamak', 'değiştirmek', 'yürümek', 'düşünmek',
+            ],
+            'body': [
+                # objects — ü, ö, ş, ç
+                'anahtar', 'dolap', 'pencere', 'köşe', 'süpürge', 'çamaşır',
+                # animals — ş, ç
+                'kuş', 'kaplumbağa', 'kelebek', 'karınca', 'köpek', 'maymun',
+                # abstract — ö, ü, ğ
+                'özgürlük', 'güzellik', 'doğruluk', 'büyüklük', 'güçlülük', 'mutluluk',
+                # actions (inflected) — dotless ı testing
+                'yüzmek', 'koşmak', 'uçmak', 'sürmek', 'gitmek', 'bulmak',
+                # descriptors — ı, ş
+                'hızlı', 'yavaş', 'güçlü', 'sessiz', 'sıcak', 'soğuk',
+            ],
+            'color': ['kırmızı', 'mavi', 'yeşil', 'sarı', 'siyah',
+                      'beyaz', 'mor', 'turuncu', 'pembe', 'kahverengi'],
+            'price': (0, 50)
+        }
+    },
+    'dutch text': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                # places — IJ digraph, compounds
+                'ziekenhuis', 'universiteit', 'bibliotheek', 'vliegveld', 'station', 'wijk',
+                # people
+                'leraar', 'ingenieur', 'schrijver', 'kunstenaar', 'bakker', 'timmerman',
+                # food
+                'kaas', 'brood', 'appel', 'sinaasappel', 'citroen', 'aardbei',
+                # nature — IJ, compounds
+                'ijsbeer', 'rivier', 'bos', 'woestijn', 'bloem', 'storm',
+                # verbs (inflected)
+                'werken', 'lopen', 'spreken', 'zingen', 'dansen', 'lezen',
+            ],
+            'body': [
+                # objects — compounds
+                'sleutel', 'koelkast', 'spiegel', 'boekenkast', 'fiets', 'klok',
+                # animals
+                'paard', 'vogel', 'vlinder', 'schildpad', 'dolfijn', 'adelaar',
+                # abstract
+                'vrijheid', 'gelijkheid', 'schoonheid', 'mogelijkheid', 'veiligheid', 'waarheid',
+                # actions (inflected)
+                'zwemmen', 'rennen', 'vliegen', 'rijden', 'tekenen', 'wandelen',
+                # descriptors
+                'snel', 'langzaam', 'sterk', 'zwak', 'warm', 'koud',
+            ],
+            'color': ['rood', 'blauw', 'groen', 'geel', 'zwart',
+                      'wit', 'paars', 'oranje', 'roze', 'bruin'],
+            'price': (0, 50)
+        }
+    },
+    'indonesian text': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                # places — agglutinative prefixes/suffixes
+                'perpustakaan', 'universitas', 'pelabuhan', 'bandara', 'pertokoan', 'perumahan',
+                # people — prefixes
+                'pelajar', 'pengajar', 'pekerja', 'penulis', 'pelukis', 'penyanyi',
+                # food
+                'mangga', 'jeruk', 'pisang', 'anggur', 'semangka', 'nanas',
+                # nature
+                'gunung', 'sungai', 'hutan', 'pantai', 'danau', 'lembah',
+                # verbs (inflected — exercises stemmer with me-/ber-/pe- prefixes)
+                'membangun', 'berenang', 'berlari', 'menulis', 'membaca', 'memahami',
+            ],
+            'body': [
+                # objects
+                'kunci', 'jendela', 'pintu', 'cermin', 'kursi', 'lemari',
+                # animals
+                'kucing', 'burung', 'kuda', 'harimau', 'elang', 'lumba',
+                # abstract — agglutinative suffixes (-an, -kan)
+                'keindahan', 'kemerdekaan', 'kebahagiaan', 'kebenaran', 'kesehatan', 'keadilan',
+                # actions (inflected)
+                'berenang', 'terbang', 'mengemudi', 'melompat', 'memanjat', 'menyelam',
+                # descriptors
+                'cepat', 'lambat', 'kuat', 'lemah', 'panas', 'dingin',
+            ],
+            'color': ['merah', 'biru', 'hijau', 'kuning', 'hitam',
+                      'putih', 'ungu', 'jingga', 'merah muda', 'cokelat'],
+            'price': (0, 50)
+        }
+    },
+    'arabic text': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                # places — Arabic script, various letter forms
+                'مدرسة', 'جامعة', 'مستشفى', 'مطار', 'مكتبة', 'متحف',
+                # people
+                'معلم', 'طبيب', 'مهندس', 'كاتب', 'رسام', 'موسيقي',
+                # food
+                'تفاحة', 'برتقال', 'عنب', 'ليمون', 'موز', 'فراولة',
+                # nature
+                'جبل', 'نهر', 'بحر', 'صحراء', 'غابة', 'شجرة',
+                # verbs (various forms — tests Arabic morphology)
+                'يعمل', 'يكتب', 'يقرأ', 'يبني', 'يفهم', 'يتعلم',
+            ],
+            'body': [
+                # objects
+                'مفتاح', 'نافذة', 'باب', 'كتاب', 'مصباح', 'مرآة',
+                # animals
+                'قطة', 'حصان', 'نسر', 'نمر', 'دلفين', 'سلحفاة',
+                # abstract
+                'حرية', 'عدالة', 'سعادة', 'جمال', 'حقيقة', 'قوة',
+                # actions
+                'يسبح', 'يطير', 'يركض', 'يقود', 'يقفز', 'يبحث',
+                # descriptors
+                'سريع', 'بطيء', 'قوي', 'ضعيف', 'حار', 'بارد',
+            ],
+            'color': ['أحمر', 'أزرق', 'أخضر', 'أصفر', 'أسود',
+                      'أبيض', 'بنفسجي', 'برتقالي', 'وردي', 'بني'],
+            'price': (0, 50)
+        }
+    },
+}
+
+# Multi-language punctuation datasets — mirrors the English 'punctuation' dataset
+# but uses non-ASCII punctuation characters from each language's configured punct
+# set (e.g. French guillemets «», em-dash —, curly quotes).  Title field has
+# unescaped values (punct splits tokens); body field has backslash-escaped values
+# (punct kept inside tokens).
+TEXT_DATASETS_MULTILANG_PUNCTUATION = {
+    # French typographic punctuation: « » – — … ' ' " "
+    'french punctuation': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                # Unescaped — these split into multiple tokens
+                'liberté«égalité',
+                'fraternité»justice',
+                'château–village',
+                'musée—galerie',
+                'forêt…prairie',
+                'médecin\u2018chirurgien',
+                'professeur\u2019étudiant',
+                'boulanger\u201cpâtissier',
+                'ingénieur\u201darchitecte',
+            ],
+            'body': [
+                # Backslash-escaped — punct kept inside token
+                'liberté\\«égalité',
+                'fraternité\\»justice',
+                'château\\–village',
+                'musée\\—galerie',
+                'forêt\\…prairie',
+                'médecin\\\u2018chirurgien',
+                'professeur\\\u2019étudiant',
+                'boulanger\\\u201cpâtissier',
+                'ingénieur\\\u201darchitecte',
+            ],
+            'color': ['rouge', 'bleu', 'vert'],
+            'price': (0, 10)
+        }
+    },
+}
+
+TEXT_DATASETS_MULTILANG.update(TEXT_DATASETS_MULTILANG_PUNCTUATION)
+
+# Merge multilang datasets into TEXT_DATASETS so existing code paths work unchanged
+TEXT_DATASETS.update(TEXT_DATASETS_MULTILANG)
+
 # Schema flags per field type and schema variant.
 # For field types with multiple variants (like "text"), use a dict keyed by schema_type.
 # For simple field types, use a plain string (empty string if no extra flags needed).
@@ -236,8 +702,21 @@ class ClientSystem:
     def hset(self, *cmd):
         return self.client.hset(*cmd)
     
-def array_encode(key_type, array):
+def array_encode(key_type, array, data_type="FLOAT32"):
     if key_type == "hash":
+        if data_type == "FLOAT16":
+            return struct.pack(f"<{len(array)}e", *array)
+        if data_type == "BFLOAT16":
+            # FP32 -> BF16 with round-to-nearest, ties-to-even. Matches the
+            # C++ bfloat16(float) constructor and RediSearch's BF16 rounding.
+            fp32 = struct.pack(f"<{len(array)}f", *array)
+            out = bytearray()
+            for i in range(len(array)):
+                u = int.from_bytes(fp32[i * 4 : i * 4 + 4], "little")
+                rounding_bias = 0x7FFF + ((u >> 16) & 1)
+                u = (u + rounding_bias) & 0xFFFFFFFF
+                out += u.to_bytes(4, "little")[2:4]
+            return bytes(out)
         return struct.pack(f"<{len(array)}f", *array)
     else:
         return array
@@ -255,7 +734,7 @@ def binary_string_encode(key_type, s):
     else:
         return '"' + "".join([json_quote(s[i]) for i in range(len(s))]) + '"'       
     
-def compute_data_sets():
+def compute_data_sets(vector_data_type="FLOAT32"):
     '''Generate all of the possible data sets'''
     data = {}
 
@@ -269,10 +748,9 @@ def compute_data_sets():
     def make_field_definition(key_type, name, typ, i):
         if typ == "vector":
             if key_type == "hash":
-                return f"{name}{i} vector HNSW 6 DIM {VECTOR_DIM} TYPE FLOAT32 DISTANCE_METRIC L2"
+                return f"{name}{i} vector HNSW 6 DIM {VECTOR_DIM} TYPE {vector_data_type} DISTANCE_METRIC L2"
             else:
-                return f"$.{name}{i} as {name}{i} vector HNSW 6 DIM {VECTOR_DIM} TYPE FLOAT32 DISTANCE_METRIC L2"
-            return f"{name}{i} vector HNSW 6 DIM {VECTOR_DIM} TYPE FLOAT32 DISTANCE_METRIC L2"
+                return f"$.{name}{i} as {name}{i} vector HNSW 6 DIM {VECTOR_DIM} TYPE {vector_data_type} DISTANCE_METRIC L2"
         else:
             return f"{name}{i} {typ}" if key_type == "hash" else f"$.{name}{i} AS {name}{i} {typ}"
 
@@ -280,9 +758,13 @@ def compute_data_sets():
     data["sortable numbers"] = {}
     data["reverse vector numbers"] = {}
     data["bad numbers"] = {}
+    data["missing numbers"] = {}
     data["bad vectors"] = {}
     data["hard strings"] = {}
     data["tag special chars"] = {}
+    data["array inputs"] = {}
+    data["array inputs empty"] = {}
+    data["array compare"] = {}
     vec_algos = ["flat", "hnsw"]
     metrics = ["cosine", "ip", "l2"]
     for algo in vec_algos:
@@ -313,7 +795,7 @@ def compute_data_sets():
                     "t1": f"one.one{i*2}",
                     "t2": f"two.two{i*-2}",
                     "t3": "all_the_same_value",
-                    "v1": array_encode(key_type, [i for _ in range(VECTOR_DIM)]),
+                    "v1": array_encode(key_type, [i for _ in range(VECTOR_DIM)], vector_data_type),
                     "e1" : 1,
                     "e2" : "two",
                 },
@@ -324,6 +806,40 @@ def compute_data_sets():
         # Sortable numbers, designed so that sorted keys for this index don't have any duplications
         # which makes the compare functions harder.
         #
+        #
+        # Missing numbers. `n1` is absent entirely -- not invalid, absent --
+        # from some documents, so a GROUPBY over @t1 yields one group whose
+        # members all have @n1, one where none do, and one mixed. That is the
+        # only way to reach the empty-fold branch of the MIN/MAX/SUM/AVG
+        # reducers, where Redis 8 answers inf/-inf/nan instead of a value.
+        # Distinct from "bad numbers", whose @n1 holds an invalid value and
+        # whose keys are therefore dropped from the index altogether.
+        #
+        missing_groups = [
+            ("g_all", 2), ("g_all", 4),          # every member has @n1
+            ("g_none", None), ("g_none", None),  # no member has @n1
+            ("g_mixed", 5), ("g_mixed", None),   # only some members have @n1
+        ]
+        data["missing numbers"][CREATES_KEY(key_type)] = [create_cmds[key_type].format(schema)]
+        data["missing numbers"][SETS_KEY(key_type)] = [
+            (
+                f"{key_type}:{i:02d}",
+                {
+                    # `n1` is omitted from the mapping when None, so the field
+                    # does not exist on the key at all.
+                    **({} if n1 is None else {"n1": n1}),
+                    "n2": i,
+                    "n3": -i,
+                    "t1": group,
+                    "t2": f"two.two{i}",
+                    "t3": "all_the_same_value",
+                    "v1": array_encode(key_type, [i for _ in range(VECTOR_DIM)], vector_data_type),
+                    "e1": 1,
+                    "e2": "two",
+                },
+            )
+            for i, (group, n1) in enumerate(missing_groups)
+        ]
         sortable_numbers = range(-5, 10)
         data["sortable numbers"][CREATES_KEY(key_type)] = [create_cmds[key_type].format(schema)]
         data["sortable numbers"][SETS_KEY(key_type)] = [
@@ -336,7 +852,7 @@ def compute_data_sets():
                     "t1": f"one.one{i*2}",
                     "t2": f"two.two{i*-2}",
                     "t3": "all_the_same_value",
-                    "v1": array_encode(key_type, [i for _ in range(VECTOR_DIM)]),
+                    "v1": array_encode(key_type, [i for _ in range(VECTOR_DIM)], vector_data_type),
                     "e1" : 1,
                     "e2" : "two",
                 },
@@ -359,7 +875,7 @@ def compute_data_sets():
                     "t1": f"one.one{i*2}",
                     "t2": f"two.two{i*-2}",
                     "t3": "all_the_same_value",
-                    "v1": array_encode(key_type, [(len(sortable_numbers)-i) for _ in range(VECTOR_DIM)]),
+                    "v1": array_encode(key_type, [(len(sortable_numbers)-i) for _ in range(VECTOR_DIM)], vector_data_type),
                     "e1" : 1,
                     "e2" : "two",
                 },
@@ -379,7 +895,7 @@ def compute_data_sets():
                     "t1": "",
                     "t2": "",
                     "t3": "",
-                    "v1": array_encode(key_type, [0 for _ in range(VECTOR_DIM)]),
+                    "v1": array_encode(key_type, [0 for _ in range(VECTOR_DIM)], vector_data_type),
                     "e1" : 1,
                     "e2" : "two",
                 },
@@ -392,7 +908,7 @@ def compute_data_sets():
                     "t1": "",
                     "t2": "",
                     "t3": "",
-                    "v1": array_encode(key_type, [1 for _ in range(VECTOR_DIM)]),
+                    "v1": array_encode(key_type, [1 for _ in range(VECTOR_DIM)], vector_data_type),
                     "e1" : 1,
                     "e2" : "two",
                 },
@@ -405,7 +921,7 @@ def compute_data_sets():
                     "t1": "",
                     "t2": "",
                     "t3": "",
-                    "v1": array_encode(key_type, [2 for _ in range(VECTOR_DIM)]),
+                    "v1": array_encode(key_type, [2 for _ in range(VECTOR_DIM)], vector_data_type),
                     "e1" : 1,
                     "e2" : "two",
                 },
@@ -418,7 +934,7 @@ def compute_data_sets():
                     "t1": "",
                     "t2": "",
                     "t3": "",
-                    "v1": array_encode(key_type, [3 for _ in range(VECTOR_DIM)]),
+                    "v1": array_encode(key_type, [3 for _ in range(VECTOR_DIM)], vector_data_type),
                     "e1" : 1,
                     "e2" : "two",
                 },
@@ -430,7 +946,7 @@ def compute_data_sets():
                     "n3": 0,
                     "t2": "",
                     "t3": "",
-                    "v1": array_encode(key_type, [4 for _ in range(VECTOR_DIM)]),
+                    "v1": array_encode(key_type, [4 for _ in range(VECTOR_DIM)], vector_data_type),
                     "e1" : 1,
                     "e2" : "two",
                 },
@@ -442,7 +958,7 @@ def compute_data_sets():
                     "n3": 0,
                     "t2": "",
                     "t3": "",
-                    "v1": array_encode(key_type, [5 for _ in range(VECTOR_DIM+1)]),
+                    "v1": array_encode(key_type, [5 for _ in range(VECTOR_DIM+1)], vector_data_type),
                 },
             ),
         ]
@@ -493,12 +1009,110 @@ def compute_data_sets():
                     "t1": unicode_chars,
                     "t2": unicode_chars[i:],
                     "t3": "all_the_same_value",
-                    "v1": array_encode(key_type, [i for _ in range(VECTOR_DIM)]),
+                    "v1": array_encode(key_type, [i for _ in range(VECTOR_DIM)], vector_data_type),
                     "e1" : 1,
                     "e2" : "two",
                 },
             )
             for i in range(20)
+        ]
+        #
+        # Array inputs: feeds the ARRAY-valued (TOLIST) downstream tests.
+        # Three t1 groups of three keys each, so a TOLIST over a group yields a
+        # multi-element array. Properties the tests rely on:
+        #   - groups ga and gc collect the same n1 values, so two different
+        #     groups produce *equal* arrays (array as a group key);
+        #   - n2 repeats within gb and gc, so tolist(@n2) is shorter than
+        #     tolist(@n1) there and array/array operations see both a matching
+        #     and a mismatched length in one reply;
+        #   - n1 mixes negative, fractional and positive values (log/sqrt);
+        #   - t2 mixes case and repeats across groups (lower/upper/startswith);
+        #   - n3 is a unix timestamp and t3 a parseable date, one per group.
+        #
+        array_input_rows = [
+            # t1,   n1,   n2,          n3, t2,          t3
+            ("ga",    1,   10, 1700000000, "apple",     "2024-01-01"),
+            ("ga",    2,   20, 1700086400, "Banana",    "2024-01-01"),
+            ("ga",    3,   30, 1700172800, "cherry",    "2024-01-01"),
+            ("gb",   -1,    5, 1700259200, "delta",     "2024-01-02"),
+            ("gb",  0.5,    5, 1700345600, "Echo",      "2024-01-02"),
+            ("gb",    4,   25, 1700432000, "foxtrot",   "2024-01-02"),
+            ("gc",    1,  100, 1700518400, "apple",     "2024-01-03"),
+            ("gc",    2,  200, 1700604800, "Banana",    "2024-01-03"),
+            ("gc",    3,  200, 1700691200, "cherry",    "2024-01-03"),
+        ]
+        data["array inputs"][CREATES_KEY(key_type)] = [create_cmds[key_type].format(schema)]
+        data["array inputs"][SETS_KEY(key_type)] = [
+            (
+                f"{key_type}:{i:02d}",
+                {
+                    "t1": row[0],
+                    "n1": row[1],
+                    "n2": row[2],
+                    "n3": row[3],
+                    "t2": row[4],
+                    "t3": row[5],
+                    "v1": array_encode(key_type, [i for _ in range(VECTOR_DIM)]),
+                },
+            )
+            for i, row in enumerate(array_input_rows)
+        ]
+        #
+        # Array inputs, empty case: every key has n1, so the base query matches
+        # both groups, but no key in group "ge" has n2 or t2 at all. A TOLIST
+        # over those fields therefore collects nothing and yields an empty
+        # array, next to a non-empty one from group "ga" in the same reply.
+        #
+        array_empty_rows = [
+            # t1,  n1,   n2,       t2
+            ("ga",  1,   10,   "apple"),
+            ("ga",  2,   20,  "Banana"),
+            ("ge",  3, None,      None),
+            ("ge",  4, None,      None),
+        ]
+        data["array inputs empty"][CREATES_KEY(key_type)] = [create_cmds[key_type].format(schema)]
+        data["array inputs empty"][SETS_KEY(key_type)] = [
+            (
+                f"{key_type}:{i:02d}",
+                {k: v for k, v in {
+                    "t1": row[0],
+                    "n1": row[1],
+                    "n2": row[2],
+                    "t2": row[3],
+                    "v1": array_encode(key_type, [i for _ in range(VECTOR_DIM)]),
+                }.items() if v is not None},
+            )
+            for i, row in enumerate(array_empty_rows)
+        ]
+        #
+        # Array compare: group shapes that tell apart the possible rules for
+        # comparing two arrays. Per group, TOLIST(n1) and TOLIST(n2) collect:
+        #   g1  {1,2} vs {1,2}    identical
+        #   g2  {1,9} vs {1,2}    same first element, differing second
+        #   g3  {1,2} vs {1,2,3}  one is a prefix of the other
+        #   g4  {2}   vs {1,9}    differing first element
+        # Comparing by first element only, lexicographically, or by length all
+        # give different answers across these four.
+        #
+        array_compare_rows = [
+            # t1,  n1, n2
+            ("g1",  1,  1), ("g1", 2, 2),
+            ("g2",  1,  1), ("g2", 9, 2),
+            ("g3",  1,  1), ("g3", 2, 2), ("g3", 1, 3),
+            ("g4",  2,  1), ("g4", 2, 9),
+        ]
+        data["array compare"][CREATES_KEY(key_type)] = [create_cmds[key_type].format(schema)]
+        data["array compare"][SETS_KEY(key_type)] = [
+            (
+                f"{key_type}:{i:02d}",
+                {
+                    "t1": row[0],
+                    "n1": row[1],
+                    "n2": row[2],
+                    "v1": array_encode(key_type, [i for _ in range(VECTOR_DIM)]),
+                },
+            )
+            for i, row in enumerate(array_compare_rows)
         ]
         for algo in vec_algos:
             for metric in metrics:
@@ -514,7 +1128,7 @@ def compute_data_sets():
                             "t1": "",
                             "t2": "",
                             "t3": "all_the_same_value",
-                            "v1": array_encode(key_type, [x, y, z]),
+                            "v1": array_encode(key_type, [x, y, z], vector_data_type),
                             "e1" : 1,
                             "e2" : "two",
                         },
@@ -523,6 +1137,56 @@ def compute_data_sets():
                     for y in vector_points
                     for z in vector_points
                 ]
+
+    #
+    # Two-vector dataset: designed for multi-VR predicate compatibility tests.
+    # Has two vector fields (v1 and v2) with asymmetric values so that distance
+    # ordering on v1 differs from v2.  Also includes numeric and tag fields.
+    #
+    data["two vectors"] = {}
+    two_vec_create_cmds = {
+        "hash": (
+            "FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: SCHEMA "
+            "v1 VECTOR FLAT 6 DIM 3 TYPE FLOAT32 DISTANCE_METRIC L2 "
+            "v2 VECTOR FLAT 6 DIM 3 TYPE FLOAT32 DISTANCE_METRIC L2 "
+            "n1 NUMERIC t1 TAG"
+        ),
+        "json": (
+            "FT.CREATE json_idx1 ON JSON PREFIX 1 json: SCHEMA "
+            "$.v1 AS v1 VECTOR FLAT 6 DIM 3 TYPE FLOAT32 DISTANCE_METRIC L2 "
+            "$.v2 AS v2 VECTOR FLAT 6 DIM 3 TYPE FLOAT32 DISTANCE_METRIC L2 "
+            "$.n1 AS n1 NUMERIC $.t1 AS t1 TAG"
+        ),
+    }
+    # 6 documents with asymmetric v1/v2 placements:
+    #   doc:0  v1=(0,0,0)  v2=(0,0,0)   -- origin for both
+    #   doc:1  v1=(1,0,0)  v2=(3,0,0)   -- close on v1, far on v2
+    #   doc:2  v1=(3,0,0)  v2=(1,0,0)   -- far on v1, close on v2
+    #   doc:3  v1=(2,0,0)  v2=(2,0,0)   -- moderate both
+    #   doc:4  v1=(5,0,0)  v2=(5,0,0)   -- far both
+    #   doc:5  v1=(10,0,0) v2=(10,0,0)  -- very far both
+    two_vec_docs_template = [
+        ("0", [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], 0, "A"),
+        ("1", [1.0, 0.0, 0.0], [3.0, 0.0, 0.0], 1, "B"),
+        ("2", [3.0, 0.0, 0.0], [1.0, 0.0, 0.0], 2, "A"),
+        ("3", [2.0, 0.0, 0.0], [2.0, 0.0, 0.0], 3, "B"),
+        ("4", [5.0, 0.0, 0.0], [5.0, 0.0, 0.0], 4, "A"),
+        ("5", [10.0, 0.0, 0.0], [10.0, 0.0, 0.0], 5, "B"),
+    ]
+    for key_type in ["hash", "json"]:
+        data["two vectors"][CREATES_KEY(key_type)] = [two_vec_create_cmds[key_type]]
+        data["two vectors"][SETS_KEY(key_type)] = [
+            (
+                f"{key_type}:{doc_id}",
+                {
+                    "v1": array_encode(key_type, v1),
+                    "v2": array_encode(key_type, v2),
+                    "n1": n1,
+                    "t1": t1,
+                },
+            )
+            for doc_id, v1, v2, n1, t1 in two_vec_docs_template
+        ]
 
     # Tag special characters data set. Comma separator so } and | are literal;
     # avoid '-' etc. (query operators) or the reference engine rejects the query.
@@ -559,18 +1223,48 @@ def compute_data_sets():
 
     return data
 
-def compute_text_data_sets(dataset_name, seed=123, schema_type="default"):
+# Mapping from dataset name to the LANGUAGE parameter value for FT.CREATE.
+# English datasets (original) use "english"; multilang datasets use their language.
+DATASET_LANGUAGE_MAP = {
+    'pure text': 'english',
+    'pure text small': 'english',
+    'numeric text': 'english',
+    'punctuation': 'english',
+    'unicode whitespace': 'english',
+    'french text': 'french',
+    'german text': 'german',
+    'spanish text': 'spanish',
+    'italian text': 'italian',
+    'portuguese text': 'portuguese',
+    'russian text': 'russian',
+    'swedish text': 'swedish',
+    'turkish text': 'turkish',
+    'dutch text': 'dutch',
+    'indonesian text': 'indonesian',
+    'arabic text': 'arabic',
+    'french punctuation': 'french',
+}
+
+
+def compute_text_data_sets(dataset_name, seed=123, schema_type="default", language=None):
     """Generate random documents for a specific dataset.
     
     Args:
-        dataset_name: Name of dataset (e.g., "pure text", "pure text small")
+        dataset_name: Name of dataset (e.g., "pure text", "french text")
         seed: Random seed for reproducibility
+        schema_type: Schema variant ("default" or "nostem")
+        language: Language for FT.CREATE LANGUAGE option. If None, auto-detected
+                  from DATASET_LANGUAGE_MAP (defaults to "english").
     
     Returns:
         dict with structure: {dataset_name: {"hash creates": [...], "hash sets": [...], ...}}
     """
     if dataset_name not in TEXT_DATASETS:
         raise ValueError(f"Unknown dataset: {dataset_name}. Available: {list(TEXT_DATASETS.keys())}")
+    
+    # Auto-detect language from dataset name if not explicitly provided
+    if language is None:
+        language = DATASET_LANGUAGE_MAP.get(dataset_name, 'english')
     
     config = TEXT_DATASETS[dataset_name]
     field_values = config['field_values']
@@ -585,10 +1279,11 @@ def compute_text_data_sets(dataset_name, seed=123, schema_type="default"):
     tag_fields = schema.get('tag', [])
     numeric_fields = schema.get('numeric', [])
     
-    # Build create commands for both hash and json
+    # Build create commands for both hash and json, with LANGUAGE option
+    language_clause = f"LANGUAGE {language} " if language != "english" else ""
     create_cmds = {
-        "hash": "FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: SCHEMA {}",
-        "json": "FT.CREATE json_idx1 ON JSON PREFIX 1 json: SCHEMA {}",
+        "hash": f"FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: {language_clause}SCHEMA {{}}",
+        "json": f"FT.CREATE json_idx1 ON JSON PREFIX 1 json: {language_clause}SCHEMA {{}}",
     }
     
     # Build schema strings using the shared helper
@@ -653,22 +1348,590 @@ def compute_text_data_sets(dataset_name, seed=123, schema_type="default"):
     
     return data
 
+### Filter Data ###
+
+FILTER_DOCS = [
+    {"status": "active",   "price": 100,  "category": "electronics", "title": "quick fox jumps high",    "rating": 5, "memo": "12"},
+    {"status": "inactive", "price": 25,   "category": "books",       "title": "slow turtle walks far",   "rating": 3, "memo": "abc"},
+    {"status": "active",   "price": 200,  "category": "clothing",    "title": "red hat sells well",      "rating": 4, "memo": "3.5"},
+    {"status": "pending",  "price": 50,   "category": "food",        "title": "fresh apple grows fast",  "rating": 2, "memo": ""},
+    {"status": "active",   "price": 75,   "category": "electronics", "title": "bright screen shines on", "rating": 5},
+    {"status": "inactive", "price": 300,  "category": "books",       "title": "old book reads fine",     "rating": 1},
+    {"status": "active",   "price": 150,                              "title": "new phone rings loud",    "rating": 4},  # missing category
+    {"status": "pending",  "price": 10,   "category": "clothing",    "title": "blue shirt fits right"},                  # missing rating
+    {                       "price": 500,  "category": "electronics", "title": "fast chip runs cool",     "rating": 5},  # missing status
+    {"status": "active",   "price": 1000, "category": "food",        "title": "big cake bakes slow",     "rating": 3},
+    {"status": "active",   "price": 42,   "category": "books",                                           "rating": 2},  # missing title (TEXT)
+]
+
+# Edge-case numeric documents for FILTER tests.
+# Includes 0, +/-0.5, +/-1, large magnitudes, +/-inf (hash-only), nan (hash-only).
+# Kept small and focused on edge cases.
+_INF = float("inf")
+_NEG_INF = float("-inf")
+_NAN = float("nan")
+
+# (n1, n2, n3) tuples. n3 is kept >= 0 so it can safely be used with sqrt/log.
+_HARD_NUMBERS_COMMON = [
+    ( 0.0,  0.0,    0.0),
+    # NOTE: a row with n1=-0.0, n2=+0.0 is intentionally omitted.
+    # Redis Stack's hash NUMERIC FILTER does not follow IEEE 754 for signed
+    # zeros: it treats `-0.0` and `+0.0` as distinct in ==, !=, <, >=, even
+    # though IEEE 754 mandates -0.0 == +0.0 (and the matching answers for the
+    # related orderings). The most likely explanation is a defect in the
+    # string-to-double conversion used on hash field values: it doesn't
+    # preserve the negative-zero sign bit when parsing "-0.0", so by the time
+    # the FILTER comparator runs, the two values no longer compare as IEEE
+    # equal. Notably, the JSON path produces the IEEE-correct answer for the
+    # same row, which is consistent with this being a hash-side parsing bug
+    # rather than a deliberate FILTER semantic. valkey-search uses
+    # absl::SimpleAtod on the same bytes, gets a proper IEEE -0.0 double, and
+    # therefore returns the IEEE-correct result. Including this row in the
+    # data set would produce permanent (and intentional) compat failures, so
+    # we exclude it.
+    # ( -0.0, 0.0, 1.0 ),
+    ( 1.0, -1.0,    1.0),
+    (-1.0,  1.0,    2.0),
+    ( 0.5, -0.5,    0.25),
+    (-0.5,  0.5,    4.0),
+    ( 100.0, -100.0, 16.0),
+]
+# Extra rows that can only be expressed in hash (JSON has no inf/nan).
+_HARD_NUMBERS_HASH_ONLY = [
+    ( _INF,     -1.0,    _INF),
+    ( _NEG_INF,  1.0,    1.0),
+    ( _NAN,      0.0,    0.0),
+]
+
+# Edge-case string documents for FILTER tests.
+# s1 is a TAG (exact-match), s2 is a TEXT field.
+_HARD_STRINGS = [
+    {"s1": "alpha",       "s2": "alpha bravo charlie"},
+    {"s1": "Alpha",       "s2": "ALPHA BRAVO"},
+    {"s1": "a",           "s2": "a"},
+    {"s1": "abc",         "s2": "abc def"},
+    {"s1": "abc123",      "s2": "abc 123"},
+    {"s1": "alpha-bravo", "s2": "alpha bravo"},
+    {"s1": "zulu",        "s2": "zulu yankee"},
+]
+
+# Filter expressions exercising every numeric operator and function on hard numbers.
+HARD_NUM_FILTER_EXPRS = {
+    # arithmetic dyadic operators
+    "filter num add":   "(@n1 + @n2) >= 0",
+    "filter num sub":   "(@n1 - @n2) > 0",
+    "filter num mul":   "(@n1 * @n2) <= 0",
+    "filter num div":   "(@n1 / @n3) > 0",
+    "filter num pow":   "(@n3 ^ 2) > 0",
+    # relational operators
+    "filter num lt":    "@n1 < @n2",
+    "filter num le":    "@n1 <= @n2",
+    "filter num eq":    "@n1 == @n2",
+    "filter num ne":    "@n1 != @n2",
+    "filter num ge":    "@n1 >= @n2",
+    "filter num gt":    "@n1 > @n2",
+    # logical operators
+    "filter num and":   "(@n1 >= 0) && (@n2 >= 0)",
+    "filter num or":    "(@n1 < 0) || (@n2 > 0)",
+    # comparison against literal infinity
+    "filter num lt inf": "@n1 < +inf",
+    "filter num gt ninf": "@n1 > -inf",
+    # Self-comparison, pinning the +/-inf rows (inf == inf is true) and the
+    # whole-key drop of the hash-only "nan" row (see below).
+    "filter num eq self": "@n1 == @n1",
+    "filter num ne self": "@n1 != @n1",
+    "filter num ge self": "@n1 >= @n1",
+    "filter num le self": "@n1 <= @n1",
+    # Unordered (NaN) comparison. A NaN operand is the only way a FILTER
+    # comparison can be unordered: Compare() returns kUNORDERED for nil
+    # (guarded separately -- a missing operand is simply false), for
+    # array-vs-scalar (which no filter attribute reference can produce, as
+    # every reference yields a double or a string), and for NaN.
+    #
+    # The NaN has to be *computed*: a NUMERIC field whose stored value is
+    # literally "nan" cannot test this, because both engines classify it as
+    # invalid data and drop the whole key from every index before any query
+    # can see it (valkey-search via the 1.3.0 emulate-release invalid-data
+    # rule in IndexSchema::ProcessMutation). `@n1 - @n1` on the +/-inf rows
+    # (hash:06, hash:07) is valid data that stays indexed and yields NaN,
+    # so the comparison result is observable through the @n2 probe.
+    #
+    # Redis answers an unordered comparison as though the operands were
+    # equal: ==, <= and >= admit the inf rows, while !=, < and > reject them.
+    "filter num eq nan": "(@n1 - @n1) == 0",
+    "filter num ne nan": "(@n1 - @n1) != 0",
+    "filter num lt nan": "(@n1 - @n1) < 0",
+    "filter num le nan": "(@n1 - @n1) <= 0",
+    "filter num gt nan": "(@n1 - @n1) > 0",
+    "filter num ge nan": "(@n1 - @n1) >= 0",
+    # numeric monadic functions
+    "filter num abs":   "abs(@n1) > 0",
+    "filter num ceil":  "ceil(@n2) >= 0",
+    "filter num floor": "floor(@n2) >= 0",
+    "filter num log":   "log(@n3) >= 0",
+    "filter num log2":  "log2(@n3) >= 0",
+    "filter num exp":   "exp(@n3) > 1",
+    "filter num sqrt":  "sqrt(@n3) >= 1",
+    # nested function/operator combinations
+    "filter num abs sub": "abs(@n1 - @n2) > 0",
+    "filter num exp neg": "exp(0 - @n3) <= 1",
+}
+
+# Filter expressions exercising every string operator and function on hard strings.
+HARD_STR_FILTER_EXPRS = {
+    # equality on TAG and TEXT
+    "filter str eq tag":     "@s1 == 'alpha'",
+    "filter str ne tag":     "@s1 != 'alpha'",
+    "filter str eq text":    "@s2 == 'alpha bravo'",
+    "filter str ne text":    "@s2 != 'alpha bravo'",
+    # contains / startswith
+    "filter str contains tag":   "contains(@s1, 'lph')",
+    "filter str contains text":  "contains(@s2, 'bravo')",
+    "filter str contains empty": "contains(@s1, '')",
+    "filter str starts tag":     "startswith(@s1, 'a')",
+    "filter str starts text":    "startswith(@s2, 'alpha')",
+    "filter str starts empty":   "startswith(@s1, '')",
+    # strlen
+    "filter str strlen gt":   "strlen(@s1) > 1",
+    "filter str strlen eq1":  "strlen(@s1) == 1",
+    "filter str strlen text": "strlen(@s2) >= 5",
+    # substr
+    "filter str substr eq":  "substr(@s1, 0, 3) == 'alp'",
+    "filter str substr neg": "substr(@s1, -3, 3) == 'pha'",
+    # case conversion
+    "filter str lower":      "lower(@s1) == 'alpha'",
+    "filter str upper":      "upper(@s1) == 'ALPHA'",
+    "filter str lower text": "lower(@s2) == 'alpha bravo'",
+    # nested function combinations
+    "filter str strlen lower":  "strlen(lower(@s1)) > 1",
+    "filter str contains upper": "contains(upper(@s1), 'PHA')",
+}
+
+# Filter expressions exercising missing-field behavior inside boolean
+# compositions. FILTER_DOCS deliberately leaves `status`, `rating`,
+# `category` and `title` missing in some rows. These expressions probe how
+# each engine handles a missing operand inside && / || / negation /
+# relational comparisons.
+#
+# Redis answers a comparison with a missing operand as FALSE, not unknown, so
+# nothing propagates and the operators are order-insensitive. The mirrored
+# left/right variants below are what proves that: they must agree.
+#
+# The "key" missing-status row is R8 (status absent, price=500). The
+# constants in each expression are chosen so that on R8 the *other*
+# branch evaluates to:
+#   - TRUE for `&&` (so the AND's outcome depends on the nil branch)
+#   - FALSE for `||` (so the OR's outcome depends on the nil branch)
+# That isolates the nil-handling decision to a single observable row.
+#
+# Mirrored ("nil left" / "nil right") variants of each shape detect any
+# short-circuit-ordering difference between the engines.
+MISSING_FIELD_FILTER_EXPRS = {
+    # AND with `==` against a missing status; right branch TRUE on R8, so
+    # the AND's outcome is decided entirely by the missing-field comparison.
+    "filter and eq nil left":    "@status=='active' && @price>200",
+    "filter and eq nil right":   "@price>200 && @status=='active'",
+    # OR with `==` against a missing status; right branch FALSE on R8.
+    "filter or eq nil left":     "@status=='active' || @price<=200",
+    "filter or eq nil right":    "@price<=200 || @status=='active'",
+    # Same shapes with `!=`. A missing operand makes this false too -- the
+    # one case where FILTER and an intuitive reading of `!=` disagree.
+    "filter and ne nil left":    "@status!='active' && @price>200",
+    "filter or ne nil left":     "@status!='active' || @price<=200",
+    # Both branches reference a missing field. R6 is missing category,
+    # R8 is missing status -- different rows hit the nil branch in each
+    # operand, so engine disagreement can show on either row.
+    "filter and missing both":   "@status=='active' && @category=='food'",
+    "filter or missing both":    "@status=='active' || @category=='food'",
+    # Relational on a missing status. Right branch TRUE on R8 so the AND's
+    # result is determined by the relational-on-missing semantics.
+    "filter and relop nil left": "@status<'b' && @price>200",
+    # A missing TEXT field. `title` is the only TEXT in the schema and the
+    # last FILTER_DOCS row omits it, so these are the only cases that reach
+    # the missing-field path for a TEXT type at all -- TAG and NUMERIC are
+    # covered by the status/category/rating rows above.
+    "filter bare eq nil text":   "@title == 'quick fox jumps high'",
+    "filter bare ne nil text":   "@title != 'quick fox jumps high'",
+    "filter not eq nil text":    "!(@title == 'quick fox jumps high')",
+    "filter and eq nil text":    "@title == 'quick fox jumps high' && @price>10",
+    "filter or eq nil text":     "@title == 'quick fox jumps high' || @price<10",
+    "filter contains nil text":  "contains(@title, 'fox')",
+    "filter exists nil text":    "exists(@title)",
+    # Idiomatic "safe" patterns users would write to dodge a missing field.
+    # Both engines should agree here; if either diverges that's a regression.
+    "filter exists guard":       "exists(@status) && @status=='active'",
+    "filter not exists or eq":   "!exists(@status) || @status=='active'",
+    # Negation of equality on nil exercises the `!(==)` vs `!=` duality
+    # (concern #2 + #4). Under VK both `!(Nil=='active')` and
+    # `Nil!='active'` are TRUE; under classic semantics one would be FALSE.
+    "filter neg of eq":          "!(@status=='active')",
+    # --- Bare single-operator comparisons against a missing field ---
+    # Each isolates ONE FilterFunc* operator's nil semantics with no
+    # surrounding boolean composition, mirroring the per-operator review
+    # analysis (FilterFuncEq/Ne/Lt/Le/Gt/Ge). @status is missing on R8, so
+    # every one of these applies its operator directly to a Nil operand.
+    # VK: a comparison touching a missing field yields Nil ("unknown"),
+    # which the filter keeps -- matching RediSearch (missing field -> NULL,
+    # NULL kept). The earlier composition tests only exercised ==, != and <
+    # against a missing field; <=, > and >= were never applied to one.
+    "filter bare eq nil":        "@status=='active'",  # == FilterFuncEq
+    "filter bare ne nil":        "@status!='active'",  # != FilterFuncNe
+    "filter bare lt nil":        "@status<'m'",         # <  FilterFuncLt
+    "filter bare le nil":        "@status<='m'",        # <= FilterFuncLe
+    "filter bare gt nil":        "@status>'m'",         # >  FilterFuncGt
+    "filter bare ge nil":        "@status>='m'",        # >= FilterFuncGe
+    # Same six operators against a missing NUMERIC field (R7 has no rating),
+    # which resolves through the numeric attribute path in
+    # FilterAttributeReference rather than the string path.
+    "filter bare num eq nil":    "@rating==3",
+    "filter bare num ne nil":    "@rating!=3",
+    "filter bare num lt nil":    "@rating<3",
+    "filter bare num le nil":    "@rating<=3",
+    "filter bare num gt nil":    "@rating>3",
+    "filter bare num ge nil":    "@rating>=3",
+}
+
+# Filter expressions that reference fields by their SCHEMA *alias*.
+#
+# Run against _alias_schema, where every alias differs from its identifier
+# (`status AS st`, `$.price AS pr`), so a match proves the alias resolved --
+# with alias and identifier identical, as in the default schema, the two
+# resolution paths are indistinguishable.
+#
+# Redis resolves the alias and only the alias: with `color AS c` declared,
+# `@c` matches while `@color` (the identifier) returns nothing, for HASH and
+# JSON alike. The identifier form is deliberately not covered here; see the
+# note in generate_filter._run_alias_queries.
+ALIAS_FILTER_EXPRS = {
+    # TAG and NUMERIC aliases, the two simplest resolutions.
+    "filter alias tag eq":    "@st == 'active'",
+    "filter alias tag ne":    "@st != 'inactive'",
+    "filter alias num gt":    "@pr > 100",
+    "filter alias num range": "@pr >= 50 && @pr <= 200",
+    # An alias on each side of a boolean, so neither operand can be the only
+    # one being resolved.
+    "filter alias and":       "@st == 'active' && @pr > 100",
+    "filter alias or":        "@cat == 'electronics' || @rt > 4",
+    # Alias inside a function call rather than a bare comparison.
+    "filter alias exists":    "exists(@rt)",
+    "filter alias contains":  "contains(@ttl, 'slow')",
+    # Aliases whose rows are missing the underlying field (FILTER_DOCS R6/R7/R8
+    # omit category/rating/status), so alias resolution is exercised on the
+    # missing-value path too.
+    "filter alias missing":   "@cat == 'food' || @st == 'pending'",
+}
+
+# Filter expressions over an UNDECLARED hash field holding values that are
+# not numbers: "12", "abc", "3.5", "" on the first four FILTER_DOCS rows, and
+# absent on the rest. Comparing that against a numeric literal is the only
+# observable way to reach the coercion path.
+#
+# A *declared* NUMERIC field with a non-numeric value cannot test this: both
+# engines classify it as invalid data and drop the whole key from the index
+# before any query runs, so whatever the filter decided is invisible -- the
+# same trap the hash-only "nan" row springs on HARD_NUM_FILTER_EXPRS.
+#
+# HASH only. A JSON index rejects a FILTER that references an undeclared
+# field at FT.CREATE time, so generate_filter skips the json parametrization.
+UNDECLARED_NUMERIC_FILTER_EXPRS = {
+    "filter undeclared num gt":   "@memo > 5",
+    "filter undeclared num lt":   "@memo < 100",
+    "filter undeclared num eq":   "@memo == 12",
+    "filter undeclared str eq":   "@memo == 'abc'",
+    "filter undeclared exists":   "exists(@memo)",
+    # A value that is not a number, against a numeric literal, is unordered:
+    # != is true for it and everything else false. Byte-order comparison --
+    # which is what a plain string fallback would do -- would instead make
+    # "abc" > 5 true, so these pin the distinction.
+    "filter undeclared num ne":   "@memo != 5",
+    "filter undeclared num ge":   "@memo >= 5",
+    "filter undeclared num le":   "@memo <= 5",
+    # Quoting the literal switches the whole comparison to byte order.
+    "filter undeclared quoted gt": "@memo > '5'",
+    "filter undeclared quoted eq": "@memo == '12'",
+}
+
+# Comparisons where the numeric-ness comes from something other than a plain
+# field reference, which is what distinguishes "is this operand a number?"
+# from "is this field declared NUMERIC?".
+#
+#   - a NUMERIC field is NOT a number: its value arrives as stored bytes, so
+#     @price > @rating and @price > '100' are byte-order comparisons while
+#     @price > 100 is numeric.
+#   - a number-returning function IS one, so strlen(@title) > '3' is numeric
+#     even though the literal is quoted.
+TYPED_COMPARISON_FILTER_EXPRS = {
+    "filter typed num vs literal":  "@price > 100",
+    "filter typed num vs quoted":   "@price > '100'",
+    "filter typed num vs num":      "@price > @rating",
+    "filter typed strlen vs lit":   "strlen(@title) > 3",
+    "filter typed strlen vs quote": "strlen(@title) > '3'",
+    "filter typed lower vs lit":    "lower(@category) > 5",
+    "filter typed lower vs quote":  "lower(@category) > 'c'",
+}
+
+FILTER_DATASETS = {
+    "filter base":               None,
+    "filter tag eq":             "@status=='active'",
+    "filter tag neq":            "@status!='inactive'",
+    "filter numeric gt":         "@price>100",
+    "filter numeric range":      "@price>=50 && @price<=200",
+    "filter exists rating":      "exists(@rating)",
+    "filter not exists category": "!exists(@category)",
+    "filter combined":           "@status=='active' && @price>100",
+    "filter strlen numeric":     "strlen(@price)>=3",
+    "filter startswith numeric": "startswith(@price,'1')",
+    "filter contains text":      "contains(@title,'slow')",
+    **MISSING_FIELD_FILTER_EXPRS,
+    **HARD_NUM_FILTER_EXPRS,
+    **HARD_STR_FILTER_EXPRS,
+    **ALIAS_FILTER_EXPRS,
+    **UNDECLARED_NUMERIC_FILTER_EXPRS,
+    **TYPED_COMPARISON_FILTER_EXPRS,
+}
+
+def _filter_docs_schema(key_type):
+    """Schema for the FILTER_DOCS dataset family."""
+    if key_type == "hash":
+        return [
+            "status TAG", "price NUMERIC", "category TAG",
+            "title TEXT NOSTEM", "rating NUMERIC",
+        ]
+    return [
+        "$.status AS status TAG", "$.price AS price NUMERIC",
+        "$.category AS category TAG", "$.title AS title TEXT NOSTEM",
+        "$.rating AS rating NUMERIC",
+    ]
+
+def _alias_schema(key_type):
+    """Schema for the alias FILTER tests, over the FILTER_DOCS dataset.
+
+    Every field is declared with an `AS <alias>` that differs from its
+    identifier, so a FILTER can only match by resolving the alias. The
+    hash schema needs the explicit `AS` for this: the default hash schema
+    above leaves alias and identifier identical, which cannot tell the two
+    resolution paths apart.
+    """
+    if key_type == "hash":
+        return [
+            "status AS st TAG", "price AS pr NUMERIC", "category AS cat TAG",
+            "title AS ttl TEXT NOSTEM", "rating AS rt NUMERIC",
+        ]
+    return [
+        "$.status AS st TAG", "$.price AS pr NUMERIC",
+        "$.category AS cat TAG", "$.title AS ttl TEXT NOSTEM",
+        "$.rating AS rt NUMERIC",
+    ]
+
+def _hard_numbers_schema(key_type):
+    """Schema for the hard-numbers FILTER tests (n1, n2, n3 NUMERIC)."""
+    if key_type == "hash":
+        return ["n1 NUMERIC", "n2 NUMERIC", "n3 NUMERIC"]
+    return [
+        "$.n1 AS n1 NUMERIC", "$.n2 AS n2 NUMERIC", "$.n3 AS n3 NUMERIC",
+    ]
+
+def _hard_strings_schema(key_type):
+    """Schema for the hard-strings FILTER tests (s1 TAG, s2 TEXT)."""
+    if key_type == "hash":
+        return ["s1 TAG", "s2 TEXT NOSTEM"]
+    return [
+        "$.s1 AS s1 TAG", "$.s2 AS s2 TEXT NOSTEM",
+    ]
+
+def _hard_numbers_docs(key_type):
+    """Build (key, fields) docs for the hard-numbers FILTER tests."""
+    rows = list(_HARD_NUMBERS_COMMON)
+    if key_type == "hash":
+        # JSON has no inf/nan, so only hash gets the extreme rows.
+        rows += list(_HARD_NUMBERS_HASH_ONLY)
+    docs = []
+    for i, (n1, n2, n3) in enumerate(rows):
+        docs.append((f"{key_type}:{i:02d}", {"n1": n1, "n2": n2, "n3": n3}))
+    return docs
+
+def _hard_strings_docs(key_type):
+    return [(f"{key_type}:{i:02d}", dict(d)) for i, d in enumerate(_HARD_STRINGS)]
+
+def compute_filter_data_sets(dataset_name):
+    if dataset_name not in FILTER_DATASETS:
+        raise ValueError(f"Unknown filter dataset: {dataset_name}. Available: {list(FILTER_DATASETS.keys())}")
+
+    filter_expr = FILTER_DATASETS[dataset_name]
+    data = {dataset_name: {}}
+
+    if dataset_name in HARD_NUM_FILTER_EXPRS:
+        schema_fn, docs_fn = _hard_numbers_schema, _hard_numbers_docs
+    elif dataset_name in HARD_STR_FILTER_EXPRS:
+        schema_fn, docs_fn = _hard_strings_schema, _hard_strings_docs
+    elif dataset_name in ALIAS_FILTER_EXPRS:
+        schema_fn = _alias_schema
+        def docs_fn(kt):
+            return [(f"{kt}:{i:02d}", dict(doc)) for i, doc in enumerate(FILTER_DOCS)]
+    else:
+        schema_fn = _filter_docs_schema
+        def docs_fn(kt):
+            return [(f"{kt}:{i:02d}", dict(doc)) for i, doc in enumerate(FILTER_DOCS)]
+
+    for key_type in ["hash", "json"]:
+        schema_parts = schema_fn(key_type)
+        create_cmd = [
+            "FT.CREATE", f"{key_type}_idx1", "ON", key_type.upper(),
+            "PREFIX", "1", f"{key_type}:",
+        ]
+        if filter_expr is not None:
+            create_cmd += ["FILTER", filter_expr]
+        create_cmd += ["SCHEMA"] + " ".join(schema_parts).split()
+
+        data[dataset_name][CREATES_KEY(key_type)] = [create_cmd]
+        data[dataset_name][SETS_KEY(key_type)] = docs_fn(key_type)
+
+    return data
+
 ### Helper Functions ###
-def load_data(client, data_set, key_type, data_source=None, schema_type="default"):
+### Sort key prefix data set (issue #1353, item 4) ###
+#
+# Fixture for the WITHSORTKEYS sort-key prefix cases (generate_sortkey.py).
+# future JSON variant: add SETS/CREATES "json" entries here.
+SORTKEY_PREFIX_DATA_SET = "sortkey prefix"
+
+# Absent-sort-key cases: nsk3 lacks p; the 'solo' tag isolates one document.
+SORTKEY_NIL_DATA_SET = "sortkey nil"
+
+
+def compute_sortkey_data_sets():
+    schema = ("m TAG z TEXT SORTABLE t TAG n NUMERIC f NUMERIC "
+              "vec VECTOR FLAT 6 TYPE FLOAT32 DIM 2 DISTANCE_METRIC L2")
+    docs = [
+        ("hash:skp1", {"m": "all", "z": "zebra", "t": "cat", "n": "3",
+                       "f": "3.5", "vec": b"CCCCCCCC"}),
+        ("hash:skp2", {"m": "all", "z": "apple", "t": "ant", "n": "1",
+                       "f": "1.5", "vec": b"AAAAAAAA"}),
+        ("hash:skp3", {"m": "all", "z": "mango", "t": "bee", "n": "2",
+                       "f": "2.5", "vec": b"BBBBBBBB"}),
+    ]
+    return {
+        SORTKEY_PREFIX_DATA_SET: {
+            SETS_KEY("hash"): docs,
+            CREATES_KEY("hash"): [
+                f"FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: SCHEMA {schema}"
+            ],
+        },
+        SORTKEY_NIL_DATA_SET: {
+            SETS_KEY("hash"): [
+                ("hash:nsk1", {"m": "all,solo", "p": "10",
+                               "vec": b"AAAAAAAA"}),
+                ("hash:nsk2", {"m": "all", "p": "20", "vec": b"BBBBBBBB"}),
+                ("hash:nsk3", {"m": "all", "vec": b"CCCCCCCC"}),
+            ],
+            CREATES_KEY("hash"): [
+                "FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: SCHEMA "
+                "m TAG p NUMERIC SORTABLE "
+                "vec VECTOR FLAT 6 TYPE FLOAT32 DIM 2 DISTANCE_METRIC L2"
+            ],
+        },
+    }
+
+
+### RETURN clause data set (issue #1353, item 7) ###
+#
+# Fixture for the repeated-RETURN-clause cases (generate_return.py). One
+# document, no SORTBY in any query to avoid hitting other #1353 divergence
+RETURN_CLAUSE_DATA_SET = "return clause"
+
+
+def compute_return_data_sets():
+    docs = [
+        ("hash:rc1", {"m": "all", "p": "10", "title": "hello world"}),
+    ]
+    return {
+        RETURN_CLAUSE_DATA_SET: {
+            SETS_KEY("hash"): docs,
+            CREATES_KEY("hash"): [
+                "FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: "
+                "SCHEMA m TAG p NUMERIC title TEXT"
+            ],
+        }
+    }
+
+
+### VR + text (BM-25) scoring data set ###
+#
+# Fixture for the single-VR + text compound scoring cases
+# (generate.py test_vector_range_text_bm25_scoring). A schema with both a TEXT
+# field and a vector field lets us exercise `@body:text @vec:[VECTOR_RANGE...]`
+# with WITHSCORES and confirm whether/how the VR distance affects the BM-25
+# relevance score, matching the reference engine.
+VR_TEXT_DATA_SET = "vr text"
+
+
+def compute_vr_text_data_sets():
+    # Vectors chosen so distances to the [0,0,0] query vector differ per doc,
+    # while the text field drives the BM-25 score. VECTOR_DIM == 3.
+    def vec(x, y, z):
+        return struct.pack(f"<{VECTOR_DIM}f", x, y, z).hex()
+
+    docs = [
+        ("hash:vt1", {"body": "hello world", "v1": bytes.fromhex(vec(0.1, 0.0, 0.0))}),
+        ("hash:vt2", {"body": "hello there", "v1": bytes.fromhex(vec(0.2, 0.0, 0.0))}),
+        ("hash:vt3", {"body": "hello hello world", "v1": bytes.fromhex(vec(0.3, 0.0, 0.0))}),
+        ("hash:vt4", {"body": "goodbye world", "v1": bytes.fromhex(vec(0.4, 0.0, 0.0))}),
+    ]
+    return {
+        VR_TEXT_DATA_SET: {
+            SETS_KEY("hash"): docs,
+            CREATES_KEY("hash"): [
+                f"FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: "
+                f"SCHEMA body TEXT v1 vector HNSW 6 DIM {VECTOR_DIM} "
+                f"TYPE FLOAT32 DISTANCE_METRIC L2"
+            ],
+        }
+    }
+
+
+def load_data(client, data_set, key_type, data_source=None, schema_type="default", language=None, vector_data_type="FLOAT32"):
     # Auto-detect data source based on data_set name
     if data_source is None:
-        data_source = "text" if data_set in TEXT_DATASETS else "vector"
+        if data_set in HYBRID_DATASETS:
+            data_source = "hybrid"
+        elif data_set in TEXT_DATASETS:
+            data_source = "text"
+        elif data_set in FILTER_DATASETS:
+            data_source = "filter"
+        elif data_set in (SORTKEY_PREFIX_DATA_SET, SORTKEY_NIL_DATA_SET):
+            data_source = "sortkey"
+        elif data_set == RETURN_CLAUSE_DATA_SET:
+            data_source = "return"
+        elif data_set == VR_TEXT_DATA_SET:
+            data_source = "vr_text"
+        else:
+            data_source = "vector"
 
     match data_source:
         case "vector":
-            data = compute_data_sets()
+            data = compute_data_sets(vector_data_type=vector_data_type)
         case "text":
-            data = compute_text_data_sets(data_set, schema_type=schema_type)
+            data = compute_text_data_sets(data_set, schema_type=schema_type, language=language)
+        case "hybrid":
+            data = compute_hybrid_data_sets()
+        case "filter":
+            data = compute_filter_data_sets(data_set)
+        case "sortkey":
+            data = compute_sortkey_data_sets()
+        case "return":
+            data = compute_return_data_sets()
+        case "vr_text":
+            data = compute_vr_text_data_sets()
         case _:
             raise ValueError(f"Unknown data source: {data_source}")
     load_list = data[data_set][SETS_KEY(key_type)]
     for create_index_cmd in data[data_set][CREATES_KEY(key_type)]:
-        client.execute_command(create_index_cmd)
+        if isinstance(create_index_cmd, (list, tuple)):
+            print("Create Index: ", *create_index_cmd)
+            client.execute_command(*create_index_cmd)
+        else:
+            print("Create Index: ", create_index_cmd)
+            client.execute_command(create_index_cmd)
 
     # Make large chunks to accelerate things
     batch_size = 50
@@ -693,14 +1956,54 @@ def load_data(client, data_set, key_type, data_source=None, schema_type="default
         for s in range(0, len(load_list)):
             k = client.execute_command(*["JSON.GET", load_list[s][0], "$"])
             print(f"{s}:{load_list[s][0]}:  ", k)
-    return len(load_list)
+    return load_list
 
-def load_data_cluster(cluster_client, test_case, data_set, key_type):
-    data = compute_data_sets()
+def load_data_cluster(cluster_client, test_case, data_set, key_type, data_source=None, schema_type="default", vector_data_type="FLOAT32"):
+    # Auto-detect data source based on data_set name (mirrors load_data). Without
+    # this, every dataset fell through to compute_data_sets(), which only knows
+    # the vector datasets — so a non-vector dataset (hybrid, vr_text, text,
+    # filter, sortkey, return) replayed in cluster mode raised KeyError on
+    # data[data_set].
+    if data_source is None:
+        if data_set in HYBRID_DATASETS:
+            data_source = "hybrid"
+        elif data_set in TEXT_DATASETS:
+            data_source = "text"
+        elif data_set in FILTER_DATASETS:
+            data_source = "filter"
+        elif data_set == SORTKEY_PREFIX_DATA_SET:
+            data_source = "sortkey"
+        elif data_set == RETURN_CLAUSE_DATA_SET:
+            data_source = "return"
+        elif data_set == VR_TEXT_DATA_SET:
+            data_source = "vr_text"
+        else:
+            data_source = "vector"
+
+    match data_source:
+        case "vector":
+            data = compute_data_sets(vector_data_type=vector_data_type)
+        case "text":
+            data = compute_text_data_sets(data_set, schema_type=schema_type)
+        case "hybrid":
+            data = compute_hybrid_data_sets()
+        case "filter":
+            data = compute_filter_data_sets(data_set)
+        case "sortkey":
+            data = compute_sortkey_data_sets()
+        case "return":
+            data = compute_return_data_sets()
+        case "vr_text":
+            data = compute_vr_text_data_sets()
+        case _:
+            raise ValueError(f"Unknown data source: {data_source}")
 
     primary0 = test_case.new_client_for_primary(0)
     for create_cmd in data[data_set][CREATES_KEY(key_type)]:
-        primary0.execute_command(create_cmd)
+        if isinstance(create_cmd, (list, tuple)):
+            primary0.execute_command(*create_cmd)
+        else:
+            primary0.execute_command(create_cmd)
 
     for key, fields in data[data_set][SETS_KEY(key_type)]:
         if key_type == "hash":
@@ -772,3 +2075,171 @@ def extract_vocab_by_field_from_text_data(dataset_name, key_type):
             vocab_by_field[field] = field_values[field]
     
     return vocab_by_field
+
+
+### FT.HYBRID data sets ###
+#
+# FT.HYBRID needs a corpus that is simultaneously a *text* corpus (so the
+# SEARCH arm produces interesting BM25 scores) and a *vector* corpus (so the
+# VSIM arm produces a ranking that is genuinely different from the text
+# ranking -- otherwise fusion is indistinguishable from either arm alone).
+#
+# The corpus is built constructively rather than randomly so every BM25 input
+# is auditable from the code:
+#
+#   * IDF spread   -- each signal term occupies a different slice of the
+#                     corpus, from `alpha` (most documents) down to `epsilon`
+#                     (a single document).
+#   * TF spread    -- `alpha` is repeated 0..3 times within a title, `stone`
+#                     1..3 times within a body.
+#   * Length norm  -- every document is padded with filler to a length no
+#                     other document shares, so documents that match the same
+#                     terms still differ in BM25's length normalization.
+#
+# Giving every document a distinct length is also what keeps the corpus free of
+# BM25 ties. A tie would leave the fused ranking to each engine's tie-break,
+# which is not something this suite should be pinning down.
+#
+# Text fields are indexed NOSTEM: the FT.HYBRID scoring path does not yet
+# implement stemming, and every query term below is a plain word (no prefix,
+# suffix, fuzzy or wildcard forms), which the scoring path does not implement
+# either.
+
+HYBRID_DATASETS = ["hybrid text"]
+
+HYBRID_VECTOR_DIM = 4
+HYBRID_NUM_KEYS = 24
+
+# Signal terms for the `title` field, in decreasing document frequency. The
+# divisor is the stride at which the term appears, so `alpha` lands in most
+# documents and `epsilon` in exactly one.
+HYBRID_TITLE_TERMS = [
+    ("beta", 2),      # every 2nd document
+    ("gamma", 3),     # every 3rd
+    ("delta", 5),     # every 5th
+    ("epsilon", 24),  # document 0 only
+]
+
+# Filler words, used only to vary document length. They are deliberately
+# outside the query vocabulary so they move BM25 length normalization without
+# adding matches.
+HYBRID_FILLER = ["lorem", "ipsum", "dolor", "amet"]
+
+# Signal terms for the `body` field, as (term, stride, offset). The offsets
+# shift each term off the `title` strides, so `@body:<term>` selects a
+# different document set than any `@title:<term>` -- without that, an
+# intersection like `@title:beta @body:river` would degenerate to one of its
+# operands.
+HYBRID_BODY_TERMS = [
+    ("river", 2, 1),
+    ("mountain", 3, 1),
+    ("forest", 4, 2),
+    ("canyon", 7, 3),
+]
+
+HYBRID_COLORS = ["red", "green", "blue", "amber"]
+
+
+def _pad_to_length(words, target):
+    """Pad `words` with filler until it is exactly `target` words long.
+
+    Every document gets a different target, which is what keeps BM25 scores
+    distinct: for a single-term query the score is a function of the term
+    frequency and the document length alone, so two documents of equal length
+    carrying the term the same number of times would score identically and
+    leave the fused ranking to each engine's tie-break.
+    """
+    filler = [HYBRID_FILLER[j % len(HYBRID_FILLER)]
+              for j in range(max(0, target - len(words)))]
+    return words + filler
+
+
+def _hybrid_title(i):
+    """Title for document i: `alpha` repeated 0..3 times, then the signal terms
+    whose stride divides i, padded out to a length unique to this document."""
+    words = ["alpha"] * (i % 4)
+    words += [term for term, stride in HYBRID_TITLE_TERMS if i % stride == 0]
+    if not words:
+        # Keep every document non-empty so it is indexed and can be reached by
+        # the vector arm even when it matches no query term.
+        words = ["omega"]
+    return " ".join(_pad_to_length(words, i + 8))
+
+
+def _hybrid_body(i):
+    """Body for document i: `stone` repeated 1..3 times plus the body signal
+    terms whose stride divides i, padded to a length unique to this document."""
+    words = ["stone"] * (1 + (i % 3))
+    words += [term for term, stride, offset in HYBRID_BODY_TERMS
+              if (i + offset) % stride == 0]
+    return " ".join(_pad_to_length(words, i + 5))
+
+
+def _hybrid_vector(i):
+    """Vector for document i.
+
+    Documents are placed along a diagonal ramp so L2 distance from the query
+    vector (1, 0, 0, 0) grows with i, while `title` term matches are keyed on
+    divisibility of i. The two rankings therefore disagree, which is what makes
+    fusion observable: neither arm's order survives into the fused order.
+    """
+    return [1.0 + i * 0.25, i * 0.5, 0.0, 0.0]
+
+
+def compute_hybrid_data_sets():
+    """Build the FT.HYBRID text+vector data set (both hash and json variants).
+
+    Returns the same {dataset: {"<kt> creates": [...], "<kt> sets": [...]}}
+    shape as compute_data_sets() / compute_text_data_sets().
+    """
+    name = "hybrid text"
+    data = {name: {}}
+
+    create_cmds = {
+        "hash": "FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: SCHEMA {}",
+        "json": "FT.CREATE json_idx1 ON JSON PREFIX 1 json: SCHEMA {}",
+    }
+    def vector_def(metric):
+        return (f"VECTOR HNSW 6 TYPE FLOAT32 DIM {HYBRID_VECTOR_DIM} "
+                f"DISTANCE_METRIC {metric}")
+
+    # Three vector fields over the same vectors, one per distance metric. The
+    # similarity a vector arm reports is a different function of the distance
+    # for each, so a sweep that only ever used one metric could not see two of
+    # the three formulas. `vec` keeps its name and its place, so every existing
+    # answer is unaffected.
+    # NOSTEM is required: see the module comment above.
+    field_defs = [
+        ("title", "TEXT NOSTEM"),
+        ("body", "TEXT NOSTEM"),
+        ("color", "TAG"),
+        ("price", "NUMERIC"),
+        ("vec", vector_def("L2")),
+        ("vec_ip", vector_def("IP")),
+        ("vec_cos", vector_def("COSINE")),
+    ]
+
+    for key_type in ["hash", "json"]:
+        if key_type == "hash":
+            schema = " ".join(f"{f} {d}" for f, d in field_defs)
+        else:
+            schema = " ".join(f"$.{f} AS {f} {d}" for f, d in field_defs)
+        data[name][CREATES_KEY(key_type)] = [create_cmds[key_type].format(schema)]
+
+        docs = []
+        for i in range(HYBRID_NUM_KEYS):
+            docs.append((
+                f"{key_type}:{i:02d}",
+                {
+                    "title": _hybrid_title(i),
+                    "body": _hybrid_body(i),
+                    "color": HYBRID_COLORS[i % len(HYBRID_COLORS)],
+                    "price": (i * 7) % 53,
+                    "vec": array_encode(key_type, _hybrid_vector(i)),
+                    "vec_ip": array_encode(key_type, _hybrid_vector(i)),
+                    "vec_cos": array_encode(key_type, _hybrid_vector(i)),
+                },
+            ))
+        data[name][SETS_KEY(key_type)] = docs
+
+    return data

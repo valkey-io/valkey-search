@@ -27,7 +27,10 @@
 #include "src/index_schema.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
+#include "src/indexes/text/language.h"
+#include "src/indexes/text/language_registry.h"
 #include "src/indexes/vector_base.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -59,6 +62,9 @@ const absl::string_view kCaseSensitiveParam{"CASESENSITIVE"};
 const absl::string_view kScoreParam{"SCORE"};
 constexpr absl::string_view kSchemaParam{"SCHEMA"};
 constexpr absl::string_view kSkipInitialScan("SKIPINITIALSCAN");
+constexpr absl::string_view kNoHlParam{"NOHL"};
+constexpr absl::string_view kSortableParam{"SORTABLE"};
+constexpr absl::string_view kUnfParam{"UNF"};
 constexpr size_t kDefaultAttributesCountLimit{1000};
 constexpr int kDefaultDimensionsCountLimit{32768};
 constexpr int kDefaultPrefixesCountLimit{8};
@@ -216,25 +222,48 @@ static auto default_timeout_ms =
 
 const absl::NoDestructor<
     absl::flat_hash_map<absl::string_view, data_model::Language>>
-    kLanguageByStr({{"ENGLISH", data_model::LANGUAGE_ENGLISH}});
+    kLanguageByStr({{"ENGLISH", data_model::LANGUAGE_ENGLISH},
+                    {"FRENCH", data_model::LANGUAGE_FRENCH},
+                    {"GERMAN", data_model::LANGUAGE_GERMAN},
+                    {"SPANISH", data_model::LANGUAGE_SPANISH},
+                    {"ITALIAN", data_model::LANGUAGE_ITALIAN},
+                    {"PORTUGUESE", data_model::LANGUAGE_PORTUGUESE},
+                    {"RUSSIAN", data_model::LANGUAGE_RUSSIAN},
+                    {"SWEDISH", data_model::LANGUAGE_SWEDISH},
+                    {"TURKISH", data_model::LANGUAGE_TURKISH},
+                    {"DUTCH", data_model::LANGUAGE_DUTCH},
+                    {"INDONESIAN", data_model::LANGUAGE_INDONESIAN},
+                    {"ARABIC", data_model::LANGUAGE_ARABIC}});
 const absl::NoDestructor<
     absl::flat_hash_map<absl::string_view, data_model::AttributeDataType>>
     kOnDataTypeByStr({{"HASH", data_model::ATTRIBUTE_DATA_TYPE_HASH},
                       {"JSON", data_model::ATTRIBUTE_DATA_TYPE_JSON}});
+// PREFIX <count> <prefix>...: parsed from the flexible pre-SCHEMA ordering
+// loop, so it may appear anywhere before SCHEMA relative to the other
+// options. `seen` tracks whether a PREFIX clause has been consumed; the
+// caller uses it after the loop to enforce that a hash-tagged index has one,
+// which cannot be decided here because an iteration without PREFIX is normal.
 absl::Status ParsePrefixes(vmsdk::ArgsIterator &itr,
                            data_model::IndexSchema &index_schema_proto,
-                           std::optional<absl::string_view> index_hash_tag) {
+                           std::optional<absl::string_view> index_hash_tag,
+                           bool &seen) {
   uint32_t prefixes_cnt{0};
   VMSDK_ASSIGN_OR_RETURN(
       auto res, vmsdk::ParseParam(kPrefixParam, false, itr, prefixes_cnt));
   if (!res) {
-    if (index_hash_tag.has_value()) {
-      return absl::InvalidArgumentError(
-          "PREFIX parameter is required for hash-tagged indexes");
-    } else {
-      return absl::OkStatus();
-    }
+    return absl::OkStatus();
   }
+  // A second PREFIX clause is rejected rather than appended: accumulating
+  // would let repeated clauses slip past the max-prefixes bound checked
+  // below, and "PREFIX 1 a: PREFIX 1 b:" is far more likely a typo for
+  // "PREFIX 2 a: b:" than a deliberate union. This input was already an
+  // error before PREFIX joined the ordering loop, just a more confusing one
+  // ("Unexpected parameter `PREFIX`, expecting `SCHEMA`").
+  if (seen) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("`", kPrefixParam, "` specified multiple times"));
+  }
+  seen = true;
   if (prefixes_cnt > (uint32_t)itr.DistanceEnd()) {
     return absl::InvalidArgumentError(
         absl::StrCat("Bad arguments for PREFIX: `", prefixes_cnt,
@@ -270,6 +299,26 @@ absl::Status ParsePrefixes(vmsdk::ArgsIterator &itr,
 std::string NotSupportedParamErrorMsg(absl::string_view param) {
   return absl::StrCat("The parameter `", param, "` is not supported");
 }
+// FILTER <expression>: an index-level predicate evaluated against each
+// candidate key during ingestion. Like the other pre-SCHEMA options this is
+// parsed from the flexible ordering loop, so it may appear anywhere before
+// SCHEMA rather than only immediately after PREFIX.
+absl::Status ParseFilter(vmsdk::ArgsIterator &itr,
+                         data_model::IndexSchema &index_schema_proto) {
+  VMSDK_ASSIGN_OR_RETURN(auto res,
+                         vmsdk::IsParamKeyMatch(kFilterParam, false, itr));
+  if (!res) {
+    return absl::OkStatus();
+  }
+  absl::string_view filter_expr;
+  VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, filter_expr));
+  if (filter_expr.empty()) {
+    return absl::InvalidArgumentError("FILTER expression cannot be empty");
+  }
+  index_schema_proto.set_filter(std::string(filter_expr));
+  return absl::OkStatus();
+}
+
 absl::Status ParseLanguage(vmsdk::ArgsIterator &itr,
                            data_model::IndexSchema &index_schema_proto) {
   data_model::Language language{data_model::Language::LANGUAGE_ENGLISH};
@@ -441,8 +490,8 @@ absl::Status ParseStopWords(vmsdk::ArgsIterator &itr,
                             PerIndexTextParams &params) {
   uint32_t count;
   VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, count));
+  params.stop_words.emplace();
   if (count == 0) {
-    params.stop_words.clear();
     return absl::OkStatus();
   }
 
@@ -453,11 +502,10 @@ absl::Status ParseStopWords(vmsdk::ArgsIterator &itr,
         "of arguments provided for STOPWORDS");
   }
 
-  params.stop_words.clear();
   for (uint32_t i = 0; i < count; ++i) {
     std::string word;
     VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, word));
-    params.stop_words.push_back(word);
+    params.stop_words->push_back(std::move(word));
   }
   return absl::OkStatus();
 }
@@ -477,7 +525,7 @@ vmsdk::KeyValueParser<PerIndexTextParams> CreateSchemaTextParser() {
   parser.AddParamParser(kNoStemParam,
                         GENERATE_FLAG_PARSER(PerIndexTextParams, no_stem));
 
-  parser.AddParamParser(kNoStopWordsParam, GENERATE_CLEAR_CONTAINER_PARSER(
+  parser.AddParamParser(kNoStopWordsParam, GENERATE_EMPLACE_PARSER(
                                                PerIndexTextParams, stop_words));
 
   parser.AddParamParser(
@@ -545,7 +593,7 @@ absl::StatusOr<indexes::IndexerType> ParseIndexerType(
 
 absl::Status ValidateAttributeAlias(absl::string_view alias) {
   for (const char ch : alias) {
-    if (kDefaultPunctuation.find(ch) != absl::string_view::npos) {
+    if (indexes::text::kAsciiPunctuation.find(ch) != std::string::npos) {
       return absl::InvalidArgumentError(absl::StrCat(
           "Attribute alias `", alias, "` contains invalid character `",
           std::string(1, ch), "`"));
@@ -588,14 +636,11 @@ absl::StatusOr<data_model::Attribute *> ParseAttributeArgs(
       break;
   }
 
-  // Check for SORTABLE option and ignore it
-  if (itr.DistanceEnd() > 0) {
-    auto next_arg = itr.Get();
-    if (next_arg.ok()) {
-      absl::string_view order_str = vmsdk::ToStringView(next_arg.value());
-      if (absl::EqualsIgnoreCase(order_str, "SORTABLE")) {
-        itr.Next();
-      }
+  // UNF is only recognized directly after SORTABLE, as in Redis
+  if (vmsdk::IsParamNext(kSortableParam, itr)) {
+    attribute_proto->set_sortable(true);
+    if (vmsdk::IsParamNext(kUnfParam, itr)) {
+      attribute_proto->set_unf(true);
     }
   }
 
@@ -641,22 +686,16 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
     return absl::InvalidArgumentError("JSON module is not loaded.");
   }
   index_schema_proto.set_attribute_data_type(on_data_type);
-  VMSDK_RETURN_IF_ERROR(ParsePrefixes(
-      itr, index_schema_proto, vmsdk::ParseHashTag(index_schema_proto.name())));
+  const auto index_hash_tag = vmsdk::ParseHashTag(index_schema_proto.name());
+  bool prefix_seen = false;
 
-  VMSDK_ASSIGN_OR_RETURN(res, vmsdk::IsParamKeyMatch(kFilterParam, false, itr));
-  if (res) {
-    return absl::InvalidArgumentError(NotSupportedParamErrorMsg(kFilterParam));
-  }
   // Parse schema-level text parameters before SCHEMA
   PerIndexTextParams schema_text_defaults;
   // Initialize with defaults for each parse call
-  schema_text_defaults.punctuation = kDefaultPunctuation;
   schema_text_defaults.min_stem_size = kDefaultMinStemSize;
   schema_text_defaults.with_offsets = true;
   schema_text_defaults.no_stem = false;
   schema_text_defaults.language = data_model::LANGUAGE_ENGLISH;
-  schema_text_defaults.stop_words = kDefaultStopWords;
 
   // Parse pre-SCHEMA parameters in flexible order
   static auto schema_text_parser = CreateSchemaTextParser();
@@ -674,17 +713,28 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
     // Track current position to detect if no parameter was consumed
     auto initial_distance = itr.DistanceEnd();
 
+    // Try PREFIX parameter
+    VMSDK_RETURN_IF_ERROR(
+        ParsePrefixes(itr, index_schema_proto, index_hash_tag, prefix_seen));
+
     // Try SCORE parameter
     VMSDK_RETURN_IF_ERROR(ParseScore(itr, index_schema_proto));
 
     // Try LANGUAGE parameter
     VMSDK_RETURN_IF_ERROR(ParseLanguage(itr, index_schema_proto));
 
+    // Try FILTER parameter
+    VMSDK_RETURN_IF_ERROR(ParseFilter(itr, index_schema_proto));
+
     VMSDK_ASSIGN_OR_RETURN(
         res, vmsdk::IsParamKeyMatch(kSkipInitialScan, false, itr));
     if (res) {
       index_schema_proto.set_skip_initial_scan(true);
     }
+
+    // Highlighting is not supported, so NOHL is accepted and the match
+    // result deliberately discarded
+    VMSDK_ASSIGN_OR_RETURN(res, vmsdk::IsParamKeyMatch(kNoHlParam, false, itr));
 
     // Try unsupported field parameters
     VMSDK_ASSIGN_OR_RETURN(
@@ -704,22 +754,50 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
     }
   }
 
+  // A hash-tagged index must restrict itself to keys carrying the same tag,
+  // so it requires a PREFIX clause. Checked here rather than in
+  // ParsePrefixes() because that now runs once per loop iteration, where an
+  // absent PREFIX is normal. Keyed on whether a clause was seen, not on
+  // whether any prefix was collected, so `PREFIX 0` keeps behaving as it did.
+  if (index_hash_tag.has_value() && !prefix_seen) {
+    return absl::InvalidArgumentError(
+        "PREFIX parameter is required for hash-tagged indexes");
+  }
+
   // Validate global text parameters
-  if (schema_text_defaults.punctuation.empty()) {
+  if (schema_text_defaults.punctuation.has_value() &&
+      schema_text_defaults.punctuation->empty()) {
     return absl::InvalidArgumentError("PUNCTUATION string cannot be empty");
   }
 
   // updating the local schema_text_defaults with language for consistency
   schema_text_defaults.language = index_schema_proto.language();
 
+  // Apply punctuation: use user-provided value or per-language defaults
+  if (!schema_text_defaults.punctuation.has_value()) {
+    index_schema_proto.set_punctuation(
+        indexes::text::LanguageRegistry::Instance()
+            .Get(schema_text_defaults.language)
+            ->GetDefaultPunctuation());
+  } else {
+    index_schema_proto.set_punctuation(*schema_text_defaults.punctuation);
+  }
+
   // Apply global text defaults to the schema
-  index_schema_proto.set_punctuation(schema_text_defaults.punctuation);
   index_schema_proto.set_with_offsets(schema_text_defaults.with_offsets);
   index_schema_proto.set_min_stem_size(schema_text_defaults.min_stem_size);
 
   // Add stop words to the schema
-  for (const auto &word : schema_text_defaults.stop_words) {
-    index_schema_proto.add_stop_words(word);
+  if (!schema_text_defaults.stop_words.has_value()) {
+    for (const auto &w : indexes::text::LanguageRegistry::Instance()
+                             .Get(index_schema_proto.language())
+                             ->GetDefaultStopWords()) {
+      index_schema_proto.add_stop_words(w);
+    }
+  } else {
+    for (const auto &w : *schema_text_defaults.stop_words) {
+      index_schema_proto.add_stop_words(w);
+    }
   }
 
   absl::string_view schema;
@@ -732,7 +810,11 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
     return absl::InvalidArgumentError(
         "Index schema must have at least one attribute");
   }
-  std::set<absl::string_view> identifier_names;
+  // Uniqueness is keyed on the attribute alias (the AS name), not the source
+  // identifier. This matches RediSearch, which allows the same source field to
+  // be indexed multiple times under distinct aliases (e.g. once as TEXT and
+  // once as TAG). See issue #1195.
+  std::set<absl::string_view> attribute_aliases;
   size_t text_fields_count = 0;
   while (itr.HasNext()) {
     absl::string_view attribute_identifier;
@@ -743,13 +825,12 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
                            schema_text_defaults),
         _.SetPrepend() << "Invalid field type for field `"
                        << attribute_identifier << "`: ");
-    if (identifier_names.find(attribute->identifier()) !=
-        identifier_names.end()) {
-      return absl::InvalidArgumentError(absl::StrCat(
-          "Duplicate field in schema - ", attribute->identifier()));
+    if (attribute_aliases.find(attribute->alias()) != attribute_aliases.end()) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Duplicate field in schema - ", attribute->alias()));
     }
     VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(
-        identifier_names.size() + 1, std::nullopt, max_attributes_value))
+        attribute_aliases.size() + 1, std::nullopt, max_attributes_value))
         << "The maximum number of attributes cannot exceed "
         << max_attributes_value << ".";
     if (attribute->index().index_type_case() ==
@@ -761,7 +842,7 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
       ++text_fields_count;
     }
 
-    identifier_names.insert(attribute->identifier());
+    attribute_aliases.insert(attribute->alias());
   }
   return index_schema_proto;
 }

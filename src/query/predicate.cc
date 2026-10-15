@@ -8,6 +8,7 @@
 #include "src/query/predicate.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -30,6 +31,7 @@
 #include "src/indexes/vector_base.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/debug.h"
+#include "vmsdk/src/info.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 
@@ -271,13 +273,33 @@ EvaluationResult InfixPredicate::Evaluate(
   return EvaluationResult(false);
 }
 
+// INFO counter for the fuzzy code-point distance compatibility defect (see
+// COMPATIBILITY.md). Statically constructed because predicates are also built
+// off the main thread (e.g. shard-side gRPC requests). Counts every fuzzy term
+// that uses byte distance: whether the result differs depends on the indexed
+// words, which a cheap check on the term cannot tell. Counted here, once per
+// term, because Search runs per key in Evaluate.
+static vmsdk::info_field::Integer fuzzy_code_point_distance_compat_counter(
+    "compatibility", "compatibility-fuzzy_code_point_distance",
+    vmsdk::info_field::IntegerBuilder().App());
+
+static indexes::text::LengthUnit FuzzyLengthUnit(
+    const indexes::text::TextIndexSchema &schema) {
+  auto unit = schema.GetLanguage().GetLengthUnit();
+  if (unit == indexes::text::LengthUnit::kBytes) {
+    fuzzy_code_point_distance_compat_counter.Increment();
+  }
+  return unit;
+}
+
 FuzzyPredicate::FuzzyPredicate(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
     FieldMaskPredicate field_mask, absl::string_view term, uint32_t distance)
     : text_index_schema_(text_index_schema),
       field_mask_(field_mask),
-      term_(StringInternStore::Intern(term)),
-      distance_(distance) {}
+      term_(term),
+      distance_(distance),
+      length_unit_(FuzzyLengthUnit(*text_index_schema_)) {}
 
 EvaluationResult FuzzyPredicate::Evaluate(Evaluator &evaluator) const {
   return evaluator.EvaluateText(*this, false);
@@ -290,13 +312,13 @@ EvaluationResult FuzzyPredicate::Evaluate(
   // Limit the number of term word expansions
   uint32_t max_words = options::GetMaxTermExpansions().GetValue();
   // Get all KeyIterators for words within edit distance
-  auto key_iters = indexes::text::FuzzySearch::Search(
-      text_index.GetPrefix(), term_, distance_, max_words);
+  auto expansion = indexes::text::FuzzySearch::Search(
+      text_index.GetPrefix(), term_, distance_, max_words, length_unit_);
   // Filter to only include KeyIterators that match target_key and field_mask
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
                       indexes::text::kWordExpansionInlineCapacity>
       filtered_key_iterators;
-  for (auto &key_iter : key_iters) {
+  for (auto &key_iter : expansion.key_iterators) {
     BACKGROUND_PAUSEPOINT("search_fuzzy_search");
     if (key_iter.SkipForwardKey(target_key) &&
         key_iter.ContainsFields(field_mask)) {
@@ -387,6 +409,29 @@ bool TagPredicate::MatchesSingleTag(absl::string_view in_tag,
   return false;
 }
 
+VectorRangePredicate::VectorRangePredicate(absl::string_view attribute_alias,
+                                           absl::string_view identifier,
+                                           double radius,
+                                           absl::string_view vector_param_name,
+                                           std::optional<std::string> score_as,
+                                           std::optional<double> epsilon)
+    : Predicate(PredicateType::kVectorRange),
+      alias_(attribute_alias),
+      identifier_(vmsdk::MakeUniqueValkeyString(identifier)),
+      vector_param_name_(vector_param_name),
+      score_as_(std::move(score_as)),
+      epsilon_(epsilon) {
+  SetRadius(radius);
+}
+
+EvaluationResult VectorRangePredicate::Evaluate(Evaluator &evaluator) const {
+  return evaluator.EvaluateVectorRange(*this);
+}
+
+void VectorRangePredicate::SetQueryVector(std::string query) {
+  query_vector_ = std::move(query);
+}
+
 EvaluationResult TagPredicate::Evaluate(
     const absl::flat_hash_set<absl::string_view> *in_tags,
     bool case_sensitive) const {
@@ -456,6 +501,25 @@ EvaluationResult ComposedPredicate::EvaluateWithContext(Evaluator &evaluator,
                                                         bool from_or) const {
   // Determine if children need to return positions for proximity checks.
   bool require_positions = slop_.has_value() || inorder_;
+  // Single-VR model: carry the matched VectorRange distance up the tree so the
+  // top-level EvaluationResult exposes it (via HasVrScore()/vr_distance) for
+  // the caller to write into Neighbor::distance. Only one VR predicate can be
+  // present per query (enforced at parse time), so at most one child sets this.
+  bool has_vr_distance = false;
+  float vr_distance = 0.0f;
+  auto carry_vr = [&](const EvaluationResult &r) {
+    if (r.has_vr_distance) {
+      has_vr_distance = true;
+      vr_distance = r.vr_distance;
+    }
+  };
+  auto with_vr = [&](EvaluationResult &&r) -> EvaluationResult {
+    if (has_vr_distance) {
+      r.has_vr_distance = true;
+      r.vr_distance = vr_distance;
+    }
+    return std::move(r);
+  };
   // Handle AND logic
   if (GetType() == PredicateType::kComposedAnd) {
     uint32_t childrenWithPositions = 0;
@@ -486,6 +550,7 @@ EvaluationResult ComposedPredicate::EvaluateWithContext(Evaluator &evaluator,
       if (!result.matches) {
         return EvaluationResult(false);
       }
+      carry_vr(result);
       if (result.filter_iterator) {
         childrenWithPositions++;
         query_field_mask &= result.filter_iterator->QueryFieldMask();
@@ -516,14 +581,14 @@ EvaluationResult ComposedPredicate::EvaluateWithContext(Evaluator &evaluator,
         return EvaluationResult(false);
       }
       // Return the proximity iterator for potential nested use.
-      return {true, std::move(proximity_iterator)};
+      return with_vr({true, std::move(proximity_iterator)});
     }
     // Propagate the filter iterator from the one child exists
     else if (childrenWithPositions == 1) {
-      return {true, std::move(iterators[0])};
+      return with_vr({true, std::move(iterators[0])});
     }
     // All matched, but none have position. non-proximity case
-    return EvaluationResult(true);
+    return with_vr(EvaluationResult(true));
   }
   // Handle OR logic
   auto filter_iterators =
@@ -535,10 +600,12 @@ EvaluationResult ComposedPredicate::EvaluateWithContext(Evaluator &evaluator,
         EvaluatePredicate(child.get(), evaluator, require_positions, true);
     // Short-circuit if any matches and positions not required.
     if (result.matches && !require_positions) {
-      return EvaluationResult(true);
+      carry_vr(result);
+      return with_vr(EvaluationResult(true));
     } else if (result.matches) {
+      carry_vr(result);
       if (result.filter_iterator == nullptr) {
-        return EvaluationResult(true);
+        return with_vr(EvaluationResult(true));
       }
       filter_iterators.push_back(std::move(result.filter_iterator));
     }
@@ -561,7 +628,7 @@ EvaluationResult ComposedPredicate::EvaluateWithContext(Evaluator &evaluator,
     return EvaluationResult(false);
   }
   // Return the OR proximity iterator for potential nested scenarios.
-  return {true, std::move(or_proximity_iterator)};
+  return with_vr({true, std::move(or_proximity_iterator)});
 }
 
 }  // namespace valkey_search::query

@@ -9,6 +9,8 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <memory>
+#include <optional>
 
 #include "absl/base/optimization.h"
 #include "absl/container/inlined_vector.h"
@@ -26,6 +28,7 @@ struct DocRecordInfo {
   DocId doc_id{0};
   size_t num_pos{0};
   size_t term_freq{0};
+  uint32_t doc_len{0};
 };
 
 static bool ReadDocRecordHeaderFromChunk(const PostingChunk *chunk,
@@ -36,22 +39,31 @@ static bool ReadDocRecordHeaderFromChunk(const PostingChunk *chunk,
   info.start_offset = offset;
   const uint8_t *data = chunk->data + offset;
   size_t remain = chunk->size - offset;
-  uint64_t doc_id_64 = 0, num_pos_64 = 0;
-  size_t doc_id_bytes_read = ReadVarint(data, remain, doc_id_64);
-  if (doc_id_bytes_read == 0) {
+  uint64_t doc_id_64 = 0, tf_64 = 0, doc_len_64 = 0, num_pos_64 = 0;
+  size_t b1 = ReadVarint(data, remain, doc_id_64);
+  if (b1 == 0) {
     return false;
   }
-  size_t pos_count_bytes_read = ReadVarint(
-      data + doc_id_bytes_read, remain - doc_id_bytes_read, num_pos_64);
-  if (pos_count_bytes_read == 0) {
+  size_t b2 = ReadVarint(data + b1, remain - b1, tf_64);
+  if (b2 == 0) {
+    return false;
+  }
+  size_t b3 = ReadVarint(data + b1 + b2, remain - b1 - b2, doc_len_64);
+  if (b3 == 0) {
+    return false;
+  }
+  size_t b4 =
+      ReadVarint(data + b1 + b2 + b3, remain - b1 - b2 - b3, num_pos_64);
+  if (b4 == 0) {
     return false;
   }
   info.doc_id = static_cast<DocId>(doc_id_64);
+  info.term_freq = static_cast<size_t>(tf_64);
+  info.doc_len = static_cast<uint32_t>(doc_len_64);
   info.num_pos = static_cast<size_t>(num_pos_64);
-  size_t header_bytes = doc_id_bytes_read + pos_count_bytes_read;
+  size_t header_bytes = b1 + b2 + b3 + b4;
 
   if (info.num_pos == 0) {
-    info.term_freq = 0;
     info.end_offset = offset + header_bytes;
     return true;
   }
@@ -65,37 +77,6 @@ static bool ReadDocRecordHeaderFromChunk(const PostingChunk *chunk,
   }
   info.end_offset = offset + header_bytes + payload_len_bytes + payload_len;
   return true;
-}
-
-static size_t DecodeDocRecordTermFreqFromChunk(const PostingChunk *chunk,
-                                               const DocRecordInfo &info) {
-  const uint8_t *data = chunk->data + info.start_offset;
-  size_t remain = chunk->size - info.start_offset;
-  uint64_t d_id = 0, n_pos = 0, p_len = 0;
-  size_t b1 = ReadVarint(data, remain, d_id);
-  size_t b2 = ReadVarint(data + b1, remain - b1, n_pos);
-  size_t b3 = ReadVarint(data + b1 + b2, remain - b1 - b2, p_len);
-  size_t pos_offset = b1 + b2 + b3;
-
-  const uint8_t *pdata = data + pos_offset;
-  size_t premain = remain - pos_offset;
-  size_t idx = 0;
-  size_t freq = 0;
-  for (size_t i = 0; i < info.num_pos; ++i) {
-    uint64_t delta = 0, mask = 0;
-    size_t db = ReadVarint(pdata + idx, premain - idx, delta);
-    if (db == 0) {
-      break;
-    }
-    idx += db;
-    size_t mb = ReadVarint(pdata + idx, premain - idx, mask);
-    if (mb == 0) {
-      break;
-    }
-    idx += mb;
-    freq += __builtin_popcountll(mask);
-  }
-  return freq;
 }
 
 }  // namespace
@@ -168,23 +149,26 @@ Postings &Postings::operator=(Postings &&other) noexcept {
 
 bool Postings::IsEmpty() const { return key_count_ == 0; }
 
-void Postings::InsertKey(const Key &key, const PositionMap *pos_map) {
+void Postings::InsertKey(const Key &key, const PositionMap *pos_map,
+                         uint32_t tf, uint32_t doc_len) {
   DocId doc_id = DocIdMap::Instance().GetOrAssign(key);
   if (ABSL_PREDICT_FALSE(doc_id == kInvalidDocId)) {
     return;
   }
-  InsertKey(doc_id, pos_map);
+  InsertKey(doc_id, pos_map, tf, doc_len);
 }
 
-void Postings::InsertKey(DocId doc_id, const PositionMap *pos_map) {
+void Postings::InsertKey(DocId doc_id, const PositionMap *pos_map, uint32_t tf,
+                         uint32_t doc_len) {
   if (ABSL_PREDICT_FALSE(doc_id == kInvalidDocId)) {
     return;
   }
-  InsertKey(EncodedDocId::Encode(doc_id), pos_map);
+  InsertKey(EncodedDocId::Encode(doc_id), pos_map, tf, doc_len);
 }
 
 void Postings::InsertKey(const EncodedDocId &enc_doc_id,
-                         const PositionMap *pos_map) {
+                         const PositionMap *pos_map, uint32_t tf,
+                         uint32_t doc_len) {
   if (ABSL_PREDICT_FALSE(enc_doc_id.doc_id == kInvalidDocId)) {
     return;
   }
@@ -196,8 +180,8 @@ void Postings::InsertKey(const EncodedDocId &enc_doc_id,
   }
 
   size_t num_pos = pos_map ? pos_map->size() : 0;
-  size_t term_freq = 0;
-  if (pos_map) {
+  size_t term_freq = tf;
+  if (term_freq == 0 && pos_map) {
     for (const auto &[pos, mask] : *pos_map) {
       term_freq += mask.CountSetFields();
     }
@@ -227,10 +211,12 @@ void Postings::InsertKey(const EncodedDocId &enc_doc_id,
   // If this DocId belongs before existing higher DocIds (e.g. recycled DocId
   // or out-of-order insertion), insert in sorted DocId position.
   if (ABSL_PREDICT_FALSE(key_count_ > 0 && enc_doc_id.doc_id < last_doc_id_)) {
-    uint8_t header_buf[32];
+    uint8_t header_buf[48];
     uint8_t *hptr = header_buf;
     std::memcpy(hptr, enc_doc_id.bytes, enc_doc_id.len);
     hptr += enc_doc_id.len;
+    WriteVarint(hptr, term_freq);
+    WriteVarint(hptr, doc_len);
     WriteVarint(hptr, num_pos);
     if (num_pos > 0) {
       WriteVarint(hptr, payload_len);
@@ -296,7 +282,7 @@ void Postings::InsertKey(const EncodedDocId &enc_doc_id,
   }
 
   // Fast path: append to tail_ in ascending DocId order.
-  size_t est_bytes_needed = 24 + payload_len;
+  size_t est_bytes_needed = 36 + payload_len;
   if (tail_ == nullptr ||
       (tail_->size + est_bytes_needed > tail_->capacity && tail_->size > 0)) {
     uint32_t chunk_cap = std::max(PostingChunk::kDefaultCapacity,
@@ -314,18 +300,22 @@ void Postings::InsertKey(const EncodedDocId &enc_doc_id,
   uint8_t *record_start = dest;
 
   // Layout per document record in PostingChunk:
-  // [Encoded DocId (varint)] [num_pos (varint)] [payload_len (varint)] [delta1,
-  // mask1, delta2, mask2, ...]
+  // [Encoded DocId (varint)] [tf (varint)] [doc_len (varint)] [num_pos
+  // (varint)] [payload_len (varint)] [delta1, mask1, delta2, mask2, ...]
 
   // 1. Append pre-encoded doc_id bytes (cached to avoid repeated varint
   // encoding)
   std::memcpy(dest, enc_doc_id.bytes, enc_doc_id.len);
   dest += enc_doc_id.len;
 
-  // 2. Append number of positions (varint encoded)
+  // 2. Append term frequency and document length (varint encoded)
+  WriteVarint(dest, term_freq);
+  WriteVarint(dest, doc_len);
+
+  // 3. Append number of positions (varint encoded)
   WriteVarint(dest, num_pos);
 
-  // 3. Append serialized positions & field bitmasks if present
+  // 4. Append serialized positions & field bitmasks if present
   if (num_pos > 0) {
     WriteVarint(dest, payload_len);
     std::memcpy(dest, pstart, payload_len);
@@ -365,11 +355,6 @@ void Postings::RemoveKey(DocId target_id, TextIndexMetadata *metadata) {
         break;
       }
       if (existing_info.doc_id == target_id) {
-        if (existing_info.num_pos > 0) {
-          existing_info.term_freq =
-              DecodeDocRecordTermFreqFromChunk(chunk, existing_info);
-        }
-
         size_t deleted_bytes =
             existing_info.end_offset - existing_info.start_offset;
         std::memmove(chunk->data + existing_info.start_offset,
@@ -446,6 +431,23 @@ size_t Postings::GetPositionCount() const { return total_positions_; }
 
 size_t Postings::GetTotalTermFrequency() const { return total_term_frequency_; }
 
+std::optional<PostingDocStats> Postings::GetPostingDocStats(
+    BorrowedInternedStringPtr key, uint64_t field_mask) const {
+  DocId target_id = DocIdMap::Instance().GetDocId(key.AsOwned());
+  if (target_id == kInvalidDocId) {
+    return std::nullopt;
+  }
+  KeyIterator iter = GetKeyIterator();
+  if (!iter.SkipForwardDocId(target_id)) {
+    return std::nullopt;
+  }
+  if (!iter.ContainsFields(field_mask)) {
+    return std::nullopt;
+  }
+  return PostingDocStats{static_cast<uint32_t>(iter.GetTermFrequency()),
+                         iter.GetDocLen()};
+}
+
 Postings *Postings::Defrag() { return this; }
 
 // Iterators Implementation
@@ -471,43 +473,70 @@ void Postings::KeyIterator::DecodeDocRecordAtOffset() {
 
   if (!current_chunk_) {
     current_doc_id_ = kInvalidDocId;
+    current_tf_ = 0;
+    current_doc_len_ = 0;
     current_pos_count_ = 0;
     return;
   }
 
   const uint8_t *data = current_chunk_->data + byte_offset_;
   size_t remain = current_chunk_->size - byte_offset_;
-  uint64_t id = 0, pos_cnt = 0;
-  size_t doc_id_bytes_read = ReadVarint(data, remain, id);
-  if (doc_id_bytes_read == 0) {
+  uint64_t id = 0, tf = 0, doc_len = 0, pos_cnt = 0;
+  size_t b1 = ReadVarint(data, remain, id);
+  if (b1 == 0) {
     current_chunk_ = nullptr;
     current_doc_id_ = kInvalidDocId;
+    current_tf_ = 0;
+    current_doc_len_ = 0;
     current_pos_count_ = 0;
     return;
   }
-  size_t pos_count_bytes_read =
-      ReadVarint(data + doc_id_bytes_read, remain - doc_id_bytes_read, pos_cnt);
-  if (pos_count_bytes_read == 0) {
+  size_t b2 = ReadVarint(data + b1, remain - b1, tf);
+  if (b2 == 0) {
     current_chunk_ = nullptr;
     current_doc_id_ = kInvalidDocId;
+    current_tf_ = 0;
+    current_doc_len_ = 0;
+    current_pos_count_ = 0;
+    return;
+  }
+  size_t b3 = ReadVarint(data + b1 + b2, remain - b1 - b2, doc_len);
+  if (b3 == 0) {
+    current_chunk_ = nullptr;
+    current_doc_id_ = kInvalidDocId;
+    current_tf_ = 0;
+    current_doc_len_ = 0;
+    current_pos_count_ = 0;
+    return;
+  }
+  size_t b4 = ReadVarint(data + b1 + b2 + b3, remain - b1 - b2 - b3, pos_cnt);
+  if (b4 == 0) {
+    current_chunk_ = nullptr;
+    current_doc_id_ = kInvalidDocId;
+    current_tf_ = 0;
+    current_doc_len_ = 0;
     current_pos_count_ = 0;
     return;
   }
   current_doc_id_ = static_cast<DocId>(id);
+  current_tf_ = static_cast<uint32_t>(tf);
+  current_doc_len_ = static_cast<uint32_t>(doc_len);
   current_pos_count_ = pos_cnt;
 
+  size_t header_len = b1 + b2 + b3 + b4;
   if (pos_cnt == 0) {
-    pos_data_ptr_ = data + doc_id_bytes_read + pos_count_bytes_read;
-    next_doc_offset_ = byte_offset_ + doc_id_bytes_read + pos_count_bytes_read;
+    pos_data_ptr_ = data + header_len;
+    next_doc_offset_ = byte_offset_ + header_len;
   } else {
     uint64_t payload_len = 0;
-    size_t header_len = doc_id_bytes_read + pos_count_bytes_read;
     size_t payload_bytes_read =
         ReadVarint(data + header_len, remain - header_len, payload_len);
     if (payload_bytes_read == 0 ||
         payload_len > remain - header_len - payload_bytes_read) {
       current_chunk_ = nullptr;
       current_doc_id_ = kInvalidDocId;
+      current_tf_ = 0;
+      current_doc_len_ = 0;
       current_pos_count_ = 0;
       return;
     }
@@ -591,6 +620,8 @@ bool Postings::KeyIterator::SkipForwardKey(const Key &key) {
   if (target_id == kInvalidDocId) {
     current_chunk_ = nullptr;
     current_doc_id_ = kInvalidDocId;
+    current_tf_ = 0;
+    current_doc_len_ = 0;
     current_pos_count_ = 0;
     return false;
   }
@@ -615,6 +646,16 @@ PositionIterator Postings::KeyIterator::GetPositionIterator() const {
           static_cast<size_t>(next_doc_offset_ -
                               (pos_data_ptr_ - current_chunk_->data)),
           current_pos_count_};
+}
+
+size_t Postings::KeyIterator::GetTermFrequency() const {
+  CHECK(IsValid()) << "KeyIterator is invalid or exhausted";
+  return current_tf_;
+}
+
+uint32_t Postings::KeyIterator::GetDocLen() const {
+  CHECK(IsValid()) << "KeyIterator is invalid or exhausted";
+  return current_doc_len_;
 }
 
 PositionIterator::PositionIterator(const uint8_t *data, size_t max_bytes,

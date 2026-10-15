@@ -90,6 +90,9 @@ message NumericIndex {}
 message TagIndex {
   string separator = 1;
   bool case_sensitive = 2;
+  // Whether FT.CREATE was given SEPARATOR. Unset for indexes created before
+  // this field existed. Recorded only; indexing does not depend on it yet.
+  optional bool explicit_separator = 3;
 }
 
 message TrackedKeyMetadata {

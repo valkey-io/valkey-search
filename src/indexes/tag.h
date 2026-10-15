@@ -197,6 +197,9 @@ class Tag : public IndexBase {
       ABSL_GUARDED_BY(index_mutex_);
   KeySet untracked_keys_ ABSL_GUARDED_BY(index_mutex_);
   const char separator_;
+  // Carried through ToProto so it survives RDB save/load; unset for indexes
+  // created before the field existed.
+  const std::optional<bool> explicit_separator_;
   const bool case_sensitive_;
   rax *tree_ ABSL_GUARDED_BY(index_mutex_);
 };

@@ -373,11 +373,11 @@ class DocIdMap {
 
   Shard shards_[kNumShards];
   std::atomic<InternedStringPtr *> chunks_[kMaxChunks];
-  mutable absl::Mutex alloc_mutex_;
-  std::atomic<DocId> next_id_;
-  std::atomic<size_t> active_doc_count_;
+  alignas(64) mutable absl::Mutex alloc_mutex_;
+  alignas(64) std::atomic<DocId> next_id_;
+  alignas(64) std::atomic<size_t> active_doc_count_;
 
-  std::atomic<FreeBatch *> global_free_stack_;
+  alignas(64) std::atomic<FreeBatch *> global_free_stack_;
   std::atomic<size_t> global_free_batches_count_;
   std::atomic<uint64_t> generation_;
   std::atomic<bool> shutting_down_;

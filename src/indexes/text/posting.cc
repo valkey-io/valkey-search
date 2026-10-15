@@ -173,12 +173,6 @@ void Postings::InsertKey(const EncodedDocId &enc_doc_id,
     return;
   }
 
-  // If the incoming DocId is <= last_doc_id_, remove any existing entry for
-  // this DocId first so re-indexing replaces rather than duplicates.
-  if (ABSL_PREDICT_FALSE(key_count_ > 0 && enc_doc_id.doc_id <= last_doc_id_)) {
-    RemoveKey(enc_doc_id.doc_id, nullptr);
-  }
-
   size_t num_pos = pos_map ? pos_map->size() : 0;
   size_t term_freq = tf;
   if (term_freq == 0 && pos_map) {
@@ -208,9 +202,11 @@ void Postings::InsertKey(const EncodedDocId &enc_doc_id,
   uint8_t *pstart = heap_buf ? heap_buf.get() : stack_buf;
   size_t payload_len = static_cast<size_t>(pdest - pstart);
 
-  // If this DocId belongs before existing higher DocIds (e.g. recycled DocId
-  // or out-of-order insertion), insert in sorted DocId position.
-  if (ABSL_PREDICT_FALSE(key_count_ > 0 && enc_doc_id.doc_id < last_doc_id_)) {
+  // If this DocId is <= last_doc_id_ (e.g. slight out-of-order arrival across
+  // concurrent ingestion threads, recycled DocId, or re-indexing an existing
+  // DocId), locate the position in a single pass, jumping directly to tail_
+  // when the DocId belongs in the tail chunk.
+  if (ABSL_PREDICT_FALSE(key_count_ > 0 && enc_doc_id.doc_id <= last_doc_id_)) {
     uint8_t header_buf[48];
     uint8_t *hptr = header_buf;
     std::memcpy(hptr, enc_doc_id.bytes, enc_doc_id.len);
@@ -226,37 +222,95 @@ void Postings::InsertKey(const EncodedDocId &enc_doc_id,
 
     PostingChunk *chunk = head_;
     PostingChunk *prev_chunk = nullptr;
+
+    // Fast path for concurrent ingestion: if the incoming DocId is strictly
+    // greater than the first DocId of tail_, it belongs inside tail_ after
+    // offset 0. Jump directly to tail_ in O(1) without scanning earlier chunks.
+    if (head_ != tail_ && tail_ != nullptr && tail_->size > 0) {
+      uint64_t tail_first_id = 0;
+      if (ReadVarint(tail_->data, tail_->size, tail_first_id) > 0 &&
+          enc_doc_id.doc_id > tail_first_id) {
+        chunk = tail_;
+      }
+    }
+
     while (chunk != nullptr) {
+      // Skip entire chunks whose next chunk starts at or before enc_doc_id.
+      if (chunk != tail_ && chunk->next != nullptr && chunk->next->size > 0) {
+        uint64_t next_first_id = 0;
+        if (ReadVarint(chunk->next->data, chunk->next->size, next_first_id) >
+                0 &&
+            enc_doc_id.doc_id >= next_first_id) {
+          prev_chunk = chunk;
+          chunk = chunk->next;
+          continue;
+        }
+      }
+
       uint32_t offset = 0;
       while (offset < chunk->size) {
         DocRecordInfo existing_info;
         if (!ReadDocRecordHeaderFromChunk(chunk, offset, existing_info)) {
           break;
         }
-        if (existing_info.doc_id > enc_doc_id.doc_id) {
-          if (chunk->size + record_len <= chunk->capacity) {
-            std::memmove(chunk->data + offset + record_len,
-                         chunk->data + offset, chunk->size - offset);
+        if (existing_info.doc_id >= enc_doc_id.doc_id) {
+          const bool is_replace = (existing_info.doc_id == enc_doc_id.doc_id);
+          const size_t old_len =
+              is_replace
+                  ? (existing_info.end_offset - existing_info.start_offset)
+                  : 0;
+          const uint32_t tail_src =
+              is_replace ? existing_info.end_offset : offset;
+          const uint32_t tail_len = chunk->size - tail_src;
+
+          if (chunk->size - old_len + record_len <= chunk->capacity) {
+            if (tail_len > 0 && record_len != old_len) {
+              std::memmove(chunk->data + offset + record_len,
+                           chunk->data + tail_src, tail_len);
+            }
             std::memcpy(chunk->data + offset, header_buf, header_len);
             if (payload_len > 0) {
               std::memcpy(chunk->data + offset + header_len, pstart,
                           payload_len);
             }
-            chunk->size += static_cast<uint32_t>(record_len);
+            chunk->size =
+                static_cast<uint32_t>(chunk->size - old_len + record_len);
+          } else if (offset > 0) {
+            // Split chunk at offset so we never need prev_chunk (safe when we
+            // jumped directly to tail_).
+            uint32_t new_cap =
+                std::max(PostingChunk::kDefaultCapacity,
+                         static_cast<uint32_t>(record_len + tail_len + 32));
+            PostingChunk *new_chunk = PostingChunk::Create(new_cap);
+            std::memcpy(new_chunk->data, header_buf, header_len);
+            if (payload_len > 0) {
+              std::memcpy(new_chunk->data + header_len, pstart, payload_len);
+            }
+            if (tail_len > 0) {
+              std::memcpy(new_chunk->data + record_len, chunk->data + tail_src,
+                          tail_len);
+            }
+            new_chunk->size = static_cast<uint32_t>(record_len + tail_len);
+            chunk->size = offset;
+            new_chunk->next = chunk->next;
+            chunk->next = new_chunk;
+            if (tail_ == chunk) {
+              tail_ = new_chunk;
+            }
           } else {
             uint32_t new_cap =
                 std::max(PostingChunk::kDefaultCapacity,
-                         static_cast<uint32_t>(chunk->size + record_len + 32));
+                         static_cast<uint32_t>(record_len + tail_len + 32));
             PostingChunk *new_chunk = PostingChunk::Create(new_cap);
-            std::memcpy(new_chunk->data, chunk->data, offset);
-            std::memcpy(new_chunk->data + offset, header_buf, header_len);
+            std::memcpy(new_chunk->data, header_buf, header_len);
             if (payload_len > 0) {
-              std::memcpy(new_chunk->data + offset + header_len, pstart,
-                          payload_len);
+              std::memcpy(new_chunk->data + header_len, pstart, payload_len);
             }
-            std::memcpy(new_chunk->data + offset + record_len,
-                        chunk->data + offset, chunk->size - offset);
-            new_chunk->size = static_cast<uint32_t>(chunk->size + record_len);
+            if (tail_len > 0) {
+              std::memcpy(new_chunk->data + record_len, chunk->data + tail_src,
+                          tail_len);
+            }
+            new_chunk->size = static_cast<uint32_t>(record_len + tail_len);
             new_chunk->next = chunk->next;
             if (prev_chunk != nullptr) {
               prev_chunk->next = new_chunk;
@@ -268,8 +322,18 @@ void Postings::InsertKey(const EncodedDocId &enc_doc_id,
             }
             PostingChunk::Destroy(chunk);
           }
+
           skip_index_.clear();
-          key_count_++;
+          if (is_replace) {
+            if (total_positions_ >= existing_info.num_pos) {
+              total_positions_ -= existing_info.num_pos;
+            }
+            if (total_term_frequency_ >= existing_info.term_freq) {
+              total_term_frequency_ -= existing_info.term_freq;
+            }
+          } else {
+            key_count_++;
+          }
           total_positions_ += num_pos;
           total_term_frequency_ += term_freq;
           return;
@@ -344,15 +408,42 @@ void Postings::RemoveKey(const Key &key, TextIndexMetadata *metadata) {
 }
 
 void Postings::RemoveKey(DocId target_id, TextIndexMetadata *metadata) {
+  if (key_count_ == 0 || target_id == kInvalidDocId ||
+      target_id > last_doc_id_) {
+    return;
+  }
+
   PostingChunk *chunk = head_;
   PostingChunk *prev_chunk = nullptr;
 
+  if (head_ != tail_ && tail_ != nullptr && tail_->size > 0) {
+    uint64_t tail_first_id = 0;
+    if (ReadVarint(tail_->data, tail_->size, tail_first_id) > 0 &&
+        target_id > tail_first_id) {
+      chunk = tail_;
+    }
+  }
+
   while (chunk != nullptr) {
+    if (chunk != tail_ && chunk->next != nullptr && chunk->next->size > 0) {
+      uint64_t next_first_id = 0;
+      if (ReadVarint(chunk->next->data, chunk->next->size, next_first_id) > 0 &&
+          target_id >= next_first_id) {
+        prev_chunk = chunk;
+        chunk = chunk->next;
+        continue;
+      }
+    }
+
     uint32_t offset = 0;
+    DocId prev_doc_id_in_chunk = 0;
     while (offset < chunk->size) {
       DocRecordInfo existing_info;
       if (!ReadDocRecordHeaderFromChunk(chunk, offset, existing_info)) {
         break;
+      }
+      if (existing_info.doc_id > target_id) {
+        return;
       }
       if (existing_info.doc_id == target_id) {
         size_t deleted_bytes =
@@ -403,21 +494,27 @@ void Postings::RemoveKey(DocId target_id, TextIndexMetadata *metadata) {
             tail_ = nullptr;
           }
         } else if (target_id == last_doc_id_) {
-          PostingChunk *c = head_;
-          DocId l_id = 0;
-          while (c != nullptr) {
-            uint32_t o = 0;
-            DocRecordInfo r_info;
-            while (o < c->size && ReadDocRecordHeaderFromChunk(c, o, r_info)) {
-              l_id = r_info.doc_id;
-              o = r_info.end_offset;
+          if (prev_doc_id_in_chunk != 0) {
+            last_doc_id_ = prev_doc_id_in_chunk;
+          } else {
+            PostingChunk *c = (prev_chunk != nullptr) ? prev_chunk : head_;
+            DocId l_id = 0;
+            while (c != nullptr) {
+              uint32_t o = 0;
+              DocRecordInfo r_info;
+              while (o < c->size &&
+                     ReadDocRecordHeaderFromChunk(c, o, r_info)) {
+                l_id = r_info.doc_id;
+                o = r_info.end_offset;
+              }
+              c = c->next;
             }
-            c = c->next;
+            last_doc_id_ = l_id;
           }
-          last_doc_id_ = l_id;
         }
         return;
       }
+      prev_doc_id_in_chunk = existing_info.doc_id;
       offset = existing_info.end_offset;
     }
     prev_chunk = chunk;

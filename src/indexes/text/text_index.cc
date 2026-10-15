@@ -162,16 +162,55 @@ TextIndexSchema::TextIndexSchema(std::shared_ptr<const Language> language,
       min_stem_size_(min_stem_size),
       rax_target_mutex_pool_(options::GetRaxTargetMutexPoolSize().GetValue()) {}
 
+namespace {
+
+template <typename Map>
+void ClearAndReuseCapacity(Map &map) {
+  if (map.bucket_count() <= 2048) {
+    map.erase(map.begin(), map.end());
+  } else {
+    map.clear();
+  }
+}
+
+struct ThreadLocalStagedKey {
+  const TextIndexSchema *schema = nullptr;
+  Key key;
+  TokenPositions token_positions;
+  InProgressStemMap stem_mappings;
+
+  void Reset() {
+    schema = nullptr;
+    key = Key();
+    ClearAndReuseCapacity(token_positions);
+    ClearAndReuseCapacity(stem_mappings);
+  }
+};
+
+thread_local ThreadLocalStagedKey tl_staged_key;
+
+}  // namespace
+
 absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
     const InternedStringPtr &key, absl::string_view data,
     size_t text_field_number, bool stem, bool suffix) {
   absl::StatusOr<std::vector<std::string>> tokens;
 
+  const bool use_tl =
+      (tl_staged_key.schema == nullptr) ||
+      (tl_staged_key.schema == this && tl_staged_key.key == key);
+  if (use_tl && tl_staged_key.schema == nullptr) {
+    tl_staged_key.schema = this;
+    tl_staged_key.key = key;
+  }
+
   if (stem) {
-    // Lock briefly to obtain a stable pointer — node_hash_map guarantees
-    // pointer stability, so we can write to it after releasing the mutex.
     InProgressStemMap *stem_mappings_ptr;
-    {
+    if (ABSL_PREDICT_TRUE(use_tl)) {
+      stem_mappings_ptr = &tl_staged_key.stem_mappings;
+    } else {
+      // Lock briefly to obtain a stable pointer — node_hash_map guarantees
+      // pointer stability, so we can write to it after releasing the mutex.
       std::lock_guard<std::mutex> stem_guard(in_progress_stem_mappings_mutex_);
       stem_mappings_ptr = &in_progress_stem_mappings_[key];
     }
@@ -183,6 +222,9 @@ absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
   }
 
   if (!tokens.ok()) {
+    if (use_tl && tl_staged_key.token_positions.empty()) {
+      tl_staged_key.Reset();
+    }
     if (tokens.status().code() == absl::StatusCode::kInvalidArgument) {
       return false;  // UTF-8 errors → hash_indexing_failures
     }
@@ -191,7 +233,12 @@ absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
 
   // Map tokens -> positions -> field-masks
   TokenPositions *token_positions;
-  {
+  if (ABSL_PREDICT_TRUE(use_tl)) {
+    token_positions = &tl_staged_key.token_positions;
+    if (token_positions->empty() && !tokens->empty()) {
+      token_positions->reserve(std::min<size_t>(tokens->size(), 1024));
+    }
+  } else {
     std::lock_guard<std::mutex> guard(in_progress_key_updates_mutex_);
     token_positions = &in_progress_key_updates_[key];
     if (token_positions->empty() && !tokens->empty()) {
@@ -216,6 +263,9 @@ absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
 }
 
 TextIndexSchema::~TextIndexSchema() {
+  if (tl_staged_key.schema == this) {
+    tl_staged_key.Reset();
+  }
   per_key_text_indexes_.clear();
   stem_tree_ = Rax();
   text_index_.reset();
@@ -225,23 +275,37 @@ TextIndexSchema::CommitResult TextIndexSchema::CommitKeyData(
     const InternedStringPtr &key) {
   // Retrieve the key's staged data
   TokenPositions token_positions;
-  {
-    std::lock_guard<std::mutex> guard(in_progress_key_updates_mutex_);
-    auto node = in_progress_key_updates_.extract(key);
-    // Exit early if the key contains no new text updates
-    if (node.empty()) {
+  InProgressStemMap stem_mappings;
+  if (ABSL_PREDICT_TRUE(tl_staged_key.schema == this &&
+                        tl_staged_key.key == key)) {
+    tl_staged_key.schema = nullptr;
+    tl_staged_key.key = Key();
+    std::swap(token_positions, tl_staged_key.token_positions);
+    std::swap(stem_mappings, tl_staged_key.stem_mappings);
+    if (token_positions.empty()) {
+      ClearAndReuseCapacity(stem_mappings);
+      std::swap(tl_staged_key.token_positions, token_positions);
+      std::swap(tl_staged_key.stem_mappings, stem_mappings);
       return {};
     }
-    token_positions = std::move(node.mapped());
-  }
+  } else {
+    {
+      std::lock_guard<std::mutex> guard(in_progress_key_updates_mutex_);
+      auto node = in_progress_key_updates_.extract(key);
+      // Exit early if the key contains no new text updates
+      if (node.empty()) {
+        return {};
+      }
+      token_positions = std::move(node.mapped());
+    }
 
-  // Retrieve the key's stem mappings
-  InProgressStemMap stem_mappings;
-  if (stem_text_field_mask_ != 0u) {
-    std::lock_guard<std::mutex> stem_guard(in_progress_stem_mappings_mutex_);
-    auto stem_node = in_progress_stem_mappings_.extract(key);
-    if (!stem_node.empty()) {
-      stem_mappings = std::move(stem_node.mapped());
+    // Retrieve the key's stem mappings
+    if (stem_text_field_mask_ != 0u) {
+      std::lock_guard<std::mutex> stem_guard(in_progress_stem_mappings_mutex_);
+      auto stem_node = in_progress_stem_mappings_.extract(key);
+      if (!stem_node.empty()) {
+        stem_mappings = std::move(stem_node.mapped());
+      }
     }
   }
 
@@ -260,6 +324,7 @@ TextIndexSchema::CommitResult TextIndexSchema::CommitKeyData(
     }
   }
   uint32_t norm = 0;
+  uint64_t total_positions_delta = 0;
 
   // Index the key's tokens
   for (auto &entry : token_positions) {
@@ -271,9 +336,8 @@ TextIndexSchema::CommitResult TextIndexSchema::CommitKeyData(
                                 std::string(token.rbegin(), token.rend()))
                           : std::nullopt;
 
-    // Update metadata from PositionMap. token_freq is this key's term frequency
-    // for this token, so it also seeds the posting entry below.
-    metadata_.total_positions += pos_map.size();
+    // Accumulate position count locally and update metadata once per document.
+    total_positions_delta += pos_map.size();
     uint32_t token_freq = 0;
     for (const auto &[_, field_mask] : pos_map) {
       token_freq += field_mask.CountSetFields();
@@ -333,6 +397,17 @@ TextIndexSchema::CommitResult TextIndexSchema::CommitKeyData(
     }
   }
 
+  // Recycle hash-table bucket capacity back into the thread-local staging slot
+  if (tl_staged_key.schema == nullptr) {
+    ClearAndReuseCapacity(token_positions);
+    ClearAndReuseCapacity(stem_mappings);
+    std::swap(tl_staged_key.token_positions, token_positions);
+    std::swap(tl_staged_key.stem_mappings, stem_mappings);
+  }
+
+  metadata_.total_positions.fetch_add(total_positions_delta,
+                                      std::memory_order_relaxed);
+
   // Map the key to the newly created per-key index and scoring info
   {
     std::lock_guard<std::mutex> per_key_guard(per_key_text_indexes_mutex_);
@@ -346,6 +421,10 @@ TextIndexSchema::CommitResult TextIndexSchema::CommitKeyData(
 }
 
 void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
+  if (ABSL_PREDICT_FALSE(tl_staged_key.schema == this &&
+                         tl_staged_key.key == key)) {
+    tl_staged_key.Reset();
+  }
   // Extract the per-key index and scoring info
   absl::node_hash_map<Key, TextIndex>::node_type node;
   {

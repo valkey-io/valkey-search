@@ -9,6 +9,7 @@
 #define VALKEYSEARCH_SRC_COORDINATOR_SEARCH_CONVERTER_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "absl/container/flat_hash_set.h"

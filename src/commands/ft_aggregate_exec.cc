@@ -21,6 +21,7 @@
 #include "absl/strings/str_join.h"
 #include "absl/strings/strip.h"
 #include "absl/time/clock.h"
+#include "results_reply.h"
 #include "src/attribute_data_type.h"
 #include "src/commands/ft_aggregate_parser.h"
 #include "src/cursor.h"
@@ -1305,7 +1306,9 @@ class CursorAggregateResult : public Cursor {
                  const std::shared_ptr<IndexSchema> &index_schema,
                  size_t count) override {
     parameters_->index_schema = index_schema;
-    parameters_->ReplyRecords(ctx, records_, std::min(count, records_.size()));
+    // Like Redis Search, a read reports no total under RESP3.
+    parameters_->ReplyRecords(ctx, records_, std::min(count, records_.size()),
+                              0);
     parameters_->index_schema = nullptr;
   }
   void ReleaseMainThreadState() override {
@@ -1319,43 +1322,64 @@ class CursorAggregateResult : public Cursor {
 
 }  // namespace
 
-// Replies [count, row...] with the first `count` records, removing them.
-void AggregateParameters::ReplyRecords(ValkeyModuleCtx *ctx, RecordSet &records,
-                                       size_t count) {
-  auto &parameters = *this;
-  ValkeyModule_ReplyWithArray(ctx, 1 + count);
-  ValkeyModule_ReplyWithLongLong(ctx, static_cast<long long>(count));
+namespace {
 
-  for (size_t n = 0; n < count; ++n) {
-    auto rec = records.pop_front();
-    ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_ARRAY_LEN);
+// The fields FT.AGGREGATE replies for one record: its columns, except
+// suppressed_reply_column_, then the extra fields LOAD * fetched. ResultsReply
+// writes them as the row of the record.
+class RecordFields : public ResultsReply::Fields {
+ public:
+  RecordFields(const AggregateParameters &parameters, const Record &rec)
+      : parameters_(parameters), rec_(rec) {}
 
-    size_t array_count = 0;
-
-    CHECK(rec->fields_.size() <= parameters.record_info_by_index_.size());
-    for (size_t i = 0; i < rec->fields_.size(); ++i) {
-      if (parameters.suppressed_reply_column_ == i) {
+  // unique_names is ignored: FT.AGGREGATE adds no field of its own to a
+  // record, so there is no name to leave out.
+  size_t Reply(ValkeyModuleCtx *ctx, bool /*unique_names*/) const override {
+    const auto data_type =
+        parameters_.index_schema->GetAttributeDataType().ToProto();
+    size_t pairs = 0;
+    CHECK(rec_.fields_.size() <= parameters_.record_info_by_index_.size());
+    for (size_t i = 0; i < rec_.fields_.size(); ++i) {
+      if (parameters_.suppressed_reply_column_ == i) {
         continue;
       }
-      if (ReplyWithValue(
-              ctx, parameters.index_schema->GetAttributeDataType().ToProto(),
-              parameters.record_info_by_index_[i].output_name_,
-              parameters.record_info_by_index_[i].data_type_, rec->fields_[i],
-              parameters.dialect)) {
-        array_count += 2;
+      const auto &info = parameters_.record_info_by_index_[i];
+      if (ReplyWithValue(ctx, data_type, info.output_name_, info.data_type_,
+                         rec_.fields_[i], parameters_.dialect)) {
+        ++pairs;
       }
     }
 
-    for (const auto &[name, value] : rec->extra_fields_) {
-      if (ReplyWithValue(
-              ctx, parameters.index_schema->GetAttributeDataType().ToProto(),
-              name, indexes::IndexerType::kNone, value, parameters.dialect)) {
-        array_count += 2;
+    for (const auto &[name, value] : rec_.extra_fields_) {
+      if (ReplyWithValue(ctx, data_type, name, indexes::IndexerType::kNone,
+                         value, parameters_.dialect)) {
+        ++pairs;
       }
     }
-
-    ValkeyModule_ReplySetArrayLength(ctx, array_count);
+    return pairs;
   }
+
+ private:
+  const AggregateParameters &parameters_;
+  const Record &rec_;
+};
+
+}  // namespace
+
+void AggregateParameters::ReplyRecords(ValkeyModuleCtx *ctx, RecordSet &records,
+                                       size_t count, size_t total_results) {
+  auto reply =
+      ResultsReply::Create(ctx, ResultsReply::Layout::kRows,
+                           ResultsReply::Columns{}, search_envelope_reply);
+  reply->Begin(total_results, count);
+  for (size_t n = 0; n < count; ++n) {
+    auto rec = records.pop_front();
+    RecordFields fields(*this, *rec);
+    ResultsReply::Row row;
+    row.fields = &fields;
+    reply->AddRow(row);
+  }
+  reply->End();
 }
 
 absl::Status RunAggregatePipeline(ValkeyModuleCtx *ctx,
@@ -1376,15 +1400,17 @@ absl::Status RunAggregatePipeline(ValkeyModuleCtx *ctx,
 
   // 4. Generate the response
   if (!parameters.cursor_options.has_value()) {
-    parameters.ReplyRecords(ctx, records, records.size());
+    parameters.ReplyRecords(ctx, records, records.size(), records.size());
     return absl::OkStatus();
   }
-  // WITHCURSOR: [[count, row...], cursor_id]
+  // WITHCURSOR: [rows, cursor_id], the rows as ReplyRecords replies them.
   ValkeyModule_ReplyWithArray(ctx, 2);
+  const size_t total_results = records.size();
   parameters.ReplyRecords(
       ctx, records,
       std::min(static_cast<size_t>(parameters.cursor_options->count),
-               records.size()));
+               records.size()),
+      total_results);
   if (records.empty()) {
     ValkeyModule_ReplyWithLongLong(ctx, 0);
     return absl::OkStatus();

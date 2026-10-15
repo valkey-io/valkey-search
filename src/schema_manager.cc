@@ -30,6 +30,7 @@
 #include "highwayhash/arch_specific.h"
 #include "highwayhash/hh_types.h"
 #include "highwayhash/highwayhash.h"
+#include "src/commands/ft_create_parser.h"
 #include "src/coordinator/metadata_manager.h"
 #include "src/cursor.h"
 #include "src/index_schema.h"
@@ -140,7 +141,22 @@ SchemaManager::SchemaManager(
           return this->OnMetadataCallback(obj_name, metadata, fingerprint,
                                           version);
         },
-        [this](auto) { return this->GetMinVersion(); });
+        [this](auto) { return this->GetMinVersion(); },
+        // Lets a reconciliation reject an over-limit index before it applies
+        // any entry, so the node stays on its current state instead of
+        // rebuilding the entries that preceded the rejected one.
+        [](const coordinator::ObjName &obj_name,
+           const google::protobuf::Any *metadata) -> absl::Status {
+          if (metadata == nullptr) {
+            return absl::OkStatus();
+          }
+          data_model::IndexSchema proposed_schema;
+          if (!metadata->UnpackTo(&proposed_schema)) {
+            return absl::InternalError(absl::StrCat(
+                "Unable to unpack metadata for index schema ", obj_name));
+          }
+          return ValidateIndexSchemaLimits(proposed_schema);
+        });
   }
 }
 
@@ -507,33 +523,45 @@ absl::Status SchemaManager::OnMetadataCallback(
     const coordinator::ObjName &obj_name, const google::protobuf::Any *metadata,
     uint64_t fingerprint, uint32_t version) {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  // FT.CREATE enforces the configurable limits (M, EF_*, DIM, prefix and
+  // attribute counts, ...) while parsing its text arguments. A proto arriving
+  // here via coordinator gossip or FT.INTERNAL_UPDATE never went through that
+  // parser, so re-check it up front. This runs before the existing schema is
+  // removed so a rejected update leaves the installed index untouched, and it
+  // is deliberately not in CreateIndexSchemaInternal: FLUSHDB recreates each
+  // live schema through that path, and a limit lowered after an index was
+  // created must not turn a flush into an index loss.
+  std::unique_ptr<data_model::IndexSchema> proposed_schema;
+  if (metadata != nullptr) {
+    proposed_schema = std::make_unique<data_model::IndexSchema>();
+    if (!metadata->UnpackTo(proposed_schema.get())) {
+      return absl::InternalError(absl::StrCat(
+          "Unable to unpack metadata for index schema ", obj_name));
+    }
+    VMSDK_RETURN_IF_ERROR(ValidateIndexSchemaLimits(*proposed_schema));
+  }
+
   auto old_schema =
       RemoveIndexSchemaInternal(obj_name.GetDbNum(), obj_name.GetName());
   if (!old_schema.ok() && !absl::IsNotFound(old_schema.status())) {
     return old_schema.status();
   }
   absl::Status result = absl::OkStatus();
-  if (metadata == nullptr) {
-    // Nothing to create — just clean up the old schema below.
-  } else {
-    auto proposed_schema = std::make_unique<data_model::IndexSchema>();
-    if (!metadata->UnpackTo(proposed_schema.get())) {
-      result = absl::InternalError(absl::StrCat(
-          "Unable to unpack metadata for index schema ", obj_name));
+  if (proposed_schema != nullptr) {
+    auto create_status =
+        CreateIndexSchemaInternal(detached_ctx_.get(), *proposed_schema);
+    if (!create_status.ok()) {
+      result = create_status;
     } else {
-      auto create_status =
-          CreateIndexSchemaInternal(detached_ctx_.get(), *proposed_schema);
-      if (!create_status.ok()) {
-        result = create_status;
-      } else {
-        auto created_schema =
-            LookupInternal(obj_name.GetDbNum(), obj_name.GetName()).value();
-        CHECK(created_schema != nullptr);
-        created_schema->SetFingerprint(fingerprint);
-        created_schema->SetVersion(version);
-      }
+      auto created_schema =
+          LookupInternal(obj_name.GetDbNum(), obj_name.GetName()).value();
+      CHECK(created_schema != nullptr);
+      created_schema->SetFingerprint(fingerprint);
+      created_schema->SetVersion(version);
     }
   }
+  // metadata == nullptr is a deletion: nothing to create, just clean up the
+  // old schema below.
   if (old_schema.ok()) {
     ValkeySearch::Instance().ScheduleUtilityTask(
         [s = std::move(old_schema.value())]() mutable { s.reset(); });
@@ -819,6 +847,50 @@ absl::Status SchemaManager::RemoveAll() {
   return absl::OkStatus();
 }
 
+namespace {
+// Number of indexes `schemas` holds once `name` in `db_num` is inserted. An
+// existing entry with the same name is replaced rather than added to.
+size_t CountIndexesAfterInsert(
+    const absl::flat_hash_map<
+        uint32_t,
+        absl::flat_hash_map<std::string, std::shared_ptr<IndexSchema>>>
+        &schemas,
+    uint32_t db_num, absl::string_view name) {
+  size_t count = 0;
+  for (const auto &[db, schemas_by_name] : schemas) {
+    count += schemas_by_name.size();
+  }
+  auto db_itr = schemas.find(db_num);
+  if (db_itr != schemas.end() && db_itr->second.contains(name)) {
+    return count;
+  }
+  return count + 1;
+}
+}  // namespace
+
+absl::Status SchemaManager::ValidateRestoredIndexSchema(
+    const data_model::IndexSchema &index_schema_proto) {
+  size_t index_count;
+  // A replication load stages its indexes and swaps them in wholesale on
+  // loading ended, so only the staged set counts toward max-indexes there.
+  if (staging_indices_due_to_repl_load_.Get()) {
+    index_count = CountIndexesAfterInsert(staged_db_to_index_schemas_.Get(),
+                                          index_schema_proto.db_num(),
+                                          index_schema_proto.name());
+  } else {
+    absl::MutexLock lock(&db_to_index_schemas_mutex_);
+    index_count = CountIndexesAfterInsert(db_to_index_schemas_,
+                                          index_schema_proto.db_num(),
+                                          index_schema_proto.name());
+  }
+  const auto max_indexes = options::GetMaxIndexes().GetValue();
+  VMSDK_RETURN_IF_ERROR(
+      vmsdk::VerifyRange(index_count, std::nullopt, max_indexes))
+      << "Number of indexes (" << index_count
+      << ") exceeds the maximum allowed (" << max_indexes << ")";
+  return ValidateIndexSchemaLimits(index_schema_proto);
+}
+
 absl::Status SchemaManager::LoadIndex(
     ValkeyModuleCtx *ctx, std::unique_ptr<data_model::RDBSection> section,
     SupplementalContentIter &&supplemental_iter) {
@@ -830,6 +902,19 @@ absl::Status SchemaManager::LoadIndex(
     return absl::InternalError(
         "Unexpected RDB section type passed to SchemaManager");
   }
+
+  // FT.CREATE enforces max-indexes and the per-schema limits only when an
+  // index is created, so an RDB taken before a limit was lowered would
+  // otherwise restore indexes the node refuses to create. Reject the load
+  // instead; raising the limit lets the same RDB load. Checked before
+  // LoadFromRDB so an over-limit index fails without loading its data.
+  const auto &restored_proto = section->index_schema_contents();
+  VMSDK_RETURN_IF_ERROR(ValidateRestoredIndexSchema(restored_proto))
+          .SetPrepend()
+      << "Index `" << vmsdk::config::RedactIfNeeded(restored_proto.name())
+      << "` (db " << restored_proto.db_num()
+      << ") exceeds a configured limit and cannot be loaded from RDB; raise "
+         "the limit to load it: ";
 
   // Load the index schema into memory
   auto index_schema_pb = std::unique_ptr<data_model::IndexSchema>(

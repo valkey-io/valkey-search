@@ -123,5 +123,46 @@ struct FlatParameters : public FTCreateVectorParameters {
 
 absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
     ValkeyModuleCtx* ctx, ValkeyModuleString** argv, int argc);
+
+// Validates an IndexSchema proto against the per-schema configurable limits
+// that FT.CREATE enforces while parsing its arguments: PREFIX count, attribute
+// count, TAG / NUMERIC identifier length, and the vector limits (DIM, M,
+// EF_CONSTRUCTION, EF_RUNTIME, BLOCK_SIZE). Each check is shared with the
+// parser, so the two paths cannot drift.
+//
+// FT.CREATE only reaches those checks through the text-argument parser. Any
+// path that builds a schema directly from a proto bypasses them, so a
+// definition that FT.CREATE would reject can be materialized. SchemaManager
+// runs this on:
+// - every proto it receives through the metadata update callback (coordinator
+//   gossip, FT.INTERNAL_UPDATE), before touching the installed schema, so a
+//   rejected update leaves the existing index in place. A reconciliation also
+//   runs it on every entry it would apply before applying any, so one
+//   over-limit index stops the whole proposal and the node keeps its current
+//   state until the limit is raised;
+// - every index schema loaded from an RDB (startup, DEBUG RELOAD, replica full
+//   sync), where a failure aborts the load.
+// It is not applied when re-materializing an already-installed schema
+// (FLUSHDB recreation), since a limit lowered after an index was created must
+// not make that index disappear.
+//
+// Deliberately not covered here:
+// - max-indexes. It is a per-node count rather than a property of one schema.
+//   SchemaManager enforces it on FT.CREATE and on RDB load; the metadata path
+//   does not check it.
+// - INITIAL_CAP upper bound. A serialized proto carries the index's grown
+//   capacity (VectorBase::ToProto emits GetCapacity()), not the value the user
+//   passed to FT.CREATE, so only a malformed (< 1) value is rejected.
+// - Text-field count. Already enforced in IndexSchema::Create on every path.
+//
+// Returns kOutOfRange on the first out-of-limit parameter, matching the code
+// FT.CREATE returns. Per-attribute failures (vector limits, TAG / NUMERIC
+// identifier length) are prefixed with "Attribute `<alias>`: ", with the alias
+// redacted when search.hide-user-data-from-log is set, since these errors are
+// logged rather than returned to a client. A vector attribute with no
+// algorithm set is malformed rather than out of range and yields
+// kInvalidArgument.
+absl::Status ValidateIndexSchemaLimits(
+    const data_model::IndexSchema& index_schema_proto);
 }  // namespace valkey_search
 #endif  // VALKEYSEARCH_SRC_COMMANDS_FT_CREATE_PARSER_H_

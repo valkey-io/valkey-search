@@ -55,6 +55,10 @@ using FingerprintCallback = absl::AnyInvocable<absl::StatusOr<uint64_t>(
 using MetadataUpdateCallback = absl::AnyInvocable<absl::Status(
     const ObjName &, const google::protobuf::Any *metadata,
     uint64_t fingerprint, uint32_t version)>;
+// Decides whether an entry may be applied, without applying it. `metadata` is
+// nullptr for a deletion.
+using MetadataValidateCallback = absl::AnyInvocable<absl::Status(
+    const ObjName &, const google::protobuf::Any *metadata)>;
 using MinVersionCallback = std::function<absl::StatusOr<vmsdk::ValkeyVersion>(
     const google::protobuf::Any &metadata)>;
 using AuxSaveCallback = void (*)(ValkeyModuleIO *rdb, int when);
@@ -110,11 +114,16 @@ class MetadataManager {
   // of the metadata for the given encoding version. This function can only
   // change when the encoding version is bumped.
   // * update_callback will be called whenever the metadata is updated.
+  // * validate_callback, if set, is called on every entry a reconciliation
+  // would apply before any of them is applied. If it rejects one, the
+  // reconciliation fails without applying anything, so the node keeps its
+  // current state and retries on the next broadcast.
   // * encoding_version should only be set in unit tests.
   void RegisterType(absl::string_view type_name,
                     FingerprintCallback fingerprint_callback,
                     MetadataUpdateCallback callback,
                     MinVersionCallback min_version_callback,
+                    MetadataValidateCallback validate_callback = nullptr,
                     vmsdk::ValkeyVersion encoding_version = kModuleVersion);
 
   void BroadcastMetadata(ValkeyModuleCtx *ctx);
@@ -169,6 +178,7 @@ class MetadataManager {
     FingerprintCallback fingerprint_callback;
     MetadataUpdateCallback update_callback;
     MinVersionCallback min_version_callback;
+    MetadataValidateCallback validate_callback;
   };
   absl::StatusOr<uint64_t> ComputeFingerprint(
       absl::string_view type_name, const google::protobuf::Any &contents,

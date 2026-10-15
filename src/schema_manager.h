@@ -136,6 +136,12 @@ class SchemaManager {
                                   uint64_t fingerprint, uint32_t version)
       ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
 
+  // Checks an index schema read from an RDB against max-indexes and the
+  // per-schema limits enforced by FT.CREATE.
+  absl::Status ValidateRestoredIndexSchema(
+      const data_model::IndexSchema &index_schema_proto)
+      ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
+
   absl::Status CreateIndexSchemaInternal(
       ValkeyModuleCtx *ctx, const data_model::IndexSchema &index_schema_proto)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);

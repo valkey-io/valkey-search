@@ -5,8 +5,12 @@
  *
  */
 
+#include <bit>
+#include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "gmock/gmock.h"
@@ -74,6 +78,7 @@ TEST_F(VectorRangePredicateTest, ConstructionWithoutOptionalParameters) {
   EXPECT_EQ(pred.GetVectorParamName(), "vec_param");
   EXPECT_FALSE(pred.GetScoreAs().has_value());
   EXPECT_FALSE(pred.GetEpsilon().has_value());
+  EXPECT_FLOAT_EQ(pred.GetSearchEpsilon(), 0.01f);
 }
 
 TEST_F(VectorRangePredicateTest, ConstructionWithScoreAsOnly) {
@@ -93,6 +98,30 @@ TEST_F(VectorRangePredicateTest, ConstructionWithEpsilonOnly) {
   EXPECT_FALSE(pred.GetScoreAs().has_value());
   ASSERT_TRUE(pred.GetEpsilon().has_value());
   EXPECT_DOUBLE_EQ(pred.GetEpsilon().value(), 0.1);
+  EXPECT_FLOAT_EQ(pred.GetSearchEpsilon(), 0.1f);
+}
+
+// Infinities and NaNs are built from bits: -ffast-math may fold the
+// std::numeric_limits ones.
+constexpr double kInf = std::bit_cast<double>(uint64_t{0x7FF0000000000000});
+constexpr double kNaN = std::bit_cast<double>(uint64_t{0x7FF8000000000000});
+constexpr double kNegNaN = std::bit_cast<double>(uint64_t{0xFFF8000000000000});
+
+// Values the walk cannot use as they are saturate the shell factor.
+TEST_F(VectorRangePredicateTest, SearchEpsilonSaturatesAtFloatMax) {
+  constexpr float kMax = std::numeric_limits<float>::max();
+  const std::vector<std::pair<std::optional<double>, float>> cases = {
+      {std::nullopt, 0.01f}, {0.5, 0.5f},  {1e38, 1e38f}, {kMax, kMax},
+      {1e39, kMax},          {1e40, kMax}, {kInf, kMax},  {kNaN, kMax},
+      {kNegNaN, kMax},       {-1.0, kMax},
+  };
+  for (const auto& [epsilon, expected] : cases) {
+    VectorRangePredicate pred("vec", "v_id", 1.0, "blob", std::nullopt,
+                              epsilon);
+    EXPECT_EQ(std::bit_cast<uint32_t>(pred.GetSearchEpsilon()),
+              std::bit_cast<uint32_t>(expected))
+        << "epsilon " << epsilon.value_or(-1);
+  }
 }
 
 TEST_F(VectorRangePredicateTest, ZeroRadius) {

@@ -1997,7 +1997,8 @@ class HierarchicalNSW
   std::vector<std::pair<dist_t, labeltype>> searchStopConditionClosest(
       const QueryVectorT &query_data,
       BaseSearchStopCondition<dist_t> &stop_condition,
-      BaseFilterFunctor *isIdAllowed = nullptr) const {
+      BaseFilterFunctor *isIdAllowed = nullptr,
+      BaseCancellationFunctor *isCancelled = nullptr) const {
     std::vector<std::pair<dist_t, labeltype>> result;
     if (cur_element_count_ == 0) return result;
 
@@ -2036,12 +2037,13 @@ class HierarchicalNSW
                         CompareByFirst>
         top_candidates;
     top_candidates = searchBaseLayerST<false>(
-        currObj, query_data, 0, isIdAllowed, nullptr, &stop_condition);
+        currObj, query_data, 0, isIdAllowed, isCancelled, &stop_condition);
 
     size_t sz = top_candidates.size();
     result.resize(sz);
     while (!top_candidates.empty()) {
-      result[--sz] = top_candidates.top();
+      const auto &[dist, id] = top_candidates.top();
+      result[--sz] = {dist, GetExternalLabel(id)};
       top_candidates.pop();
     }
 

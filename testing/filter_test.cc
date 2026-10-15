@@ -1906,6 +1906,13 @@ INSTANTIATE_TEST_SUITE_P(
                 "Invalid option (Error parsing vector similarity parameters)",
         },
         {
+            .test_name = "vector_range_epsilon_hnsw_negative_zero_rejected",
+            .filter = "@vec_hnsw:[VECTOR_RANGE 1.5 $blob]=>{$epsilon: -0}",
+            .create_success = false,
+            .create_expected_error_message =
+                "Invalid option (Error parsing vector similarity parameters)",
+        },
+        {
             .test_name = "vector_range_with_both_query_attrs",
             .filter = "@vec_hnsw:[VECTOR_RANGE 1.5 "
                       "$blob]=>{$yield_distance_as: dist; "
@@ -1986,8 +1993,55 @@ INSTANTIATE_TEST_SUITE_P(
                 "$epsilon must be a valid non-negative number",
         },
         {
+            // NaN, infinite and beyond-float values are accepted, as in
+            // Redis; the search saturates them to the widest shell.
+            .test_name = "vector_range_nan_epsilon",
+            .filter = "@vec_hnsw:[VECTOR_RANGE 1.5 $blob]=>{$epsilon: nan}",
+            .create_success = true,
+        },
+        {
+            .test_name = "vector_range_infinite_epsilon",
+            .filter = "@vec_hnsw:[VECTOR_RANGE 1.5 $blob]=>{$epsilon: inf}",
+            .create_success = true,
+        },
+        {
+            .test_name = "vector_range_plus_infinite_epsilon",
+            .filter = "@vec_hnsw:[VECTOR_RANGE 1.5 $blob]=>{$epsilon: +inf}",
+            .create_success = true,
+        },
+        {
+            .test_name = "vector_range_float_overflow_epsilon",
+            .filter = "@vec_hnsw:[VECTOR_RANGE 1.5 $blob]=>{$epsilon: 1e40}",
+            .create_success = true,
+        },
+        {
+            .test_name = "vector_range_above_float_max_epsilon",
+            .filter = "@vec_hnsw:[VECTOR_RANGE 1.5 $blob]=>{$epsilon: 1e39}",
+            .create_success = true,
+        },
+        {
+            // Read as +inf; Redis rejects a literal beyond double range.
+            .test_name = "vector_range_double_overflow_epsilon",
+            .filter = "@vec_hnsw:[VECTOR_RANGE 1.5 $blob]=>{$epsilon: 1e400}",
+            .create_success = true,
+        },
+        {
             .test_name = "vector_range_negative_epsilon",
             .filter = "@vec:[VECTOR_RANGE 1.5 $blob]=>{$epsilon: -0.5}",
+            .create_success = false,
+            .create_expected_error_message =
+                "$epsilon must be a valid non-negative number",
+        },
+        {
+            .test_name = "vector_range_negative_infinite_epsilon",
+            .filter = "@vec_hnsw:[VECTOR_RANGE 1.5 $blob]=>{$epsilon: -inf}",
+            .create_success = false,
+            .create_expected_error_message =
+                "$epsilon must be a valid non-negative number",
+        },
+        {
+            .test_name = "vector_range_negative_nan_epsilon",
+            .filter = "@vec_hnsw:[VECTOR_RANGE 1.5 $blob]=>{$epsilon: -nan}",
             .create_success = false,
             .create_expected_error_message =
                 "$epsilon must be a valid non-negative number",

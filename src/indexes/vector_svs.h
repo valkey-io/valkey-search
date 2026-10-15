@@ -12,6 +12,8 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <queue>
+#include <utility>
 #include <vector>
 
 #include "absl/base/thread_annotations.h"
@@ -103,33 +105,35 @@ class VectorSVS : public VectorType<T> {
       std::optional<size_t> ef_runtime = std::nullopt,
       bool enable_partial_results = false) override
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  absl::StatusOr<std::vector<Neighbor>> SearchRange(
+      absl::string_view query, float radius, cancel::Token &cancellation_token,
+      std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr) override
+      ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
  protected:
-  absl::Status AddRecordImpl(
-      uint64_t internal_id,
-      std::shared_ptr<const VectorRecord> &&vector_record) override
+  absl::Status AddRecordImpl(uint64_t internal_id,
+                             VectorRecord &&vector_record) override
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
   absl::Status RemoveRecordImpl(uint64_t internal_id) override
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
-  absl::Status ModifyRecordImpl(
-      uint64_t internal_id,
-      std::shared_ptr<const VectorRecord> &&vector_record) override
+  absl::Status ModifyRecordImpl(uint64_t internal_id,
+                                VectorRecord &&vector_record) override
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
   void ToProtoImpl(data_model::VectorIndex *vector_index_proto) const override;
   int RespondWithInfoImpl(ValkeyModuleCtx *ctx) const override;
   absl::Status SaveIndexImpl(RDBChunkOutputStream chunked_out) const override;
   float ComputeDistance(
-      absl::string_view query, const VectorRecord *vector_record,
+      absl::string_view query, const VectorRecord &vector_record,
       float query_magnitude) const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
-  std::shared_ptr<const VectorRecord> &GetVectorLockFree(
-      uint64_t internal_id) const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  VectorRecord &GetVectorLockFree(uint64_t internal_id) const override
+      ABSL_NO_THREAD_SAFETY_ANALYSIS;
   // LoadFromRDB leaves this map empty (saves consolidate SVS's soft
   // deletes away), so every label LoadTrackedKeys re-encounters is new to
   // it; try_emplace instead of the base class's CHECK.
-  std::shared_ptr<const VectorRecord> &GetOrCreateVectorLockFree(
-      uint64_t internal_id) override ABSL_LOCKS_EXCLUDED(label_mutex_);
-  std::shared_ptr<const VectorRecord> &GetVector(
-      uint64_t internal_id) const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  VectorRecord &GetOrCreateVectorLockFree(uint64_t internal_id) override
+      ABSL_LOCKS_EXCLUDED(label_mutex_);
+  VectorRecord &GetVector(uint64_t internal_id) const override
+      ABSL_NO_THREAD_SAFETY_ANALYSIS;
   std::optional<hnswlib::tableint> GetAlgoIdLockFree(
       uint64_t internal_id) const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
   uint64_t GetMaxLoadedLabel() const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
@@ -140,6 +144,13 @@ class VectorSVS : public VectorType<T> {
             data_model::AttributeDataType attribute_data_type, int db_num);
 
 #if defined(__linux__) && defined(__x86_64__)
+  // Up to `count` nearest neighbors of `query` as (distance, label), shared by
+  // Search and SearchRange. `filter` may be null and is not consumed.
+  absl::StatusOr<std::priority_queue<std::pair<float, hnswlib::labeltype>>>
+  SearchKnn(absl::string_view query, uint64_t count,
+            hnswlib::BaseFilterFunctor *filter,
+            std::optional<size_t> ef_runtime) ABSL_NO_THREAD_SAFETY_ANALYSIS;
+
   // Adds one vector, building the index from it when there is no handle yet
   // (writer lock only for that first build, double-checked).
   absl::Status InsertVector(uint64_t internal_id, const float *fp32)
@@ -166,8 +177,8 @@ class VectorSVS : public VectorType<T> {
   std::atomic<bool> mutations_exclusive_{false};
   SVSBuildConfig build_config_;
   mutable absl::Mutex label_mutex_ ABSL_ACQUIRED_AFTER(resize_mutex_);
-  mutable absl::node_hash_map<uint64_t, std::shared_ptr<const VectorRecord>>
-      label_to_record_ ABSL_GUARDED_BY(label_mutex_);
+  mutable absl::node_hash_map<uint64_t, VectorRecord> label_to_record_
+      ABSL_GUARDED_BY(label_mutex_);
 
   friend class VectorSVSTestPeer;
 };

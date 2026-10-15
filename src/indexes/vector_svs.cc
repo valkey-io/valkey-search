@@ -31,8 +31,10 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
+#include "src/query/search.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/cancel.h"
+#include "src/valkey_search_options.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -712,13 +714,13 @@ size_t VectorSVS<T>::GetCapacity() const {
   return 0;
 }
 
-template <typename T>
-absl::StatusOr<std::vector<Neighbor>> VectorSVS<T>::Search(
-    absl::string_view query, uint64_t count,
-    cancel::Token& /*cancellation_token*/,
-    std::unique_ptr<hnswlib::BaseFilterFunctor> filter,
-    std::optional<size_t> ef_runtime, bool /*enable_partial_results*/) {
 #if defined(__linux__) && defined(__x86_64__)
+template <typename T>
+absl::StatusOr<std::priority_queue<std::pair<float, hnswlib::labeltype>>>
+VectorSVS<T>::SearchKnn(absl::string_view query, uint64_t count,
+                        hnswlib::BaseFilterFunctor* filter,
+                        std::optional<size_t> ef_runtime) {
+  std::priority_queue<std::pair<float, hnswlib::labeltype>> knn;
   if (!IsValidSizeVector(query)) {
     return absl::InvalidArgumentError(
         absl::StrCat("SVS_VAMANA search: query vector blob size (",
@@ -728,7 +730,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorSVS<T>::Search(
 
   absl::ReaderMutexLock lock(&resize_mutex_);
   if (svs_index_ == nullptr) {
-    return std::vector<Neighbor>{};
+    return knn;
   }
   size_t live = 0;
   {
@@ -737,7 +739,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorSVS<T>::Search(
   }
   const size_t k = std::min<size_t>(count, live);
   if (k == 0) {
-    return std::vector<Neighbor>{};
+    return knn;
   }
 
   const T* raw = reinterpret_cast<const T*>(query.data());
@@ -756,7 +758,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorSVS<T>::Search(
     return SvsErrorToStatus(err.get(), "search_params_create_vamana");
   }
 
-  svs_id_filter_t filter_iface{&kSvsFilterOps, filter.get()};
+  svs_id_filter_t filter_iface{&kSvsFilterOps, filter};
   svs_id_filter_i filter_arg = filter ? &filter_iface : nullptr;
 
   svs_search_results_t results = SVS_INIT_SEARCH_RESULTS();
@@ -769,12 +771,25 @@ absl::StatusOr<std::vector<Neighbor>> VectorSVS<T>::Search(
     return SvsErrorToStatus(err.get(), "index_search_topk");
   }
 
-  std::priority_queue<std::pair<float, hnswlib::labeltype>> knn;
-  // CreateReply re-ranks by score, so every result must be a distance.
+  // Callers rank and compare against a radius by score, so every result must
+  // be a distance.
   for (size_t i = 0; i < results.total_results; ++i) {
     knn.push({SvsToDistance(this->distance_metric_, results.distances[i]),
               static_cast<hnswlib::labeltype>(results.indices[i])});
   }
+  return knn;
+}
+#endif
+
+template <typename T>
+absl::StatusOr<std::vector<Neighbor>> VectorSVS<T>::Search(
+    absl::string_view query, uint64_t count,
+    cancel::Token& /*cancellation_token*/,
+    std::unique_ptr<hnswlib::BaseFilterFunctor> filter,
+    std::optional<size_t> ef_runtime, bool /*enable_partial_results*/) {
+#if defined(__linux__) && defined(__x86_64__)
+  VMSDK_ASSIGN_OR_RETURN(auto knn,
+                         SearchKnn(query, count, filter.get(), ef_runtime));
   return this->CreateReply(knn);
 #else
   (void)query;
@@ -785,11 +800,59 @@ absl::StatusOr<std::vector<Neighbor>> VectorSVS<T>::Search(
 #endif
 }
 
+// Fetches up to search.max-nonvector-search-results-fetched nearest
+// neighbors and keeps those within the radius. When the fetch reaches the cap
+// with its farthest candidate still in range, keys may be missing, so every
+// vector is scanned exactly instead.
 template <typename T>
-absl::Status VectorSVS<T>::AddRecordImpl(
-    uint64_t internal_id, std::shared_ptr<const VectorRecord>&& vector_record) {
+absl::StatusOr<std::vector<Neighbor>> VectorSVS<T>::SearchRange(
+    absl::string_view query, float radius, cancel::Token& cancellation_token,
+    std::unique_ptr<hnswlib::BaseFilterFunctor> filter) {
 #if defined(__linux__) && defined(__x86_64__)
-  const T* raw = reinterpret_cast<const T*>(vector_record->GetRawVector());
+  const size_t max_candidates = static_cast<size_t>(
+      options::GetMaxNonVectorSearchResultsFetched().GetValue());
+  VMSDK_ASSIGN_OR_RETURN(
+      auto knn, SearchKnn(query, max_candidates, filter.get(), std::nullopt));
+
+  const bool fetch_full = knn.size() >= max_candidates;
+  if (fetch_full &&
+      (knn.empty() || this->ClampCosineDistance(knn.top().first) <= radius)) {
+    query::RecordNonVectorResultsFetchedLimited();
+    return this->SearchRangeExhaustive(query, radius, cancellation_token,
+                                       filter.get());
+  }
+
+  std::vector<Neighbor> neighbors;
+  neighbors.reserve(knn.size());
+  for (; !knn.empty(); knn.pop()) {
+    if (cancellation_token->IsCancelled()) {
+      break;
+    }
+    const auto [distance, label] = knn.top();
+    const float clamped = this->ClampCosineDistance(distance);
+    if (clamped > radius) {
+      continue;
+    }
+    auto key = this->GetKeyDuringSearch(label);
+    if (key.ok()) {
+      neighbors.emplace_back(*key, clamped);
+    }
+  }
+  return neighbors;
+#else
+  (void)query;
+  (void)radius;
+  (void)cancellation_token;
+  (void)filter;
+  return absl::UnimplementedError(kUnavailableMsg);
+#endif
+}
+
+template <typename T>
+absl::Status VectorSVS<T>::AddRecordImpl(uint64_t internal_id,
+                                         VectorRecord&& vector_record) {
+#if defined(__linux__) && defined(__x86_64__)
+  const T* raw = reinterpret_cast<const T*>(vector_record.GetRawVector());
   std::vector<float> scratch;
   VMSDK_ASSIGN_OR_RETURN(
       const float* fp32,
@@ -866,12 +929,12 @@ absl::Status VectorSVS<T>::RemoveRecordImpl(uint64_t internal_id) {
 }
 
 template <typename T>
-absl::Status VectorSVS<T>::ModifyRecordImpl(
-    uint64_t internal_id, std::shared_ptr<const VectorRecord>&& vector_record) {
+absl::Status VectorSVS<T>::ModifyRecordImpl(uint64_t internal_id,
+                                            VectorRecord&& vector_record) {
 #if defined(__linux__) && defined(__x86_64__)
   // No replace primitive in the C API and add_points rejects a duplicate id,
   // so modify is delete then add; the gap is invisible to search (phase gate).
-  const T* raw = reinterpret_cast<const T*>(vector_record->GetRawVector());
+  const T* raw = reinterpret_cast<const T*>(vector_record.GetRawVector());
   std::vector<float> scratch;
   VMSDK_ASSIGN_OR_RETURN(
       const float* fp32,
@@ -1052,20 +1115,19 @@ absl::Status VectorSVS<T>::SaveIndexImpl(
 
 template <typename T>
 float VectorSVS<T>::ComputeDistance(absl::string_view query,
-                                    const VectorRecord* vector_record,
+                                    const VectorRecord& vector_record,
                                     float query_magnitude) const {
   // Distance evaluation uses the space populated by VectorType::Init
   // from the configured distance metric. This mirrors the raw-bytes
   // distance path the base class uses for pre-filter scoring and does
   // not require the SVS index handle.
-  return space_->get_dist_func()(query.data(), vector_record->GetRawVector(),
+  return space_->get_dist_func()(query.data(), vector_record.GetRawVector(),
                                  space_->get_dist_func_param(),
                                  query_magnitude);
 }
 
 template <typename T>
-std::shared_ptr<const VectorRecord>& VectorSVS<T>::GetVectorLockFree(
-    uint64_t internal_id) const {
+VectorRecord& VectorSVS<T>::GetVectorLockFree(uint64_t internal_id) const {
   auto it = label_to_record_.find(internal_id);
   CHECK(it != label_to_record_.end())
       << "SVS internal_id not found: " << internal_id;
@@ -1073,8 +1135,7 @@ std::shared_ptr<const VectorRecord>& VectorSVS<T>::GetVectorLockFree(
 }
 
 template <typename T>
-std::shared_ptr<const VectorRecord>& VectorSVS<T>::GetOrCreateVectorLockFree(
-    uint64_t internal_id) {
+VectorRecord& VectorSVS<T>::GetOrCreateVectorLockFree(uint64_t internal_id) {
   // Load-time only (main thread, index not yet published); label_mutex_ is
   // uncontended here and keeps the header's lock contract true.
   absl::MutexLock map_lock(&label_mutex_);
@@ -1086,8 +1147,7 @@ std::shared_ptr<const VectorRecord>& VectorSVS<T>::GetOrCreateVectorLockFree(
 }
 
 template <typename T>
-std::shared_ptr<const VectorRecord>& VectorSVS<T>::GetVector(
-    uint64_t internal_id) const {
+VectorRecord& VectorSVS<T>::GetVector(uint64_t internal_id) const {
   absl::ReaderMutexLock lock(&label_mutex_);
   return GetVectorLockFree(internal_id);
 }

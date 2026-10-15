@@ -8,6 +8,7 @@
 #include "src/indexes/vector_svs.h"
 
 #include <algorithm>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -23,6 +24,7 @@
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
+#include "absl/synchronization/mutex.h"
 #include "src/attribute_data_type.h"
 #include "src/indexes/bfloat16.h"
 #include "src/indexes/fp16.h"
@@ -32,6 +34,7 @@
 #include "src/rdb_serialization.h"
 #include "src/utils/cancel.h"
 #include "third_party/hnswlib/hnswlib.h"
+#include "vmsdk/src/debug.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -44,6 +47,7 @@
 #include "src/index_schema.pb.h"
 #include "src/indexes/svs_index.pb.h"
 #include "src/indexes/svs_stream_adapter.h"
+#include "src/metrics.h"
 #include "vmsdk/src/utils.h"
 #endif
 
@@ -90,9 +94,14 @@ bool SvsThreadpoolParallelFor(void* /*self*/,
   return true;
 }
 
+}  // namespace
+
+// Declared in vector_svs.h for the unit tests.
 svs_threadpool_ops_t kSvsThreadpoolOps =
     SVS_INIT_THREADPOOL_OPS(SvsThreadpoolSize, SvsThreadpoolParallelFor);
 svs_threadpool_t kSvsThreadpoolIface{&kSvsThreadpoolOps, nullptr};
+
+namespace {
 
 // Huge-page-aware custom allocator vtable. Requests at least one huge
 // page in size try three tiers in order: 2 MiB huge pages via
@@ -110,6 +119,43 @@ constexpr size_t kSvsAllocatorHugePageSize = 2 * 1024 * 1024;
 // 16 MiB keeps the first-add reservation bounded. Measured 16–64 MiB
 // behave identically; smaller wastes per-block overhead at large DIM.
 constexpr size_t kSvsBlockSizeBytes = 16 * 1024 * 1024;
+// svs_index_build_dynamic_ex rejects a block size that is not a power of two,
+// while the stream load rounds one down silently; keep the two paths agreeing.
+static_assert(std::has_single_bit(kSvsBlockSizeBytes),
+              "kSvsBlockSizeBytes must be a power of two");
+
+// In the pinned SVS revision FINE_GRAIN is an alias of GLOBAL; once upstream
+// implements it, writers on one index run in parallel with no module change.
+constexpr svs_sync_kind_t kSvsSyncKind = SVS_SYNC_KIND_FINE_GRAIN;
+
+// Reader or writer side of resize_mutex_ for a mutation, chosen at run time
+// (see VectorSVS::mutations_exclusive_). Annotated as a shared lock: the
+// exclusive case is a superset, so callers that require the shared side are
+// satisfied either way.
+class ABSL_SCOPED_LOCKABLE SvsMutationLock {
+ public:
+  SvsMutationLock(absl::Mutex* mu, bool exclusive) ABSL_SHARED_LOCK_FUNCTION(mu)
+      : mu_(mu), exclusive_(exclusive) {
+    if (exclusive_) {
+      mu_->Lock();
+    } else {
+      mu_->ReaderLock();
+    }
+  }
+  ~SvsMutationLock() ABSL_UNLOCK_FUNCTION() {
+    if (exclusive_) {
+      mu_->Unlock();
+    } else {
+      mu_->ReaderUnlock();
+    }
+  }
+  SvsMutationLock(const SvsMutationLock&) = delete;
+  SvsMutationLock& operator=(const SvsMutationLock&) = delete;
+
+ private:
+  absl::Mutex* mu_;
+  bool exclusive_;
+};
 
 size_t RoundUpToPageSize(size_t size, size_t page_size) {
   return ((size + page_size - 1) / page_size) * page_size;
@@ -399,7 +445,7 @@ absl::StatusOr<BuilderPtr> AssembleIndexBuilder(
 
 // Builds the first svs_index on the first HSET after Create() left
 // svs_index_ null. svs_index_build_dynamic requires num_vectors > 0.
-absl::StatusOr<svs_index_h> BootstrapIndex(
+absl::StatusOr<svs_index_h> BootstrapIndexImpl(
     const SVSBuildConfig& config, data_model::DistanceMetric distance_metric,
     int dimensions, uint64_t label, const float* fp32_vector) {
   ScopedSvsError err;
@@ -407,13 +453,28 @@ absl::StatusOr<svs_index_h> BootstrapIndex(
       AssembleIndexBuilder(config, distance_metric, dimensions, err.get());
   if (!builder.ok()) return builder.status();
 
-  svs_index_h index = svs_index_build_dynamic(
-      builder->get(), fp32_vector, &label, /*num_vectors=*/1,
-      /*blocksize_bytes=*/kSvsBlockSizeBytes, err.get());
+  svs_dynamic_index_params_t params = SVS_INIT_DYNAMIC_INDEX_PARAMS();
+  params.blocksize_bytes = kSvsBlockSizeBytes;
+  params.sync_kind = kSvsSyncKind;
+  svs_index_h index =
+      svs_index_build_dynamic_ex(builder->get(), fp32_vector, &label,
+                                 /*num_vectors=*/1, &params, err.get());
   if (index == nullptr) {
-    return SvsErrorToStatus(err.get(), "index_build_dynamic");
+    return SvsErrorToStatus(err.get(), "index_build_dynamic_ex");
   }
   return index;
+}
+
+// Counts every failure once in svs_create_exceptions_cnt (INFO).
+absl::StatusOr<svs_index_h> BootstrapIndex(
+    const SVSBuildConfig& config, data_model::DistanceMetric distance_metric,
+    int dimensions, uint64_t label, const float* fp32_vector) {
+  auto result = BootstrapIndexImpl(config, distance_metric, dimensions, label,
+                                   fp32_vector);
+  if (!result.ok()) {
+    ++Metrics::GetStats().svs_create_exceptions_cnt;
+  }
+  return result;
 }
 
 // Compares the v1 fields that determine SVS's on-disk layout
@@ -575,6 +636,15 @@ absl::StatusOr<std::shared_ptr<VectorSVS<T>>> VectorSVS<T>::LoadFromRDB(
       absl::WriterMutexLock lock(&instance->resize_mutex_);
       instance->svs_index_ = index;
     }
+    // The stream load has no parameter form at this pin, so the restored
+    // index reports SVS_SYNC_KIND_NONE and cannot guard concurrent writers;
+    // keep its mutations exclusive (serialized by resize_mutex_, as before).
+    svs_sync_kind_t sync_kind = SVS_SYNC_KIND_NONE;
+    if (!svs_index_dynamic_get_sync_kind(index, &sync_kind, err.get())) {
+      return SvsErrorToStatus(err.get(), "index_dynamic_get_sync_kind");
+    }
+    instance->mutations_exclusive_.store(sync_kind == SVS_SYNC_KIND_NONE,
+                                         std::memory_order_release);
 
     // Terminator invariant (design.md): consumed_sentinel() implies AtEnd();
     // AtEnd() == false either way means SVS stopped before the payload end.
@@ -620,11 +690,15 @@ absl::StatusOr<std::vector<Neighbor>> VectorSVS<T>::Search(
   }
 
   absl::ReaderMutexLock lock(&resize_mutex_);
-  if (svs_index_ == nullptr || label_to_record_.empty()) {
+  if (svs_index_ == nullptr) {
     return std::vector<Neighbor>{};
   }
-
-  const size_t k = std::min<size_t>(count, label_to_record_.size());
+  size_t live = 0;
+  {
+    absl::ReaderMutexLock map_lock(&label_mutex_);
+    live = label_to_record_.size();
+  }
+  const size_t k = std::min<size_t>(count, live);
   if (k == 0) {
     return std::vector<Neighbor>{};
   }
@@ -684,37 +758,25 @@ absl::Status VectorSVS<T>::AddRecordImpl(
   const float* fp32 =
       MakeFp32<T>(raw, static_cast<size_t>(dimensions_), scratch);
 
-  absl::WriterMutexLock lock(&resize_mutex_);
-  // Reserve the map slot before touching SVS state. If the hash-map
-  // bucket allocation throws bad_alloc, SVS state is still pristine.
-  // If the SVS mutation later fails, the cleanup below erases the
-  // reservation so the map and SVS stay in step.
-  auto [it, inserted] = label_to_record_.try_emplace(internal_id, nullptr);
-  if (!inserted) {
-    return absl::AlreadyExistsError(
-        absl::StrCat("SVS internal_id already present: ", internal_id));
-  }
-  // Declared after `lock`, so it runs before the lock is released.
-  absl::Cleanup rollback = [this, internal_id]()
-                               ABSL_EXCLUSIVE_LOCKS_REQUIRED(resize_mutex_) {
-                                 label_to_record_.erase(internal_id);
-                               };
-
-  if (svs_index_ == nullptr) {
-    auto result = BootstrapIndex(build_config_, this->distance_metric_,
-                                 dimensions_, internal_id, fp32);
-    if (!result.ok()) return result.status();
-    svs_index_ = *result;
-  } else {
-    ScopedSvsError err;
-    size_t added = 0;
-    if (!svs_index_dynamic_add_points(svs_index_, fp32, &internal_id,
-                                      /*num_vectors=*/1, &added, err.get())) {
-      return SvsErrorToStatus(err.get(), "index_dynamic_add_points");
+  // Reserve the map slot first so a failed SVS mutation can erase it and
+  // the two stay in step; no other mutation touches this id meanwhile.
+  {
+    absl::MutexLock map_lock(&label_mutex_);
+    auto [it, inserted] = label_to_record_.try_emplace(internal_id, nullptr);
+    if (!inserted) {
+      return absl::AlreadyExistsError(
+          absl::StrCat("SVS internal_id already present: ", internal_id));
     }
   }
-  it->second = std::move(vector_record);
-  std::move(rollback).Cancel();
+  // Test hook: the map holds the id, SVS does not yet. No lock is held here.
+  BACKGROUND_PAUSEPOINT("svs_add_after_map_reserve");
+  absl::Status status = InsertVector(internal_id, fp32);
+  absl::MutexLock map_lock(&label_mutex_);
+  if (!status.ok()) {
+    label_to_record_.erase(internal_id);
+    return status;
+  }
+  label_to_record_[internal_id] = std::move(vector_record);
   return absl::OkStatus();
 #else
   (void)internal_id;
@@ -726,29 +788,38 @@ absl::Status VectorSVS<T>::AddRecordImpl(
 template <typename T>
 absl::Status VectorSVS<T>::RemoveRecordImpl(uint64_t internal_id) {
 #if defined(__linux__) && defined(__x86_64__)
-  absl::WriterMutexLock lock(&resize_mutex_);
-  auto it = label_to_record_.find(internal_id);
-  if (it == label_to_record_.end()) {
-    return absl::NotFoundError(
-        absl::StrCat("SVS internal_id not found: ", internal_id));
+  {
+    absl::ReaderMutexLock map_lock(&label_mutex_);
+    if (!label_to_record_.contains(internal_id)) {
+      return absl::NotFoundError(
+          absl::StrCat("SVS internal_id not found: ", internal_id));
+    }
   }
+  absl::Status svs_status = absl::OkStatus();
+  {
+    SvsMutationLock lock(&resize_mutex_,
+                         mutations_exclusive_.load(std::memory_order_acquire));
+    if (svs_index_ != nullptr) {
+      ScopedSvsError err;
+      size_t deleted = 0;
+      if (!svs_index_dynamic_delete_points(svs_index_, &internal_id,
+                                           /*num_vectors=*/1, &deleted,
+                                           err.get())) {
+        svs_status = SvsErrorToStatus(err.get(), "index_dynamic_delete_points");
+      }
+    }
+  }
+  // Test hook: SVS no longer holds the id, the map still does. No lock is
+  // held here.
+  BACKGROUND_PAUSEPOINT("svs_remove_after_svs_delete");
   // Erase the authoritative label mapping regardless of the SVS
   // delete outcome. If SVS reports failure, its internal state for
   // this id is unknown; dropping the map entry ensures search paths
   // that resolve labels through the map first cannot surface a stale
   // id, and a subsequent re-Add on the same id will not collide with
   // the reservation in AddRecordImpl.
-  absl::Status svs_status = absl::OkStatus();
-  if (svs_index_ != nullptr) {
-    ScopedSvsError err;
-    size_t deleted = 0;
-    if (!svs_index_dynamic_delete_points(svs_index_, &internal_id,
-                                         /*num_vectors=*/1, &deleted,
-                                         err.get())) {
-      svs_status = SvsErrorToStatus(err.get(), "index_dynamic_delete_points");
-    }
-  }
-  label_to_record_.erase(it);
+  absl::MutexLock map_lock(&label_mutex_);
+  label_to_record_.erase(internal_id);
   return svs_status;
 #else
   (void)internal_id;
@@ -760,10 +831,8 @@ template <typename T>
 absl::Status VectorSVS<T>::ModifyRecordImpl(
     uint64_t internal_id, std::shared_ptr<const VectorRecord>&& vector_record) {
 #if defined(__linux__) && defined(__x86_64__)
-  // SVS's add_points throws on a duplicate external ID (the translator
-  // insert is checked before the data mutation), so replacement is a
-  // delete followed by an add under the same lock. No native replace
-  // primitive on the C API surface today.
+  // No replace primitive in the C API and add_points rejects a duplicate id,
+  // so modify is delete then add; the gap is invisible to search (phase gate).
   const T* raw = reinterpret_cast<const T*>(vector_record->GetRawVector());
   VMSDK_RETURN_IF_ERROR(
       CheckFiniteVector<T>(raw, static_cast<size_t>(dimensions_)));
@@ -771,32 +840,38 @@ absl::Status VectorSVS<T>::ModifyRecordImpl(
   const float* fp32 =
       MakeFp32<T>(raw, static_cast<size_t>(dimensions_), scratch);
 
-  absl::WriterMutexLock lock(&resize_mutex_);
-  ScopedSvsError err;
-  if (svs_index_ != nullptr) {
-    size_t deleted = 0;
-    if (!svs_index_dynamic_delete_points(svs_index_, &internal_id,
-                                         /*num_vectors=*/1, &deleted,
-                                         err.get())) {
-      return SvsErrorToStatus(err.get(), "modify: index_dynamic_delete_points");
+  {
+    SvsMutationLock lock(&resize_mutex_,
+                         mutations_exclusive_.load(std::memory_order_acquire));
+    if (svs_index_ != nullptr) {
+      ScopedSvsError err;
+      size_t deleted = 0;
+      if (!svs_index_dynamic_delete_points(svs_index_, &internal_id,
+                                           /*num_vectors=*/1, &deleted,
+                                           err.get())) {
+        return SvsErrorToStatus(err.get(),
+                                "modify: index_dynamic_delete_points");
+      }
+      size_t added = 0;
+      if (!svs_index_dynamic_add_points(svs_index_, fp32, &internal_id,
+                                        /*num_vectors=*/1, &added, err.get())) {
+        // Delete already committed inside SVS; the id is gone from the
+        // index and cannot be resurrected here (add just failed). Drop
+        // the stale map entry so the two views agree — the base class's
+        // RemoveRecordDueToError path will then NotFoundError out
+        // cleanly instead of hitting a phantom.
+        absl::MutexLock map_lock(&label_mutex_);
+        label_to_record_.erase(internal_id);
+        return SvsErrorToStatus(err.get(), "modify: index_dynamic_add_points");
+      }
+      absl::MutexLock map_lock(&label_mutex_);
+      label_to_record_[internal_id] = std::move(vector_record);
+      return absl::OkStatus();
     }
-    size_t added = 0;
-    if (!svs_index_dynamic_add_points(svs_index_, fp32, &internal_id,
-                                      /*num_vectors=*/1, &added, err.get())) {
-      // Delete already committed inside SVS; the id is gone from the
-      // index and cannot be resurrected here (add just failed). Drop
-      // the stale map entry so the two views agree — the base class's
-      // RemoveRecordDueToError path will then NotFoundError out
-      // cleanly instead of hitting a phantom.
-      label_to_record_.erase(internal_id);
-      return SvsErrorToStatus(err.get(), "modify: index_dynamic_add_points");
-    }
-  } else {
-    auto result = BootstrapIndex(build_config_, this->distance_metric_,
-                                 dimensions_, internal_id, fp32);
-    if (!result.ok()) return result.status();
-    svs_index_ = *result;
   }
+  // No handle yet: the modify is the first add.
+  VMSDK_RETURN_IF_ERROR(InsertVector(internal_id, fp32));
+  absl::MutexLock map_lock(&label_mutex_);
   label_to_record_[internal_id] = std::move(vector_record);
   return absl::OkStatus();
 #else
@@ -805,6 +880,42 @@ absl::Status VectorSVS<T>::ModifyRecordImpl(
   return absl::UnimplementedError(kUnavailableMsg);
 #endif
 }
+
+#if defined(__linux__) && defined(__x86_64__)
+template <typename T>
+absl::Status VectorSVS<T>::InsertVector(uint64_t internal_id,
+                                        const float* fp32) {
+  {
+    SvsMutationLock lock(&resize_mutex_,
+                         mutations_exclusive_.load(std::memory_order_acquire));
+    if (svs_index_ != nullptr) {
+      return AddPoint(internal_id, fp32);
+    }
+  }
+  // No handle yet: re-check under the writer lock so racing first adds
+  // build exactly once.
+  absl::WriterMutexLock lock(&resize_mutex_);
+  if (svs_index_ != nullptr) {
+    return AddPoint(internal_id, fp32);
+  }
+  auto result = BootstrapIndex(build_config_, this->distance_metric_,
+                               dimensions_, internal_id, fp32);
+  if (!result.ok()) return result.status();
+  svs_index_ = *result;
+  return absl::OkStatus();
+}
+
+template <typename T>
+absl::Status VectorSVS<T>::AddPoint(uint64_t internal_id, const float* fp32) {
+  ScopedSvsError err;
+  size_t added = 0;
+  if (!svs_index_dynamic_add_points(svs_index_, fp32, &internal_id,
+                                    /*num_vectors=*/1, &added, err.get())) {
+    return SvsErrorToStatus(err.get(), "index_dynamic_add_points");
+  }
+  return absl::OkStatus();
+}
+#endif  // __linux__ && __x86_64__
 
 template <typename T>
 void VectorSVS<T>::ToProtoImpl(
@@ -853,8 +964,17 @@ absl::Status VectorSVS<T>::SaveIndexImpl(
 
   // Deletes only mark SVS slots, so a handle can outlive its last live
   // entry; SVS's save cannot compact an index with none, so save it as the
-  // handle-less empty index and bootstrap afresh on the next write.
-  const bool has_index = svs_index_ != nullptr && !label_to_record_.empty();
+  // handle-less empty index and bootstrap afresh on the next write. Ask SVS
+  // for its live count: writers update label_to_record_ outside
+  // resize_mutex_, so the map can disagree with SVS here.
+  size_t live_entries = 0;
+  if (svs_index_ != nullptr) {
+    ScopedSvsError size_err;
+    if (!svs_index_get_size(svs_index_, &live_entries, size_err.get())) {
+      return SvsErrorToStatus(size_err.get(), "index_get_size");
+    }
+  }
+  const bool has_index = live_entries > 0;
 
   data_model::SVSIndexHeader header;
   header.set_format_version(kSvsHeaderFormatVersion);
@@ -917,8 +1037,9 @@ std::shared_ptr<const VectorRecord>& VectorSVS<T>::GetVectorLockFree(
 template <typename T>
 std::shared_ptr<const VectorRecord>& VectorSVS<T>::GetOrCreateVectorLockFree(
     uint64_t internal_id) {
-  // label_to_record_ is filled before any query or mutation can reach this
-  // index, which is why resize_mutex_ is not taken; an insert rehashes it.
+  // Load-time only (main thread, index not yet published); label_mutex_ is
+  // uncontended here and keeps the header's lock contract true.
+  absl::MutexLock map_lock(&label_mutex_);
   auto [it, inserted] = label_to_record_.try_emplace(internal_id, nullptr);
   if (!inserted) {
     ++Metrics::GetStats().svs_duplicate_label_on_load_cnt;
@@ -929,6 +1050,7 @@ std::shared_ptr<const VectorRecord>& VectorSVS<T>::GetOrCreateVectorLockFree(
 template <typename T>
 std::shared_ptr<const VectorRecord>& VectorSVS<T>::GetVector(
     uint64_t internal_id) const {
+  absl::ReaderMutexLock lock(&label_mutex_);
   return GetVectorLockFree(internal_id);
 }
 
@@ -945,6 +1067,7 @@ std::optional<hnswlib::tableint> VectorSVS<T>::GetAlgoIdLockFree(
 
 template <typename T>
 uint64_t VectorSVS<T>::GetMaxLoadedLabel() const {
+  absl::ReaderMutexLock lock(&label_mutex_);
   uint64_t max_label = 0;
   for (const auto& [id, _] : label_to_record_) {
     if (id > max_label) max_label = id;
@@ -954,6 +1077,7 @@ uint64_t VectorSVS<T>::GetMaxLoadedLabel() const {
 
 template <typename T>
 size_t VectorSVS<T>::GetLabelCount() const {
+  absl::ReaderMutexLock lock(&label_mutex_);
   return label_to_record_.size();
 }
 

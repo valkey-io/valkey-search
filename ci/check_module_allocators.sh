@@ -267,8 +267,7 @@ done
 ALLOWED_NEEDED="libc.so.6 libm.so.6 libmvec.so.1 libgcc_s.so.1
                 libssl.so.3 libcrypto.so.3 libsystemd.so.0
                 libssl.so.1.1 libcrypto.so.1.1
-                libpthread.so.0 librt.so.1 libdl.so.2
-                libgomp.so.1"
+                libpthread.so.0 librt.so.1 libdl.so.2"
 
 # Unquoted, so that the newlines and indentation above collapse to single
 # spaces; the match below relies on every entry being space-delimited.

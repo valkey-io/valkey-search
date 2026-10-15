@@ -7,6 +7,7 @@
 
 #ifndef VALKEYSEARCH_SRC_INDEXES_VECTOR_SVS_H_
 #define VALKEYSEARCH_SRC_INDEXES_VECTOR_SVS_H_
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -14,10 +15,11 @@
 #include <vector>
 
 #include "absl/base/thread_annotations.h"
-#include "absl/container/flat_hash_map.h"
+#include "absl/container/node_hash_map.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
+#include "absl/synchronization/mutex.h"
 #include "src/attribute_data_type.h"
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_type.h"
@@ -33,9 +35,18 @@
 extern "C" {
 struct svs_index;
 typedef struct svs_index *svs_index_h;
+struct svs_threadpool_interface_ops;
+struct svs_threadpool_interface;
 }
 
 namespace valkey_search::indexes {
+
+#if defined(__linux__) && defined(__x86_64__)
+// Sequential threadpool vtable installed on every SVS builder; exposed for
+// the unit tests.
+extern svs_threadpool_interface_ops kSvsThreadpoolOps;
+extern svs_threadpool_interface kSvsThreadpoolIface;
+#endif
 
 // Build-time configuration retained on the class so the first HSET can
 // bootstrap the SVS index once it has an actual vector to build with;
@@ -116,7 +127,7 @@ class VectorSVS : public VectorType<T> {
   // deletes away), so every label LoadTrackedKeys re-encounters is new to
   // it; try_emplace instead of the base class's CHECK.
   std::shared_ptr<const VectorRecord> &GetOrCreateVectorLockFree(
-      uint64_t internal_id) override ABSL_NO_THREAD_SAFETY_ANALYSIS;
+      uint64_t internal_id) override ABSL_LOCKS_EXCLUDED(label_mutex_);
   std::shared_ptr<const VectorRecord> &GetVector(
       uint64_t internal_id) const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
   std::optional<hnswlib::tableint> GetAlgoIdLockFree(
@@ -128,10 +139,37 @@ class VectorSVS : public VectorType<T> {
   VectorSVS(int dimensions, absl::string_view attribute_identifier,
             data_model::AttributeDataType attribute_data_type, int db_num);
 
+#if defined(__linux__) && defined(__x86_64__)
+  // Adds one vector, building the index from it when there is no handle yet
+  // (writer lock only for that first build, double-checked).
+  absl::Status InsertVector(uint64_t internal_id, const float *fp32)
+      ABSL_LOCKS_EXCLUDED(resize_mutex_);
+  absl::Status AddPoint(uint64_t internal_id, const float *fp32)
+      ABSL_SHARED_LOCKS_REQUIRED(resize_mutex_);
+#endif
+
+  // Concurrency: the index is built with SVS_SYNC_KIND_FINE_GRAIN and guards
+  // itself, so SVS calls run under the reader side of resize_mutex_ (as in
+  // VectorHNSW); the writer side is taken only to install the first handle.
+  // label_to_record_ is guarded by label_mutex_ (acquired after resize_mutex_,
+  // never held across an SVS call) and is a node_hash_map so references from
+  // GetVector survive concurrent inserts. Search relies on the index-schema
+  // phase gate, so GetVectorLockFree stays lock-free and the delete-then-add
+  // gap inside modify is never observed.
   svs_index_h svs_index_ ABSL_GUARDED_BY(resize_mutex_){nullptr};
+  // Mutations hold the reader side of resize_mutex_ when SVS guards the index
+  // itself (built with SVS_SYNC_KIND_FINE_GRAIN). An index restored from RDB
+  // comes back with SVS_SYNC_KIND_NONE at the pinned revision (the stream load
+  // takes no parameters), so its mutations take the writer side instead and
+  // stay serialized, as before. Set once in LoadFromRDB before the instance is
+  // published; read on every mutation.
+  std::atomic<bool> mutations_exclusive_{false};
   SVSBuildConfig build_config_;
-  mutable absl::flat_hash_map<uint64_t, std::shared_ptr<const VectorRecord>>
-      label_to_record_ ABSL_GUARDED_BY(resize_mutex_);
+  mutable absl::Mutex label_mutex_ ABSL_ACQUIRED_AFTER(resize_mutex_);
+  mutable absl::node_hash_map<uint64_t, std::shared_ptr<const VectorRecord>>
+      label_to_record_ ABSL_GUARDED_BY(label_mutex_);
+
+  friend class VectorSVSTestPeer;
 };
 
 }  // namespace valkey_search::indexes

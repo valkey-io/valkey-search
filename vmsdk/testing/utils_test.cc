@@ -281,6 +281,32 @@ TEST_F(UtilsTest, Crc32) {
   }
 }
 
+TEST_F(UtilsTest, KeyHashSlot) {
+  // Expected values are what CLUSTER KEYSLOT returns for the same keys.
+  std::vector<std::pair<std::string, uint16_t>> testcases{
+      {"", 0},
+      {"foo", 12182},
+      {"bar", 5061},
+      {"hello", 866},
+      {"123456789", 12739},
+      // Hash tags: only the tag is hashed.
+      {"user1000", 3443},
+      {"{user1000}.following", 3443},
+      {"foo{bar}baz", 5061},
+      {"vec:{m}:0", 15627},
+      {"{m}", 15627},
+      // Only the first tag counts.
+      {"a{b}c{d}", 3300},
+      // No usable tag: the whole key is hashed.
+      {"{}foo", 9500},
+      {"foo{", 7673},
+      {"foo{}", 5542},
+  };
+  for (auto &[key, expected] : testcases) {
+    EXPECT_EQ(KeyHashSlot(key), expected) << "Key: " << key;
+  }
+}
+
 #ifdef __linux__
 // "." is relative, so a result starting with '/' shows it was resolved rather
 // than passed through, and getcwd gives the value it must resolve to.

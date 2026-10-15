@@ -9,6 +9,7 @@
 
 #include <netinet/in.h>
 
+#include <algorithm>
 #include <bit>
 #include <cstddef>
 #include <cstdint>
@@ -41,6 +42,7 @@
 #include "src/valkey_search.h"
 #include "valkey_search_options.h"
 #include "vmsdk/src/debug.h"
+#include "vmsdk/src/info.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -52,6 +54,7 @@
 namespace valkey_search::query::fanout {
 
 CONTROLLED_BOOLEAN(ForceInvalidSlotFingerprint, false);
+DEV_INTEGER_COUNTER(query_stats, fanout_duplicate_results_dropped_count);
 
 struct NeighborComparator {
   bool operator()(const indexes::Neighbor &a,
@@ -91,6 +94,14 @@ struct SearchPartitionResultsTracker {
   std::priority_queue<indexes::Neighbor, std::vector<indexes::Neighbor>,
                       NeighborComparator>
       results ABSL_GUARDED_BY(mutex);
+  // Every key merged so far. Each shard filters its hits to the slots it owns,
+  // but the shards' cluster-map snapshots are refreshed independently, so
+  // around a slot hand-over two of them can briefly both claim a key; the
+  // first copy wins. Owning pointers on purpose: a key evicted from `results`
+  // must stay alive, or its address could be reused by a different string
+  // and a genuine neighbor would be mistaken for a duplicate.
+  InternedStringSet seen_keys ABSL_GUARDED_BY(mutex);
+  size_t duplicates_dropped ABSL_GUARDED_BY(mutex){0};
   int outstanding_requests ABSL_GUARDED_BY(mutex);
   std::unique_ptr<SearchParameters> parameters ABSL_GUARDED_BY(mutex);
   // Error tracking
@@ -111,7 +122,17 @@ struct SearchPartitionResultsTracker {
   SearchPartitionResultsTracker(int outstanding_requests, int k,
                                 std::unique_ptr<SearchParameters> parameters)
       : outstanding_requests(outstanding_requests),
-        parameters(std::move(parameters)) {}
+        parameters(std::move(parameters)) {
+    // Pre-size the dedup set to the most results the merge can hold: KNN caps
+    // at k per shard, so k * shards; a non-vector query has no k, so leave it
+    // to grow. Capped so a pathological k * shards can't reserve unboundedly.
+    if (k > 0 && outstanding_requests > 0) {
+      constexpr size_t kMaxSeenKeysReserve = 1 << 16;
+      seen_keys.reserve(std::min(
+          static_cast<size_t>(k) * static_cast<size_t>(outstanding_requests),
+          kMaxSeenKeysReserve));
+    }
+  }
 
   void HandleResponse(coordinator::SearchIndexPartitionResponse &response,
                       const std::string &address, const grpc::Status &status) {
@@ -189,6 +210,11 @@ struct SearchPartitionResultsTracker {
 
   void AddResult(indexes::Neighbor &neighbor)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex) {
+    if (!seen_keys.insert(neighbor.external_id).second) {
+      ++duplicates_dropped;
+      fanout_duplicate_results_dropped_count.Increment();
+      return;
+    }
     // For non-vector queries, we can add the result directly.
     if (parameters->IsNonVectorQuery()) {
       results.emplace(std::move(neighbor));
@@ -235,8 +261,16 @@ struct SearchPartitionResultsTracker {
       // SearchResult construction automatically applies trimming based on LIMIT
       // offset count IF the command allows it (ie - it does not require
       // complete results).
-      parameters->search_result = SearchResult(
-          accumulated_total_count, std::move(neighbors), *parameters, true);
+      //
+      // A dropped duplicate was counted by each of the shards that returned
+      // it, so the summed total is reduced by one per drop. Duplicates that
+      // fell outside every shard's returned window cannot be seen here and
+      // stay counted; the per-shard ownership filter is what keeps those rare.
+      size_t total_count =
+          accumulated_total_count.load(std::memory_order_relaxed);
+      total_count -= std::min(total_count, duplicates_dropped);
+      parameters->search_result =
+          SearchResult(total_count, std::move(neighbors), *parameters, true);
       status = absl::OkStatus();
     }
     parameters->search_result.status = status;

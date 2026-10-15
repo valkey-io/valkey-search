@@ -37,6 +37,7 @@
 #include "src/indexes/text/rax_wrapper.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/memory_tracker.h"
+#include "vmsdk/src/sharded_atomic.h"
 
 namespace valkey_search::indexes::text {
 
@@ -51,9 +52,9 @@ class TextIndexSchema;
 
 // FT.INFO counters for text info fields and memory pools
 struct TextIndexMetadata {
-  std::atomic<uint64_t> total_positions{0};
-  std::atomic<uint64_t> num_unique_terms{0};
-  std::atomic<uint64_t> total_term_frequency{0};
+  vmsdk::ShardedAtomic<uint64_t> total_positions{0};
+  vmsdk::ShardedAtomic<uint64_t> num_unique_terms{0};
+  vmsdk::ShardedAtomic<uint64_t> total_term_frequency{0};
   std::atomic<uint64_t> total_doc_len{
       0};  // Sum of all doc_lens for avg_doc_len
 

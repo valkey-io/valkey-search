@@ -455,15 +455,15 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
 }
 
 uint64_t TextIndexSchema::GetTotalPositions() const {
-  return metadata_.total_positions.load();
+  return metadata_.total_positions.GetNonNegativeTotal();
 }
 
 uint64_t TextIndexSchema::GetNumUniqueTerms() const {
-  return metadata_.num_unique_terms.load();
+  return metadata_.num_unique_terms.GetNonNegativeTotal();
 }
 
 uint64_t TextIndexSchema::GetTotalTermFrequency() const {
-  return metadata_.total_term_frequency.load();
+  return metadata_.total_term_frequency.GetNonNegativeTotal();
 }
 
 std::string TextIndexSchema::GetAllStemVariants(

@@ -57,6 +57,10 @@ include_directories(${CMAKE_SOURCE_DIR}/third_party/icu/source/i18n)
 
 include(valkey_search)
 
+if(UNIX AND NOT APPLE AND NOT SAN_BUILD)
+  add_compile_definitions(VMSDK_USE_VALKEY_ALLOC_OVERRIDES=1)
+endif()
+
 add_subdirectory(vmsdk)
 add_subdirectory(third_party)
 add_subdirectory(src)

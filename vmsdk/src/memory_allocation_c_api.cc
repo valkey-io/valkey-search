@@ -42,9 +42,6 @@
 // handler prints the backtrace, which localises the problem better than any
 // bookkeeping we could carry on every allocation to detect it after the fact.
 
-// Defines VMSDK_USE_VALKEY_ALLOC_OVERRIDES.
-#include "vmsdk/src/memory_allocation_overrides.h"
-
 #ifdef VMSDK_USE_VALKEY_ALLOC_OVERRIDES
 
 // Deliberately inside the guard: <malloc.h> is glibc-only, and this file
@@ -61,6 +58,7 @@
 
 #include "absl/base/optimization.h"
 #include "vmsdk/src/memory_allocation.h"
+#include "vmsdk/src/memory_allocation_overrides.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -74,25 +72,11 @@
 #define VMSDK_LIBC_NOEXCEPT
 #endif
 
-namespace {
-
-// Valkey exposes no aligned allocation entry point. jemalloc returns memory
-// aligned to the size class, so rounding the request up to a multiple of the
-// alignment gets us the alignment we need.
-//
-// See https://linux.die.net/man/3/jemalloc: "... Chunks are always aligned to
-// multiples of the chunk size..."
-size_t AlignSize(size_t size, size_t alignment = 16) {
-  return (size + alignment - 1) & ~(alignment - 1);
-}
-
-}  // namespace
-
 extern "C" {
 
 void* malloc(size_t size) VMSDK_LIBC_NOEXCEPT {
   // Force 16-byte alignment; Valkey may otherwise return 8-byte aligned memory.
-  void* ptr = ValkeyModule_Alloc(AlignSize(size));
+  void* ptr = ValkeyModule_Alloc(vmsdk::AlignSize(size));
   if (ABSL_PREDICT_TRUE(ptr != nullptr)) {
     vmsdk::ReportAllocMemorySize(ValkeyModule_MallocUsableSize(ptr));
   }
@@ -108,7 +92,7 @@ void free(void* ptr) VMSDK_LIBC_NOEXCEPT {
 }
 
 void* calloc(size_t nmemb, size_t size) VMSDK_LIBC_NOEXCEPT {
-  void* ptr = ValkeyModule_Calloc(nmemb, AlignSize(size));
+  void* ptr = ValkeyModule_Calloc(nmemb, vmsdk::AlignSize(size));
   if (ABSL_PREDICT_TRUE(ptr != nullptr)) {
     vmsdk::ReportAllocMemorySize(ValkeyModule_MallocUsableSize(ptr));
   }
@@ -120,7 +104,7 @@ void* realloc(void* ptr, size_t size) VMSDK_LIBC_NOEXCEPT {
     return malloc(size);
   }
   size_t old_size = ValkeyModule_MallocUsableSize(ptr);
-  void* new_ptr = ValkeyModule_Realloc(ptr, AlignSize(size));
+  void* new_ptr = ValkeyModule_Realloc(ptr, vmsdk::AlignSize(size));
   if (ABSL_PREDICT_TRUE(new_ptr != nullptr)) {
     vmsdk::ReportFreeMemorySize(old_size);
     vmsdk::ReportAllocMemorySize(ValkeyModule_MallocUsableSize(new_ptr));
@@ -129,7 +113,7 @@ void* realloc(void* ptr, size_t size) VMSDK_LIBC_NOEXCEPT {
 }
 
 void* aligned_alloc(size_t alignment, size_t size) VMSDK_LIBC_NOEXCEPT {
-  void* ptr = ValkeyModule_Alloc(AlignSize(size, alignment));
+  void* ptr = ValkeyModule_Alloc(vmsdk::AlignSize(size, alignment));
   if (ABSL_PREDICT_TRUE(ptr != nullptr)) {
     vmsdk::ReportAllocMemorySize(ValkeyModule_MallocUsableSize(ptr));
   }

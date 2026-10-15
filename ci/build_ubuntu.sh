@@ -114,6 +114,7 @@ function prepare_env() {
 # Save integration test artifacts and logs to INTEGRATION_OUTPUT
 function save_integration_output() {
     echo "Saving integration test output to ${INTEGRATION_OUTPUT}"
+    mkdir -p -- "${INTEGRATION_OUTPUT}" || return 1
     local artifacts_dir="${ROOT_DIR}/.build-${BUILD_CONFIG}${BUILD_DIR_SUFFIX:-}${san_suffix}"
     local third_party_dir="${ROOT_DIR}/.build-release${san_suffix}"
     local status=0
@@ -144,6 +145,7 @@ function save_integration_output() {
     echo "Results Directory is ${result_dir}"
     if [ -d "${result_dir}" ]; then
         if cp -r -P -- "${result_dir}" "${INTEGRATION_OUTPUT}"; then
+            rm -rf -- "${INTEGRATION_OUTPUT}/valkey-test-framework"
             mv -- "${INTEGRATION_OUTPUT}/.valkey-test-framework" "${INTEGRATION_OUTPUT}/valkey-test-framework" || status=1
         else
             status=1
@@ -166,6 +168,7 @@ function save_integration_output() {
 # Save unit test binaries and output logs to UNITTEST_OUTPUT
 function save_unittest_output() {
     echo "Saving unit test output to ${UNITTEST_OUTPUT}"
+    mkdir -p -- "${UNITTEST_OUTPUT}" || return 1
     local result_dir="${ROOT_DIR}/.build-${BUILD_CONFIG}${BUILD_DIR_SUFFIX:-}${san_suffix}"
     local status=0
     echo "Results Directory is ${result_dir}"

@@ -106,6 +106,14 @@ This section describes areas where Valkey Search intentionally diverges from Red
 
 **Migration impact.** Log-scraping rules, alerting triggers keyed on specific log strings, log-shipping parsers, and runbooks that instruct operators to look for particular Redisearch log phrases all need to be reviewed and updated against Valkey Search's log output. Applications that do not consume logs programmatically are not affected.
 
+### Zero-relevance scores with an infinite document score
+
+**What differs.** When a document's summed relevance is `0` and its `SCORE_FIELD` value is `inf` or `-inf`, Valkey Search scores it `0`, while Redisearch scores it `nan` (0 × ±inf). Examples include a query whose only clause has `$weight: 0`, or a numeric-only query. When the summed relevance is non-zero, both return `inf` or `-inf`.
+
+**Why.** Zero relevance scores zero regardless of the document score, and a `nan` score has no defined sort order.
+
+**Migration impact.** Applications that check for `nan` scores should expect `0` instead.
+
 ## Extensions
 
 Valkey Search may extend functionality beyond what Redisearch provides. These extensions take two forms.
@@ -202,3 +210,4 @@ A list of the compatibility issues that have been fixed.
 | 1.3.0   | `compatibility-min_stem_size_code_points` | On an English index, `MINSTEMSIZE` is compared against a word's length in bytes, so with the default of 4 a word like `café` (4 characters, 5 bytes) is stemmed. | `MINSTEMSIZE` is compared against the length in characters (Unicode code points), so `café` is not stemmed. Non-English languages always count characters. The setting applies when a document is indexed, so documents indexed before the change keep their stem entries until they are re-indexed. |
 | 1.3.0   | `compatibility-fuzzy_code_point_distance` | On an English index, fuzzy (`%term%`) edit distance counts bytes, so replacing `é` with `è` costs 2 edits and `%hola%` does not match `¡hola`. | Edit distance counts characters (Unicode code points), so `é` to `è` costs 1 edit and `%hola%` matches `¡hola`. Non-English languages always count characters. Whether the result differs depends on the indexed words, so the INFO field counts every fuzzy term searched on an English index under the old behavior. |
 | 1.3.0   | `compatibility-filter_parser_invalid_utf8_expression` | A query expression containing malformed UTF-8 is accepted. In text terms each malformed sequence is replaced with U+FFFD, so the term matches only documents that contain U+FFFD; `TAG` values keep their raw bytes and match a tag stored with the same bytes. | The query is rejected with `Invalid UTF-8 in query expression`, matching how ingestion rejects malformed text. |
+| 1.3.0   | `compatibility-tag_rejects_non_utf8` | A `TAG` field value containing malformed UTF-8 is indexed with its raw bytes and matches a tag query with the same bytes. | The value is rejected as invalid data, matching Redisearch, and counted in `hash_indexing_failures`; with `compatibility-invalid_data_drops_key` the whole key is dropped from the index. The setting applies when a document is indexed, so documents indexed before the change stay indexed until they are re-indexed. |

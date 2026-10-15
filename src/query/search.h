@@ -57,6 +57,35 @@ struct SortByParameter {
   SortOrder order{SortOrder::kAscending};
 };
 
+// Where a SORTBY value is filed in Neighbor::attribute_contents.
+//
+// The content map is keyed by the attribute's identifier (hash field or JSON
+// path) on every fetch path; the SORTBY field as typed (its alias) only appears
+// as a key where a fetch path copied the value under it (the HASH filter +
+// RETURN path, and JSON, which renames the entry). Resolved once per query by
+// the node that sorts, so the same lookup serves local rows and rows merged
+// from other shards, whose maps carry the same identifier keys. See #1440.
+struct SortByLookup {
+  // Key tried first: the attribute's identifier, or the field as typed when
+  // it names no attribute (the KNN score alias, for example).
+  std::string identifier;
+  // The SORTBY field as typed.
+  std::string field;
+  // Also try `field` when `identifier` is absent. Set for JSON and for a
+  // field that is not any attribute's identifier, so a collision (an alias
+  // that equals another attribute's hash field) can never pick up that
+  // attribute's value.
+  bool try_field{false};
+
+  RecordsMap::const_iterator Find(const RecordsMap &contents) const {
+    auto it = contents.find(identifier);
+    if (it == contents.end() && try_field && field != identifier) {
+      it = contents.find(field);
+    }
+    return it;
+  }
+};
+
 constexpr int64_t kTimeoutMS{50000};
 constexpr size_t kMaxTimeoutMs{60000};
 constexpr absl::string_view kOOMMsg{

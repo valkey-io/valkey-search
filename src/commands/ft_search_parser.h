@@ -66,6 +66,9 @@ struct SearchCommand : public QueryCommand {
     bool sort_by_vec_score{false};
     bool nil_absent_sort_key{false};
     std::string sort_key_prefix;
+    // Where WITHSORTKEYS reads the sort value from attribute_contents. Unset
+    // when the reply carries no sort key.
+    std::optional<query::SortByLookup> sortby_lookup;
     // The single VR distance field name (query::GetVrScoreFieldName).
     // Empty unless the query named the distance ($yield_distance_as or AS).
     std::string vr_field;

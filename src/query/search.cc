@@ -667,11 +667,51 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
   if (parameters.no_content || parameters.return_attributes.empty()) {
     return results;
   }
+  // Collect the attributes to serve from indexes: the RETURN fields plus the
+  // SORTBY field that the sort comparator reads later.
   struct AttributeInfo {
-    const ReturnAttribute *attribute;
+    // Content map key; views memory owned by `parameters` or by
+    // `sortby_identifier` below.
+    absl::string_view identifier;
     indexes::IndexBase *index;
   };
   std::vector<AttributeInfo> attributes;
+  // SORTBY on a stored attribute that RETURN does not name: serve it from its
+  // index too, keyed by its identifier like every other fetch path, so the
+  // sort can read it (issue #1440). Gated with the sort-side fix: when the
+  // attribute cannot be served (TEXT, or missing on a document) the whole
+  // row falls back to the main-thread fetch, which returns stored bytes
+  // where the index copy is re-serialized, a byte change for RETURN.
+  std::string sortby_identifier;
+  // The KNN score and the VR distance are synthesized reply fields, not
+  // stored attributes; the sort reads Neighbor::distance for them.
+  const bool sort_by_synthesized_field =
+      parameters.sortby_parameter.has_value() &&
+      ((parameters.score_as &&
+        parameters.sortby_parameter->field ==
+            vmsdk::ToStringView(parameters.score_as.get())) ||
+       parameters.sortby_parameter->field == GetVrScoreFieldName(parameters));
+  if (parameters.sortby_parameter.has_value() && !sort_by_synthesized_field &&
+      options::EnabledInVersion(1, 3, 0)) {
+    const std::string &sortby_field = parameters.sortby_parameter->field;
+    auto identifier = parameters.index_schema->GetIdentifier(sortby_field);
+    sortby_identifier = identifier.ok() ? *identifier : sortby_field;
+    const bool sortby_served_by_return = std::any_of(
+        parameters.return_attributes.begin(),
+        parameters.return_attributes.end(), [&](const ReturnAttribute &attr) {
+          return attr.identifier.get() &&
+                 vmsdk::ToStringView(attr.identifier.get()) ==
+                     sortby_identifier;
+        });
+    if (!sortby_served_by_return) {
+      auto index = parameters.index_schema->GetIndex(sortby_field);
+      if (!index.ok()) {
+        return results;
+      }
+      attributes.push_back(AttributeInfo{.identifier = sortby_identifier,
+                                         .index = index.value().get()});
+    }
+  }
   for (auto &attribute : parameters.return_attributes) {
     if (!attribute.attribute_alias.get()) {
       // Any attribute that is not indexed will result in all attributes being
@@ -683,7 +723,9 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
     if (!index.ok()) {
       return results;
     }
-    attributes.push_back(AttributeInfo{&attribute, index.value().get()});
+    attributes.push_back(AttributeInfo{
+        .identifier = vmsdk::ToStringView(attribute.identifier.get()),
+        .index = index.value().get()});
   }
   for (auto &neighbor : *results) {
     if (neighbor.attribute_contents.has_value()) {
@@ -766,8 +808,8 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
       }
 
       if (attribute_value != nullptr) {
-        auto identifier = vmsdk::MakeUniqueValkeyString(
-            vmsdk::ToStringView(attribute_info.attribute->identifier.get()));
+        auto identifier =
+            vmsdk::MakeUniqueValkeyString(attribute_info.identifier);
         auto identifier_view = vmsdk::ToStringView(identifier.get());
         neighbor.attribute_contents->emplace(
             identifier_view,

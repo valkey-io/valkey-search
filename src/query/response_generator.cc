@@ -490,10 +490,20 @@ absl::StatusOr<RecordsMap> GetContent(
   }
 
   // Add sortby field to return_content for sorting, even when return_attributes
-  // is not empty. Use the alias (sortby_parameter->field) as the key.
+  // is not empty. File it under its identifier, the key the sort reads
+  // (query::SortByLookup), and under the alias (sortby_parameter->field) for a
+  // coordinator that still reads the typed field. Neither copy reaches the
+  // reply, which emits the RETURN attributes only.
   if (parameters.sortby_parameter.has_value()) {
     auto itr = content.find(sortby_identifier);
     if (itr != content.end()) {
+      auto identifier = vmsdk::MakeUniqueValkeyString(sortby_identifier);
+      auto identifier_view = vmsdk::ToStringView(identifier.get());
+      return_content.emplace(
+          identifier_view,
+          RecordsMapValue(
+              std::move(identifier),
+              vmsdk::RetainUniqueValkeyString(itr->second.value.get())));
       return_content.emplace(
           parameters.sortby_parameter->field,
           RecordsMapValue(

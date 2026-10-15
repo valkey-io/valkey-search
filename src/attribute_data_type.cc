@@ -239,9 +239,14 @@ absl::StatusOr<RecordsMap> JsonAttributeDataType::FetchAllAttributes(
     if (!str.ok()) {
       continue;
     }
+    // Key the map by the identifier string the entry owns, not by the
+    // caller's view: GetContent passes a view into a local string for the
+    // SORTBY identifier, which no longer exists once the map is returned.
+    auto owned_identifier = vmsdk::MakeUniqueValkeyString(identifier);
+    auto identifier_view = vmsdk::ToStringView(owned_identifier.get());
     key_value_content.emplace(
-        identifier, RecordsMapValue(vmsdk::MakeUniqueValkeyString(identifier),
-                                    std::move(str.value())));
+        identifier_view,
+        RecordsMapValue(std::move(owned_identifier), std::move(str.value())));
   }
   return key_value_content;
 }

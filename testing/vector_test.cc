@@ -61,6 +61,7 @@ constexpr static uint32_t kBlockSize = 250;
 constexpr static int kM = 16;
 constexpr static int kEFConstruction = 20;
 constexpr static int kEFRuntime = 20;
+constexpr size_t kLargePageSize = 2 * 1024 * 1024;
 const hnswlib::InnerProductSpace kInnerProductSpace{kDimensions};
 const hnswlib::L2Space kL2Space{kDimensions};
 const absl::flat_hash_map<data_model::DistanceMetric, std::string>
@@ -138,6 +139,40 @@ class VectorIndexTest : public ValkeySearchTest {
   data_model::AttributeDataType attribute_data_type =
       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH;
 };
+
+#ifdef __linux__
+TEST_F(VectorIndexTest, ChunkedArrayLargePageAllocationIsAccounted) {
+  const size_t page_size = static_cast<size_t>(getpagesize());
+  EXPECT_CALL(*kMockValkeyModule, IncrExternalMemory(page_size))
+      .WillOnce(testing::Return(VALKEYMODULE_OK));
+  EXPECT_CALL(*kMockValkeyModule, DecrExternalMemory(page_size))
+      .WillOnce(testing::Return(VALKEYMODULE_OK));
+
+  {
+    hnswlib::ChunkedArray array(/*element_byte_size=*/1,
+                                /*elements_per_chunk=*/1,
+                                /*element_count=*/1,
+                                /*use_large_pages=*/true);
+    EXPECT_EQ(reinterpret_cast<uintptr_t>(array[0]) % kLargePageSize, 0u);
+  }
+}
+
+TEST_F(VectorIndexTest,
+       ChunkedArrayLargePageChunkUsesElementsInsteadOfPadding) {
+  EXPECT_EQ(hnswlib::ChunkedArray::GetElementsPerChunkForLargePages(
+                /*element_byte_size=*/160,
+                /*default_elements_per_chunk=*/10 * 1024),
+            13107u);
+  EXPECT_EQ(hnswlib::ChunkedArray::GetElementsPerChunkForLargePages(
+                /*element_byte_size=*/288,
+                /*default_elements_per_chunk=*/10 * 1024),
+            14563u);
+  EXPECT_EQ(hnswlib::ChunkedArray::GetElementsPerChunkForLargePages(
+                /*element_byte_size=*/544,
+                /*default_elements_per_chunk=*/10 * 1024),
+            11565u);
+}
+#endif
 
 TEST_F(VectorIndexTest, InitializationHNSW) {
   for (auto &distance_metric : kExpectedSpaces) {

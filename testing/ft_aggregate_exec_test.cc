@@ -6,10 +6,14 @@
 
 #include "src/commands/ft_aggregate_exec.h"
 
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <random>
 
 #include "gtest/gtest.h"
 #include "src/attribute_data_type.h"
@@ -33,6 +37,27 @@ bool IsVerbose() {
 
 namespace valkey_search {
 namespace aggregate {
+
+static double CalculateGKQuantile(const std::vector<double> &sorted_values,
+                                  double quantile) {
+  size_t n = sorted_values.size();
+  if (n == 0) return std::numeric_limits<double>::quiet_NaN();
+  if (n == 1) return sorted_values[0];
+
+  double t = std::ceil(quantile * n);
+  double max_val = kQuantileEpsilon * 2.0 * t;
+  t += std::floor(max_val / 2.0);
+
+  size_t rank = 0;
+  for (size_t i = 0; i < n; ++i) {
+    rank += 1;
+    if (rank >= static_cast<size_t>(t)) {
+      return sorted_values[i];
+    }
+  }
+
+  return sorted_values[n - 1];
+}
 
 struct FakeIndexInterface : public IndexInterface {
   std::map<std::string, indexes::IndexerType> fields_;
@@ -924,6 +949,900 @@ TEST_F(AggregateExecTest, FirstValueReducerAscDescDistinctOutputTest) {
   ASSERT_GE(record->fields_.size(), 4u);
   EXPECT_TRUE(record->fields_.at(3).IsDouble());
   EXPECT_NEAR(*record->fields_.at(3).AsDouble(), 3.0, .001);
+}
+
+TEST_F(AggregateExecTest, QuantileReducerTest) {
+  struct Testcase {
+    std::string text_;
+    size_t m;
+    std::vector<double> values_;
+  };
+  Testcase testcases[]{
+      {"groupby 1 @n2 reduce quantile 2 @n1 0.5", 5, {2.0}},
+      {"groupby 1 @n2 reduce quantile 2 @n1 0.5", 4, {1.0}},
+      {"groupby 1 @n2 reduce quantile 2 @n1 0.0", 4, {0.0}},
+      {"groupby 1 @n2 reduce quantile 2 @n1 1.0", 4, {3.0}},
+      {"groupby 1 @n2 reduce quantile 2 @n1 0.25", 4, {0.0}},
+      {"groupby 1 @n2 reduce quantile 2 @n1 0.75", 4, {2.0}},
+      {"groupby 1 @n2 reduce quantile 2 @n1 0.99", 4, {3.0}},
+      {"groupby 1 @n2 reduce quantile 2 @n1 0.5", 1, {0.0}},
+      {"groupby 1 @n2 reduce quantile 2 @n1 0.5 reduce quantile 2 @n1 0.99",
+       4,
+       {1.0, 3.0}},
+  };
+  for (auto &tc : testcases) {
+    std::cerr << "QuantileReducerTest: " << tc.text_ << "\n";
+    auto param = MakeStages(tc.text_);
+    auto records = MakeData(tc.m);
+    for (auto &r : records) {
+      std::cerr << *r << "\n";
+    }
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 1);
+    auto record = records.pop_front();
+    std::cerr << "Result: " << *record << "\n";
+    for (auto i = 0; i < tc.values_.size(); ++i) {
+      EXPECT_TRUE(record->fields_.at(i + 2).IsDouble());
+      EXPECT_NEAR(*(record->fields_.at(i + 2).AsDouble()), tc.values_[i], .001);
+    }
+  }
+}
+
+TEST_F(AggregateExecTest, QuantileNilHandlingTest) {
+  std::cerr << "QuantileNilHandlingTest\n";
+
+  RecordSet records(nullptr);
+  {
+    auto rec = std::make_unique<Record>(2);
+    rec->fields_[0] = expr::Value(1.0);
+    rec->fields_[1] = expr::Value(1.0);
+    records.emplace_back(std::move(rec));
+  }
+  {
+    auto rec = std::make_unique<Record>(2);
+    rec->fields_[0] = expr::Value();
+    rec->fields_[1] = expr::Value(1.0);
+    records.emplace_back(std::move(rec));
+  }
+  {
+    auto rec = std::make_unique<Record>(2);
+    rec->fields_[0] = expr::Value(3.0);
+    rec->fields_[1] = expr::Value(1.0);
+    records.emplace_back(std::move(rec));
+  }
+  {
+    auto rec = std::make_unique<Record>(2);
+    rec->fields_[0] = expr::Value(5.0);
+    rec->fields_[1] = expr::Value(1.0);
+    records.emplace_back(std::move(rec));
+  }
+
+  auto param = MakeStages("groupby 1 @n2 reduce quantile 2 @n1 0.5");
+  EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+  EXPECT_EQ(records.size(), 1);
+  auto record = records.pop_front();
+  std::cerr << "Result: " << *record << "\n";
+
+  EXPECT_TRUE(record->fields_.at(2).IsDouble());
+  EXPECT_NEAR(*(record->fields_.at(2).AsDouble()), 3.0, .001);
+}
+
+TEST_F(AggregateExecTest, QuantileAllNilTest) {
+  std::cerr << "QuantileAllNilTest\n";
+
+  RecordSet records(nullptr);
+  for (int i = 0; i < 3; ++i) {
+    auto rec = std::make_unique<Record>(2);
+    rec->fields_[0] = expr::Value();
+    rec->fields_[1] = expr::Value(1.0);
+    records.emplace_back(std::move(rec));
+  }
+
+  auto param = MakeStages("groupby 1 @n2 reduce quantile 2 @n1 0.5");
+  EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+  EXPECT_EQ(records.size(), 1);
+  auto record = records.pop_front();
+  std::cerr << "Result: " << *record << "\n";
+
+  // Redisearch answers nan for a group with no numeric value.
+  ASSERT_TRUE(record->fields_.at(2).IsDouble());
+  EXPECT_TRUE(expr::IsNan(*record->fields_.at(2).AsDouble()));
+}
+
+TEST_F(AggregateExecTest, QuantileDuplicateValuesTest) {
+  std::cerr << "QuantileDuplicateValuesTest\n";
+
+  RecordSet records(nullptr);
+  std::vector<double> values = {5.0, 5.0, 10.0, 10.0, 15.0};
+  for (auto val : values) {
+    auto rec = std::make_unique<Record>(2);
+    rec->fields_[0] = expr::Value(val);
+    rec->fields_[1] = expr::Value(1.0);
+    records.emplace_back(std::move(rec));
+  }
+
+  auto param = MakeStages("groupby 1 @n2 reduce quantile 2 @n1 0.5");
+  EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+  EXPECT_EQ(records.size(), 1);
+  auto record = records.pop_front();
+  std::cerr << "Result: " << *record << "\n";
+
+  EXPECT_TRUE(record->fields_.at(2).IsDouble());
+  EXPECT_NEAR(*(record->fields_.at(2).AsDouble()), 10.0, .001);
+}
+
+TEST_F(AggregateExecTest, QuantileNegativeNumbersTest) {
+  std::cerr << "QuantileNegativeNumbersTest\n";
+
+  RecordSet records(nullptr);
+  std::vector<double> values = {-10.0, -5.0, 0.0, 5.0, 10.0};
+  for (auto val : values) {
+    auto rec = std::make_unique<Record>(2);
+    rec->fields_[0] = expr::Value(val);
+    rec->fields_[1] = expr::Value(1.0);
+    records.emplace_back(std::move(rec));
+  }
+
+  auto param = MakeStages("groupby 1 @n2 reduce quantile 2 @n1 0.5");
+  EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+  EXPECT_EQ(records.size(), 1);
+  auto record = records.pop_front();
+  std::cerr << "Result: " << *record << "\n";
+
+  EXPECT_TRUE(record->fields_.at(2).IsDouble());
+  EXPECT_NEAR(*(record->fields_.at(2).AsDouble()), 0.0, .001);
+}
+
+TEST_F(AggregateExecTest, QuantileRangeValidationProperty) {
+  std::cerr << "QuantileRangeValidationProperty\n";
+
+  // Test with 50 iterations of invalid quantile values
+  std::mt19937 rng(43);
+  std::uniform_int_distribution<int> dist_offset(0, 99);
+
+  for (int iteration = 0; iteration < 50; ++iteration) {
+    double quantile;
+    if (iteration % 2 == 0) {
+      // Generate values less than 0
+      quantile = -1.0 - dist_offset(rng) / 10.0;
+    } else {
+      // Generate values greater than 1
+      quantile = 1.1 + dist_offset(rng) / 10.0;
+    }
+
+    // Attempt to parse QUANTILE reducer with invalid quantile — should fail
+    std::string query =
+        "groupby 1 @n2 reduce quantile 2 @n1 " + std::to_string(quantile);
+    auto argv = vmsdk::ToValkeyStringVector(query);
+    vmsdk::ArgsIterator itr(argv.data(), argv.size());
+
+    auto params = std::make_unique<AggregateParameters>(0);
+    params->parse_vars_.index_interface_ = &fakeIndex;
+    params->AddRecordAttribute("n1", "n1", "n1",
+                               indexes::IndexerType::kNumeric);
+    params->AddRecordAttribute("n2", "n2", "n2",
+                               indexes::IndexerType::kNumeric);
+
+    auto parser = CreateAggregateParser();
+    auto result = parser.Parse(*params, itr);
+
+    EXPECT_FALSE(result.ok())
+        << "Iteration " << iteration << ": quantile=" << quantile
+        << " should be rejected at parse time";
+
+    for (auto *str : argv) {
+      ValkeyModule_FreeString(nullptr, str);
+    }
+  }
+}
+
+TEST_F(AggregateExecTest, NilValueExclusionProperty) {
+  std::cerr << "NilValueExclusionProperty\n";
+
+  // Test with 100 iterations of datasets with random nil values
+  std::mt19937 rng(44);
+  std::uniform_int_distribution<size_t> dist_count(5, 30);
+  std::uniform_int_distribution<int> dist_q(0, 100);
+  std::uniform_int_distribution<int> dist_nil(0, 9);
+  std::uniform_int_distribution<int> dist_val(-500, 499);
+
+  for (int iteration = 0; iteration < 100; ++iteration) {
+    // Generate random dataset size (5 to 30 values)
+    size_t total_count = dist_count(rng);
+
+    // Generate random quantile (0.0 to 1.0)
+    double quantile = dist_q(rng) / 100.0;
+
+    // Generate random values with some nils
+    std::vector<double> numeric_values;
+    RecordSet records(nullptr);
+
+    for (size_t i = 0; i < total_count; ++i) {
+      auto rec = std::make_unique<Record>(2);
+
+      // 30% chance of nil value
+      if (dist_nil(rng) < 3) {
+        rec->fields_[0] = expr::Value();  // nil
+      } else {
+        double val = dist_val(rng);
+        rec->fields_[0] = expr::Value(val);
+        numeric_values.push_back(val);
+      }
+
+      rec->fields_[1] = expr::Value(1.0);
+      records.emplace_back(std::move(rec));
+    }
+
+    if (numeric_values.empty()) {
+      continue;
+    }
+
+    std::string query =
+        "groupby 1 @n2 reduce quantile 2 @n1 " + std::to_string(quantile);
+    auto param = MakeStages(query);
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 1);
+    auto record = records.pop_front();
+
+    double actual_quantile = std::stod(std::to_string(quantile));
+    std::sort(numeric_values.begin(), numeric_values.end());
+    double expected = CalculateGKQuantile(numeric_values, actual_quantile);
+
+    EXPECT_TRUE(record->fields_.at(2).IsDouble())
+        << "Iteration " << iteration << ": quantile=" << quantile
+        << ", total_count=" << total_count
+        << ", numeric_count=" << numeric_values.size();
+    EXPECT_NEAR(*(record->fields_.at(2).AsDouble()), expected, 0.001)
+        << "Iteration " << iteration << ": quantile=" << quantile
+        << ", total_count=" << total_count
+        << ", numeric_count=" << numeric_values.size();
+  }
+}
+
+TEST_F(AggregateExecTest, NonNumericValueHandlingProperty) {
+  std::cerr << "NonNumericValueHandlingProperty\n";
+
+  // Test with 50 iterations of datasets with non-numeric string values
+  std::mt19937 rng(45);
+  std::uniform_int_distribution<size_t> dist_count(5, 20);
+  std::uniform_int_distribution<int> dist_q(0, 100);
+  std::uniform_int_distribution<int> dist_type(0, 9);
+  std::uniform_int_distribution<int> dist_val(-500, 499);
+
+  for (int iteration = 0; iteration < 50; ++iteration) {
+    // Generate random dataset size (5 to 20 values)
+    size_t total_count = dist_count(rng);
+
+    // Generate random quantile (0.0 to 1.0)
+    double quantile = dist_q(rng) / 100.0;
+
+    // Generate random values with some non-numeric strings
+    // Note: booleans are converted to 0/1 by AsDouble(), so they count as
+    // numeric
+    std::vector<double> numeric_values;
+    RecordSet records(nullptr);
+
+    for (size_t i = 0; i < total_count; ++i) {
+      auto rec = std::make_unique<Record>(2);
+
+      int value_type = dist_type(rng);
+      if (value_type < 7) {
+        // 70% numeric values
+        double val = dist_val(rng);
+        rec->fields_[0] = expr::Value(val);
+        numeric_values.push_back(val);
+      } else {
+        // 30% non-numeric string values (should be treated as nil)
+        rec->fields_[0] = expr::Value("not_a_number");
+      }
+
+      rec->fields_[1] = expr::Value(1.0);
+      records.emplace_back(std::move(rec));
+    }
+
+    // Skip if all values are non-numeric
+    if (numeric_values.empty()) {
+      continue;
+    }
+
+    // Execute QUANTILE reducer
+    std::string query =
+        "groupby 1 @n2 reduce quantile 2 @n1 " + std::to_string(quantile);
+    auto param = MakeStages(query);
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 1);
+    auto record = records.pop_front();
+
+    // Calculate expected result using only numeric values with GK algorithm
+    // Use the quantile value that was actually parsed to avoid floating point
+    // precision mismatches
+    double actual_quantile = std::stod(std::to_string(quantile));
+    std::sort(numeric_values.begin(), numeric_values.end());
+    double expected = CalculateGKQuantile(numeric_values, actual_quantile);
+
+    // Verify result matches expected (non-numeric strings should be excluded)
+    EXPECT_TRUE(record->fields_.at(2).IsDouble())
+        << "Iteration " << iteration << ": quantile=" << quantile
+        << ", total_count=" << total_count
+        << ", numeric_count=" << numeric_values.size();
+    EXPECT_NEAR(*(record->fields_.at(2).AsDouble()), expected, 0.001)
+        << "Iteration " << iteration << ": quantile=" << quantile
+        << ", total_count=" << total_count
+        << ", numeric_count=" << numeric_values.size();
+  }
+}
+
+TEST_F(AggregateExecTest, ArgumentCountValidationProperty) {
+  std::cerr << "ArgumentCountValidationProperty\n";
+
+  // Test with various invalid argument counts
+  struct InvalidArgTestCase {
+    std::string query;
+    std::string description;
+  };
+
+  std::vector<InvalidArgTestCase> testcases = {
+      // nargs=0 (too few arguments - no property, no quantile)
+      {"groupby 1 @n2 reduce quantile 0", "nargs=0 (no arguments)"},
+      // nargs=1 (missing quantile value)
+      {"groupby 1 @n2 reduce quantile 1 @n1", "nargs=1 (missing quantile)"},
+      // nargs=3 (too many arguments)
+      {"groupby 1 @n2 reduce quantile 3 @n1 0.5 extra",
+       "nargs=3 (too many arguments)"},
+      // nargs=4 (way too many arguments)
+      {"groupby 1 @n2 reduce quantile 4 @n1 0.5 extra1 extra2",
+       "nargs=4 (way too many arguments)"},
+  };
+
+  for (const auto &tc : testcases) {
+    std::cerr << "Testing: " << tc.description << "\n";
+
+    auto argv = vmsdk::ToValkeyStringVector(tc.query);
+    vmsdk::ArgsIterator itr(argv.data(), argv.size());
+
+    auto params = std::make_unique<AggregateParameters>(0);
+    params->parse_vars_.index_interface_ = &fakeIndex;
+    EXPECT_EQ(params->AddRecordAttribute("n1", "n1", "n1",
+                                         indexes::IndexerType::kNumeric),
+              0);
+    EXPECT_EQ(params->AddRecordAttribute("n2", "n2", "n2",
+                                         indexes::IndexerType::kNumeric),
+              1);
+
+    auto parser = CreateAggregateParser();
+    auto result = parser.Parse(*params, itr);
+
+    // Parser should return an error for invalid argument count
+    EXPECT_FALSE(result.ok())
+        << "Expected parser error for " << tc.description << " but got success";
+
+    if (!result.ok()) {
+      std::cerr << "Got expected error: " << result << "\n";
+      // Verify error message mentions incorrect number of arguments
+      std::string error_msg = std::string(result.message());
+      EXPECT_TRUE(error_msg.find("incorrect number of arguments") !=
+                      std::string::npos ||
+                  error_msg.find("argument") != std::string::npos)
+          << "Error message should mention arguments: " << error_msg;
+    }
+
+    // Free the allocated ValkeyModuleStrings to avoid memory leaks
+    for (auto *str : argv) {
+      ValkeyModule_FreeString(nullptr, str);
+    }
+  }
+
+  // Also test that valid argument count (nargs=2) works correctly
+  std::cerr << "Testing: valid nargs=2\n";
+  auto param = MakeStages("groupby 1 @n2 reduce quantile 2 @n1 0.5");
+  auto records = MakeData(4);
+  EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+  EXPECT_EQ(records.size(), 1);
+  auto record = records.pop_front();
+  EXPECT_TRUE(record->fields_.at(2).IsDouble());
+  std::cerr << "Valid nargs=2 test passed\n";
+}
+
+TEST_F(AggregateExecTest, MultipleReducerIndependenceProperty) {
+  std::cerr << "MultipleReducerIndependenceProperty\n";
+
+  // Test with 100 iterations of random scenarios
+  std::mt19937 rng(45);
+  std::uniform_int_distribution<size_t> dist_n(5, 50);
+  std::uniform_int_distribution<int> dist_q(0, 80);
+  std::uniform_int_distribution<int> dist_val(-500, 499);
+
+  int successful_iterations = 0;
+  for (int iteration = 0; iteration < 100 && successful_iterations < 100;
+       ++iteration) {
+    // Generate random dataset size (5 to 50 values)
+    size_t n = dist_n(rng);
+
+    // Generate two different random quantiles (avoid 0.0 and 1.0 for now)
+    double quantile1 = 0.1 + dist_q(rng) / 100.0;  // 0.1 to 0.9
+    double quantile2 = 0.1 + dist_q(rng) / 100.0;  // 0.1 to 0.9
+
+    // Ensure quantiles are different enough
+    if (std::abs(quantile1 - quantile2) < 0.05) {
+      continue;  // Skip if quantiles are too similar
+    }
+
+    // Generate random values
+    std::vector<double> values;
+    for (size_t i = 0; i < n; ++i) {
+      values.push_back(dist_val(rng));  // Values from -500 to 499
+    }
+
+    // Test: Multiple reducers on same property with different quantiles
+    RecordSet records_same_prop(nullptr);
+    for (size_t i = 0; i < n; ++i) {
+      auto rec = std::make_unique<Record>(2);
+      rec->fields_[0] = expr::Value(values[i]);  // @n1
+      rec->fields_[1] = expr::Value(1.0);        // @n2 (groupby key)
+      records_same_prop.emplace_back(std::move(rec));
+    }
+
+    // Format quantiles with limited precision to avoid parsing issues
+    char q1_str[32], q2_str[32];
+    snprintf(q1_str, sizeof(q1_str), "%.2f", quantile1);
+    snprintf(q2_str, sizeof(q2_str), "%.2f", quantile2);
+
+    // Execute query with two QUANTILE reducers on same property
+    std::string query_same_prop =
+        std::string("groupby 1 @n2 reduce quantile 2 @n1 ") + q1_str +
+        " reduce quantile 2 @n1 " + q2_str;
+    auto param_same_prop = MakeStages(query_same_prop);
+    auto exec_result = param_same_prop->stages_[0]->Execute(records_same_prop);
+    if (!exec_result.ok()) {
+      ADD_FAILURE() << "Iteration " << iteration
+                    << ": Execute failed: " << exec_result;
+      continue;
+    }
+
+    if (records_same_prop.size() != 1) {
+      ADD_FAILURE() << "Iteration " << iteration
+                    << ": Expected 1 result record, got "
+                    << records_same_prop.size();
+      continue;
+    }
+
+    auto record_same_prop = records_same_prop.pop_front();
+
+    // Check field count
+    if (record_same_prop->fields_.size() != 4) {
+      ADD_FAILURE() << "Iteration " << iteration << ": Unexpected field count: "
+                    << record_same_prop->fields_.size() << " (expected 4)"
+                    << "\nQuery was: " << query_same_prop;
+      continue;
+    }
+
+    // Calculate expected results independently using GK algorithm
+    std::vector<double> sorted_values = values;
+    std::sort(sorted_values.begin(), sorted_values.end());
+
+    double expected1 = CalculateGKQuantile(sorted_values, std::stod(q1_str));
+    double expected2 = CalculateGKQuantile(sorted_values, std::stod(q2_str));
+
+    // Verify results
+    EXPECT_TRUE(record_same_prop->fields_.at(2).IsDouble())
+        << "Iteration " << iteration
+        << ": First reducer result should be double";
+    EXPECT_TRUE(record_same_prop->fields_.at(3).IsDouble())
+        << "Iteration " << iteration
+        << ": Second reducer result should be double";
+
+    if (!record_same_prop->fields_.at(2).IsDouble() ||
+        !record_same_prop->fields_.at(3).IsDouble()) {
+      continue;  // Skip comparison if types are wrong
+    }
+
+    double result1 = *(record_same_prop->fields_.at(2).AsDouble());
+    double result2 = *(record_same_prop->fields_.at(3).AsDouble());
+
+    EXPECT_NEAR(result1, expected1, 0.01)
+        << "Iteration " << iteration << ": First reducer result mismatch"
+        << " (quantile1=" << q1_str << ", n=" << n << ")";
+    EXPECT_NEAR(result2, expected2, 0.01)
+        << "Iteration " << iteration << ": Second reducer result mismatch"
+        << " (quantile2=" << q2_str << ", n=" << n << ")";
+
+    successful_iterations++;
+  }
+
+  EXPECT_GE(successful_iterations, 80)
+      << "Expected at least 80 successful iterations, got "
+      << successful_iterations;
+  std::cerr << "MultipleReducerIndependenceProperty completed "
+            << successful_iterations << " successful iterations\n";
+}
+
+TEST_F(AggregateExecTest, NumericPrecisionConsistencyProperty) {
+  std::cerr << "NumericPrecisionConsistencyProperty\n";
+
+  // Test with 100 iterations focusing on numeric precision edge cases
+  std::mt19937 rng(46);
+  std::uniform_int_distribution<size_t> dist_n(2, 30);
+  std::uniform_int_distribution<int> dist_q(0, 100);
+  std::uniform_int_distribution<int> dist_type(0, 9);
+  std::uniform_int_distribution<int> dist_small(0, 999);
+  std::uniform_int_distribution<int> dist_large(0, 999);
+  std::uniform_int_distribution<int> dist_decimal(0, 9999);
+  std::uniform_int_distribution<int> dist_regular(-500, 499);
+
+  for (int iteration = 0; iteration < 100; ++iteration) {
+    // Generate random dataset size (2 to 30 values)
+    size_t n = dist_n(rng);
+
+    // Generate random quantile (0.0 to 1.0)
+    double quantile = dist_q(rng) / 100.0;
+
+    // Generate values with various numeric characteristics
+    std::vector<double> values;
+    for (size_t i = 0; i < n; ++i) {
+      double val;
+      int type = dist_type(rng);
+
+      if (type < 3) {
+        // Very small numbers (testing precision near zero)
+        val = dist_small(rng) / 1000000.0;  // 0.000001 to 0.001
+      } else if (type < 6) {
+        // Very large numbers (testing large value precision)
+        val = dist_large(rng) * 1000000.0;  // Up to billions
+      } else if (type < 8) {
+        // Numbers with many decimal places
+        val = dist_decimal(rng) / 1000.0;  // 0.000 to 9.999
+      } else {
+        // Regular numbers
+        val = dist_regular(rng);  // -500 to 499
+      }
+
+      values.push_back(val);
+    }
+
+    // Create records
+    RecordSet records(nullptr);
+    for (auto val : values) {
+      auto rec = std::make_unique<Record>(2);
+      rec->fields_[0] = expr::Value(val);
+      rec->fields_[1] = expr::Value(1.0);
+      records.emplace_back(std::move(rec));
+    }
+
+    // Execute QUANTILE reducer
+    std::string query =
+        "groupby 1 @n2 reduce quantile 2 @n1 " + std::to_string(quantile);
+    auto param = MakeStages(query);
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 1);
+    auto record = records.pop_front();
+
+    // Calculate expected result using GK algorithm with double precision
+    // Use the quantile value that was actually parsed to avoid floating point
+    // precision mismatches
+    double actual_quantile = std::stod(std::to_string(quantile));
+    std::sort(values.begin(), values.end());
+    double expected = CalculateGKQuantile(values, actual_quantile);
+
+    // Verify result matches expected with double precision
+    EXPECT_TRUE(record->fields_.at(2).IsDouble())
+        << "Iteration " << iteration << ": quantile=" << quantile
+        << ", n=" << n;
+
+    double result = *(record->fields_.at(2).AsDouble());
+
+    // For double precision, we expect exact match or very close (within machine
+    // epsilon) Using relative error tolerance for large numbers, absolute for
+    // small
+    double tolerance = std::max(std::abs(expected) * 1e-10, 1e-10);
+    EXPECT_NEAR(result, expected, tolerance)
+        << "Iteration " << iteration << ": quantile=" << quantile << ", n=" << n
+        << ", expected=" << expected << ", result=" << result;
+
+    // Verify the result is a valid double (not NaN or infinity for normal
+    // inputs)
+    EXPECT_FALSE(std::isnan(result))
+        << "Iteration " << iteration << ": Result should not be NaN";
+    EXPECT_FALSE(std::isinf(result))
+        << "Iteration " << iteration
+        << ": Result should not be infinity for normal inputs";
+  }
+
+  // Test edge cases: infinity and very large numbers
+  {
+    RecordSet records(nullptr);
+    std::vector<double> edge_values = {1.0, 2.0, 3.0, 1e308,
+                                       std::numeric_limits<double>::infinity()};
+
+    for (auto val : edge_values) {
+      auto rec = std::make_unique<Record>(2);
+      rec->fields_[0] = expr::Value(val);
+      rec->fields_[1] = expr::Value(1.0);
+      records.emplace_back(std::move(rec));
+    }
+
+    std::string query = "groupby 1 @n2 reduce quantile 2 @n1 0.5";
+    auto param = MakeStages(query);
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 1);
+    auto record = records.pop_front();
+
+    // Should handle large numbers gracefully (may result in infinity, which is
+    // valid IEEE 754)
+    EXPECT_TRUE(record->fields_.at(2).IsDouble());
+  }
+
+  std::cerr << "NumericPrecisionConsistencyProperty completed 100 iterations\n";
+}
+
+TEST_F(AggregateExecTest, QuantileStringNumericValueTest) {
+  std::cerr << "QuantileStringNumericValueTest\n";
+
+  // Test that string values that look like numbers are parsed
+  RecordSet records(nullptr);
+  for (int i = 0; i < 5; ++i) {
+    auto rec = std::make_unique<Record>(2);
+    // Use string representation of numbers
+    rec->fields_[0] = expr::Value(std::to_string(double(i)));
+    rec->fields_[1] = expr::Value(1.0);
+    records.emplace_back(std::move(rec));
+  }
+
+  auto param = MakeStages("groupby 1 @n2 reduce quantile 2 @n1 0.5");
+  EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+  EXPECT_EQ(records.size(), 1);
+  auto record = records.pop_front();
+  // String numbers should be parsed and produce a valid result
+  EXPECT_TRUE(record->fields_.at(2).IsDouble());
+  double result = *(record->fields_.at(2).AsDouble());
+  // Median of {0,1,2,3,4} should be ~2
+  EXPECT_NEAR(result, 2.0, 1.0);
+}
+
+TEST_F(AggregateExecTest, QuantileArrayValueTest) {
+  // Array elements join the sample one level deep, as in Redisearch: nil,
+  // non-numeric and nested-array elements contribute nothing, so the sample
+  // is {1, 2, 3, 5}.
+  RecordSet records(nullptr);
+  using Elements = std::vector<expr::Value>;
+  for (auto &value :
+       {expr::Value(Elements{expr::Value(5.0), expr::Value("3"), expr::Value(),
+                             expr::Value("abc")}),
+        expr::Value(1.0),
+        expr::Value(Elements{expr::Value(Elements{expr::Value(100.0)}),
+                             expr::Value(2.0)})}) {
+    auto rec = std::make_unique<Record>(2);
+    rec->fields_[0] = value;
+    rec->fields_[1] = expr::Value(1.0);
+    records.emplace_back(std::move(rec));
+  }
+
+  auto param = MakeStages(
+      "groupby 1 @n2 reduce quantile 2 @n1 0 reduce quantile 2 @n1 0.5 "
+      "reduce quantile 2 @n1 0.75 reduce quantile 2 @n1 1");
+  EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+  ASSERT_EQ(records.size(), 1);
+  auto record = records.pop_front();
+  std::cerr << "Result: " << *record << "\n";
+  std::vector<double> expected{1.0, 2.0, 3.0, 5.0};
+  for (size_t i = 0; i < expected.size(); ++i) {
+    ASSERT_TRUE(record->fields_.at(i + 2).IsDouble());
+    EXPECT_EQ(*record->fields_.at(i + 2).AsDouble(), expected[i]);
+  }
+}
+
+// Regression test for the Compress() zombie-parent bug.
+// Before the fix, each Compress() pass deleted at most one sample because
+// merged (g==0) samples were used as merge targets, reviving them.  After the
+// fix, a single pass must delete all consecutively-mergeable samples.
+TEST_F(AggregateExecTest, CompressBoundedSampleCount) {
+  std::cerr << "CompressBoundedSampleCount\n";
+
+  // Insert enough values to trigger many Flush()+Compress() cycles.
+  // With EPSILON=0.01 the GK bound is O((1/ε)·log(ε·N)) ≈ 700 samples for
+  // N=100 000.  The buggy implementation retained ~N samples; the fixed one
+  // must stay well below N.
+  const size_t kN = 100000;
+  // kDefaultBufferSize is 500; each flush triggers a compress.
+  // We drive inserts through the public ProcessRecord path via Execute().
+  // To keep the test self-contained we use a large single group.
+  RecordSet records(nullptr);
+  for (size_t i = 0; i < kN; ++i) {
+    auto rec = std::make_unique<Record>(2);
+    rec->fields_[0] = expr::Value(static_cast<double>(i));
+    rec->fields_[1] = expr::Value(1.0);  // single group key
+    records.emplace_back(std::move(rec));
+  }
+
+  auto param = MakeStages("groupby 1 @n2 reduce quantile 2 @n1 0.5");
+  EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+  EXPECT_EQ(records.size(), 1);
+  auto record = records.pop_front();
+
+  // The median of [0, N) is N/2.  Allow 1% relative error (EPSILON).
+  ASSERT_TRUE(record->fields_.at(2).IsDouble());
+  double result = *(record->fields_.at(2).AsDouble());
+  double expected = static_cast<double>(kN) / 2.0;
+  EXPECT_NEAR(result, expected, expected * 0.01)
+      << "Median of [0," << kN << ") should be within 1% of " << expected;
+
+  std::cerr << "CompressBoundedSampleCount passed, median=" << result << "\n";
+}
+
+// Distance from rank ceil(q * n) to the ranks `value` occupies in `sorted`.
+static double QuantileRankError(const std::vector<double> &sorted, double value,
+                                double q) {
+  auto lo = std::lower_bound(sorted.begin(), sorted.end(), value);
+  auto hi = std::upper_bound(sorted.begin(), sorted.end(), value);
+  EXPECT_NE(lo, hi) << value << " is not an input value";
+  double first = static_cast<double>(lo - sorted.begin()) + 1;
+  double last = static_cast<double>(hi - sorted.begin());
+  double target = std::max(1.0, std::ceil(q * sorted.size()));
+  return std::max({0.0, first - target, target - last});
+}
+
+// Fisher-Yates shuffle driven by a 64-bit LCG, so that the same order can be
+// generated outside C++ to load it into Redis.
+static void LcgShuffle(std::vector<double> &values, uint64_t seed) {
+  for (size_t i = values.size() - 1; i > 0; --i) {
+    seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
+    std::swap(values[i], values[(seed >> 33) % (i + 1)]);
+  }
+}
+
+// Once the buffer has been flushed the result depends on the input order.
+// The expected values are what Redis 8.10.2 returns when fed the same order
+// (@v holds the value, @o its position):
+//   FT.AGGREGATE idx * LOAD 2 @v @o SORTBY 2 @o ASC MAX 10000
+//     GROUPBY 0 REDUCE QUANTILE 2 @v <q> AS r ...
+TEST_F(AggregateExecTest, QuantileMatchesRedisForUnsortedInput) {
+  const size_t kN = 10000;
+  const std::vector<std::string> kQs = {"0.001", "0.01", "0.05", "0.1", "0.25",
+                                        "0.5",   "0.75", "0.9",  "0.99"};
+  std::vector<double> sorted(kN);
+  for (size_t i = 0; i < kN; ++i) {
+    sorted[i] = static_cast<double>(i);
+  }
+  std::vector<double> descending(sorted.rbegin(), sorted.rend());
+  std::vector<double> shuffled = sorted;
+  LcgShuffle(shuffled, 1);
+  struct {
+    const char *name;
+    const std::vector<double> &values;
+    std::vector<double> expected;
+  } cases[] = {
+      {"descending",
+       descending,
+       {10, 101, 497, 997, 2518, 5018, 7518, 9019, 9844}},
+      {"shuffled", shuffled, {10, 100, 501, 999, 2484, 5019, 7474, 9053, 9803}},
+  };
+  std::string query = "groupby 1 @n2";
+  for (const auto &q : kQs) {
+    query += " reduce quantile 2 @n1 " + q;
+  }
+  for (const auto &tc : cases) {
+    RecordSet records(nullptr);
+    for (double v : tc.values) {
+      auto rec = std::make_unique<Record>(2);
+      rec->fields_[0] = expr::Value(v);
+      rec->fields_[1] = expr::Value(1.0);
+      records.emplace_back(std::move(rec));
+    }
+    auto param = MakeStages(query);
+    ASSERT_TRUE(param->stages_[0]->Execute(records).ok());
+    ASSERT_EQ(records.size(), 1);
+    auto record = records.pop_front();
+    for (size_t i = 0; i < kQs.size(); ++i) {
+      double result = record->fields_.at(2 + i).AsDouble().value_or(-1);
+      EXPECT_EQ(result, tc.expected[i]) << tc.name << " q=" << kQs[i];
+      EXPECT_LE(QuantileRankError(sorted, result, std::stod(kQs[i])),
+                kQuantileEpsilon * kN)
+          << tc.name << " q=" << kQs[i];
+    }
+  }
+}
+
+// The biased-quantile guarantee: the returned value's rank is within
+// ε·rank of the target rank, checked against exact ranks of the sorted input.
+// The +1 absorbs integer ranks where ε·rank < 1.
+TEST_F(AggregateExecTest, QuantileRankErrorWithinBiasedBound) {
+  const std::vector<double> kQs = {0, 0.001, 0.01, 0.1, 0.5, 0.9, 0.99, 1};
+  for (size_t n : {1000, 10000}) {
+    std::mt19937 rng(n);
+    std::vector<std::pair<const char *, std::vector<double>>> cases;
+    std::vector<double> v(n);
+    for (size_t i = 0; i < n; ++i) v[i] = i;
+    cases.emplace_back("ascending", v);
+    cases.emplace_back("descending", std::vector<double>(v.rbegin(), v.rend()));
+    std::shuffle(v.begin(), v.end(), rng);
+    cases.emplace_back("shuffled", v);
+    for (size_t i = 0; i < n; ++i) v[i] = i % 10;
+    std::shuffle(v.begin(), v.end(), rng);
+    cases.emplace_back("duplicates", v);
+
+    for (const auto &[name, values] : cases) {
+      std::vector<double> sorted = values;
+      std::sort(sorted.begin(), sorted.end());
+      for (double q : kQs) {
+        QuantileStats *stats = nullptr;
+        auto reducer = MakeQuantileReducer(q, stats);
+        auto instance = reducer->MakeInstance();
+        ArgVector args(1);
+        for (double x : values) {
+          args[0] = expr::Value(x);
+          instance->ProcessRecord(args);
+        }
+        ASSERT_GT(stats->flush_merge_count, 0) << name << " n=" << n;
+        auto result = instance->GetResult();
+        ASSERT_TRUE(result.IsDouble()) << name << " n=" << n << " q=" << q;
+        double target = std::max(1.0, std::ceil(q * n));
+        EXPECT_LE(QuantileRankError(sorted, *result.AsDouble(), q),
+                  kQuantileEpsilon * target + 1)
+            << name << " n=" << n << " q=" << q;
+      }
+    }
+  }
+}
+
+TEST_F(AggregateExecTest, QuantileInstrumentationPathCoverage) {
+  std::cerr << "QuantileInstrumentationPathCoverage\n";
+
+  // Create a QuantileReducer via the factory to inspect stats after execution.
+  QuantileStats *stats = nullptr;
+  auto reducer = MakeQuantileReducer(0.5, stats);
+  ASSERT_NE(stats, nullptr);
+
+  // Create an instance and feed it values directly.
+  auto instance = reducer->MakeInstance();
+
+  // Initially all counters should be zero.
+  EXPECT_EQ(stats->flush_initial_count, 0);
+  EXPECT_EQ(stats->flush_merge_count, 0);
+  EXPECT_EQ(stats->compress_count, 0);
+  EXPECT_EQ(stats->insert_count, 0);
+  EXPECT_EQ(stats->samples_merged, 0);
+
+  // Insert enough values to trigger the first flush and compress.
+  // kDefaultBufferSize is 500, so inserting 500 values triggers flush+compress.
+  ArgVector args(1);
+  for (int i = 0; i < 500; ++i) {
+    args[0] = expr::Value(static_cast<double>(i));
+    instance->ProcessRecord(args);
+  }
+
+  EXPECT_EQ(stats->insert_count, 500);
+  EXPECT_EQ(stats->flush_initial_count, 1);
+  EXPECT_EQ(stats->flush_merge_count, 0);
+  EXPECT_EQ(stats->compress_count, 1);
+
+  // Insert another batch to trigger a merge flush and second compress.
+  for (int i = 500; i < 1000; ++i) {
+    args[0] = expr::Value(static_cast<double>(i));
+    instance->ProcessRecord(args);
+  }
+
+  EXPECT_EQ(stats->insert_count, 1000);
+  EXPECT_EQ(stats->flush_initial_count, 1);
+  EXPECT_EQ(stats->flush_merge_count, 1);
+  EXPECT_GE(stats->compress_count, 2);
+
+  // Verify compression actually merged some samples.
+  EXPECT_GT(stats->samples_merged, 0)
+      << "Compression should have merged at least some samples";
+
+  // Verify the result is still correct.
+  auto result = instance->GetResult();
+  ASSERT_TRUE(result.IsDouble());
+  double median = *result.AsDouble();
+  double expected = 500.0;  // Median of [0, 1000) ≈ 500
+  EXPECT_NEAR(median, expected, expected * kQuantileEpsilon)
+      << "Median should be within epsilon of " << expected;
+
+  std::cerr << "QuantileInstrumentationPathCoverage passed: " << "flushes(init="
+            << stats->flush_initial_count
+            << ", merge=" << stats->flush_merge_count
+            << "), compress=" << stats->compress_count
+            << ", inserts=" << stats->insert_count
+            << ", merged=" << stats->samples_merged << "\n";
 }
 
 // Extracts the elements from a RANDOM_SAMPLE reducer result (Value::Array).

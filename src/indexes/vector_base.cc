@@ -54,6 +54,19 @@ namespace valkey_search {
 
 namespace indexes {
 
+namespace {
+
+// Tracked as a float, the type 1.1 and 1.2 read back from the RDB. Those
+// versions cannot load a FLOAT64 index, so a FLOAT64 magnitude beyond the float
+// range is clamped: converting it would be undefined behavior.
+float TrackedMagnitude(const VectorRecord &vector_record) {
+  return static_cast<float>(
+      std::min(1.0 / vector_record.GetReciprocalMagnitude(),
+               double{std::numeric_limits<float>::max()}));
+}
+
+}  // namespace
+
 template <typename T>
 MagnitudeOf<T> CalcReciprocalMagnitude(const T *src, size_t size) {
   // Accumulate in float even when T is 2 bytes: squaring a half-precision
@@ -195,7 +208,7 @@ absl::StatusOr<RecordResult> VectorBase::AddRecord(const InternedStringPtr &key,
     return RecordResult::kInvalidData;
   }
   auto vector_record = data.ConsumeVector();
-  double magnitude = 1.0 / vector_record.GetReciprocalMagnitude();
+  float magnitude = TrackedMagnitude(vector_record);
   VMSDK_ASSIGN_OR_RETURN(auto internal_id, TrackKey(key, magnitude));
   absl::Status add_result =
       AddRecordImpl(internal_id, std::move(vector_record));
@@ -242,7 +255,7 @@ absl::StatusOr<RecordResult> VectorBase::ModifyRecord(
     return RecordResult::kInvalidData;
   }
   auto vector_record = data.ConsumeVector();
-  double magnitude = 1.0 / vector_record.GetReciprocalMagnitude();
+  float magnitude = TrackedMagnitude(vector_record);
   VMSDK_ASSIGN_OR_RETURN(auto internal_id, GetInternalId(key));
   VMSDK_ASSIGN_OR_RETURN(bool res,
                          IsVectorUnchanged(key, magnitude, vector_record));
@@ -346,7 +359,7 @@ absl::StatusOr<std::optional<uint64_t>> VectorBase::UnTrackKey(
 }
 
 absl::StatusOr<uint64_t> VectorBase::TrackKey(const InternedStringPtr &key,
-                                              double magnitude) {
+                                              float magnitude) {
   absl::WriterMutexLock lock(&key_to_metadata_mutex_);
   auto id = inc_id_++;
   auto [_, succ] = tracked_metadata_by_key_.insert(
@@ -361,7 +374,7 @@ absl::StatusOr<uint64_t> VectorBase::TrackKey(const InternedStringPtr &key,
 }
 
 absl::StatusOr<bool> VectorBase::IsVectorUnchanged(
-    const InternedStringPtr &key, double magnitude,
+    const InternedStringPtr &key, float magnitude,
     const VectorRecord &vector_record) {
   absl::ReaderMutexLock lock(&resize_mutex_);
   VectorRecord stored_record;
@@ -426,12 +439,7 @@ absl::Status VectorBase::SaveTrackedKeys(
     data_model::TrackedKeyMetadata metadata_pb;
     metadata_pb.set_key(key->Str());
     metadata_pb.set_internal_id(metadata.internal_id);
-    // Clamped first: converting a double beyond the float range is undefined.
-    metadata_pb.set_magnitude(static_cast<float>(std::min(
-        metadata.magnitude, double{std::numeric_limits<float>::max()})));
-    if (GetVectorDataType() == data_model::VECTOR_DATA_TYPE_FLOAT64) {
-      metadata_pb.set_magnitude_fp64(metadata.magnitude);
-    }
+    metadata_pb.set_magnitude(metadata.magnitude);
     auto metadata_pb_str = metadata_pb.SerializeAsString();
     VMSDK_RETURN_IF_ERROR(
         chunked_out.SaveChunk(metadata_pb_str.data(), metadata_pb_str.size()))
@@ -456,9 +464,7 @@ absl::Status VectorBase::LoadTrackedKeys(
     tracked_metadata_by_key_.insert(
         {interned_key,
          {.internal_id = tracked_key_metadata.internal_id(),
-          .magnitude = tracked_key_metadata.has_magnitude_fp64()
-                           ? tracked_key_metadata.magnitude_fp64()
-                           : tracked_key_metadata.magnitude()}});
+          .magnitude = tracked_key_metadata.magnitude()}});
     key_by_internal_id_.insert(
         {tracked_key_metadata.internal_id(), interned_key});
 

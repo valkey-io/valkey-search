@@ -454,9 +454,9 @@ absl::string_view LookupKeyByValue(
 
 struct TrackedKeyMetadata {
   uint64_t internal_id;
-  // If normalize_ is false, this will be 1.0. Otherwise, it will be the
+  // If normalize_ is false, this will be 1.0f. Otherwise, it will be the
   // magnitude of the vector.
-  double magnitude;
+  float magnitude;
 };
 
 class VectorBase : public IndexBase {
@@ -695,12 +695,12 @@ class VectorBase : public IndexBase {
 
  private:
   absl::StatusOr<uint64_t> TrackKey(const InternedStringPtr &key,
-                                    double magnitude)
+                                    float magnitude)
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   absl::StatusOr<std::optional<uint64_t>> UnTrackKey(
       const InternedStringPtr &key) ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   absl::StatusOr<bool> IsVectorUnchanged(const InternedStringPtr &key,
-                                         double magnitude,
+                                         float magnitude,
                                          const VectorRecord &vector_record)
       ABSL_LOCKS_EXCLUDED(resize_mutex_, key_to_metadata_mutex_);
   absl::StatusOr<uint64_t> GetInternalId(const InternedStringPtr &key) const

@@ -84,7 +84,7 @@ std::vector<indexes::Neighbor> AssembleResult(
   for (auto& [key, entry] : accum) {
     indexes::Neighbor n;
     n.external_id = entry.representative->external_id;
-    n.score = static_cast<float>(entry.score);
+    n.score = entry.score;
     n.distance = n.score;
     // Carry over the representative's attribute_contents as the base. We
     // shallow-copy via move-fresh; if we want to merge from multiple arms in

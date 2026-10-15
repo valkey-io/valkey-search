@@ -2,6 +2,12 @@
 
 #include "hnswlib.h"
 
+#if defined(USE_SIMSIMD)
+#include "third_party/hnswlib/simsimd.h"
+#endif
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
 namespace hnswlib {
 
 static double L2SqrFP64(const void *pVect1v, const void *pVect2v,
@@ -18,6 +24,19 @@ static double L2SqrFP64(const void *pVect1v, const void *pVect2v,
   return res;
 }
 
+#if defined(USE_SIMSIMD)
+static double L2SqrFP64Simsimd(const void *pVect1, const void *pVect2,
+                               const void *qty_ptr,
+                               [[maybe_unused]] double product_magnitude) {
+  simsimd_size_t dim = *static_cast<const size_t *>(qty_ptr);
+  const simsimd_f64_t *vec1 = static_cast<const simsimd_f64_t *>(pVect1);
+  const simsimd_f64_t *vec2 = static_cast<const simsimd_f64_t *>(pVect2);
+  simsimd_distance_t distance;
+  simsimd_l2sq_f64(vec1, vec2, dim, &distance);
+  return distance;
+}
+#endif
+
 class L2SpaceFP64 : public SpaceInterface<double> {
   DISTFUNC<double> fstdistfunc_;
   size_t data_size_;
@@ -25,7 +44,13 @@ class L2SpaceFP64 : public SpaceInterface<double> {
 
  public:
   explicit L2SpaceFP64(size_t dim)
-      : fstdistfunc_(L2SqrFP64), data_size_(dim * sizeof(double)), dim_(dim) {}
+      : data_size_(dim * sizeof(double)), dim_(dim) {
+#if defined(USE_SIMSIMD)
+    fstdistfunc_ = L2SqrFP64Simsimd;
+#else
+    fstdistfunc_ = L2SqrFP64;
+#endif
+  }
 
   size_t get_data_size() { return data_size_; }
   DISTFUNC<double> get_dist_func() { return fstdistfunc_; }
@@ -33,3 +58,4 @@ class L2SpaceFP64 : public SpaceInterface<double> {
 };
 
 }  // namespace hnswlib
+#pragma GCC diagnostic pop

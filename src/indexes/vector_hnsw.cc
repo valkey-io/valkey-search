@@ -157,9 +157,8 @@ absl::Status VectorHNSW<T>::AddRecordImpl(uint64_t internal_id,
     try {
       absl::ReaderMutexLock lock(&resize_mutex_);
 
-      algo_->addPoint(Query(vector_record, GetVectorDataSize(), normalize_,
-                            GetVectorDataType()),
-                      internal_id, algo_->allow_replace_deleted_);
+      algo_->addPoint(Query(vector_record), internal_id,
+                      algo_->allow_replace_deleted_);
       return absl::OkStatus();
     } catch (const std::exception &e) {
       std::string error_msg = e.what();
@@ -283,9 +282,8 @@ absl::Status VectorHNSW<T>::ModifyRecordImpl(uint64_t internal_id,
   try {
     absl::ReaderMutexLock lock(&resize_mutex_);
     // addPoint() routes an existing label to an in-place update.
-    algo_->addPoint(Query(vector_record, GetVectorDataSize(), normalize_,
-                          GetVectorDataType()),
-                    internal_id, /*replace_deleted=*/false);
+    algo_->addPoint(Query(vector_record), internal_id,
+                    /*replace_deleted=*/false);
   } catch (const std::exception &e) {
     DCHECK(false) << "Unexpected error while modifying a record: " << e.what();
     ++Metrics::GetStats().hnsw_modify_exceptions_cnt;
@@ -341,8 +339,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
     CancelCondition cancel_condition(cancellation_token);
     VectorRecord query_record = VectorRecord::Construct<MagnitudeT>(
         query, reciprocal_magnitude, GetVectorAllocator());
-    Query embedding(query_record, query.size(), normalize_,
-                    GetVectorDataType());
+    Query embedding(query_record);
     auto res = algo_->searchKnn(embedding, count, ef_runtime, filter.get(),
                                 &cancel_condition);
     if (!enable_partial_results && cancellation_token->IsCancelled()) {
@@ -378,10 +375,8 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
           std::priority_queue<std::pair<DistanceT, hnswlib::labeltype>>> {
     try {
       CancelCondition cancel_condition(cancellation_token);
-      Query embedding(
-          VectorRecord::Construct<MagnitudeT>(query_view, reciprocal_magnitude,
-                                              GetVectorAllocator()),
-          query_view.size(), normalize_, GetVectorDataType());
+      Query embedding(VectorRecord::Construct<MagnitudeT>(
+          query_view, reciprocal_magnitude, GetVectorAllocator()));
       auto res = algo_->searchKnn(embedding, max_candidates,
                                   std::optional<size_t>(max_candidates),
                                   filter.get(), &cancel_condition);

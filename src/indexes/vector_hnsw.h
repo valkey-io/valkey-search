@@ -37,18 +37,12 @@ class QueryVector {
   // Holds a query or inserted vector and caches its raw data pointer and
   // reciprocal magnitude so HNSW distance evaluations do not reload the record
   // header on every candidate.
-  QueryVector(const VectorRecord &vector_record, size_t vector_record_size = 0,
-              bool normalize = false,
-              data_model::VectorDataType data_type =
-                  data_model::VECTOR_DATA_TYPE_FLOAT32) noexcept
+  QueryVector(const VectorRecord &vector_record) noexcept
       : record_ref_(&vector_record),
         raw_vector_(vector_record.GetRawVector()),
         reciprocal_magnitude_(ReciprocalMagnitudeOf(vector_record)) {}
 
-  QueryVector(VectorRecord &&vector_record, size_t vector_record_size = 0,
-              bool normalize = false,
-              data_model::VectorDataType data_type =
-                  data_model::VECTOR_DATA_TYPE_FLOAT32) noexcept
+  QueryVector(VectorRecord &&vector_record) noexcept
       : owned_record_(std::move(vector_record)),
         raw_vector_(owned_record_.GetRawVector()),
         reciprocal_magnitude_(ReciprocalMagnitudeOf(owned_record_)) {}
@@ -110,7 +104,6 @@ class VectorHNSW : public VectorType<T> {
   using VectorType<T>::GetDataTypeSize;
   using VectorType<T>::GetVectorAllocator;
   using VectorType<T>::GetVectorDataSize;
-  using VectorType<T>::GetVectorDataType;
   using VectorType<T>::IsValidSizeVector;
   using VectorType<T>::EmitDataTypeInfo;
   using VectorType<T>::SetProtoDataType;

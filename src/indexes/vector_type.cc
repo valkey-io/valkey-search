@@ -7,7 +7,6 @@
 
 #include "src/indexes/vector_type.h"
 
-#include <bit>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -49,12 +48,6 @@
 namespace valkey_search::indexes {
 
 namespace {
-
-// Classifies from the bits: -ffast-math lets std::isfinite fold to true.
-bool IsFiniteDouble(double value) {
-  constexpr uint64_t kExponentMask = 0x7ff0000000000000ULL;
-  return (std::bit_cast<uint64_t>(value) & kExponentMask) != kExponentMask;
-}
 
 // Constructs the right hnswlib space for T + metric. Kept private to
 // this TU -- callers reach it via VectorType<T>::Init below. Note that
@@ -341,7 +334,7 @@ vmsdk::UniqueValkeyString VectorType<T>::NormalizeStringAttribute(
     if constexpr (std::is_same_v<T, double>) {
       // Parsed directly as double: going through float would drop precision.
       double value;
-      if (!absl::SimpleAtod(element, &value) || !IsFiniteDouble(value)) {
+      if (!absl::SimpleAtod(element, &value)) {
         return nullptr;
       }
       binary_string.append(reinterpret_cast<const char *>(&value),

@@ -1949,11 +1949,9 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
 
   float magnitude = kDefaultMagnitude;
   for (int t = 0; t < kThreads; ++t) {
-    algo.addPoint(
-        QueryVector(
-            VectorRecord::Construct(v_bytes, magnitude, vector_allocator.get()),
-            v_bytes.size(), false, data_model::VECTOR_DATA_TYPE_FLOAT32),
-        t);
+    algo.addPoint(QueryVector(VectorRecord::Construct(v_bytes, magnitude,
+                                                      vector_allocator.get())),
+                  t);
   }
 
   // baseline is unsigned 64-bit integer, if goes to negative it underflows to a
@@ -2119,12 +2117,9 @@ ChunkStream BuildGoldenChunks(const std::vector<int> &force_levels,
                               v.size() * sizeof(float));
     float reciprocal_magnitude = CalcReciprocalMagnitude(v.data(), v.size());
 
-    algo.addPoint(
-        QueryVector(VectorRecord::Construct(v_bytes, reciprocal_magnitude,
-                                            vector_allocator.get()),
-                    v_bytes.size(), false,
-                    data_model::VECTOR_DATA_TYPE_FLOAT32),
-        /*label=*/i, force_levels[i]);
+    algo.addPoint(QueryVector(VectorRecord::Construct(
+                      v_bytes, reciprocal_magnitude, vector_allocator.get())),
+                  /*label=*/i, force_levels[i]);
   }
   ChunkStream golden;
   auto serializer = [](const VectorRecord &record, bool is_marked_deleted) {
@@ -2203,12 +2198,9 @@ ChunkStream DuplicateLabelGolden(size_t num_slots,
   for (size_t i = 0; i < num_slots; ++i) {
     absl::string_view v_bytes(reinterpret_cast<const char *>(vectors[i].data()),
                               kDimensions * sizeof(float));
-    algo.addPoint(
-        QueryVector(VectorRecord::Construct(v_bytes, kDefaultMagnitude,
-                                            vector_allocator.get()),
-                    v_bytes.size(), false,
-                    data_model::VECTOR_DATA_TYPE_FLOAT32),
-        /*label=*/i);
+    algo.addPoint(QueryVector(VectorRecord::Construct(
+                      v_bytes, kDefaultMagnitude, vector_allocator.get())),
+                  /*label=*/i);
   }
   for (size_t t : tombstones) {
     algo.markDelete(t);
@@ -2288,11 +2280,9 @@ TEST_F(VectorIndexTest, LoadDuplicateLabelRebuildsLiveMapping) {
     absl::string_view new_v(
         reinterpret_cast<const char *>(vectors[live_slot].data()),
         kDimensions * sizeof(float));
-    algo.addPoint(
-        QueryVector(VectorRecord::Construct(new_v, kDefaultMagnitude,
-                                            vector_allocator.get()),
-                    new_v.size(), false, data_model::VECTOR_DATA_TYPE_FLOAT32),
-        /*label=*/1000, /*replace_deleted=*/true);
+    algo.addPoint(QueryVector(VectorRecord::Construct(new_v, kDefaultMagnitude,
+                                                      vector_allocator.get())),
+                  /*label=*/1000, /*replace_deleted=*/true);
     EXPECT_EQ(algo.label_lookup_[live_slot], live_slot);
     EXPECT_FALSE(algo.isMarkedDeleted(live_slot));
     hnswlib::tableint reused_slot = algo.label_lookup_[1000];
@@ -2347,8 +2337,7 @@ TEST_F(VectorIndexTest, HnswAddPointReplaceDeletedDoesNotDuplicateLabel) {
                               kDimensions * sizeof(float));
     records.push_back(VectorRecord::Construct(v_bytes, kDefaultMagnitude,
                                               vector_allocator.get()));
-    algo.addPoint(QueryVector(records.back(), v_bytes.size(), false,
-                              data_model::VECTOR_DATA_TYPE_FLOAT32),
+    algo.addPoint(QueryVector(records.back()),
                   /*label=*/i);
   }
 
@@ -2358,8 +2347,7 @@ TEST_F(VectorIndexTest, HnswAddPointReplaceDeletedDoesNotDuplicateLabel) {
   // Add vector with label 1 again. Previously in the replace-deleted case, this
   // would overwrite the tombstoned slot 0 and not re-use slot 1 with the same
   // label.
-  algo.addPoint(QueryVector(records[0], kDimensions * sizeof(float), false,
-                            data_model::VECTOR_DATA_TYPE_FLOAT32),
+  algo.addPoint(QueryVector(records[0]),
                 /*label=*/1, /*replace_deleted=*/true);
 
   // Each label keeps its own slot: label 1 stays live on slot 1 and label 0
@@ -2395,8 +2383,7 @@ TEST_F(VectorIndexTest, HnswSelfHealsTombstoneRoot) {
 
   // Insert label 0 at level 2 so it establishes maxlevel_ = 2 and becomes the
   // entry point.
-  algo.addPoint(QueryVector(records[0], kDimensions * sizeof(float), false,
-                            data_model::VECTOR_DATA_TYPE_FLOAT32),
+  algo.addPoint(QueryVector(records[0]),
                 /*label=*/0, /*level=*/2);
   EXPECT_EQ(algo.enterpoint_node_.load(), 0u);
   EXPECT_EQ(algo.maxlevel_.load(), 2);
@@ -2409,18 +2396,15 @@ TEST_F(VectorIndexTest, HnswSelfHealsTombstoneRoot) {
   // Insert label 1 matching maxlevel_ (curlevel == maxlevelcopy == 2).
   // The root self-healing logic detects the tombstoned enterpoint_node_ and
   // updates enterpoint_node_ to the new alive element 1.
-  algo.addPoint(QueryVector(records[1], kDimensions * sizeof(float), false,
-                            data_model::VECTOR_DATA_TYPE_FLOAT32),
+  algo.addPoint(QueryVector(records[1]),
                 /*label=*/1, /*level=*/2);
   EXPECT_EQ(algo.enterpoint_node_.load(), 1u);
   EXPECT_FALSE(algo.isMarkedDeleted(algo.enterpoint_node_.load()));
   EXPECT_EQ(algo.maxlevel_.load(), 2);
 
   // Verify search uses the healed entry point and finds the live element.
-  auto results =
-      algo.searchKnn(QueryVector(records[1], kDimensions * sizeof(float), false,
-                                 data_model::VECTOR_DATA_TYPE_FLOAT32),
-                     /*k=*/1);
+  auto results = algo.searchKnn(QueryVector(records[1]),
+                                /*k=*/1);
   ASSERT_EQ(results.size(), 1u);
   EXPECT_EQ(results.top().second, 1u);
 }
@@ -2462,8 +2446,7 @@ TEST_F(VectorIndexTest, ConcurrentRootDeletionAndInsertionHealsRoot) {
 
   // Insert label 0 at level 2 so it establishes maxlevel_ = 2 and becomes the
   // entry point.
-  algo.addPoint(QueryVector(records[0], kDimensions * sizeof(float), false,
-                            data_model::VECTOR_DATA_TYPE_FLOAT32),
+  algo.addPoint(QueryVector(records[0]),
                 /*label=*/0, /*level=*/2);
   EXPECT_EQ(algo.enterpoint_node_.load(), 0u);
   EXPECT_EQ(algo.maxlevel_.load(), 2);
@@ -2477,8 +2460,7 @@ TEST_F(VectorIndexTest, ConcurrentRootDeletionAndInsertionHealsRoot) {
   // unlocked the global mutex. The hook will pause thread 1, allowing the main
   // thread to delete node 0 concurrently.
   std::thread insert_thread([&]() {
-    algo.addPoint(QueryVector(records[1], kDimensions * sizeof(float), false,
-                              data_model::VECTOR_DATA_TYPE_FLOAT32),
+    algo.addPoint(QueryVector(records[1]),
                   /*label=*/1, /*level=*/2);
   });
 
@@ -2501,10 +2483,8 @@ TEST_F(VectorIndexTest, ConcurrentRootDeletionAndInsertionHealsRoot) {
   EXPECT_EQ(algo.maxlevel_.load(), 2);
 
   // Verify search uses the healed entry point and finds the live element.
-  auto results =
-      algo.searchKnn(QueryVector(records[1], kDimensions * sizeof(float), false,
-                                 data_model::VECTOR_DATA_TYPE_FLOAT32),
-                     /*k=*/1);
+  auto results = algo.searchKnn(QueryVector(records[1]),
+                                /*k=*/1);
   ASSERT_EQ(results.size(), 1u);
   EXPECT_EQ(results.top().second, 1u);
 }
@@ -2525,10 +2505,7 @@ TEST_F(VectorIndexTest, HnswReplacedVectorOutlivesConcurrentReader) {
     return VectorRecord::Construct(bytes, kDefaultMagnitude,
                                    vector_allocator.get());
   };
-  auto query = [](const VectorRecord &record) {
-    return QueryVector(record, kDimensions * sizeof(float), false,
-                       data_model::VECTOR_DATA_TYPE_FLOAT32);
-  };
+  auto query = [](const VectorRecord &record) { return QueryVector(record); };
 
   std::atomic<bool> hook_enabled = false;
   std::atomic<bool> intercepted = false;
@@ -2616,11 +2593,9 @@ TEST_F(VectorIndexTest, HnswTombstoneClusterFallbackDoesNotThrow) {
   }
 
   // Insert label 0 at level 1 and label 1 at level 0.
-  algo.addPoint(QueryVector(records[0], kDimensions * sizeof(float), false,
-                            data_model::VECTOR_DATA_TYPE_FLOAT32),
+  algo.addPoint(QueryVector(records[0]),
                 /*label=*/0, /*level=*/1);
-  algo.addPoint(QueryVector(records[1], kDimensions * sizeof(float), false,
-                            data_model::VECTOR_DATA_TYPE_FLOAT32),
+  algo.addPoint(QueryVector(records[1]),
                 /*label=*/1, /*level=*/0);
 
   // Mark all existing nodes deleted, creating an all-tombstone graph.
@@ -2632,10 +2607,8 @@ TEST_F(VectorIndexTest, HnswTombstoneClusterFallbackDoesNotThrow) {
   // Inserting label 2 at level 0: searchBaseLayer encounters only tombstones,
   // returning an empty candidate queue. The fallback prevents throwing
   // "During insertion, no neighbors found to mutually connect to".
-  EXPECT_NO_THROW(
-      algo.addPoint(QueryVector(records[2], kDimensions * sizeof(float), false,
-                                data_model::VECTOR_DATA_TYPE_FLOAT32),
-                    /*label=*/2, /*level=*/0));
+  EXPECT_NO_THROW(algo.addPoint(QueryVector(records[2]),
+                                /*label=*/2, /*level=*/0));
   EXPECT_FALSE(algo.isMarkedDeleted(2));
 }
 
@@ -2670,8 +2643,7 @@ TEST_F(VectorIndexTest, HnswTombstoneClusterFallbackWithAliveRootDoesNotThrow) {
   auto rec2 = make_record(v2);
 
   // Insert label 0 at level 2.
-  algo.addPoint(QueryVector(rec0, kDimensions * sizeof(float), false,
-                            data_model::VECTOR_DATA_TYPE_FLOAT32),
+  algo.addPoint(QueryVector(rec0),
                 /*label=*/0, /*level=*/2);
   // Mark node 0 deleted before inserting label 1.
   algo.markDelete(0);
@@ -2679,8 +2651,7 @@ TEST_F(VectorIndexTest, HnswTombstoneClusterFallbackWithAliveRootDoesNotThrow) {
 
   // Insert label 1 at level 2 (matches maxlevel_, self-heals root so node 1
   // becomes the entry point; both 0 and 1 are connected at level 2).
-  algo.addPoint(QueryVector(rec1, kDimensions * sizeof(float), false,
-                            data_model::VECTOR_DATA_TYPE_FLOAT32),
+  algo.addPoint(QueryVector(rec1),
                 /*label=*/1, /*level=*/2);
   EXPECT_EQ(algo.enterpoint_node_.load(), 1u);
   EXPECT_FALSE(algo.isMarkedDeleted(1));
@@ -2693,10 +2664,8 @@ TEST_F(VectorIndexTest, HnswTombstoneClusterFallbackWithAliveRootDoesNotThrow) {
   // At level 1, searchBaseLayer(currObj = 0) has no live neighbors and returns
   // empty top_candidates.
   // Fallback links currObj (0) and alive enterpoint_node_ (1) without throwing.
-  EXPECT_NO_THROW(
-      algo.addPoint(QueryVector(rec2, kDimensions * sizeof(float), false,
-                                data_model::VECTOR_DATA_TYPE_FLOAT32),
-                    /*label=*/2, /*level=*/1));
+  EXPECT_NO_THROW(algo.addPoint(QueryVector(rec2),
+                                /*label=*/2, /*level=*/1));
   EXPECT_FALSE(algo.isMarkedDeleted(2));
   EXPECT_EQ(algo.getListCount(algo.get_linklist_at_level(2, 1)), 2);
 }
@@ -2710,8 +2679,7 @@ TEST_F(VectorIndexTest, HnswHandlesEmptyNeighborLists) {
     absl::string_view bytes(reinterpret_cast<const char *>(&value),
                             sizeof(value));
     return QueryVector(
-        VectorRecord::Construct(bytes, kDefaultMagnitude, nullptr),
-        bytes.size(), false, data_model::VECTOR_DATA_TYPE_FLOAT32);
+        VectorRecord::Construct(bytes, kDefaultMagnitude, nullptr));
   };
   auto entry = query(0.0f);
   auto point = query(1.0f);
@@ -3517,19 +3485,6 @@ TEST_F(VectorIndexTest, Fp64NormalizeStringAttributeKeepsDoublePrecision) {
   EXPECT_EQ(vmsdk::ToStringView(normalized.get()), AsBytes(expected));
 }
 
-TEST_F(VectorIndexTest, Fp64NormalizeStringAttributeRejectsNonFinite) {
-  auto index = VectorFlat<double>::Create(
-      CreateFlatVectorIndexProto(1, data_model::DISTANCE_METRIC_L2, 10, 10),
-      attribute_identifier, attribute_data_type, 0);
-  ASSERT_TRUE(index.ok());
-  for (const char *value : {"[nan]", "[inf]", "[-inf]", "[1e999]"}) {
-    EXPECT_EQ(index.value()->NormalizeStringAttribute(
-                  vmsdk::MakeUniqueValkeyString(value)),
-              nullptr)
-        << value;
-  }
-}
-
 TEST_F(VectorIndexTest, Fp64ConstructRecordKeepsDoubleMagnitude) {
   auto index = VectorFlat<double>::Create(
       CreateFlatVectorIndexProto(2, data_model::DISTANCE_METRIC_COSINE, 10, 10),
@@ -3688,8 +3643,8 @@ data_model::TrackedKeyMetadata SaveSingleTrackedKey(const VectorBase &index) {
   return metadata;
 }
 
-// A FLOAT64 magnitude outside the float range survives in magnitude_fp64.
-TEST_F(VectorIndexTest, Fp64SaveTrackedKeysKeepsMagnitude) {
+// A FLOAT64 magnitude outside the float range is saved as the largest float.
+TEST_F(VectorIndexTest, Fp64SaveTrackedKeysClampsMagnitude) {
   auto index = VectorFlat<double>::Create(
       CreateFlatVectorIndexProto(2, data_model::DISTANCE_METRIC_COSINE, 10, 10),
       attribute_identifier, attribute_data_type, 0);
@@ -3698,12 +3653,10 @@ TEST_F(VectorIndexTest, Fp64SaveTrackedKeysKeepsMagnitude) {
   VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(*index.value(), IndexToKey(1),
                                                  AsBytes(v)));
   auto metadata = SaveSingleTrackedKey(*index.value());
-  ASSERT_TRUE(metadata.has_magnitude_fp64());
-  EXPECT_NEAR(metadata.magnitude_fp64() / 1e100, 1.0, 1e-12);
+  EXPECT_EQ(metadata.magnitude(), std::numeric_limits<float>::max());
 }
 
-// Other types keep writing the float field alone.
-TEST_F(VectorIndexTest, FloatSaveTrackedKeysOmitsFp64Magnitude) {
+TEST_F(VectorIndexTest, FloatSaveTrackedKeysKeepsMagnitude) {
   auto index = VectorFlat<float>::Create(
       CreateFlatVectorIndexProto(2, data_model::DISTANCE_METRIC_COSINE, 10, 10),
       attribute_identifier, attribute_data_type, 0);
@@ -3714,7 +3667,6 @@ TEST_F(VectorIndexTest, FloatSaveTrackedKeysOmitsFp64Magnitude) {
       absl::string_view(reinterpret_cast<const char *>(v.data()),
                         v.size() * sizeof(float))));
   auto metadata = SaveSingleTrackedKey(*index.value());
-  EXPECT_FALSE(metadata.has_magnitude_fp64());
   EXPECT_FLOAT_EQ(metadata.magnitude(), 5.0f);
 }
 

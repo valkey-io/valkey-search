@@ -95,11 +95,7 @@ message TagIndex {
 message TrackedKeyMetadata {
   string key = 1;
   uint64 internal_id = 2;
-  // Narrowed to float, which a FLOAT64 magnitude can overflow; kept for
-  // readers that predate magnitude_fp64.
   float magnitude = 3;
-  // Written by FLOAT64 indexes only.
-  optional double magnitude_fp64 = 4;
 }
 
 message VectorIndex {

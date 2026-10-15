@@ -12,8 +12,6 @@
 #include <absl/status/statusor.h>
 
 #include <atomic>
-#include <bitset>
-#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -51,10 +49,10 @@ class TextIndexSchema;
 
 // FT.INFO counters for text info fields and memory pools
 struct TextIndexMetadata {
-  std::atomic<uint64_t> total_positions{0};
-  std::atomic<uint64_t> num_unique_terms{0};
-  std::atomic<uint64_t> total_term_frequency{0};
-  std::atomic<uint64_t> total_doc_len{
+  alignas(64) std::atomic<uint64_t> total_positions{0};
+  alignas(64) std::atomic<uint64_t> num_unique_terms{0};
+  alignas(64) std::atomic<uint64_t> total_term_frequency{0};
+  alignas(64) std::atomic<uint64_t> total_doc_len{
       0};  // Sum of all doc_lens for avg_doc_len
 
   // Memory pools for text index components
@@ -104,6 +102,8 @@ class TextIndexSchema {
                   const std::string &punctuation,
                   const std::vector<std::string> &stop_words, bool with_offsets,
                   uint32_t min_stem_size);
+
+  ~TextIndexSchema();
 
   absl::StatusOr<bool> StageAttributeData(const InternedStringPtr &key,
                                           absl::string_view data,

@@ -5,10 +5,10 @@
  *
  */
 
-#ifndef _VALKEY_SEARCH_INDEXES_TEXT_ORPROXIMITY_H_
-#define _VALKEY_SEARCH_INDEXES_TEXT_ORPROXIMITY_H_
+#ifndef VALKEY_SEARCH_INDEXES_TEXT_ORPROXIMITY_H_
+#define VALKEY_SEARCH_INDEXES_TEXT_ORPROXIMITY_H_
 
-#include <vector>
+#include <utility>
 
 #include "absl/container/inlined_vector.h"
 #include "src/indexes/text.h"
@@ -32,19 +32,20 @@ class OrProximityIterator : public TextIterator {
  public:
   OrProximityIterator(
       absl::InlinedVector<std::unique_ptr<TextIterator>,
-                          kProximityTermsInlineCapacity>&& iters,
+                          kProximityTermsInlineCapacity> &&iters,
       float weight = 1.0f);
 
   /* Implementation of TextIterator APIs */
   FieldMaskPredicate QueryFieldMask() const override;
   // Key-level iteration
   bool DoneKeys() const override;
-  const Key& CurrentKey() const override;
+  const Key &CurrentKey() const override;
+  DocId CurrentDocId() const override { return current_doc_id_; }
   bool NextKey() override;
-  bool SeekForwardKey(const Key& target_key) override;
+  bool SeekForwardKey(const Key &target_key) override;
   // Position-level iteration
   bool DonePositions() const override;
-  const PositionRange& CurrentPosition() const override;
+  const PositionRange &CurrentPosition() const override;
   bool NextPosition() override;
   bool SeekForwardPosition(Position target_position) override;
   FieldMaskPredicate CurrentFieldMask() const override;
@@ -67,12 +68,13 @@ class OrProximityIterator : public TextIterator {
       iters_;
   float weight_;
   Key current_key_;
+  DocId current_doc_id_{kInvalidDocId};
   std::optional<PositionRange> current_position_;
   FieldMaskPredicate current_field_mask_;
   FieldMaskPredicate query_field_mask_;
 
-  // InlinedPriorityQueue for efficient key management (no heap allocation).
-  valkey_search::InlinedPriorityQueue<std::pair<Key, size_t>,
+  // InlinedPriorityQueue for efficient key management ordered by DocId.
+  valkey_search::InlinedPriorityQueue<std::pair<DocId, size_t>,
                                       kProximityTermsInlineCapacity>
       key_set_;
   // Current iterators on same key

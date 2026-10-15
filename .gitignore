@@ -23,6 +23,7 @@ env/
 .venv/
 .env/
 .build_log
+integration/benchmarks/rax/dataset/
 integration/module/*.so
 
 # Core dumps. The test binaries abort at teardown under a gtest_filter (the

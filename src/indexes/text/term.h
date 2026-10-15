@@ -5,8 +5,8 @@
  *
  */
 
-#ifndef _VALKEY_SEARCH_INDEXES_TEXT_TERM_H_
-#define _VALKEY_SEARCH_INDEXES_TEXT_TERM_H_
+#ifndef VALKEY_SEARCH_INDEXES_TEXT_TERM_H_
+#define VALKEY_SEARCH_INDEXES_TEXT_TERM_H_
 
 #include <cstdint>
 #include <utility>
@@ -14,7 +14,7 @@
 #include "absl/container/inlined_vector.h"
 #include "src/indexes/scoring/scorer.h"
 #include "src/indexes/text.h"
-#include "src/indexes/text/flat_position_map.h"
+#include "src/indexes/text/posting.h"
 #include "src/indexes/text/text_iterator.h"
 #include "src/utils/inlined_priority_queue.h"
 
@@ -53,8 +53,8 @@ struct TermScoringParams {
   uint32_t stem_num_doc_contain_term = 0;
   uint32_t root_num_doc_contain_term = 0;
   bool has_root = false;
-  const TextIndexSchema* text_index_schema = nullptr;
-  const scoring::Scorer* scorer = nullptr;
+  const TextIndexSchema *text_index_schema = nullptr;
+  const scoring::Scorer *scorer = nullptr;
   // Expansion (prefix/suffix/fuzzy) scoring input: one dt per matched term.
   absl::InlinedVector<uint32_t, kWordExpansionInlineCapacity> per_term_dt;
 };
@@ -62,21 +62,22 @@ struct TermScoringParams {
 class TermIterator : public TextIterator {
  public:
   TermIterator(
-      absl::InlinedVector<Postings::KeyIterator, kWordExpansionInlineCapacity>&&
-          key_iterators,
+      absl::InlinedVector<Postings::KeyIterator, kWordExpansionInlineCapacity>
+          &&key_iterators,
       const FieldMaskPredicate query_field_mask, const bool require_positions,
       const FieldMaskPredicate stem_field_mask = 0, bool has_original = false,
-      const TermScoringParams& scoring = {});
+      const TermScoringParams &scoring = {});
   /* Implementation of TextIterator APIs */
   FieldMaskPredicate QueryFieldMask() const override;
   // Key-level iteration
   bool DoneKeys() const override;
-  const Key& CurrentKey() const override;
+  const Key &CurrentKey() const override;
+  DocId CurrentDocId() const override { return current_doc_id_; }
   bool NextKey() override;
-  bool SeekForwardKey(const Key& target_key) override;
+  bool SeekForwardKey(const Key &target_key) override;
   // Position-level iteration
   bool DonePositions() const override;
-  const PositionRange& CurrentPosition() const override;
+  const PositionRange &CurrentPosition() const override;
   bool NextPosition() override;
   bool SeekForwardPosition(Position target_position) override;
   FieldMaskPredicate CurrentFieldMask() const override;
@@ -102,10 +103,8 @@ class TermIterator : public TextIterator {
       key_iterators_;
   absl::InlinedVector<PositionIterator, kWordExpansionInlineCapacity>
       pos_iterators_;
-  // Raw pointer to the current key in the underlying btree_map. Safe to use
-  // because the map is immutable while the reader lock is held (no inserts or
-  // deletes during search).
-  const Key* current_key_{nullptr};
+  const Key *current_key_{nullptr};
+  DocId current_doc_id_{kInvalidDocId};
   std::optional<PositionRange> current_position_;
   FieldMaskPredicate current_field_mask_;
   const bool require_positions_;
@@ -119,14 +118,14 @@ class TermIterator : public TextIterator {
   // per-document doc_len (null disables scoring).
   const float leaf_weight_;
   const uint32_t num_doc_contain_term_;
-  const TextIndexSchema* const text_index_schema_;
+  const TextIndexSchema *const text_index_schema_;
 
   // Query-selected scorer and the query-invariant inputs cached at
   // construction: idf_ (per-term) and avg_doc_len_ (corpus-wide). GetScore()
   // combines them with the per-document term frequency and doc_len via
   // ScoreLeaf(). Null scorer_ means scoring is disabled (constant-stub
   // fallback).
-  const scoring::Scorer* scorer_{nullptr};
+  const scoring::Scorer *scorer_{nullptr};
   float idf_{0.0f};
   // Separate IDFs for the stem inflection group and the stem root literal leaf.
   float idf_stem_{0.0f};
@@ -137,12 +136,9 @@ class TermIterator : public TextIterator {
   // key_iterators_. Non-empty selects expansion mode in GetScore().
   absl::InlinedVector<float, kWordExpansionInlineCapacity> per_term_idf_;
 
-  // Pending queue: heap of valid iterators not currently being processed.
-  // Provides O(1) access to the minimum key and O(log K) extraction.
-  // Uses PriorityQueueEntry (raw pointer) instead of copying Key to avoid
-  // atomic ref counting. Safe because pointers reference btree_map entries
-  // which are immutable during search (reader lock held).
-  valkey_search::InlinedPriorityQueue<valkey_search::PriorityQueueEntry<Key>,
+  // Pending queue: heap of valid iterators not currently being processed,
+  // ordered by ascending DocId to match Postings::KeyIterator order.
+  valkey_search::InlinedPriorityQueue<std::pair<DocId, size_t>,
                                       kWordExpansionInlineCapacity>
       key_set_;
   // Pending queue: heap of valid iterators not currently being processed.

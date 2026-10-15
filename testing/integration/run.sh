@@ -30,7 +30,7 @@ Usage: test.sh [options...]
     --help | -h              Print this help message and exit.
     --clean                  Clean the current build configuration.
     --debug                  Build for debug version.
-    --test                   Specify the test name [stability|vector_search_integration]. Default all.
+    --test                   Specify the test name [stability|vector_search_integration|benchmark]. Default all.
     --test-errors-stdout     When a test fails, dump the captured tests output to stdout.
     --asan                   Build the ASan version of the module.
     --tsan                   Build the TSan version of the module.
@@ -134,7 +134,7 @@ fi
 # Source the common.rc after we setup our environment variables
 . ${WORKSPACE_HOME}/scripts/common.rc
 
-if [[ ! "${TEST}" == "stability" ]] && [[ ! "${TEST}" == "vector_search_integration" ]] && [[ ! "${TEST}" == "all" ]]; then
+if [[ ! "${TEST}" == "stability" ]] && [[ ! "${TEST}" == "vector_search_integration" ]] && [[ ! "${TEST}" == "benchmark" ]] && [[ ! "${TEST}" == "all" ]]; then
     printf "\n${RED}Invalid test value: ${TEST}${RESET}\n\n" >&2
     print_usage
     exit 1
@@ -183,12 +183,24 @@ function configure() {
     setup_valkey_server
     setup_json_module
 
-    # If the binary is already there, do not rebuild it
+    # If the binary is not there, build it automatically
     printf "Checking for ${VALKEY_SEARCH_PATH}"
     if [ ! -f "${VALKEY_SEARCH_PATH}" ]; then
-        printf "... ${RED}not found${RESET}\n"
-        printf "\n${RED} Please build ${VALKEY_SEARCH_PATH} and try again${RESET}\n\n";
-        exit 1
+        printf "... ${RED}not found. Building libsearch.so automatically...${RESET}\n"
+        local build_flag=""
+        if [[ "${BUILD_CONFIG}" == "debug" ]]; then
+            build_flag="--debug"
+        fi
+        if [[ "${SAN_BUILD}" == "address" ]]; then
+            build_flag="${build_flag} --asan"
+        elif [[ "${SAN_BUILD}" == "thread" ]]; then
+            build_flag="${build_flag} --tsan"
+        fi
+        ${WORKSPACE_HOME}/build.sh ${build_flag}
+        if [ ! -f "${VALKEY_SEARCH_PATH}" ]; then
+            printf "\n${RED}Error: ${VALKEY_SEARCH_PATH} was not produced by build.sh${RESET}\n\n" >&2
+            exit 1
+        fi
     else
         printf "... ${GREEN}found${RESET}\n"
     fi
@@ -256,7 +268,14 @@ fi
 configure
 build
 
-export MEMTIER_PATH=memtier_benchmark
+if command -v memtier_benchmark &> /dev/null; then
+    export MEMTIER_PATH=memtier_benchmark
+elif [ -f "${WORKSPACE_HOME}/.devcontainer/run_in_docker.sh" ]; then
+    export MEMTIER_PATH="${WORKSPACE_HOME}/.devcontainer/run_in_docker.sh memtier_benchmark"
+else
+    printf "\n${RED}Error: memtier_benchmark is not installed or not in PATH and docker fallback is unavailable.${RESET}\n\n" >&2
+    exit 1
+fi
 export VALKEY_SEARCH_PATH=${VALKEY_SEARCH_PATH}
 export TEST_UNDECLARED_OUTPUTS_DIR="$BUILD_DIR/output"
 
@@ -298,7 +317,12 @@ fi
 
 ALL_FILES="vector_search_integration_test.py stability_test.py"
 
-if [ -n "${PARALLEL_WORKERS}" ] && [ "${PARALLEL_WORKERS}" != "0" ] && [ "${PARALLEL_WORKERS}" != "1" ]; then
+if [[ "${TEST}" == "benchmark" ]]; then
+    for bench_script in $(find ${WORKSPACE_HOME}/integration/benchmarks -name "run_benchmark.py"); do
+        echo "Executing benchmark script: ${bench_script}"
+        python3 ${bench_script} "$@"
+    done
+elif [ -n "${PARALLEL_WORKERS}" ] && [ "${PARALLEL_WORKERS}" != "0" ] && [ "${PARALLEL_WORKERS}" != "1" ]; then
     XDIST_ARGS="-n ${PARALLEL_WORKERS} --dist=load"
     echo "Running integration tests in parallel with ${PARALLEL_WORKERS} workers"
     if [[ "${TEST}" == "all" ]]; then

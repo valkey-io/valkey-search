@@ -434,7 +434,7 @@ class VectorBase : public IndexBase {
       absl::string_view query, float query_magnitude,
       const InternedStringPtr &key, uint64_t count,
       std::priority_queue<std::pair<float, hnswlib::labeltype>> &results,
-      absl::flat_hash_set<const char *> &top_keys) const;
+      absl::flat_hash_set<InternedStringPtr> &top_keys) const;
   template <typename T>
   absl::StatusOr<std::vector<Neighbor>> CreateReply(
       std::priority_queue<std::pair<T, hnswlib::labeltype>> &knn_res);
@@ -703,7 +703,7 @@ class PrefilterEvaluator : public query::Evaluator {
   explicit PrefilterEvaluator(
       const valkey_search::indexes::text::TextIndex *text_index,
       QueryOperations query_operations,
-      const valkey_search::IndexSchema *index_schema)
+      const valkey_search::IndexSchema *index_schema = nullptr)
       : query::Evaluator(query_operations),
         text_index_(text_index),
         index_schema_(index_schema) {}

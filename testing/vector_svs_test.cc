@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "absl/algorithm/container.h"
+#include "absl/cleanup/cleanup.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -47,6 +48,7 @@
 #include "src/rdb_serialization.h"
 #include "src/utils/cancel.h"
 #include "src/utils/string_interning.h"
+#include "src/valkey_search_options.h"
 #include "svs/c/svs_c.h"
 #include "testing/common.h"
 #include "vmsdk/src/debug.h"
@@ -1248,6 +1250,36 @@ TEST_P(VectorSVSMetricTest, ScoresAreDistancesOnEveryPath) {
   for (size_t i = 0; i < result->size(); ++i) {
     EXPECT_FLOAT_EQ((*filtered)[i].distance, (*result)[i].distance)
         << "rank " << i;
+  }
+}
+
+// Radius 0.3 holds docs 1 (0.2) and 2 (0.0). Under the default cap the SVS
+// fetch is not full, so the radius filters it; with a cap of 1 the fetch is
+// full and still in range, so the exhaustive scan answers. Both must agree.
+TEST_P(VectorSVSMetricTest, SearchRangeKeepsDocsWithinRadius) {
+  const auto &param = GetParam();
+  auto svs = CreatePopulatedSvs();
+  const auto query_vector = MetricTestQuery(param.metric);
+  const absl::string_view query = VectorToStr(query_vector);
+  auto &fetch_cap = options::GetMaxNonVectorSearchResultsFetched();
+  const auto saved_cap = fetch_cap.GetValue();
+  absl::Cleanup restore = [&] {
+    VMSDK_EXPECT_OK(fetch_cap.SetValue(saved_cap));
+  };
+
+  for (const long long cap : {saved_cap, 1LL}) {
+    VMSDK_EXPECT_OK(fetch_cap.SetValue(cap));
+    auto result = svs->SearchRange(query, 0.3f, CancelNever());
+    VMSDK_EXPECT_OK(result);
+    std::vector<size_t> docs;
+    for (const auto &neighbor : *result) {
+      const size_t doc = DocIndex(neighbor);
+      EXPECT_NEAR(neighbor.distance, kMetricExpectedScores[doc],
+                  param.tolerance)
+          << "cap " << cap << " doc " << doc;
+      docs.push_back(doc);
+    }
+    EXPECT_THAT(docs, testing::UnorderedElementsAre(1, 2)) << "cap " << cap;
   }
 }
 

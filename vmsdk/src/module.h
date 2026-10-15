@@ -94,6 +94,9 @@ struct CommandOptions {
   int first_key{0};
   int last_key{0};
   int key_step{0};
+  // Fixed arity: positive N means exactly N args (including command name).
+  // Use -N for "at least N". 0 = no enforcement (default).
+  int arity{0};
 };
 
 struct Options {

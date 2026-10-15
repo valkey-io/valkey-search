@@ -1,5 +1,6 @@
 """FT.CREATE + HSET + FT.SEARCH for every accepted SVS_VAMANA TYPE x
-COMPRESSION. BFLOAT16 and SQ8 are rejected at FT.CREATE (test_svs_smoke.py)."""
+COMPRESSION x DISTANCE_METRIC. BFLOAT16 and SQ8 are rejected at FT.CREATE
+(test_svs_smoke.py)."""
 
 import struct
 import time
@@ -14,6 +15,8 @@ from valkeytestframework.conftest import resource_port_tracker
 
 DIM = 4
 VECTOR = [1.0, 2.0, 3.0, 4.0]
+# IP scores 1 - dot, so a self-match scores 0 only for a unit vector.
+UNIT_VECTOR = [0.5, 0.5, 0.5, 0.5]
 
 
 def _fp32(values):
@@ -26,7 +29,8 @@ def _fp16(values):
 
 ENCODERS = {"FLOAT32": _fp32, "FLOAT16": _fp16}
 COMPRESSIONS = ["NONE", "FP16"]
-COMBOS = [(t, c) for t in ENCODERS for c in COMPRESSIONS]
+METRICS = ["L2", "IP", "COSINE"]
+COMBOS = [(t, c, m) for t in ENCODERS for c in COMPRESSIONS for m in METRICS]
 
 
 def _threads(pid: int) -> int:
@@ -52,13 +56,14 @@ def _wait_indexed(client: Valkey, index: str, n: int, timeout: float = 30.0):
 
 class TestSVSTypeCompressionCombos(ValkeySearchTestCaseBase):
 
-    @pytest.mark.parametrize("vtype,compression", COMBOS,
-                             ids=[f"{t}-{c}" for t, c in COMBOS])
-    def test_create_hset_search_round_trip(self, vtype, compression):
+    @pytest.mark.parametrize("vtype,compression,metric", COMBOS,
+                             ids=[f"{t}-{c}-{m}" for t, c, m in COMBOS])
+    def test_create_hset_search_round_trip(self, vtype, compression, metric):
         client: Valkey = self.server.get_new_client()
         pid = self.server.pid()
         encode = ENCODERS[vtype]
-        index = f"combo_{vtype.lower()}_{compression.lower()}"
+        vector = UNIT_VECTOR if metric == "IP" else VECTOR
+        index = f"combo_{vtype.lower()}_{compression.lower()}_{metric.lower()}"
         key = f"{index}:1"
 
         threads_before = _threads(pid)
@@ -66,8 +71,8 @@ class TestSVSTypeCompressionCombos(ValkeySearchTestCaseBase):
             "FT.CREATE", index, "PREFIX", "1", f"{index}:",
             "SCHEMA", "v", "VECTOR", "SVS_VAMANA",
             "8", "TYPE", vtype, "DIM", str(DIM),
-            "DISTANCE_METRIC", "L2", "COMPRESSION", compression)
-        client.hset(key, mapping={"v": encode(VECTOR)})
+            "DISTANCE_METRIC", metric, "COMPRESSION", compression)
+        client.hset(key, mapping={"v": encode(vector)})
         info = _wait_indexed(client, index, 1)
 
         attribute = info.attributes[0]["index"]
@@ -78,12 +83,15 @@ class TestSVSTypeCompressionCombos(ValkeySearchTestCaseBase):
 
         reply = client.execute_command(
             "FT.SEARCH", index, "*=>[KNN 1 @v $q]",
-            "PARAMS", "2", "q", encode(VECTOR), "DIALECT", "2")
+            "PARAMS", "2", "q", encode(vector), "DIALECT", "2")
         assert reply[0] == 1, reply
         assert reply[1] == key.encode(), reply
-        # The query is the stored vector, so the distance is 0 (FP16 exact).
+        # The query is the stored vector, so the distance is 0. The test
+        # vectors are exact in FP16; COSINE's normalized copy is not, so FP16
+        # storage rounds its self-match slightly away from 0.
+        tolerance = 2e-3 if (metric, compression) == ("COSINE", "FP16") else 1e-6
         payload = dict(zip(reply[2][::2], reply[2][1::2]))
-        assert float(payload[b"__v_score"]) == pytest.approx(0.0, abs=1e-6)
+        assert float(payload[b"__v_score"]) == pytest.approx(0.0, abs=tolerance)
 
         assert _threads(pid) == threads_before, (
             f"{index}: thread count moved from {threads_before} to "

@@ -997,31 +997,23 @@ absl::Status SVSVamanaParameters::Verify() const {
         "COMPRESSION SQ8 is not supported for SVS_VAMANA in v1 pending "
         "range calibration; use COMPRESSION NONE or FP16.");
   }
-  // SVS reports inner-product and cosine as *similarities* (larger is
-  // closer). The valkey-search reply layer treats __v_score as a
-  // distance (smaller is closer), which inverts order and score on the
-  // native search path. Fenced until the per-metric transform + tests
-  // land in a follow-up.
-  if (distance_metric == data_model::DISTANCE_METRIC_IP ||
-      distance_metric == data_model::DISTANCE_METRIC_COSINE) {
-    return absl::InvalidArgumentError(
-        "DISTANCE_METRIC IP and COSINE are not supported for SVS_VAMANA "
-        "in v1; use ALGORITHM HNSW for IP or COSINE, or DISTANCE_METRIC "
-        "L2 for SVS_VAMANA.");
-  }
   // ALPHA sentinel (-1.0) means "use SVS's metric-specific default".
-  // Any user-supplied value must be finite and respect SVS's L2
-  // invariant (alpha >= 1.0). IP/COSINE's 0 < alpha <= 1.0 range is
-  // unreachable while those metrics are fenced above; the check will
-  // widen when the fence lifts. Both tests compare bit patterns because
-  // -ffast-math folds isnan/isfinite and lets NaN compare equal to the
-  // sentinel.
+  // Any user-supplied value must be finite and in SVS's range for the
+  // metric: alpha >= 1.0 for L2, 0 < alpha <= 1.0 for IP and COSINE.
+  // Both tests compare bit patterns because -ffast-math folds
+  // isnan/isfinite and lets NaN compare equal to the sentinel.
   const auto alpha_bits = std::bit_cast<uint32_t>(alpha);
   if (alpha_bits != std::bit_cast<uint32_t>(kDefaultSVSAlphaSentinel)) {
     const bool is_non_finite = (alpha_bits & 0x7F800000u) == 0x7F800000u;
-    if (is_non_finite || alpha < 1.0f) {
-      return absl::InvalidArgumentError(
-          absl::StrCat(kAlphaParam, " must be >= 1.0 for DISTANCE_METRIC L2."));
+    if (distance_metric == data_model::DISTANCE_METRIC_L2) {
+      if (is_non_finite || alpha < 1.0f) {
+        return absl::InvalidArgumentError(absl::StrCat(
+            kAlphaParam, " must be >= 1.0 for DISTANCE_METRIC L2."));
+      }
+    } else if (is_non_finite || alpha <= 0.0f || alpha > 1.0f) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          kAlphaParam,
+          " must be in (0, 1.0] for DISTANCE_METRIC IP and COSINE."));
     }
   }
   const auto max_m_value = options::GetMaxM().GetValue();

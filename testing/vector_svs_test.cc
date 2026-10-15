@@ -1125,5 +1125,202 @@ TEST_F(VectorSVSTest, RestoredIndexMutatesUnderTheExclusiveLock) {
   ValkeyModule_FreeString(nullptr, records[0]);
 }
 
+// -- IP / COSINE scores -------------------------------------------------------
+
+// SVS returns dot product as a similarity; __v_score must be the distance
+// 1 - dot on every path: SVS's search with and without a filter, and the
+// pre-filter path that scores records outside SVS (RecomputeDistance).
+constexpr int kMetricDimensions = 4;
+
+// Five documents whose expected scores against MetricTestQuery are
+// {1.0, 0.2, 0.0, 0.4, 1.0}. IP uses unit vectors. COSINE scales them, so
+// a missing normalization shows up as a wrong score, and makes the last
+// document a zero vector, which must score 1.0 rather than NaN.
+std::vector<std::vector<float>> MetricTestVectors(
+    data_model::DistanceMetric metric) {
+  if (metric == data_model::DISTANCE_METRIC_IP) {
+    return {{0, 0, 1, 0},
+            {0.8, 0.6, 0, 0},
+            {1, 0, 0, 0},
+            {0.6, 0.8, 0, 0},
+            {0, 0, 0, 1}};
+  }
+  return {
+      {0, 0, 5, 0}, {4, 3, 0, 0}, {2, 0, 0, 0}, {0.3, 0.4, 0, 0}, {0, 0, 0, 0}};
+}
+
+std::vector<float> MetricTestQuery(data_model::DistanceMetric metric) {
+  if (metric == data_model::DISTANCE_METRIC_IP) {
+    return {1, 0, 0, 0};
+  }
+  return {3, 0, 0, 0};
+}
+
+const std::vector<float> kMetricExpectedScores = {1.0f, 0.2f, 0.0f, 0.4f, 1.0f};
+
+struct MetricCase {
+  const char *name;
+  data_model::DistanceMetric metric;
+  data_model::SVSCompressionType compression;
+  float tolerance;
+};
+
+class VectorSVSMetricTest : public VectorSVSTest,
+                            public testing::WithParamInterface<MetricCase> {
+ protected:
+  std::shared_ptr<VectorSVS<float>> CreatePopulatedSvs() {
+    const auto &param = GetParam();
+    auto index = VectorSVS<float>::Create(
+        CreateSVSVectorIndexProto(kMetricDimensions, param.metric,
+                                  param.compression),
+        attribute_identifier, attribute_data_type, 0);
+    CHECK(index.ok()) << index.status();
+    auto vectors = MetricTestVectors(param.metric);
+    for (size_t i = 0; i < vectors.size(); ++i) {
+      CHECK(testing_infra::AddVectorRecord(**index, IndexToKey(i),
+                                           VectorToStr(vectors[i]))
+                .ok());
+    }
+    return *index;
+  }
+
+  // Index of the test document a search result refers to.
+  static size_t DocIndex(const Neighbor &neighbor) {
+    for (size_t i = 0; i < kMetricExpectedScores.size(); ++i) {
+      if (neighbor.external_id == IndexToKey(i)) return i;
+    }
+    ADD_FAILURE() << "unexpected key " << neighbor.external_id->Str();
+    return 0;
+  }
+};
+
+TEST_P(VectorSVSMetricTest, ScoresAreDistancesOnEveryPath) {
+  const auto &param = GetParam();
+  auto svs = CreatePopulatedSvs();
+  auto flat = VectorFlat<float>::Create(
+      CreateFlatVectorIndexProto(kMetricDimensions, param.metric,
+                                 /*initial_cap=*/10, /*block_size=*/10),
+      "attribute_identifier_2", attribute_data_type, 0);
+  VMSDK_EXPECT_OK(flat);
+  auto vectors = MetricTestVectors(param.metric);
+  for (size_t i = 0; i < vectors.size(); ++i) {
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(**flat, IndexToKey(i),
+                                                   VectorToStr(vectors[i])));
+  }
+  const auto query_vector = MetricTestQuery(param.metric);
+  const absl::string_view query = VectorToStr(query_vector);
+
+  auto result = svs->Search(query, vectors.size(), CancelNever());
+  VMSDK_EXPECT_OK(result);
+  ASSERT_EQ(result->size(), vectors.size());
+  auto flat_result = (*flat)->Search(query, vectors.size(), CancelNever());
+  VMSDK_EXPECT_OK(flat_result);
+  ASSERT_EQ(flat_result->size(), vectors.size());
+  std::vector<float> flat_scores(vectors.size());
+  for (const auto &neighbor : *flat_result) {
+    flat_scores[DocIndex(neighbor)] = neighbor.distance;
+  }
+
+  // The exact match comes first, and scores ascend from there.
+  EXPECT_EQ((*result)[0].external_id, IndexToKey(2));
+  float previous = 0.0f;
+  for (const auto &neighbor : *result) {
+    const size_t doc = DocIndex(neighbor);
+    EXPECT_NEAR(neighbor.distance, kMetricExpectedScores[doc], param.tolerance)
+        << "doc " << doc;
+    EXPECT_NEAR(neighbor.distance, flat_scores[doc], param.tolerance)
+        << "doc " << doc;
+    auto recomputed =
+        AsBase(svs)->RecomputeDistance(VectorToStr(vectors[doc]), query);
+    VMSDK_EXPECT_OK(recomputed);
+    EXPECT_NEAR(neighbor.distance, *recomputed, param.tolerance)
+        << "doc " << doc;
+    EXPECT_GE(neighbor.distance, previous) << "doc " << doc;
+    previous = neighbor.distance;
+  }
+
+  // A filter routes the query through SVS's filtered search, which must
+  // report the same scores.
+  auto filtered = svs->Search(query, vectors.size(), CancelNever(),
+                              std::make_unique<hnswlib::BaseFilterFunctor>());
+  VMSDK_EXPECT_OK(filtered);
+  ASSERT_EQ(filtered->size(), result->size());
+  for (size_t i = 0; i < result->size(); ++i) {
+    EXPECT_FLOAT_EQ((*filtered)[i].distance, (*result)[i].distance)
+        << "rank " << i;
+  }
+}
+
+TEST_P(VectorSVSMetricTest, ZeroQueryScoresOne) {
+  const auto &param = GetParam();
+  auto svs = CreatePopulatedSvs();
+  auto result = svs->Search(VectorToStr(std::vector<float>(kMetricDimensions)),
+                            kMetricExpectedScores.size(), CancelNever());
+  VMSDK_EXPECT_OK(result);
+  ASSERT_EQ(result->size(), kMetricExpectedScores.size());
+  for (const auto &neighbor : *result) {
+    EXPECT_NEAR(neighbor.distance, 1.0f, param.tolerance)
+        << "doc " << DocIndex(neighbor);
+  }
+}
+
+TEST_P(VectorSVSMetricTest, RoundTripKeepsScores) {
+  const auto &param = GetParam();
+  auto svs = CreatePopulatedSvs();
+  auto vectors = MetricTestVectors(param.metric);
+  std::vector<ValkeyModuleString *> records(vectors.size());
+  for (size_t i = 0; i < vectors.size(); ++i) {
+    records[i] =
+        ValkeyModule_CreateString(nullptr, (const char *)vectors[i].data(),
+                                  kMetricDimensions * sizeof(float));
+  }
+  FakeSafeRDB rdb;
+  VMSDK_EXPECT_OK(svs->SaveIndex(RDBChunkOutputStream(&rdb)));
+  VMSDK_EXPECT_OK(svs->SaveTrackedKeys(RDBChunkOutputStream(&rdb)));
+  ExpectHashGetsForRecords(records);
+
+  auto loaded = VectorSVS<float>::LoadFromRDB(
+      &fake_ctx_, &hash_attribute_data_type_,
+      CreateSVSVectorIndexProto(kMetricDimensions, param.metric,
+                                param.compression),
+      "attribute_identifier_2", SupplementalContentChunkIter(&rdb), 0);
+  VMSDK_EXPECT_OK(loaded);
+  VMSDK_EXPECT_OK(
+      (*loaded)->LoadTrackedKeys(&fake_ctx_, &hash_attribute_data_type_,
+                                 SupplementalContentChunkIter(&rdb)));
+
+  const auto query_vector = MetricTestQuery(param.metric);
+  const absl::string_view query = VectorToStr(query_vector);
+  auto result = (*loaded)->Search(query, vectors.size(), CancelNever());
+  VMSDK_EXPECT_OK(result);
+  ASSERT_EQ(result->size(), vectors.size());
+  EXPECT_EQ((*result)[0].external_id, IndexToKey(2));
+  for (const auto &neighbor : *result) {
+    const size_t doc = DocIndex(neighbor);
+    EXPECT_NEAR(neighbor.distance, kMetricExpectedScores[doc], param.tolerance)
+        << "doc " << doc;
+  }
+
+  for (auto *record : records) {
+    ValkeyModule_FreeString(nullptr, record);
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    Metrics, VectorSVSMetricTest,
+    testing::Values(MetricCase{"IP_NONE", data_model::DISTANCE_METRIC_IP,
+                               data_model::SVS_COMPRESSION_NONE, 1e-5f},
+                    MetricCase{"IP_FP16", data_model::DISTANCE_METRIC_IP,
+                               data_model::SVS_COMPRESSION_FP16, 2e-3f},
+                    MetricCase{"COSINE_NONE",
+                               data_model::DISTANCE_METRIC_COSINE,
+                               data_model::SVS_COMPRESSION_NONE, 1e-5f},
+                    MetricCase{"COSINE_FP16",
+                               data_model::DISTANCE_METRIC_COSINE,
+                               data_model::SVS_COMPRESSION_FP16, 2e-3f}),
+    [](const testing::TestParamInfo<MetricCase> &info) {
+      return info.param.name;
+    });
+
 }  // namespace
 }  // namespace valkey_search::indexes

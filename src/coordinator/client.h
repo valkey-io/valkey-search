@@ -13,6 +13,7 @@
 
 #include "absl/functional/any_invocable.h"
 #include "absl/strings/string_view.h"
+#include "grpcpp/security/credentials.h"
 #include "grpcpp/support/status.h"
 #include "src/coordinator/coordinator.grpc.pb.h"
 #include "src/coordinator/coordinator.pb.h"
@@ -52,6 +53,10 @@ class ClientImpl : public Client {
   static std::shared_ptr<Client> MakeInsecureClient(
       vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx,
       absl::string_view address);
+  static std::shared_ptr<Client> MakeClient(
+      vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx,
+      absl::string_view address,
+      std::shared_ptr<grpc::ChannelCredentials> creds);
 
   ClientImpl(const ClientImpl&) = delete;
   ClientImpl& operator=(const ClientImpl&) = delete;

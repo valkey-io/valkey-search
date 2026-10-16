@@ -489,16 +489,23 @@ absl::StatusOr<RecordsMap> GetContent(
             vmsdk::RetainUniqueValkeyString(itr->second.value.get())));
   }
 
-  // Add sortby field to return_content for sorting, even when return_attributes
-  // is not empty. Use the alias (sortby_parameter->field) as the key.
+  // Filed twice: the sort reads the identifier; an older coordinator in a
+  // rolling upgrade reads the alias. Neither reaches the reply.
   if (parameters.sortby_parameter.has_value()) {
     auto itr = content.find(sortby_identifier);
     if (itr != content.end()) {
+      ValkeyModuleString *value = itr->second.value.get();
+      auto identifier = vmsdk::MakeUniqueValkeyString(sortby_identifier);
+      auto identifier_view = vmsdk::ToStringView(identifier.get());
+      return_content.emplace(
+          identifier_view,
+          RecordsMapValue(std::move(identifier),
+                          vmsdk::RetainUniqueValkeyString(value)));
       return_content.emplace(
           parameters.sortby_parameter->field,
           RecordsMapValue(
               vmsdk::MakeUniqueValkeyString(parameters.sortby_parameter->field),
-              vmsdk::RetainUniqueValkeyString(itr->second.value.get())));
+              vmsdk::RetainUniqueValkeyString(value)));
     }
   }
 

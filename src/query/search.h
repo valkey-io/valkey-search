@@ -57,6 +57,33 @@ struct SortByParameter {
   SortOrder order{SortOrder::kAscending};
 };
 
+// The attribute_contents key a SORTBY attribute is read under, resolved once
+// per query on the node that sorts. Rows merged from other shards carry the
+// same keys. Issue #1440.
+struct SortByKey {
+  SortByKey(const IndexSchema &schema, absl::string_view sortby_alias);
+  static SortByKey Legacy(absl::string_view sortby_alias);
+
+  std::string identifier;
+  std::string alias;
+  bool is_json{false};
+
+  RecordsMap::const_iterator Find(const RecordsMap &contents) const {
+    auto it = contents.find(identifier);
+    // Not a JSON/HASH switch: JSON fetch paths disagree on the key (the
+    // full-content path renames the entry to the alias, the others keep the
+    // path), so JSON tries both. HASH never tries the alias: an undeclared
+    // hash field may carry that name.
+    if (it == contents.end() && is_json) {
+      it = contents.find(alias);
+    }
+    return it;
+  }
+
+ private:
+  SortByKey() = default;
+};
+
 constexpr int64_t kTimeoutMS{50000};
 constexpr size_t kMaxTimeoutMs{60000};
 constexpr absl::string_view kOOMMsg{

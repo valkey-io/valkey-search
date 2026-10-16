@@ -8,6 +8,7 @@ FT.SEARCH <index> <query>
   [INKEYS <count> <key> [<key> ...]]
   [INORDER]
   [LIMIT <offset> <num>]
+  [LOCALONLY]
   [NOCONTENT]
   [PARAMS <count> <name> <value> [ <name> <value> ...]]
   [RETURN <count> <field> [AS <name>] <field> [AS <name>]...]
@@ -29,6 +30,7 @@ FT.SEARCH <index> <query>
 - `INCONSISTENT` (Optional): If specified, the command will generate a best-effort reply if the cluster remains inconsistent within the timeout interval.
 - `INKEYS <count> <key> [<key> ...]` (optional): Restricts results to the specified set of document keys. `<count>` is the number of keys that follow and must be a non-negative integer. Duplicate keys are deduplicated. If `<count>` is 0, no results are returned. The filter is applied as a post-filter after the search, so `total_count` in the response reflects only the keys that matched both the query and the INKEYS set.
 - `LIMIT <offset> <count>` (optional): Lets you choose a portion of the result. The first `<offset>` keys are skipped and only a maximum of `<count>` keys are included. The default is LIMIT 0 10, which returns at most 10 keys.
+- `LOCALONLY` (optional): Skips cluster fanout and searches only the data on the contacted node, so a cluster-wide result is not assembled. Required when running `FT.SEARCH` inside `MULTI`/`EXEC` or a Lua script in cluster mode: the query is rejected unless it runs locally, either because `LOCALONLY` is given or because it targets a single-slot index on the contacted node.
 - `NOCONTENT` (optional): When present, only the resulting key names are returned, no key values are included.
 - `PARAMS <count> <name> <value> [<name> <value> ...]` (optional): `count` is of the number of arguments, i.e., twice the number of value/name pairs. [Search - query language](../topics/search-query.md) for details.
 - `RETURN <count> <field> [AS <name>] <field> [AS <name>] ...` (options): `count` is the number of fields to return. Specifies the fields you want to retrieve from your documents, along with any renaming for the returned values. By default, all fields are returned unless the `NOCONTENT` option is set, in which case no fields are returned. If num is set to 0, it behaves the same as `NOCONTENT`.

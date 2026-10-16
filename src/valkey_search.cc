@@ -1044,16 +1044,6 @@ void ValkeySearch::Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const {
 // workers guarantees that no thread is mutating the index while the fork is
 // happening. For more details see:
 // https://pubs.opengroup.org/onlinepubs/009695399/functions/pthread_atfork.html
-//
-// The wait is bounded so that a worker stuck in a task cannot freeze the main
-// thread inside fork(). A prepare handler cannot cancel the fork, so on timeout
-// the fork goes ahead with that worker still running. The child then cannot
-// trust index memory or locks: a mutex may be held by a thread that does not
-// exist in the child, and an HNSW graph may be half-updated. The flag set here
-// is inherited by the child, whose RDB save exits instead of writing (see
-// AuxSaveCallback), so the save fails and is retried rather than hanging or
-// producing an inconsistent RDB.
-constexpr absl::Duration kForkSuspendTimeout = absl::Seconds(5);
 
 void ValkeySearch::AtForkPrepare() {
   // Sanity: fork can occur (by example: calling to "popen") before the thread
@@ -1063,28 +1053,18 @@ void ValkeySearch::AtForkPrepare() {
     return;
   }
   Metrics::GetStats().worker_thread_pool_suspend_cnt++;
-  // One deadline across all pools, so the worst case is not a multiple of it.
-  const absl::Time deadline = absl::Now() + kForkSuspendTimeout;
-  auto remaining = [deadline] {
-    return std::max(deadline - absl::Now(), absl::ZeroDuration());
-  };
-  bool timed_out = false;
-  auto status = writer_thread_pool_->SuspendWorkers(remaining());
-  timed_out |= absl::IsDeadlineExceeded(status);
+  auto status = writer_thread_pool_->SuspendWorkers();
   VMSDK_LOG(WARNING, nullptr) << "At prepare fork callback, suspend writer "
                                  "worker thread pool returned message: "
                               << status.message();
-  status = reader_thread_pool_->SuspendWorkers(remaining());
-  timed_out |= absl::IsDeadlineExceeded(status);
+  status = reader_thread_pool_->SuspendWorkers();
   VMSDK_LOG(WARNING, nullptr) << "At prepare fork callback, suspend reader "
                                  "worker thread pool returned message: "
                               << status.message();
-  status = utility_thread_pool_->SuspendWorkers(remaining());
-  timed_out |= absl::IsDeadlineExceeded(status);
+  status = utility_thread_pool_->SuspendWorkers();
   VMSDK_LOG(WARNING, nullptr) << "At prepare fork callback, suspend utility "
                                  "worker thread pool returned message: "
                               << status.message();
-  forked_with_unsuspended_workers_.store(timed_out, std::memory_order_relaxed);
   status = coordinator::GRPCSuspender::Instance().Suspend();
   VMSDK_LOG(WARNING, nullptr) << "At prepare fork callback, suspend gRPC "
                                  "returned message: "
@@ -1092,7 +1072,6 @@ void ValkeySearch::AtForkPrepare() {
 }
 
 void ValkeySearch::AfterForkParent() {
-  forked_with_unsuspended_workers_.store(false, std::memory_order_relaxed);
   // Sanity: fork can occur (by example: calling to "popen") before the thread
   // pool is initialized
   if (reader_thread_pool_ == nullptr) {

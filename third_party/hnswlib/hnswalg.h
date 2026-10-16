@@ -1692,13 +1692,10 @@ class HierarchicalNSW
       dist_t curdist =
           EvaluateDistance(dataPoint, GetDataByInternalId(currObj));
       // Bounded for the same reason as the descent in addPoint.
-      const size_t max_passes =
-          cur_element_count_.load(std::memory_order_relaxed);
       for (int level = maxLevel; level > dataPointLevel; level--) {
         bool changed = true;
-        size_t passes = 0;
-        while (changed && passes++ < max_passes) {
-          changed = false;
+        while (changed) {
+          const tableint prevObj = currObj;
           unsigned int *data;
           std::unique_lock<std::mutex> lock(link_list_locks_[currObj]);
           data = get_linklist_at_level(currObj, level);
@@ -1720,9 +1717,13 @@ class HierarchicalNSW
             if (d < curdist) {
               curdist = d;
               currObj = cand;
-              changed = true;
             }
           }
+          // Terminate when a pass stops moving. A NaN distance under
+          // -ffast-math can make `d < curdist` behave unpredictably, so we key
+          // termination off whether currObj actually advanced rather than off a
+          // flag the comparison sets, which cannot spin forever.
+          changed = (currObj != prevObj);
         }
       }
     }
@@ -1850,17 +1851,15 @@ class HierarchicalNSW
         dist_t curdist =
             EvaluateDistance(data_point, GetDataByInternalId(currObj));
         // A pass that moves strictly lowers curdist, so a correct greedy
-        // descent never needs more passes than there are elements. The bound
-        // ends the loop when a NaN distance makes the comparison unordered:
-        // under -ffast-math that can set `changed` without moving currObj,
-        // and the loop would otherwise spin forever holding the writer.
-        const size_t max_passes =
-            cur_element_count_.load(std::memory_order_relaxed);
+        // descent terminates once a pass stops advancing currObj. Keying
+        // termination off `currObj != prevObj` rather than off a flag the
+        // distance comparison sets means a NaN distance -- which under
+        // -ffast-math can make `d < curdist` unordered -- cannot spin the loop
+        // forever holding the writer.
         for (int level = maxlevelcopy; level > curlevel; level--) {
           bool changed = true;
-          size_t passes = 0;
-          while (changed && passes++ < max_passes) {
-            changed = false;
+          while (changed) {
+            const tableint prevObj = currObj;
             unsigned int *data;
             std::unique_lock<std::mutex> lock(link_list_locks_[currObj]);
             data = get_linklist(currObj, level);
@@ -1876,9 +1875,9 @@ class HierarchicalNSW
               if (d < curdist) {
                 curdist = d;
                 currObj = cand;
-                changed = true;
               }
             }
+            changed = (currObj != prevObj);
           }
         }
       }
@@ -1948,9 +1947,9 @@ class HierarchicalNSW
       BaseFilterFunctor *isIdAllowed = nullptr,
       BaseCancellationFunctor *isCancelled = nullptr) const {
     std::priority_queue<std::pair<dist_t, labeltype>> result;
-    const size_t max_passes =
+    const size_t element_count =
         cur_element_count_.load(std::memory_order_relaxed);
-    if (max_passes == 0) return result;
+    if (element_count == 0) return result;
 
     tableint currObj = enterpoint_node_.load(std::memory_order_acquire);
     dist_t curdist = EvaluateDistance(query_data, GetDataByInternalId(currObj));
@@ -1958,9 +1957,8 @@ class HierarchicalNSW
     // Bounded for the same reason as the descent in addPoint.
     for (int level = element_levels_[currObj]; level > 0; level--) {
       bool changed = true;
-      size_t passes = 0;
-      while (changed && passes++ < max_passes) {
-        changed = false;
+      while (changed) {
+        const tableint prevObj = currObj;
         unsigned int *data;
 
         data = (unsigned int *)get_linklist(currObj, level);
@@ -1977,9 +1975,9 @@ class HierarchicalNSW
           if (d < curdist) {
             curdist = d;
             currObj = cand;
-            changed = true;
           }
         }
+        changed = (currObj != prevObj);
       }
     }
 
@@ -2015,9 +2013,9 @@ class HierarchicalNSW
       BaseSearchStopCondition<dist_t> &stop_condition,
       BaseFilterFunctor *isIdAllowed = nullptr) const {
     std::vector<std::pair<dist_t, labeltype>> result;
-    const size_t max_passes =
+    const size_t element_count =
         cur_element_count_.load(std::memory_order_relaxed);
-    if (max_passes == 0) return result;
+    if (element_count == 0) return result;
 
     tableint currObj = enterpoint_node_.load(std::memory_order_acquire);
     dist_t curdist = EvaluateDistance(query_data, GetDataByInternalId(currObj));
@@ -2025,9 +2023,8 @@ class HierarchicalNSW
     // Bounded for the same reason as the descent in addPoint.
     for (int level = element_levels_[currObj]; level > 0; level--) {
       bool changed = true;
-      size_t passes = 0;
-      while (changed && passes++ < max_passes) {
-        changed = false;
+      while (changed) {
+        const tableint prevObj = currObj;
         unsigned int *data;
 
         data = (unsigned int *)get_linklist(currObj, level);
@@ -2045,9 +2042,9 @@ class HierarchicalNSW
           if (d < curdist) {
             curdist = d;
             currObj = cand;
-            changed = true;
           }
         }
+        changed = (currObj != prevObj);
       }
     }
 

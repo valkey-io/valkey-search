@@ -51,16 +51,16 @@ class IndexSchema;
 namespace valkey_search::indexes {
 
 constexpr float kDefaultMagnitude = 1.0f;
-// Returned by CalcReciprocalMagnitude for a vector with a NaN or Inf component
-// or a magnitude too large for float. A real reciprocal magnitude is never
-// negative, and a finite sentinel stays testable under -ffast-math.
+// Returned by CalcReciprocalMagnitude for a vector with a NaN or Inf component.
+// A real reciprocal magnitude is never negative, and a finite sentinel stays
+// testable under -ffast-math.
 inline constexpr float kInvalidReciprocalMagnitude = -1.0f;
-inline constexpr uint32_t kFloatExponentMask = 0x7F800000u;
+inline constexpr uint64_t kDoubleExponentMask = 0x7FF0000000000000ull;
 inline constexpr bool IsValidReciprocalMagnitude(float reciprocal_magnitude) {
   return reciprocal_magnitude >= 0.0f;
 }
 inline constexpr absl::string_view kInvalidQueryVectorError =
-    "contains a NaN or infinite value, or its magnitude is too large.";
+    "contains a NaN or infinite value.";
 // Initial capacity of a range search's result vector.
 constexpr size_t kRangeReserve = 128;
 
@@ -225,9 +225,8 @@ struct VectorRecordWithSize {
 // Computes 1/||v|| over `size` elements of storage type T. Templated because
 // FLOAT16/BFLOAT16 vectors are 2 bytes per element: reading them as float
 // would both walk off the end of the buffer and produce garbage magnitudes.
-// The accumulation is always done in float regardless of T.
-// Returns kInvalidReciprocalMagnitude if any element is NaN or Inf, or the
-// sum of squares overflows float.
+// The accumulation is always done in double regardless of T.
+// Returns kInvalidReciprocalMagnitude if any element is NaN or Inf.
 template <typename T>
 float CalcReciprocalMagnitude(const T *src, size_t size);
 
@@ -262,6 +261,14 @@ std::vector<char> NormalizeVector(absl::string_view record,
 // data-type enum rather than a compile-time T (VectorRegistry, QueryVector).
 float CalcReciprocalMagnitude(absl::string_view record,
                               data_model::VectorDataType data_type);
+
+// True if any component of the raw vector blob is NaN or +/-Inf. Used to
+// reject non-finite query vectors for every metric, not just COSINE: a
+// non-finite L2/IP query otherwise drives the full HNSW descent and burns CPU
+// proportional to index size. Reads IEEE bits because -ffast-math folds
+// std::isfinite to a constant.
+bool VectorContainsNonFinite(absl::string_view record,
+                             data_model::VectorDataType data_type);
 
 std::vector<char> NormalizeVector(absl::string_view record,
                                   data_model::VectorDataType data_type,

@@ -2548,10 +2548,14 @@ absl::Status PostParseVectorParameters(query::SearchParameters &parameters) {
                      ") does not match index's expected size (",
                      vector_index->GetVectorDataSize(), ")."));
   }
-  // Only COSINE uses the magnitude, so other metrics pay nothing here.
-  if (vector_index->GetNormalize() &&
-      !indexes::IsValidReciprocalMagnitude(indexes::CalcReciprocalMagnitude(
-          parameters.query, vector_index->GetVectorDataType()))) {
+  // Reject non-finite query vectors for every metric: a NaN/Inf L2 or IP query
+  // otherwise drives the full HNSW descent and burns CPU proportional to index
+  // size. COSINE additionally validates the magnitude.
+  if (indexes::VectorContainsNonFinite(parameters.query,
+                                       vector_index->GetVectorDataType()) ||
+      (vector_index->GetNormalize() &&
+       !indexes::IsValidReciprocalMagnitude(indexes::CalcReciprocalMagnitude(
+           parameters.query, vector_index->GetVectorDataType())))) {
     return absl::InvalidArgumentError(
         absl::StrCat("query vector ", indexes::kInvalidQueryVectorError));
   }
@@ -2638,11 +2642,14 @@ absl::Status PostParseVectorRangeParameters(
                            ") does not match index dimensions (",
                            vector_index->GetVectorDataSize(), ")"));
         }
-        // Only COSINE uses the magnitude, so other metrics pay nothing here.
-        if (vector_index->GetNormalize() &&
-            !indexes::IsValidReciprocalMagnitude(
-                indexes::CalcReciprocalMagnitude(
-                    resolved_blob, vector_index->GetVectorDataType()))) {
+        // Reject non-finite query vectors for every metric (see the KNN query
+        // site). COSINE additionally validates the magnitude.
+        if (indexes::VectorContainsNonFinite(
+                resolved_blob, vector_index->GetVectorDataType()) ||
+            (vector_index->GetNormalize() &&
+             !indexes::IsValidReciprocalMagnitude(
+                 indexes::CalcReciprocalMagnitude(
+                     resolved_blob, vector_index->GetVectorDataType())))) {
           return absl::InvalidArgumentError(
               absl::StrCat("Vector blob ", indexes::kInvalidQueryVectorError));
         }

@@ -57,22 +57,23 @@ namespace indexes {
 
 template <typename T>
 float CalcReciprocalMagnitude(const T *src, size_t size) {
-  // Accumulate in float even when T is 2 bytes: squaring a half-precision
-  // value overflows its own exponent range well before it overflows float.
-  float sum_sq = 0.0f;
+  // Sum of squares in double: a finite float32 squared can exceed float's max,
+  // so a float accumulator would overflow to Inf on valid input. In double it
+  // stays finite, so the sentinel fires only on a genuine NaN/Inf component.
+  double sum_sq = 0.0;
   for (size_t i = 0; i < size; i++) {
-    float v = static_cast<float>(src[i]);
+    double v = static_cast<double>(src[i]);
     sum_sq += v * v;
   }
   // Squares are never negative, so the sum is NaN or Inf exactly when a
-  // component is NaN or Inf or the sum overflows float. One test on the sum
-  // therefore validates the whole vector at no per-element cost. It reads the
-  // IEEE bits because -ffast-math folds std::isnan/std::isfinite to constants.
-  if (ABSL_PREDICT_FALSE((std::bit_cast<uint32_t>(sum_sq) &
-                          kFloatExponentMask) == kFloatExponentMask)) {
+  // component is NaN or Inf. One test on the sum therefore validates the whole
+  // vector at no per-element cost. It reads the IEEE bits because -ffast-math
+  // folds std::isnan/std::isfinite to constants.
+  if (ABSL_PREDICT_FALSE((std::bit_cast<uint64_t>(sum_sq) &
+                          kDoubleExponentMask) == kDoubleExponentMask)) {
     return kInvalidReciprocalMagnitude;
   }
-  return (sum_sq == 0.0f) ? 1.0f : (1.0f / std::sqrt(sum_sq));
+  return (sum_sq == 0.0) ? 1.0f : static_cast<float>(1.0 / std::sqrt(sum_sq));
 }
 
 template float CalcReciprocalMagnitude<float>(const float *, size_t);
@@ -92,6 +93,43 @@ float CalcReciprocalMagnitude(absl::string_view record,
           record.size() / sizeof(float16));
     case data_model::VECTOR_DATA_TYPE_BFLOAT16:
       return CalcReciprocalMagnitude(
+          reinterpret_cast<const bfloat16 *>(record.data()),
+          record.size() / sizeof(bfloat16));
+    default:
+      CHECK(false) << "unsupported vector data type";
+  }
+}
+
+namespace {
+template <typename T>
+bool VectorContainsNonFinite(const T *src, size_t size) {
+  // A double is NaN or Inf iff every exponent bit is set. Every finite float32/
+  // float16/bfloat16 widens to a finite double, so the only way the widened
+  // value is non-finite is a non-finite source component.
+  for (size_t i = 0; i < size; i++) {
+    const double v = static_cast<double>(src[i]);
+    if (ABSL_PREDICT_FALSE((std::bit_cast<uint64_t>(v) & kDoubleExponentMask) ==
+                           kDoubleExponentMask)) {
+      return true;
+    }
+  }
+  return false;
+}
+}  // namespace
+
+bool VectorContainsNonFinite(absl::string_view record,
+                             data_model::VectorDataType data_type) {
+  switch (data_type) {
+    case data_model::VECTOR_DATA_TYPE_FLOAT32:
+      return VectorContainsNonFinite(
+          reinterpret_cast<const float *>(record.data()),
+          record.size() / sizeof(float));
+    case data_model::VECTOR_DATA_TYPE_FLOAT16:
+      return VectorContainsNonFinite(
+          reinterpret_cast<const float16 *>(record.data()),
+          record.size() / sizeof(float16));
+    case data_model::VECTOR_DATA_TYPE_BFLOAT16:
+      return VectorContainsNonFinite(
           reinterpret_cast<const bfloat16 *>(record.data()),
           record.size() / sizeof(bfloat16));
     default:

@@ -16,17 +16,18 @@
 //   of T -- i.e. quantization is the only source of error, and no extra error
 //   is introduced by accumulating, scaling, or rounding in the wrong domain.
 //
-// This matters because the magnitude accumulator deliberately runs in float
-// (extended precision relative to a 2-byte T): squaring a half-precision value
-// overflows fp16's own exponent range long before it overflows float, so
-// accumulating in T would produce inf/0 for perfectly ordinary vectors. These
-// tests pin that choice down, and pin down that the scale is applied in float
-// and rounded back into T exactly once (double-rounding would show up as error
-// above the single-rounding bound).
+// This matters because the magnitude accumulator runs in double (extended
+// precision relative to float and any 2-byte T): a finite float32 squared can
+// exceed float's own exponent range, so accumulating in float would produce
+// inf/0 for perfectly ordinary vectors. These tests pin that choice down, and
+// pin down that the scale is applied in float and rounded back into T exactly
+// once (double-rounding would show up as error above the single-rounding
+// bound).
 
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <vector>
 
 #include "absl/strings/string_view.h"
@@ -98,7 +99,7 @@ void ExpectMagnitudeMatchesReference(const std::vector<double>& raw) {
   const double expected_recip = 1.0 / ExactMagnitude<T>(q);
   const float got = CalcReciprocalMagnitude(q.data(), q.size());
 
-  // The accumulator runs in float, so the achievable bound is float's unit
+  // The accumulator runs in double, so the achievable bound is float's unit
   // roundoff scaled by the term count -- NOT T's. If the accumulation were
   // (incorrectly) done in T, the error would land near UnitRoundoff<T>(),
   // which for bf16 is ~2500x looser than this bound.
@@ -125,6 +126,29 @@ TEST(VectorNormalizeValidation, Float16MagnitudeDoesNotOverflowInAccumulator) {
   ASSERT_TRUE(std::isfinite(got)) << "accumulator overflowed to inf";
   EXPECT_GT(got, 0.0f) << "accumulator overflowed, reciprocal collapsed to 0";
   EXPECT_NEAR(static_cast<double>(got), 1.0 / 600.0, 1.0 / 600.0 * 1e-5);
+}
+
+// A finite float32 whose square overflows float (3e38^2 ~ 9e76 > float max)
+// must still be indexed: the double accumulator keeps the sum finite, so only
+// a genuinely non-finite component is rejected. A float accumulator wrongly
+// rejected these.
+TEST(VectorNormalizeValidation, LargeFiniteFloat32IsAccepted) {
+  const std::vector<float> q = {3e38f, 3e38f};
+  const float recip = CalcReciprocalMagnitude(q.data(), q.size());
+  EXPECT_TRUE(IsValidReciprocalMagnitude(recip));
+  EXPECT_GT(recip, 0.0f);
+}
+
+TEST(VectorNormalizeValidation, NanComponentIsRejected) {
+  const std::vector<float> q = {std::numeric_limits<float>::quiet_NaN(), 1.0f};
+  EXPECT_FALSE(IsValidReciprocalMagnitude(
+      CalcReciprocalMagnitude(q.data(), q.size())));
+}
+
+TEST(VectorNormalizeValidation, InfComponentIsRejected) {
+  const std::vector<float> q = {std::numeric_limits<float>::infinity(), 1.0f};
+  EXPECT_FALSE(IsValidReciprocalMagnitude(
+      CalcReciprocalMagnitude(q.data(), q.size())));
 }
 
 // Every element must be scaled in float and rounded back into T exactly once.

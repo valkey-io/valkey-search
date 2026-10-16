@@ -1156,10 +1156,14 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
             arm->query.size(), ") does not match index's expected size (",
             vector_index->GetVectorDataSize(), ")."));
       }
-      // Only COSINE uses the magnitude, so other metrics pay nothing here.
-      if (vector_index->GetNormalize() &&
-          !indexes::IsValidReciprocalMagnitude(indexes::CalcReciprocalMagnitude(
-              arm->query, vector_index->GetVectorDataType()))) {
+      // Reject non-finite query vectors for every metric (see the KNN query
+      // site). COSINE additionally validates the magnitude.
+      if (indexes::VectorContainsNonFinite(
+              arm->query, vector_index->GetVectorDataType()) ||
+          (vector_index->GetNormalize() &&
+           !indexes::IsValidReciprocalMagnitude(
+               indexes::CalcReciprocalMagnitude(
+                   arm->query, vector_index->GetVectorDataType())))) {
         return absl::InvalidArgumentError(
             absl::StrCat("Error parsing vector similarity parameters: query "
                          "vector ",

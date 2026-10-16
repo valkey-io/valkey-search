@@ -92,6 +92,7 @@ See [Numeric Field Format](../topics/search-data-formats.md#numeric-fields) for 
   - `TYPE [FLOAT32 | FLOAT16 | BFLOAT16]` (required): Element data type. `FLOAT16` and `BFLOAT16` halve the memory used per vector at some cost in precision; see [Supported Data Types](../topics/search-data-formats.md#supported-data-types).
   - `DISTANCE_METRIC [L2 | IP | COSINE]` (required): Specifies the distance algorithm
   - `INITIAL_CAP <size>` (optional): Initial index size.
+  - `BLOCK_SIZE <size>` (optional): FLAT only. When the index runs out of capacity, it grows by this many vectors. Must be between 1 and 10000000. (default: 1024)
 - `HNSW:` The HNSW algorithm provides approximate answers, but operates substantially faster than `FLAT`.
   - `DIM <number>` (required): Specifies the number of dimensions in a vector.
   - `TYPE [FLOAT32 | FLOAT16 | BFLOAT16]` (required): Element data type. `FLOAT16` and `BFLOAT16` halve the memory used per vector at some cost in precision; see [Supported Data Types](../topics/search-data-formats.md#supported-data-types).

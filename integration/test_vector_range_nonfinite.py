@@ -1,8 +1,11 @@
 """VECTOR_RANGE with non-finite distances and radii.
 
-A NaN or infinite component in a stored or a query vector makes its distance
-non-finite. A NaN or +inf distance is within no radius, not even an infinite
-one, and neither is any non-finite COSINE distance, so plain, compound and
+A stored vector with a NaN or infinite component, or a magnitude too large
+for float, is rejected at ingest and left out of the vector index. A COSINE
+query vector
+like that is rejected with an error. For L2 and IP a non-finite query vector
+is accepted and makes its distances non-finite. A NaN or +inf distance is
+within no radius, not even an infinite one, so plain, compound and
 FT.AGGREGATE queries exclude the document and a negated range includes it. An
 IP distance of -inf is within every radius and reported as -inf, as on Redis,
 also through the cluster coordinator. An infinite radius matches every
@@ -10,6 +13,9 @@ document whose distance is finite.
 """
 
 import struct
+
+import pytest
+from valkey.exceptions import ResponseError
 
 from utils import IndexingTestHelper
 from valkey_search_test_case import (
@@ -26,23 +32,25 @@ def _vec(*xs):
     return struct.pack(f"<{len(xs)}f", *xs)
 
 
-# a and b are at distance 0 and 1 (2 for L2) from Q. Every distance of the
-# other documents to Q is non-finite: n holds a NaN, p and m an infinity (for
-# IP, p is at -inf and m at +inf).
+# a and b are at distance 0 and 1 (2 for L2) from Q.
 DOCS = {
     "a": _vec(1.0, 0.0, 0.0, 0.0),
     "b": _vec(0.0, 1.0, 0.0, 0.0),
+}
+# Rejected at ingest: n holds a NaN, p and m an infinity.
+REJECTED = {
     "n": _vec(NAN, 0.0, 0.0, 0.0),
     "p": _vec(INF, 0.0, 0.0, 0.0),
     "m": _vec(-INF, 0.0, 0.0, 0.0),
 }
 Q = _vec(1.0, 0.0, 0.0, 0.0)
-# Every distance to these queries is non-finite. For IP, a and p are at -inf
-# from INF_Q.
+# Every distance to these queries is non-finite. For IP, a is at -inf from
+# INF_Q.
 NAN_Q = _vec(1.0, NAN, 0.0, 0.0)
 INF_Q = _vec(INF, 0.0, 0.0, 0.0)
+NON_FINITE_QUERIES = (NAN_Q, INF_Q)
 # For IP, the documents at -inf from each query.
-IP_NEG_INF = {Q: {"p"}, NAN_Q: set(), INF_Q: {"a", "p"}}
+IP_NEG_INF = {Q: set(), NAN_Q: set(), INF_Q: {"a"}}
 YIELD = "=>{$yield_distance_as: d}"
 
 
@@ -113,21 +121,30 @@ class TestVectorRangeNonFinite(ValkeySearchTestCaseBase):
             for metric in ("L2", "IP", "COSINE"):
                 index = f"{algo}_{metric}"
                 _create_index(client, index, algo, metric)
-                for key, vec in DOCS.items():
+                for key, vec in {**DOCS, **REJECTED}.items():
                     client.hset(f"{index}:{key}",
                                 mapping={"vec": vec, "tag": "x"})
+                IndexingTestHelper.wait_for_indexing_complete_on_all_nodes(
+                    [client], index)
                 for (blob, radius), finite in cases.items():
-                    neg_inf = IP_NEG_INF[blob] if metric == "IP" else set()
-                    within = finite | neg_inf
                     vr = "@vec:[VECTOR_RANGE $r $blob]"
                     params = ["PARAMS", "4", "r", radius, "blob", blob]
+                    if metric == "COSINE" and blob in NON_FINITE_QUERIES:
+                        with pytest.raises(ResponseError,
+                                           match="NaN or infinite"):
+                            _keys(client, index, vr, *params)
+                        continue
+                    neg_inf = IP_NEG_INF[blob] if metric == "IP" else set()
+                    within = finite | neg_inf
                     got = _distances(client, index, vr + YIELD, *params)
                     assert set(got) == within, (index, radius, vr, got)
                     for key in neg_inf:
                         assert got[key] == -INF, (index, radius, key, got)
+                    # A rejected vector counts as a missing field, so its key
+                    # stays in the tag index and a negated range returns it.
                     for query, expected in (
                         (vr + " @tag:{x}", within),
-                        ("-" + vr, set(DOCS) - within),
+                        ("-" + vr, (set(DOCS) | set(REJECTED)) - within),
                     ):
                         got = _keys(client, index, query, *params)
                         assert got == expected, (index, radius, query, got)
@@ -141,28 +158,34 @@ class TestVectorRangeNonFiniteCluster(ValkeySearchClusterTestCase):
         """Every coordinator reports an IP -inf distance as -inf, as a
         standalone server does, whichever shard holds the document. A document
         that only the tag branch of an OR returns has no VR distance and still
-        yields none."""
+        yields none.
+
+        Stored vectors must be finite, so the -inf comes from a finite query
+        whose dot product with p overflows float: 2^120 * 2^10 = 2^130. a is at
+        exactly 0 (2^120 * 2^-120 = 1), b at 1 and m at +inf."""
         cluster = self.new_cluster_client()
         coordinators = [
             self.new_client_for_primary(i) for i in range(self.CLUSTER_SIZE)
         ]
+        query = _vec(2.0**120, 0.0, 0.0, 0.0)
         vr = "@vec:[VECTOR_RANGE 0.5 $blob]" + YIELD
-        params = ["PARAMS", "2", "blob", Q]
+        params = ["PARAMS", "2", "blob", query]
         for algo in ("FLAT", "HNSW"):
             index = f"{algo}_IP"
             _create_index(cluster, index, algo, "IP")
             # One document at -inf on each shard, so that every coordinator
             # merges a local one and remote ones. b and m are outside the
-            # radius (at 1 and +inf) and match only @tag:{y}.
-            docs = {"a": ("x", DOCS["a"]), "b": ("y", DOCS["b"]),
-                    "m": ("y", DOCS["m"])}
+            # radius and match only @tag:{y}.
+            docs = {"a": ("x", _vec(2.0**-120, 0.0, 0.0, 0.0)),
+                    "b": ("y", DOCS["b"]),
+                    "m": ("y", _vec(-(2.0**10), 0.0, 0.0, 0.0))}
             shards = set()
             i = 0
             while len(shards) < self.CLUSTER_SIZE:
                 node = cluster.get_node_from_key(f"{index}:p{i}")
                 if node.name not in shards:
                     shards.add(node.name)
-                    docs[f"p{i}"] = ("x", DOCS["p"])
+                    docs[f"p{i}"] = ("x", _vec(2.0**10, 0.0, 0.0, 0.0))
                 i += 1
             for key, (tag, vec) in docs.items():
                 cluster.hset(f"{index}:{key}", mapping={"vec": vec, "tag": tag})
@@ -172,16 +195,15 @@ class TestVectorRangeNonFiniteCluster(ValkeySearchClusterTestCase):
             within["a"] = 0.0
             with_tag = {**within, "b": None, "m": None}
             for coordinator in coordinators:
-                for query, expected in (
+                for q, expected in (
                     (vr, within),
                     (vr + " @tag:{x}", within),
                     ("@tag:{y} | " + vr, with_tag),
                 ):
-                    got = _distances(coordinator, index, query, *params)
-                    assert got == expected, (index, query, got)
-                    got = _aggregate_distances(
-                        coordinator, index, query, *params)
-                    assert got == expected, (index, "FT.AGGREGATE", query, got)
+                    got = _distances(coordinator, index, q, *params)
+                    assert got == expected, (index, q, got)
+                    got = _aggregate_distances(coordinator, index, q, *params)
+                    assert got == expected, (index, "FT.AGGREGATE", q, got)
                 # The -inf documents sort before a, not after it as documents
                 # without a VR distance would.
                 result = coordinator.execute_command(

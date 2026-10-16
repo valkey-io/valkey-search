@@ -1691,10 +1691,11 @@ class HierarchicalNSW
     if (dataPointLevel < maxLevel) {
       dist_t curdist =
           EvaluateDistance(dataPoint, GetDataByInternalId(currObj));
+      // Bounded for the same reason as the descent in addPoint.
       for (int level = maxLevel; level > dataPointLevel; level--) {
         bool changed = true;
         while (changed) {
-          changed = false;
+          const tableint prevObj = currObj;
           unsigned int *data;
           std::unique_lock<std::mutex> lock(link_list_locks_[currObj]);
           data = get_linklist_at_level(currObj, level);
@@ -1716,9 +1717,13 @@ class HierarchicalNSW
             if (d < curdist) {
               curdist = d;
               currObj = cand;
-              changed = true;
             }
           }
+          // Terminate when a pass stops moving. A NaN distance under
+          // -ffast-math can make `d < curdist` behave unpredictably, so we key
+          // termination off whether currObj actually advanced rather than off a
+          // flag the comparison sets, which cannot spin forever.
+          changed = (currObj != prevObj);
         }
       }
     }
@@ -1845,10 +1850,16 @@ class HierarchicalNSW
       if (curlevel < maxlevelcopy) {
         dist_t curdist =
             EvaluateDistance(data_point, GetDataByInternalId(currObj));
+        // A pass that moves strictly lowers curdist, so a correct greedy
+        // descent terminates once a pass stops advancing currObj. Keying
+        // termination off `currObj != prevObj` rather than off a flag the
+        // distance comparison sets means a NaN distance -- which under
+        // -ffast-math can make `d < curdist` unordered -- cannot spin the loop
+        // forever holding the writer.
         for (int level = maxlevelcopy; level > curlevel; level--) {
           bool changed = true;
           while (changed) {
-            changed = false;
+            const tableint prevObj = currObj;
             unsigned int *data;
             std::unique_lock<std::mutex> lock(link_list_locks_[currObj]);
             data = get_linklist(currObj, level);
@@ -1864,9 +1875,9 @@ class HierarchicalNSW
               if (d < curdist) {
                 curdist = d;
                 currObj = cand;
-                changed = true;
               }
             }
+            changed = (currObj != prevObj);
           }
         }
       }
@@ -1936,15 +1947,18 @@ class HierarchicalNSW
       BaseFilterFunctor *isIdAllowed = nullptr,
       BaseCancellationFunctor *isCancelled = nullptr) const {
     std::priority_queue<std::pair<dist_t, labeltype>> result;
-    if (cur_element_count_ == 0) return result;
+    const size_t element_count =
+        cur_element_count_.load(std::memory_order_relaxed);
+    if (element_count == 0) return result;
 
     tableint currObj = enterpoint_node_.load(std::memory_order_acquire);
     dist_t curdist = EvaluateDistance(query_data, GetDataByInternalId(currObj));
 
+    // Bounded for the same reason as the descent in addPoint.
     for (int level = element_levels_[currObj]; level > 0; level--) {
       bool changed = true;
       while (changed) {
-        changed = false;
+        const tableint prevObj = currObj;
         unsigned int *data;
 
         data = (unsigned int *)get_linklist(currObj, level);
@@ -1961,9 +1975,9 @@ class HierarchicalNSW
           if (d < curdist) {
             curdist = d;
             currObj = cand;
-            changed = true;
           }
         }
+        changed = (currObj != prevObj);
       }
     }
 
@@ -1999,15 +2013,18 @@ class HierarchicalNSW
       BaseSearchStopCondition<dist_t> &stop_condition,
       BaseFilterFunctor *isIdAllowed = nullptr) const {
     std::vector<std::pair<dist_t, labeltype>> result;
-    if (cur_element_count_ == 0) return result;
+    const size_t element_count =
+        cur_element_count_.load(std::memory_order_relaxed);
+    if (element_count == 0) return result;
 
     tableint currObj = enterpoint_node_.load(std::memory_order_acquire);
     dist_t curdist = EvaluateDistance(query_data, GetDataByInternalId(currObj));
 
+    // Bounded for the same reason as the descent in addPoint.
     for (int level = element_levels_[currObj]; level > 0; level--) {
       bool changed = true;
       while (changed) {
-        changed = false;
+        const tableint prevObj = currObj;
         unsigned int *data;
 
         data = (unsigned int *)get_linklist(currObj, level);
@@ -2025,9 +2042,9 @@ class HierarchicalNSW
           if (d < curdist) {
             curdist = d;
             currObj = cand;
-            changed = true;
           }
         }
+        changed = (currObj != prevObj);
       }
     }
 

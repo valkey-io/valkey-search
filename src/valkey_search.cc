@@ -7,6 +7,7 @@
 
 #include "src/valkey_search.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -21,6 +22,7 @@
 #include "absl/strings/numbers.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
+#include "absl/time/clock.h"
 #include "absl/time/time.h"
 #include "src/attribute_data_type.h"
 #include "src/coordinator/client_pool.h"
@@ -1042,6 +1044,7 @@ void ValkeySearch::Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const {
 // workers guarantees that no thread is mutating the index while the fork is
 // happening. For more details see:
 // https://pubs.opengroup.org/onlinepubs/009695399/functions/pthread_atfork.html
+
 void ValkeySearch::AtForkPrepare() {
   // Sanity: fork can occur (by example: calling to "popen") before the thread
   // pool is initialized

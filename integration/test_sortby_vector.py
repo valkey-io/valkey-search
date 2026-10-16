@@ -87,6 +87,32 @@ class TestKnnSortByStoredField(ValkeySearchTestCaseBase):
                           b"vsorta:1", [b"cat", b"a"],
                           b"vsorta:2", [b"cat", b"a"]], "dist ASC"
 
+    def test_knn_sortby_distance_ties_follow_direction(self):
+        client: Valkey = self.server.get_new_client()
+        assert client.execute_command(
+            "FT.CREATE", "vstie_idx", "ON", "HASH", "PREFIX", "1", "vstie:",
+            "SCHEMA", "vec", "VECTOR", "FLAT", "6", "TYPE", "FLOAT32",
+            "DIM", "2", "DISTANCE_METRIC", "L2") == b"OK"
+        # All four vectors are exactly 1 from the origin; load order is
+        # neither key order nor its reverse.
+        for key, vec in [("vstie:3", (0.0, 1.0)), ("vstie:1", (1.0, 0.0)),
+                         ("vstie:4", (0.0, -1.0)), ("vstie:2", (-1.0, 0.0))]:
+            assert client.execute_command(
+                "HSET", key, "vec", struct.pack("<2f", *vec)) == 1
+        waiters.wait_for_true(
+            lambda: client.execute_command(
+                "FT.SEARCH", "vstie_idx", "*", "NOCONTENT",
+                "DIALECT", "2")[0] == 4
+        )
+        blob = struct.pack("<2f", 0.0, 0.0)
+        for direction, keys in (("ASC", [1, 2, 3, 4]), ("DESC", [4, 3, 2, 1])):
+            result = client.execute_command(
+                "FT.SEARCH", "vstie_idx", "*=>[KNN 4 @vec $B AS dist]",
+                "PARAMS", "2", "B", blob, "SORTBY", "dist", direction,
+                "NOCONTENT", "DIALECT", "2")
+            assert result == [4] + [f"vstie:{k}".encode() for k in keys], \
+                direction
+
     def test_knn_sortby_stored_field_also_in_return(self):
         client: Valkey = self.server.get_new_client()
         blob = self._setup(client, "vsret_idx", "vsret:")

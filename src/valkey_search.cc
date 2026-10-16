@@ -27,6 +27,7 @@
 #include "src/coordinator/grpc_suspender.h"
 #include "src/coordinator/metadata_manager.h"
 #include "src/coordinator/server.h"
+#include "src/coordinator/tls.h"
 #include "src/coordinator/util.h"
 #include "src/metrics.h"
 #include "src/rdb_serialization.h"
@@ -1206,9 +1207,24 @@ absl::Status ValkeySearch::Startup(ValkeyModuleCtx *ctx) {
   VMSDK_LOG(NOTICE, ctx) << "Utility workers count: "
                          << utility_thread_pool_->Size();
 
+  // Opt-in (coordinator-tls): secure the coordinator channel with mTLS built
+  // from the server's own TLS configuration.
+  std::optional<coordinator::TlsConfig> coordinator_tls;
+  if (options::GetUseCoordinator().GetValue() &&
+      options::GetCoordinatorTls().GetValue()) {
+    VMSDK_ASSIGN_OR_RETURN(
+        coordinator_tls,
+        coordinator::LoadTlsConfig([ctx](const char *name) {
+          return valkey_search::GetConfigGetReply(ctx, name);
+        }));
+    VMSDK_LOG(NOTICE, ctx) << "Coordinator TLS enabled";
+  }
+
   if (options::GetUseCoordinator().GetValue() && IsCluster()) {
     client_pool_ = std::make_unique<coordinator::ClientPool>(
-        vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx));
+        vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx),
+        coordinator_tls ? coordinator::MakeTlsChannelCredentials(*coordinator_tls)
+                        : nullptr);
     coordinator::MetadataManager::InitInstance(
         std::make_unique<coordinator::MetadataManager>(ctx, *client_pool_));
     coordinator::MetadataManager::Instance().RegisterForClusterMessages(ctx);
@@ -1222,7 +1238,9 @@ absl::Status ValkeySearch::Startup(ValkeyModuleCtx *ctx) {
     VMSDK_ASSIGN_OR_RETURN(auto valkey_port, GetValkeyLocalPort(ctx));
     auto coordinator_port = coordinator::GetCoordinatorPort(valkey_port);
     coordinator_ = coordinator::ServerImpl::Create(
-        ctx, reader_thread_pool_.get(), coordinator_port);
+        ctx, reader_thread_pool_.get(), coordinator_port,
+        coordinator_tls ? coordinator::MakeTlsServerCredentials(*coordinator_tls)
+                        : nullptr);
     if (coordinator_ == nullptr) {
       return absl::InternalError("Failed to create coordinator server");
     }

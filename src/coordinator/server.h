@@ -111,7 +111,9 @@ class ServerImpl final : public Server {
  public:
   static std::unique_ptr<Server> Create(ValkeyModuleCtx* ctx,
                                         vmsdk::ThreadPool* reader_thread_pool,
-                                        uint16_t port);
+                                        uint16_t port,
+                                        std::shared_ptr<grpc::ServerCredentials>
+                                            creds = nullptr);
   ServerImpl(const ServerImpl&) = delete;
   ServerImpl& operator=(const ServerImpl&) = delete;
   uint16_t GetPort() const override { return port_; }

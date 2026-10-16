@@ -505,12 +505,13 @@ ServerImpl::ServerImpl(std::unique_ptr<Service> coordinator_service,
       port_(port) {}
 
 std::unique_ptr<Server> ServerImpl::Create(
-    ValkeyModuleCtx *ctx, vmsdk::ThreadPool *reader_thread_pool,
-    uint16_t port) {
+    ValkeyModuleCtx *ctx, vmsdk::ThreadPool *reader_thread_pool, uint16_t port,
+    std::shared_ptr<grpc::ServerCredentials> creds) {
   std::string server_address = absl::StrCat("[::]:", port);
   grpc::EnableDefaultHealthCheckService(true);
-  std::shared_ptr<grpc::ServerCredentials> creds =
-      grpc::InsecureServerCredentials();
+  if (creds == nullptr) {
+    creds = grpc::InsecureServerCredentials();
+  }
   auto coordinator_service = std::make_unique<Service>(
       vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx),
       reader_thread_pool);

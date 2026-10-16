@@ -89,7 +89,7 @@ void ReplyScoreTopLevel(ValkeyModuleCtx *ctx, float score) {
 }
 
 std::optional<std::string> GetSortKeyValue(const indexes::Neighbor &neighbor,
-                                           const query::SortByLookup &lookup);
+                                           const query::SortByKey &sortby_key);
 
 // If the SORTBY field matches the VR distance alias, returns the formatted
 // distance for this neighbor (to be emitted with the numeric '#' prefix for
@@ -139,12 +139,12 @@ bool IsSortByFieldNumeric(const SearchCommand &command,
 // Returns std::nullopt when the query has no SORTBY or the document lacks the
 // sort field.
 std::optional<std::string> GetSortKeyValue(const indexes::Neighbor &neighbor,
-                                           const query::SortByLookup &lookup) {
+                                           const query::SortByKey &sortby_key) {
   if (!neighbor.attribute_contents.has_value()) {
     return std::nullopt;
   }
 
-  auto it = lookup.Find(*neighbor.attribute_contents);
+  auto it = sortby_key.Find(*neighbor.attribute_contents);
   if (it == neighbor.attribute_contents->end()) {
     return std::nullopt;
   }
@@ -152,34 +152,14 @@ std::optional<std::string> GetSortKeyValue(const indexes::Neighbor &neighbor,
   return std::string(vmsdk::ToStringView(it->second.value.get()));
 }
 
-// Resolves where the SORTBY value is filed in attribute_contents (see
-// query::SortByLookup). Gated: below 1.3.0 the value is looked up by the
-// field as typed, so a SORTBY on an attribute whose alias differs from its
-// hash field finds nothing on most shapes, and finds another attribute's
-// value when the alias equals that attribute's field (issue #1440). Main
-// thread only: the gate macro owns a static INFO counter.
-query::SortByLookup ResolveSortByLookup(const SearchCommand &command) {
-  query::SortByLookup lookup;
-  lookup.field = command.sortby_parameter->field;
-  const IndexSchema &schema = *command.index_schema;
+// Issue #1440. Main thread only: the gate macro constructs its INFO counter
+// lazily.
+query::SortByKey ResolveSortByKey(const SearchCommand &command) {
+  const std::string &alias = command.sortby_parameter->field;
   return VALKEY_SEARCH_COMPATIBILITY_FIX(
       1, 3, 0, "ft_search_sortby_alias",
-      [&]() {
-        auto identifier = schema.GetIdentifier(lookup.field);
-        lookup.identifier =
-            identifier.ok() ? std::move(*identifier) : lookup.field;
-        const bool is_json =
-            schema.GetAttributeDataType().ToProto() ==
-            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON;
-        // On HASH, fall back to the typed field only when it cannot be
-        // another attribute's hash field.
-        lookup.try_field = is_json || !schema.GetAlias(lookup.field).ok();
-        return lookup;
-      },
-      [&]() {
-        lookup.identifier = lookup.field;
-        return lookup;
-      });
+      [&]() { return query::SortByKey(*command.index_schema, alias); },
+      [&]() { return query::SortByKey::Legacy(alias); });
 }
 
 template <typename Comparator>
@@ -200,7 +180,7 @@ void PerformSortingOnRelevantPortion(std::vector<indexes::Neighbor> &neighbors,
 // Apply sorting to neighbors based on attribute values in attribute_contents
 void ApplySorting(std::vector<indexes::Neighbor> &neighbors,
                   const SearchCommand &parameters,
-                  const std::optional<query::SortByLookup> &sortby_lookup) {
+                  const std::optional<query::SortByKey> &sortby_key) {
   if (!parameters.sortby_parameter.has_value() || neighbors.empty()) {
     return;
   }
@@ -247,8 +227,7 @@ void ApplySorting(std::vector<indexes::Neighbor> &neighbors,
   bool is_numeric =
       index_result.ok() &&
       index_result.value()->GetIndexerType() == indexes::IndexerType::kNumeric;
-  CHECK(sortby_lookup.has_value());
-  const query::SortByLookup &lookup = *sortby_lookup;
+  CHECK(sortby_key.has_value());
   auto compare = [&](const indexes::Neighbor &a,
                      const indexes::Neighbor &b) -> bool {
     if (is_vector_score) {
@@ -265,8 +244,8 @@ void ApplySorting(std::vector<indexes::Neighbor> &neighbors,
       return false;
     }
 
-    auto it_a = lookup.Find(*a.attribute_contents);
-    auto it_b = lookup.Find(*b.attribute_contents);
+    auto it_a = sortby_key->Find(*a.attribute_contents);
+    auto it_b = sortby_key->Find(*b.attribute_contents);
 
     if (it_a == a.attribute_contents->end()) {
       return false;
@@ -404,7 +383,7 @@ SearchCommand::RowFormat SearchCommand::GetRowFormat() const {
         [&]() { return false; });
   }
   if (sortby_parameter.has_value()) {
-    format.sortby_lookup = ResolveSortByLookup(*this);
+    format.sortby_key = ResolveSortByKey(*this);
   }
   if (IsVectorRangeQuery()) {
     format.vr_field = query::GetVrScoreFieldName(*this);
@@ -443,8 +422,8 @@ size_t SearchCommand::ReplyRowElements(ValkeyModuleCtx *ctx,
       prefix = "#";
     } else if (format.sort_by_vec_score) {
       value = expr::FormatDouble(neighbor.distance);
-    } else if (format.sortby_lookup.has_value()) {
-      value = GetSortKeyValue(neighbor, *format.sortby_lookup);
+    } else if (format.sortby_key.has_value()) {
+      value = GetSortKeyValue(neighbor, *format.sortby_key);
     }
     if (!value.has_value() && format.nil_absent_sort_key) {
       ValkeyModule_ReplyWithNull(ctx);
@@ -564,7 +543,7 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
   }
   const auto format = GetRowFormat();
   if (!skip_content) {
-    ApplySorting(search_result.neighbors, *this, format.sortby_lookup);
+    ApplySorting(search_result.neighbors, *this, format.sortby_key);
   }
 
   auto range = search_result.GetSerializationRange(*this);

@@ -57,33 +57,31 @@ struct SortByParameter {
   SortOrder order{SortOrder::kAscending};
 };
 
-// Where a SORTBY value is filed in Neighbor::attribute_contents.
-//
-// The content map is keyed by the attribute's identifier (hash field or JSON
-// path) on every fetch path; the SORTBY field as typed (its alias) only appears
-// as a key where a fetch path copied the value under it (the HASH filter +
-// RETURN path, and JSON, which renames the entry). Resolved once per query by
-// the node that sorts, so the same lookup serves local rows and rows merged
-// from other shards, whose maps carry the same identifier keys. See #1440.
-struct SortByLookup {
-  // Key tried first: the attribute's identifier, or the field as typed when
-  // it names no attribute (the KNN score alias, for example).
+// The attribute_contents key a SORTBY attribute is read under, resolved once
+// per query on the node that sorts. Rows merged from other shards carry the
+// same keys. Issue #1440.
+struct SortByKey {
+  SortByKey(const IndexSchema &schema, absl::string_view sortby_alias);
+  static SortByKey Legacy(absl::string_view sortby_alias);
+
   std::string identifier;
-  // The SORTBY field as typed.
-  std::string field;
-  // Also try `field` when `identifier` is absent. Set for JSON and for a
-  // field that is not any attribute's identifier, so a collision (an alias
-  // that equals another attribute's hash field) can never pick up that
-  // attribute's value.
-  bool try_field{false};
+  std::string alias;
+  bool is_json{false};
 
   RecordsMap::const_iterator Find(const RecordsMap &contents) const {
     auto it = contents.find(identifier);
-    if (it == contents.end() && try_field && field != identifier) {
-      it = contents.find(field);
+    // Not a JSON/HASH switch: JSON fetch paths disagree on the key (the
+    // full-content path renames the entry to the alias, the others keep the
+    // path), so JSON tries both. HASH never tries the alias: an undeclared
+    // hash field may carry that name.
+    if (it == contents.end() && is_json) {
+      it = contents.find(alias);
     }
     return it;
   }
+
+ private:
+  SortByKey() = default;
 };
 
 constexpr int64_t kTimeoutMS{50000};

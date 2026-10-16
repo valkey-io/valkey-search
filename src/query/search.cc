@@ -658,6 +658,22 @@ CalcBestMatchingInkeys(const SearchParameters &parameters,
   return results;
 }
 
+SortByKey::SortByKey(const IndexSchema &schema, absl::string_view sortby_alias)
+    : alias(sortby_alias) {
+  auto resolved = schema.GetIdentifier(alias);
+  // A non-attribute name (KNN score, VR distance) is never read from the map.
+  identifier = resolved.ok() ? *std::move(resolved) : alias;
+  is_json = schema.GetAttributeDataType().ToProto() ==
+            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON;
+}
+
+SortByKey SortByKey::Legacy(absl::string_view sortby_alias) {
+  SortByKey key;
+  key.alias = std::string(sortby_alias);
+  key.identifier = key.alias;
+  return key;
+}
+
 absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
     absl::StatusOr<std::vector<indexes::Neighbor>> results,
     const SearchParameters &parameters) {
@@ -667,24 +683,16 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
   if (parameters.no_content || parameters.return_attributes.empty()) {
     return results;
   }
-  // Collect the attributes to serve from indexes: the RETURN fields plus the
-  // SORTBY field that the sort comparator reads later.
   struct AttributeInfo {
-    // Content map key; views memory owned by `parameters` or by
-    // `sortby_identifier` below.
     absl::string_view identifier;
     indexes::IndexBase *index;
   };
   std::vector<AttributeInfo> attributes;
-  // SORTBY on a stored attribute that RETURN does not name: serve it from its
-  // index too, keyed by its identifier like every other fetch path, so the
-  // sort can read it (issue #1440). Gated with the sort-side fix: when the
-  // attribute cannot be served (TEXT, or missing on a document) the whole
-  // row falls back to the main-thread fetch, which returns stored bytes
-  // where the index copy is re-serialized, a byte change for RETURN.
-  std::string sortby_identifier;
-  // The KNN score and the VR distance are synthesized reply fields, not
-  // stored attributes; the sort reads Neighbor::distance for them.
+  // Issue #1440. Gated: a sort attribute the index cannot serve (TEXT, or
+  // missing on a document) sends the row to the main-thread fetch, which
+  // changes the RETURN bytes of indexed numerics.
+  std::optional<SortByKey> sortby_key;
+  // Sorted from Neighbor::distance, not from attribute_contents.
   const bool sort_by_synthesized_field =
       parameters.sortby_parameter.has_value() &&
       ((parameters.score_as &&
@@ -694,21 +702,20 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
   if (parameters.sortby_parameter.has_value() && !sort_by_synthesized_field &&
       options::EnabledInVersion(1, 3, 0)) {
     const std::string &sortby_field = parameters.sortby_parameter->field;
-    auto identifier = parameters.index_schema->GetIdentifier(sortby_field);
-    sortby_identifier = identifier.ok() ? *identifier : sortby_field;
+    sortby_key.emplace(*parameters.index_schema, sortby_field);
     const bool sortby_served_by_return = std::any_of(
         parameters.return_attributes.begin(),
         parameters.return_attributes.end(), [&](const ReturnAttribute &attr) {
           return attr.identifier.get() &&
                  vmsdk::ToStringView(attr.identifier.get()) ==
-                     sortby_identifier;
+                     sortby_key->identifier;
         });
     if (!sortby_served_by_return) {
       auto index = parameters.index_schema->GetIndex(sortby_field);
       if (!index.ok()) {
         return results;
       }
-      attributes.push_back(AttributeInfo{.identifier = sortby_identifier,
+      attributes.push_back(AttributeInfo{.identifier = sortby_key->identifier,
                                          .index = index.value().get()});
     }
   }

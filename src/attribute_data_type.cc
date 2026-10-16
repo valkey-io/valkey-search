@@ -239,9 +239,7 @@ absl::StatusOr<RecordsMap> JsonAttributeDataType::FetchAllAttributes(
     if (!str.ok()) {
       continue;
     }
-    // Key the map by the identifier string the entry owns, not by the
-    // caller's view: GetContent passes a view into a local string for the
-    // SORTBY identifier, which no longer exists once the map is returned.
+    // The caller's view may not outlive the map.
     auto owned_identifier = vmsdk::MakeUniqueValkeyString(identifier);
     auto identifier_view = vmsdk::ToStringView(owned_identifier.get());
     key_value_content.emplace(

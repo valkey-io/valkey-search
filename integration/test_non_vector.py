@@ -1177,11 +1177,7 @@ class TestReturnClauseGate(ValkeySearchTestCaseDebugMode):
 
 class TestSortByAliasGate(ValkeySearchTestCaseDebugMode):
     """
-        SORTBY on an aliased attribute (issue #1440) is gated on
-        search.emulate-release: pre-1.3.0 the sort read the content map by
-        the typed token, so an alias that names another attribute's hash
-        field sorted by that field. debug-mode is required to set
-        emulate-release at the module version.
+        Issue #1440. debug-mode lets the test set emulate-release.
     """
 
     def test_sortby_alias_gate(self):
@@ -1199,13 +1195,10 @@ class TestSortByAliasGate(ValkeySearchTestCaseDebugMode):
         IndexingTestHelper.wait_for_indexing_complete_on_node(client, "sba_idx")
 
         def legacy_uses():
-            # The INFO field appears with the first query that evaluates the gate.
             return client.info("SEARCH").get(
                 "search_compatibility-ft_search_sortby_alias", 0)
 
         knn = ["*=>[KNN 3 @v $q]", "PARAMS", "2", "q", vec]
-        # Legacy sorts by hash field b (100, 500, 900); fixed by attribute b
-        # (5, 6, 7), the one `SORTBY b` names.
         for release, by_field_b, counted in (("1.2.1", True, 1),
                                              ("1.3.0", False, 0)):
             assert client.execute_command(
@@ -1235,8 +1228,7 @@ class TestSortByAliasGate(ValkeySearchTestCaseDebugMode):
             assert legacy_uses() - before == counted
 
     def test_sortby_knn_prefill_gate(self):
-        # The KNN index-served pre-fill reads SORTBY only at >= 1.3.0; below
-        # that it must produce the pre-fix bytes (unsorted, 12-digit values).
+        # Below 1.3.0 the KNN pre-fill must keep the 12-digit index bytes.
         client: Valkey = self.server.get_new_client()
         assert client.execute_command(
             "FT.CREATE", "sbk_idx", "ON", "HASH", "PREFIX", "1", "sbk:",
@@ -1251,7 +1243,6 @@ class TestSortByAliasGate(ValkeySearchTestCaseDebugMode):
             assert client.execute_command(
                 "HSET", key, "t", t, "n", n, "a", a, "v",
                 struct.pack("<2f", x, 0.0)) == 4
-        # sbk:4 lacks the aliased sort field a.
         assert client.execute_command(
             "HSET", "sbk:4", "t", "delta", "n", "0.4234567890123456", "v",
             struct.pack("<2f", 4.0, 0.0)) == 3
@@ -1280,11 +1271,44 @@ class TestSortByAliasGate(ValkeySearchTestCaseDebugMode):
                     "WITHSORTKEYS", "RETURN", "1", "n", "DIALECT", "2")
                 assert result == expected, f"emulate-release {release} {field}"
 
+    def test_sortby_alias_stray_field(self):
+        # An undeclared field named like the alias is not the attribute.
+        client: Valkey = self.server.get_new_client()
+        assert client.execute_command(
+            "CONFIG", "SET", "search.emulate-release", "1.3.0") == b"OK"
+        assert client.execute_command(
+            "FT.CREATE", "sbf_idx", "ON", "HASH", "PREFIX", "1", "sbf:",
+            "SCHEMA", "price_v2", "AS", "price", "NUMERIC",
+            "n", "NUMERIC") == b"OK"
+        assert client.execute_command(
+            "HSET", "sbf:new1", "price_v2", 700, "n", 1) == 2
+        assert client.execute_command(
+            "HSET", "sbf:new2", "price_v2", 500, "n", 1) == 2
+        assert client.execute_command(
+            "HSET", "sbf:old1", "price", 300, "n", 1) == 2
+        IndexingTestHelper.wait_for_indexing_complete_on_node(client, "sbf_idx")
+        for query in (["*"], ["@n:[0 10]"]):
+            for order, present in (("ASC", [b"sbf:new2", b"sbf:new1"]),
+                                   ("DESC", [b"sbf:new1", b"sbf:new2"])):
+                keys = present + [b"sbf:old1"]
+                sort_keys = [b"#" + str(
+                    {b"sbf:new1": 700, b"sbf:new2": 500}[k]).encode()
+                             for k in present] + [None]
+                base = ["FT.SEARCH", "sbf_idx", *query, "SORTBY", "price",
+                        order, "WITHSORTKEYS"]
+                result = client.execute_command(*base, "DIALECT", "2")
+                assert result[0] == 3, result
+                assert result[1::3] == keys, (query, order, result)
+                assert result[2::3] == sort_keys, (query, order, result)
+                assert [b"price", b"300"] == [
+                    x for x in result[3::3][2] if x in (b"price", b"300")]
+                result = client.execute_command(
+                    *base, "RETURN", "1", "price_v2", "DIALECT", "2")
+                assert result[1::3] == keys, (query, order, result)
+                assert result[2::3] == sort_keys, (query, order, result)
+
     def test_sortby_alias_matrix(self):
-        # Every reply shape sorts by the aliased attribute at >= 1.3.0, on
-        # HASH (content keyed by hash field) and JSON (content renamed to the
-        # alias). Docs are inserted and keyed so that neither key order nor
-        # KNN order equals the sorted order.
+        # Values chosen so neither key order nor KNN order is the sorted order.
         client: Valkey = self.server.get_new_client()
         assert client.execute_command(
             "CONFIG", "SET", "search.emulate-release", "1.3.0") == b"OK"
@@ -1311,8 +1335,6 @@ class TestSortByAliasGate(ValkeySearchTestCaseDebugMode):
         IndexingTestHelper.wait_for_indexing_complete_on_node(client, "sbm_j")
 
         def ids(result):
-            # Keys are every other element after the count, except with
-            # WITHSORTKEYS, which is handled by the caller.
             return [x for x in result[1:] if isinstance(x, bytes)
                     and x[:4] in (b"sbmh", b"sbmj")]
 
@@ -1324,15 +1346,11 @@ class TestSortByAliasGate(ValkeySearchTestCaseDebugMode):
                 for order, expected in (("ASC", asc), ("DESC", desc)):
                     base = ["FT.SEARCH", idx, *query, "SORTBY", "s", order]
                     tail = ["DIALECT", "2"]
-                    # full content, NOCONTENT, RETURN another field, RETURN the
-                    # alias itself
                     for shape in ([], ["NOCONTENT"], ["RETURN", "1", "t"],
                                   ["RETURN", "1", "s"]):
                         result = client.execute_command(*base, *shape, *tail)
                         assert ids(result) == expected, (idx, query, order,
                                                          shape, result)
-                    # WITHSORTKEYS reports the attribute's value with the
-                    # numeric prefix.
                     result = client.execute_command(
                         *base, "WITHSORTKEYS", "RETURN", "1", "t", *tail)
                     assert result[0] == 3, result
@@ -1508,11 +1526,7 @@ class TestNonVectorCluster(ValkeySearchClusterTestCase):
 
 class TestSortByAliasCluster(ValkeySearchClusterTestCaseDebugMode):
     """
-        SORTBY on an aliased attribute in CME (issue #1440). Shards ship the
-        fetched content keyed by hash field; the coordinator sorts the merged
-        rows, so the fix is exercised on rows that crossed the wire. The
-        collision schema (alias b of field a, attribute c on field b) makes
-        the legacy order deterministic too: it sorts by hash field b.
+        Issue #1440 on rows merged from other shards.
     """
 
     def test_sortby_alias_cluster(self):
@@ -1523,7 +1537,7 @@ class TestSortByAliasCluster(ValkeySearchClusterTestCaseDebugMode):
             "SCHEMA", "a", "AS", "b", "NUMERIC", "b", "AS", "c", "NUMERIC",
             "v", "VECTOR", "FLAT", "6", "TYPE", "FLOAT32", "DIM", "2",
             "DISTANCE_METRIC", "L2") == b"OK"
-        # key suffix -> a; b = 1000 - 10 * a, so ascending a is descending b.
+        # b = 1000 - 10 * a, so the legacy order (by hash field b) is the reverse.
         a_values = {1: 7, 2: 5, 3: 6, 4: 9, 5: 1, 6: 8, 7: 3, 8: 2, 9: 4}
         for i, a in a_values.items():
             assert cluster_client.execute_command(
@@ -1531,8 +1545,7 @@ class TestSortByAliasCluster(ValkeySearchClusterTestCaseDebugMode):
                 struct.pack("<2f", float(i), 0.0)) == 3
         IndexingTestHelper.wait_for_indexing_complete_on_all_nodes(
             self.get_all_primary_clients(), "sbc_idx")
-        # Nine distinct keys should not all hash to one shard; the test is
-        # about rows that crossed the wire, so make sure some did.
+        # Some rows must have crossed the wire.
         slots = {cluster_client.execute_command("CLUSTER", "KEYSLOT",
                                                 f"sbc:{i}") for i in a_values}
         assert len(slots) > 1
@@ -1571,8 +1584,6 @@ class TestSortByAliasCluster(ValkeySearchClusterTestCaseDebugMode):
                                                          order, shape, result)
                         assert (legacy_uses() > before) == counted, (
                             release, query, order, shape)
-            # WITHSORTKEYS reports the value the sort used: attribute b's
-            # (field a) once fixed, hash field b before.
             result = coordinator.execute_command(
                 "FT.SEARCH", "sbc_idx", "@b:[0 10]", "SORTBY", "b", "ASC",
                 "WITHSORTKEYS", "RETURN", "1", "c", "DIALECT", "2")

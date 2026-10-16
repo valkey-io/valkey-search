@@ -712,6 +712,10 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
         });
     if (!sortby_served_by_return) {
       auto index = parameters.index_schema->GetIndex(sortby_field);
+      // Unreachable from FT.SEARCH: the parser validated the field, and a shard
+      // refuses a request whose schema differs from the coordinator's. A caller
+      // that bypasses both gets the keyspace fetch, not a crash.
+      DCHECK(index.ok()) << index.status();
       if (!index.ok()) {
         return results;
       }

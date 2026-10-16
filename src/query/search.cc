@@ -2165,7 +2165,8 @@ absl::Status query::SearchParameters::PreParseQueryString() {
                 auto index, index_schema->GetIndex(vr_pred->GetAlias()),
                 _.SetPrepend() << "Vector range field validation failed: ");
             if (index->GetIndexerType() != indexes::IndexerType::kHNSW &&
-                index->GetIndexerType() != indexes::IndexerType::kFlat) {
+                index->GetIndexerType() != indexes::IndexerType::kFlat &&
+                index->GetIndexerType() != indexes::IndexerType::kSVS) {
               return absl::InvalidArgumentError(
                   absl::StrCat("'", vr_pred->GetAlias(),
                                "' is not indexed as a vector field"));

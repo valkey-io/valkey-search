@@ -865,6 +865,7 @@ bool IndexSchema::ProcessAttributeMutation(ValkeyModuleCtx *ctx,
         case indexes::IndexerType::kVector:
         case indexes::IndexerType::kHNSW:
         case indexes::IndexerType::kFlat:
+        case indexes::IndexerType::kSVS:
           Metrics::GetStats().ingest_field_vector++;
           break;
         case indexes::IndexerType::kNumeric:
@@ -1260,7 +1261,8 @@ int IndexSchema::GetVectorAttributeCount() const {
                          auto type = attr.second.GetIndex()->GetIndexerType();
                          return type == indexes::IndexerType::kVector ||
                                 type == indexes::IndexerType::kHNSW ||
-                                type == indexes::IndexerType::kFlat;
+                                type == indexes::IndexerType::kFlat ||
+                                type == indexes::IndexerType::kSVS;
                        });
 }
 

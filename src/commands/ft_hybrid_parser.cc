@@ -1117,7 +1117,8 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
       VMSDK_ASSIGN_OR_RETURN(auto index,
                              arm->index_schema->GetIndex(arm->attribute_alias));
       if (index->GetIndexerType() != indexes::IndexerType::kHNSW &&
-          index->GetIndexerType() != indexes::IndexerType::kFlat) {
+          index->GetIndexerType() != indexes::IndexerType::kFlat &&
+          index->GetIndexerType() != indexes::IndexerType::kSVS) {
         return absl::InvalidArgumentError(absl::StrCat(
             "Index field `", arm->attribute_alias, "` is not a Vector index"));
       }

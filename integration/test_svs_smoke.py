@@ -113,6 +113,30 @@ def _knn_scores(client: Valkey, index: str, query, filter="*"):
     return {int(k[len(prefix):]): s for k, s in _score_map(reply).items()}
 
 
+def _create_svs_and_flat_on_same_keys(client: Valkey):
+    """Indexes svs_h (SVS_VAMANA) and flat_h (FLAT) over h:1..h:5, each with
+    a TEXT title and an L2 vector (i, 0, 0, 0), as the reference answer for
+    SVS queries."""
+    for index, algorithm in (("svs_h", "SVS_VAMANA"), ("flat_h", "FLAT")):
+        client.execute_command(
+            "FT.CREATE", index, "PREFIX", "1", "h:",
+            "SCHEMA",
+            "v", "VECTOR", algorithm,
+            "6", "TYPE", "FLOAT32", "DIM", str(DIM), "DISTANCE_METRIC", "L2",
+            "title", "TEXT",
+        )
+    for i in range(1, 6):
+        client.hset(f"h:{i}", mapping={
+            "v": _fp32([float(i), 0.0, 0.0, 0.0]), "title": "hello world"})
+
+    def indexed():
+        return all(
+            FTInfoParser(client.execute_command("FT.INFO", index)).num_docs
+            == 5 for index in ("svs_h", "flat_h"))
+
+    waiters.wait_for_equal(indexed, True, timeout=5)
+
+
 class TestSVSVamanaSmoke(ValkeySearchTestCaseBase):
 
     def _create_default_index(self, client: Valkey, index: str = "svs_idx"):
@@ -276,6 +300,60 @@ class TestSVSVamanaSmoke(ValkeySearchTestCaseBase):
         for doc, expected in METRIC_EXPECTED.items():
             assert scores[doc] == pytest.approx(expected, abs=1e-5), scores
             assert scores[doc] == pytest.approx(flat_scores[doc], abs=1e-5)
+
+    @pytest.mark.parametrize("metric", ["IP", "COSINE"])
+    def test_vector_range_on_svs_field(self, metric):
+        """VECTOR_RANGE on an SVS_VAMANA field returns docs 2 (0.2) and
+        3 (0.0) for radius 0.3."""
+        client: Valkey = self.server.get_new_client()
+        _create_metric_index(client, "svs_m", "SVS_VAMANA", metric)
+        _create_metric_index(client, "flat_m", "FLAT", metric)
+
+        def range_docs(index):
+            reply = client.execute_command(
+                "FT.SEARCH", index, "@v:[VECTOR_RANGE $r $q]", "NOCONTENT",
+                "PARAMS", "4", "r", "0.3", "q", _fp32(METRIC_QUERY[metric]),
+                "DIALECT", "2",
+            )
+            prefix = f"{index}:".encode()
+            return {int(k[len(prefix):]) for k in reply[1:]}
+
+        assert range_docs("svs_m") == range_docs("flat_m") == {2, 3}
+
+    def test_ft_hybrid_vsim_on_svs_field(self):
+        """FT.HYBRID accepts an SVS_VAMANA field in its VSIM arm."""
+        client: Valkey = self.server.get_new_client()
+        _create_svs_and_flat_on_same_keys(client)
+
+        def hybrid(index):
+            return client.execute_command(
+                "FT.HYBRID", index,
+                "SEARCH", "@title:hello",
+                "VSIM", "@v", "$q", "KNN", "2", "K", "3",
+                "COMBINE", "RRF", "2", "WINDOW", "10",
+                "PARAMS", "2", "q", _fp32([0.0, 0.0, 0.0, 0.0]),
+            )
+
+        svs_reply = hybrid("svs_h")
+        assert svs_reply[0] > 0, svs_reply
+        assert svs_reply == hybrid("flat_h")
+
+    def test_ft_aggregate_references_svs_field(self):
+        """FT.AGGREGATE can reference an SVS_VAMANA field by name."""
+        client: Valkey = self.server.get_new_client()
+        _create_svs_and_flat_on_same_keys(client)
+
+        def aggregate(index):
+            return client.execute_command(
+                "FT.AGGREGATE", index, "*",
+                "GROUPBY", "1", "@v", "REDUCE", "COUNT", "0", "AS", "n",
+                "DIALECT", "2",
+            )
+
+        svs_reply = aggregate("svs_h")
+        assert svs_reply[0] > 0, svs_reply
+        assert sorted(map(repr, svs_reply[1:])) == \
+            sorted(map(repr, aggregate("flat_h")[1:]))
 
     @pytest.mark.parametrize("metric", ["IP", "COSINE"])
     def test_zero_query_scores_one(self, metric):
@@ -455,8 +533,35 @@ class TestSVSVamanaSmoke(ValkeySearchTestCaseBase):
             f"SVS_COMPRESSION_{compression}"
 
 
-class TestSVSVamanaPlannerPaths(ValkeySearchTestCaseDebugMode):
-    """Changing the planner threshold ratio requires debug-mode."""
+class TestSVSVamanaDebugMode(ValkeySearchTestCaseDebugMode):
+    """Tests that need debug-mode: changing the planner threshold ratio and
+    reading developer INFO fields."""
+
+    def test_info_counts_svs_vector_field(self):
+        """An SVS_VAMANA field is counted in number_of_vector_attributes and
+        its ingests in ingest_field_vector."""
+        client: Valkey = self.server.get_new_client()
+
+        def info(field):
+            return int(client.info("SEARCH").get(f"search_{field}", 0))
+
+        attributes_before = info("number_of_vector_attributes")
+        ingests_before = info("ingest_field_vector")
+        index = "svs_info"
+        client.execute_command(
+            "FT.CREATE", index, "PREFIX", "1", "i:",
+            "SCHEMA", "v", "VECTOR", "SVS_VAMANA",
+            "6", "TYPE", "FLOAT32", "DIM", str(DIM), "DISTANCE_METRIC", "L2",
+        )
+        client.hset("i:1", mapping={"v": _fp32([1.0, 0.0, 0.0, 0.0])})
+        waiters.wait_for_equal(
+            lambda: FTInfoParser(
+                client.execute_command("FT.INFO", index)).num_docs, 1,
+            timeout=5,
+        )
+
+        assert info("number_of_vector_attributes") == attributes_before + 1
+        assert info("ingest_field_vector") == ingests_before + 1
 
     @pytest.mark.parametrize("metric", ["IP", "COSINE"])
     def test_prefilter_and_index_paths_agree(self, metric):

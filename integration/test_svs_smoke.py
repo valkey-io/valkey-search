@@ -540,6 +540,31 @@ class TestSVSVamanaDebugMode(ValkeySearchTestCaseDebugMode):
     """Tests that need debug-mode: changing the planner threshold ratio and
     reading developer INFO fields."""
 
+    def test_nan_vector_counts_as_skipped(self):
+        """A vector with a non-finite component is skipped as invalid data,
+        like a wrong-size vector, rather than counted as an indexing
+        failure."""
+        client: Valkey = self.server.get_new_client()
+
+        def failures():
+            return int(client.info("SEARCH").get(
+                "search_ingest_total_failures", 0))
+
+        client.execute_command(
+            "FT.CREATE", "nan_idx", "PREFIX", "1", "n:",
+            "SCHEMA", "v", "VECTOR", "SVS_VAMANA",
+            "6", "TYPE", "FLOAT32", "DIM", str(DIM), "DISTANCE_METRIC", "L2",
+        )
+        client.hset("n:1", mapping={"v": _fp32([1.0, 0.0, 0.0, 0.0])})
+        before = failures()
+        nan_bytes = struct.pack("<I", 0x7FC00000) + _fp32([0.0, 0.0, 0.0])
+        client.hset("n:nan", mapping={"v": nan_bytes})
+        client.hset("n:2", mapping={"v": _fp32([2.0, 0.0, 0.0, 0.0])})
+        waiters.wait_for_equal(
+            lambda: _v_index(client, "nan_idx")["size"], 2, timeout=5,
+        )
+        assert failures() == before
+
     def test_info_counts_svs_vector_field(self):
         """An SVS_VAMANA field is counted in number_of_vector_attributes and
         its ingests in ingest_field_vector."""

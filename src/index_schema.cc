@@ -2439,15 +2439,20 @@ absl::StatusOr<vmsdk::ValkeyVersion> IndexSchema::GetMinVersion(
   }
   bool has_text_index = false;
   bool has_low_precision_vector = false;
+  bool has_svs_vamana = false;
   for (const auto &attr : unpacked->attributes()) {
     if (attr.index().has_text_index()) {
       has_text_index = true;
     }
     if (attr.index().has_vector_index()) {
-      const auto dt = attr.index().vector_index().vector_data_type();
+      const auto &vector_index = attr.index().vector_index();
+      const auto dt = vector_index.vector_data_type();
       if (dt == data_model::VECTOR_DATA_TYPE_FLOAT16 ||
           dt == data_model::VECTOR_DATA_TYPE_BFLOAT16) {
         has_low_precision_vector = true;
+      }
+      if (vector_index.has_svs_vamana_algorithm()) {
+        has_svs_vamana = true;
       }
     }
   }
@@ -2455,7 +2460,10 @@ absl::StatusOr<vmsdk::ValkeyVersion> IndexSchema::GetMinVersion(
   // proto field, so it would load the index, silently ignore the filter, and
   // index every key the filter exists to exclude -- a wrong index rather than
   // a failed load. Recording 1.3.0 makes that RDB refuse to load instead.
-  if (has_low_precision_vector || unpacked->has_filter()) {
+  // An SVS_VAMANA index can't be created by a module without SVS. Stamping it
+  // makes older modules refuse it cleanly instead of dropping the index on
+  // metadata sync or failing the whole RDB load.
+  if (has_low_precision_vector || unpacked->has_filter() || has_svs_vamana) {
     return kRelease13;
   }
   if (has_text_index) {

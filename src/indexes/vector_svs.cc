@@ -795,19 +795,26 @@ VectorSVS<T>::SearchKnn(absl::string_view query, uint64_t count,
 
 template <typename T>
 absl::StatusOr<std::vector<Neighbor>> VectorSVS<T>::Search(
-    absl::string_view query, uint64_t count,
-    cancel::Token& /*cancellation_token*/,
+    absl::string_view query, uint64_t count, cancel::Token& cancellation_token,
     std::unique_ptr<hnswlib::BaseFilterFunctor> filter,
-    std::optional<size_t> ef_runtime, bool /*enable_partial_results*/) {
+    std::optional<size_t> ef_runtime, bool enable_partial_results) {
 #if defined(__linux__) && defined(__x86_64__)
   VMSDK_ASSIGN_OR_RETURN(auto knn,
                          SearchKnn(query, count, filter.get(), ef_runtime));
+  // SVS can't be cancelled mid-search and polls the token too rarely for its
+  // periodic deadline check, so check the deadline now that it has returned.
+  // Without partial results, a timed-out query reports the timeout.
+  if (!enable_partial_results && cancellation_token->IsCancelledNow()) {
+    return absl::CancelledError(query::kTimeoutMsg);
+  }
   return this->CreateReply(knn);
 #else
   (void)query;
   (void)count;
+  (void)cancellation_token;
   (void)filter;
   (void)ef_runtime;
+  (void)enable_partial_results;
   return absl::UnimplementedError(kUnavailableMsg);
 #endif
 }

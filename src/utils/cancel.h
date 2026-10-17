@@ -29,6 +29,10 @@ namespace cancel {
 struct Base {
   virtual ~Base() = default;
   virtual bool IsCancelled() = 0;
+  // Like IsCancelled, but checks the deadline now instead of on every Nth
+  // poll. For callers that poll rarely, e.g. once after a search they can't
+  // interrupt.
+  virtual bool IsCancelledNow() { return IsCancelled(); }
   virtual void Cancel() = 0;
 };
 

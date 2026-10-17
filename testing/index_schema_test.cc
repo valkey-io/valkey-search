@@ -2357,8 +2357,39 @@ void IndexSchemaFriendTest::VerifyVectorIndexConsistency(
             vectors.size());
   EXPECT_EQ(stats.subscription_remove.success_cnt,
             stats.subscription_add.success_cnt);
-  // Test update consistency
-  for (size_t j = 0; j < iterations; ++j) {
+  // Test update consistency. Wave 1 adds every key; wave 2 races updates
+  // against already indexed keys, so every count below is exact or bounded.
+  const uint64_t adds_before_wave1 = stats.subscription_add.success_cnt;
+  const uint64_t modifies_before_wave1 = stats.subscription_modify.success_cnt +
+                                         stats.subscription_modify.skipped_cnt;
+  for (size_t i = 0; i < vectors.size(); ++i) {
+    auto key_interned =
+        StringInternStore::Intern(std::string(*key) + std::to_string(i));
+    auto data = testing_infra::MakeAttributeData(
+        *vector_index, key_interned,
+        absl::string_view(reinterpret_cast<const char *>(vectors[0].data()),
+                          dimensions * sizeof(float)));
+    IndexSchema::MutatedAttributes mutated_attributes;
+    mutated_attributes[attr_id] = std::move(data);
+    index_schema->ProcessMutation(&fake_ctx, mutated_attributes, key_interned,
+                                  false, false);
+  }
+  WaitWorkerTasksAreCompleted(mutations_thread_pool);
+  EXPECT_EQ(stats.subscription_add.success_cnt - adds_before_wave1,
+            vectors.size());
+  EXPECT_EQ(stats.subscription_modify.success_cnt +
+                stats.subscription_modify.skipped_cnt - modifies_before_wave1,
+            0u);
+  for (size_t i = 0; i < vectors.size(); ++i) {
+    auto interned_key =
+        StringInternStore::Intern(std::string(*key) + std::to_string(i));
+    EXPECT_TRUE(vector_index->IsTracked(interned_key));
+  }
+
+  const uint64_t adds_before_wave2 = stats.subscription_add.success_cnt;
+  const uint64_t modifies_before_wave2 = stats.subscription_modify.success_cnt +
+                                         stats.subscription_modify.skipped_cnt;
+  for (size_t j = 1; j < iterations; ++j) {
     for (size_t i = 0; i < vectors.size(); ++i) {
       auto key_interned =
           StringInternStore::Intern(std::string(*key) + std::to_string(i));
@@ -2390,9 +2421,12 @@ void IndexSchemaFriendTest::VerifyVectorIndexConsistency(
   EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 0);
   EXPECT_EQ(stats.subscription_remove.success_cnt + vectors.size(),
             stats.subscription_add.success_cnt);
-  EXPECT_GT(stats.subscription_modify.success_cnt +
-                stats.subscription_modify.skipped_cnt,
-            vectors.size() * 0.1);
+  const uint64_t wave2_modifies = stats.subscription_modify.success_cnt +
+                                  stats.subscription_modify.skipped_cnt -
+                                  modifies_before_wave2;
+  EXPECT_EQ(stats.subscription_add.success_cnt, adds_before_wave2);
+  EXPECT_GE(wave2_modifies, vectors.size());
+  EXPECT_LE(wave2_modifies, vectors.size() * iterations);
   for (size_t i = 0; i < vectors.size(); ++i) {
     auto interned_key =
         StringInternStore::Intern(std::string(*key) + std::to_string(i));

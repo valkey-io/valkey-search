@@ -157,9 +157,6 @@ if(UNIX AND NOT APPLE
     list(REMOVE_ITEM _svs_c_api_opts -fopenmp)
     set_target_properties(svs_c_api_static PROPERTIES
         COMPILE_OPTIONS "${_svs_c_api_opts}")
-    # Interim; see the header.
-    target_compile_options(svs_c_api_static PRIVATE
-        "SHELL:-include ${CMAKE_CURRENT_LIST_DIR}/svs_shim/svs_omp_shim.h")
     target_link_libraries(svs_c_api_static PRIVATE
         svs::svs
         svs_compile_options

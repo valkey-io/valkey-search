@@ -1127,6 +1127,44 @@ TEST_F(VectorSVSTest, RestoredIndexMutatesUnderTheExclusiveLock) {
   ValkeyModule_FreeString(nullptr, records[0]);
 }
 
+// -- Timeouts -----------------------------------------------------------------
+
+// A token whose periodic poll never fires, but whose immediate check reports
+// the deadline as passed: what an SVS query sees when it times out between
+// the token's periodic deadline checks.
+class DeadlinePassedToken : public cancel::Base {
+ public:
+  bool IsCancelled() override { return false; }
+  bool IsCancelledNow() override { return true; }
+  void Cancel() override {}
+};
+
+TEST_F(VectorSVSTest, SearchChecksDeadlineAfterReturning) {
+  auto index = VectorSVS<float>::Create(
+      CreateSVSVectorIndexProto(kDimensions, data_model::DISTANCE_METRIC_L2,
+                                data_model::SVS_COMPRESSION_NONE),
+      attribute_identifier, attribute_data_type, 0);
+  VMSDK_EXPECT_OK(index);
+  auto vectors = DeterministicallyGenerateVectors(5, kDimensions, 1.0);
+  for (size_t i = 0; i < vectors.size(); ++i) {
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(**index, IndexToKey(i),
+                                                   VectorToStr(vectors[i])));
+  }
+  cancel::Token token = std::make_shared<DeadlinePassedToken>();
+  const auto query = VectorToStr(vectors[0]);
+
+  auto without_partial =
+      (*index)->Search(query, 3, token, nullptr, std::nullopt,
+                       /*enable_partial_results=*/false);
+  EXPECT_TRUE(absl::IsCancelled(without_partial.status()))
+      << without_partial.status();
+
+  auto with_partial = (*index)->Search(query, 3, token, nullptr, std::nullopt,
+                                       /*enable_partial_results=*/true);
+  VMSDK_EXPECT_OK(with_partial);
+  EXPECT_EQ(with_partial->size(), 3u);
+}
+
 // -- IP / COSINE scores -------------------------------------------------------
 
 // SVS returns dot product as a similarity; __v_score must be the distance

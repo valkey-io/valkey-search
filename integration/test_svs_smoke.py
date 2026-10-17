@@ -540,6 +540,43 @@ class TestSVSVamanaDebugMode(ValkeySearchTestCaseDebugMode):
     """Tests that need debug-mode: changing the planner threshold ratio and
     reading developer INFO fields."""
 
+    def test_search_timeout_without_partial_results(self):
+        """A timed-out SVS search reports the timeout when partial results
+        are disabled, and returns a (possibly truncated) reply when they are
+        enabled, as HNSW and FLAT do. SVS polls the token only a few times
+        per query, so this runs at the default poll frequency."""
+        client: Valkey = self.server.get_new_client()
+        client.execute_command(
+            "FT.CREATE", "to_idx", "PREFIX", "1", "t:",
+            "SCHEMA", "v", "VECTOR", "SVS_VAMANA",
+            "6", "TYPE", "FLOAT32", "DIM", str(DIM), "DISTANCE_METRIC", "L2",
+        )
+        for i in range(20):
+            client.hset(f"t:{i}", mapping={"v": _fp32([float(i), 0, 0, 0])})
+        waiters.wait_for_equal(
+            lambda: _v_index(client, "to_idx")["size"], 20, timeout=5,
+        )
+
+        def knn(partial):
+            return client.execute_command(
+                "FT.SEARCH", "to_idx", "*=>[KNN 5 @v $q]",
+                "PARAMS", "2", "q", _fp32([0.0, 0.0, 0.0, 0.0]),
+                "TIMEOUT", "10", "SOMESHARDS" if partial else "ALLSHARDS",
+                "DIALECT", "2",
+            )
+
+        assert knn(partial=False)[0] == 5
+        client.execute_command(
+            "FT._DEBUG", "CONTROLLED_VARIABLE", "SET", "ForceTimeout", "yes")
+        try:
+            with pytest.raises(Exception) as exc_info:
+                knn(partial=False)
+            assert "cancelled due to timeout" in str(exc_info.value)
+            assert isinstance(knn(partial=True), list)
+        finally:
+            client.execute_command(
+                "FT._DEBUG", "CONTROLLED_VARIABLE", "SET", "ForceTimeout", "no")
+
     def test_nan_vector_counts_as_skipped(self):
         """A vector with a non-finite component is skipped as invalid data,
         like a wrong-size vector, rather than counted as an indexing

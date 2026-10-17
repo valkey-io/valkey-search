@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package valkey_search.data_model;
+
+import "src/index_schema.proto";
+
+message SVSIndexHeader {
+  // Format version of this RDB header. Mismatch with expectations triggers
+  // InvalidArgumentError on load and prevents partial loading.
+  uint32 format_version = 1;
+
+  // SVS library version that produced the payload. A mismatch hard-fails the
+  // load, because the stream format is still in development.
+  uint32 svs_version = 2;
+
+  // False when the index held no vectors at save time. Load then skips the
+  // stream entirely and leaves the index to bootstrap on the first write.
+  bool has_index = 3;
+
+  // Element type T (storage type after compression). Consistency check on
+  // the proto; storage type derives from compression, not this field.
+  VectorDataType element_type = 4;
+
+  // Vector dimensionality. Must match the ingest schema exactly.
+  uint32 dimensionality = 5;
+
+  // Echo of the SVS build configuration. Mismatch (especially in compression)
+  // with expectations triggers InvalidArgumentError on load.
+  SVSVamanaAlgorithm build_config = 6;
+}

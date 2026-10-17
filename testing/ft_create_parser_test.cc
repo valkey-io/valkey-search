@@ -1000,6 +1000,103 @@ INSTANTIATE_TEST_SUITE_P(
                  "greater than 0 and cannot exceed 1000000.",
          },
          {
+             .test_name = "svs_alpha_negative_nan",
+             .success = false,
+             .command_str = "idx1 SChema hash_field1 vector SVS_VAMANA 8 "
+                            "TYPE FLOAT32 DIM 3 DISTANCE_METRIC L2 ALPHA -nan",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: ALPHA must be "
+                 ">= 1.0 for DISTANCE_METRIC L2.",
+         },
+         {
+             .test_name = "svs_alpha_inf",
+             .success = false,
+             .command_str = "idx1 SChema hash_field1 vector SVS_VAMANA 8 "
+                            "TYPE FLOAT32 DIM 3 DISTANCE_METRIC L2 ALPHA inf",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: ALPHA must be "
+                 ">= 1.0 for DISTANCE_METRIC L2.",
+         },
+         {
+             .test_name = "svs_alpha_valid",
+             .success = true,
+             .command_str = "idx1 SChema hash_field1 vector SVS_VAMANA 8 "
+                            "TYPE FLOAT32 DIM 3 DISTANCE_METRIC L2 ALPHA 1.2",
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .attributes = {{
+                              .identifier = "hash_field1",
+                              .attribute_alias = "hash_field1",
+                              .indexer_type = indexes::IndexerType::kSVS,
+                          }}},
+         },
+         {
+             .test_name = "svs_metric_ip_alpha_valid",
+             .success = true,
+             .command_str = "idx1 SChema hash_field1 vector SVS_VAMANA 8 "
+                            "TYPE FLOAT32 DIM 3 DISTANCE_METRIC IP ALPHA 0.95",
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .attributes = {{
+                              .identifier = "hash_field1",
+                              .attribute_alias = "hash_field1",
+                              .indexer_type = indexes::IndexerType::kSVS,
+                          }}},
+         },
+         {
+             .test_name = "svs_metric_cosine_alpha_omitted",
+             .success = true,
+             .command_str = "idx1 SChema hash_field1 vector SVS_VAMANA 6 "
+                            "TYPE FLOAT32 DIM 3 DISTANCE_METRIC COSINE",
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .attributes = {{
+                              .identifier = "hash_field1",
+                              .attribute_alias = "hash_field1",
+                              .indexer_type = indexes::IndexerType::kSVS,
+                          }}},
+         },
+         {
+             .test_name = "svs_metric_ip_alpha_above_one",
+             .success = false,
+             .command_str = "idx1 SChema hash_field1 vector SVS_VAMANA 8 "
+                            "TYPE FLOAT32 DIM 3 DISTANCE_METRIC IP ALPHA 1.2",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: ALPHA must be "
+                 "in (0, 1.0] for DISTANCE_METRIC IP and COSINE.",
+         },
+         {
+             .test_name = "svs_metric_cosine_alpha_zero",
+             .success = false,
+             .command_str = "idx1 SChema hash_field1 vector SVS_VAMANA 8 "
+                            "TYPE FLOAT32 DIM 3 DISTANCE_METRIC COSINE ALPHA 0",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: ALPHA must be "
+                 "in (0, 1.0] for DISTANCE_METRIC IP and COSINE.",
+         },
+         {
+             .test_name = "svs_metric_cosine_alpha_inf",
+             .success = false,
+             .command_str = "idx1 SChema hash_field1 vector SVS_VAMANA 8 "
+                            "TYPE FLOAT32 DIM 3 DISTANCE_METRIC COSINE ALPHA inf",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: ALPHA must be "
+                 "in (0, 1.0] for DISTANCE_METRIC IP and COSINE.",
+         },
+         {
+             .test_name = "svs_alpha_omitted",
+             .success = true,
+             .command_str = "idx1 SChema hash_field1 vector SVS_VAMANA 6 "
+                            "TYPE FLOAT32 DIM 3 DISTANCE_METRIC L2",
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .attributes = {{
+                              .identifier = "hash_field1",
+                              .attribute_alias = "hash_field1",
+                              .indexer_type = indexes::IndexerType::kSVS,
+                          }}},
+         },
+         {
              .test_name = "invalid_m_negative",
              .success = false,
              .command_str = "idx1 SChema hash_field1 as "

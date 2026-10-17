@@ -340,6 +340,8 @@ const absl::NoDestructor<absl::flat_hash_map<
     kVectorAlgoByStr({
         {"HNSW", data_model::VectorIndex::AlgorithmCase::kHnswAlgorithm},
         {"FLAT", data_model::VectorIndex::AlgorithmCase::kFlatAlgorithm},
+        {"SVS_VAMANA",
+         data_model::VectorIndex::AlgorithmCase::kSvsVamanaAlgorithm},
     });
 
 const absl::NoDestructor<
@@ -522,6 +524,11 @@ class VectorBase : public IndexBase {
   bool IsValidSizeVector(absl::string_view record) const {
     return IsValidSizeVector(record.size());
   }
+  // Lets an index reject vector contents it can't store, such as non-finite
+  // components. Rejected input is treated like a wrong-size vector.
+  virtual bool IsValidVectorData(absl::string_view /*record*/) const {
+    return true;
+  }
   // Distance between `query` and the vector in `record`, where `record` is the
   // raw bytes just read back from the database rather than anything the index
   // holds.
@@ -651,6 +658,13 @@ class VectorBase : public IndexBase {
       RDBChunkOutputStream chunked_out) const = 0;
 
   virtual VectorRecord &GetVectorLockFree(uint64_t internal_id) const = 0;
+
+  // During LoadTrackedKeys, allow an index implementation to create missing
+  // labels instead of crashing on the CHECK in GetVectorLockFree.
+  virtual VectorRecord &GetOrCreateVectorLockFree(uint64_t internal_id) {
+    return GetVectorLockFree(internal_id);
+  }
+
   virtual VectorRecord &GetVector(uint64_t internal_id) const = 0;
 
   int db_num_;

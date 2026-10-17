@@ -1,6 +1,10 @@
 valkey_search_create_proto_library("src/index_schema.proto"
                                    "index_schema_cc_proto")
 
+valkey_search_create_proto_library("src/indexes/svs_index.proto"
+                                   "svs_index_cc_proto")
+target_link_libraries(svs_index_cc_proto PUBLIC index_schema_cc_proto)
+
 set(SRCS_SCORING
     ${CMAKE_CURRENT_LIST_DIR}/scoring/scorer.h
     ${CMAKE_CURRENT_LIST_DIR}/scoring/scorer.cc
@@ -14,6 +18,7 @@ target_link_libraries(scoring PUBLIC vmsdklib)
 add_library(index_base INTERFACE ${SRCS_INDEX_BASE})
 target_include_directories(index_base INTERFACE ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(index_base INTERFACE index_schema_cc_proto)
+target_link_libraries(index_base INTERFACE svs_index_cc_proto)
 target_link_libraries(index_base INTERFACE rdb_serialization)
 target_link_libraries(index_base INTERFACE string_interning)
 target_link_libraries(index_base INTERFACE vmsdklib)
@@ -102,6 +107,63 @@ target_link_libraries(tag PUBLIC valkey_module)
 target_link_libraries(tag PUBLIC vmsdklib)
 target_link_libraries(tag PUBLIC ${INDEX_SCHEMA_PROTO_LIB})
 target_link_libraries(tag PUBLIC rax_lib)
+
+set(SRCS_VECTOR_SVS ${CMAKE_CURRENT_LIST_DIR}/vector_svs.cc
+                    ${CMAKE_CURRENT_LIST_DIR}/vector_svs.h)
+
+valkey_search_add_static_library(vector_svs "${SRCS_VECTOR_SVS}")
+target_include_directories(vector_svs PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(vector_svs PUBLIC index_base)
+target_link_libraries(vector_svs PUBLIC vector_base)
+target_link_libraries(vector_svs PUBLIC vector_type)
+target_link_libraries(vector_svs PUBLIC attribute_data_type)
+target_link_libraries(vector_svs PUBLIC metrics)
+target_link_libraries(vector_svs PUBLIC rdb_serialization)
+target_link_libraries(vector_svs PUBLIC string_interning)
+target_link_libraries(vector_svs PUBLIC hnswlib_vmsdk)
+target_link_libraries(vector_svs PUBLIC vmsdklib)
+target_link_libraries(vector_svs PUBLIC valkey_module)
+
+# The SVS submodule (third_party/svs) is compiled on x86_64 Linux only.
+# The SVS C API implementation sources compile with SVS's own strict
+# warnings-as-errors flags (via svs_compile_options), which would cascade
+# to vector_svs.cc's compile line if the two were mixed. Keep them in a
+# dedicated static library so those flags stay scoped, and have vector_svs
+# link it. On other platforms vector_svs.cc compiles as a stub whose
+# factories return absl::UnimplementedError; arch is detected in the
+# source via __linux__ && __x86_64__ rather than a project flag.
+#
+# Built without OpenMP: threading comes from the module through the C API's
+# threadpool vtable, so libgomp must not enter DT_NEEDED (ci/check_svs_link.sh).
+if(UNIX AND NOT APPLE
+   AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+    set(SVS_C_API_DIR "${CMAKE_SOURCE_DIR}/third_party/svs/bindings/c")
+    set(SRCS_SVS_C_API
+        ${SVS_C_API_DIR}/src/error.cpp
+        ${SVS_C_API_DIR}/src/svs_c.cpp
+        ${SVS_C_API_DIR}/src/dispatcher_vamana.cpp
+        ${SVS_C_API_DIR}/src/dispatcher_dynamic_vamana.cpp
+        ${SVS_C_API_DIR}/src/index_builder.cpp
+        ${SVS_C_API_DIR}/src/index_vamana.cpp
+        ${SVS_C_API_DIR}/src/leanvec_training_data.cpp
+        ${SVS_C_API_DIR}/src/data_builder.cpp)
+    valkey_search_add_static_library(svs_c_api_static "${SRCS_SVS_C_API}")
+    target_include_directories(svs_c_api_static PUBLIC
+        ${SVS_C_API_DIR}/include
+        ${CMAKE_BINARY_DIR}/third_party/svs-c-api-build/include)
+    target_include_directories(svs_c_api_static PRIVATE ${SVS_C_API_DIR}/src)
+    target_compile_options(svs_c_api_static PRIVATE -fvisibility=hidden)
+    get_target_property(_svs_c_api_opts svs_c_api_static COMPILE_OPTIONS)
+    list(REMOVE_ITEM _svs_c_api_opts -fopenmp)
+    set_target_properties(svs_c_api_static PROPERTIES
+        COMPILE_OPTIONS "${_svs_c_api_opts}")
+    target_link_libraries(svs_c_api_static PRIVATE
+        svs::svs
+        svs_compile_options
+        svs_x86_options_base)
+
+    target_link_libraries(vector_svs PRIVATE svs_c_api_static)
+endif()
 
 set(SRCS_VECTOR_FLAT ${CMAKE_CURRENT_LIST_DIR}/vector_flat.cc
                      ${CMAKE_CURRENT_LIST_DIR}/vector_flat.h)

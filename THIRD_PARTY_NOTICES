@@ -44,6 +44,52 @@ Details: Per-language default punctuation character sets for full-text search to
   Languages: French, German, Spanish, Italian, Portuguese, Russian, Swedish,
   Turkish, Dutch, Indonesian, Arabic.
 
+Package: Intel Scalable Vector Search (SVS)
+License: Apache License 2.0
+License URL: https://spdx.org/licenses/Apache-2.0.html
+License File: third_party/svs/LICENSE
+Source URL: https://github.com/intel/ScalableVectorSearch
+Details: Git submodule, compiled into the module on x86_64 Linux. Provides the Vamana graph index
+  behind the SVS_VAMANA vector algorithm, through its C API.
+
+The following third-party software is downloaded by the SVS build (third_party/svs/cmake/*.cmake)
+at configure time and compiled into the module on x86_64 Linux:
+
+Package: EVE
+Version: v2023.02.15
+License: Boost Software License 1.0
+License URL: https://spdx.org/licenses/BSL-1.0.html
+Source URL: https://github.com/jfalcou/eve
+Details: SIMD library used by SVS.
+
+Package: {fmt}
+Version: 12.1.0
+License: MIT License (with an optional exception for embedded object code)
+License URL: https://spdx.org/licenses/MIT.html
+Source URL: https://github.com/fmtlib/fmt
+Details: String formatting used by SVS.
+
+Package: spdlog
+Version: v1.15.3
+License: MIT License
+License URL: https://spdx.org/licenses/MIT.html
+Source URL: https://github.com/gabime/spdlog
+Details: Logging used by SVS.
+
+Package: toml++
+Version: v3.3.0
+License: MIT License
+License URL: https://spdx.org/licenses/MIT.html
+Source URL: https://github.com/marzer/tomlplusplus
+Details: TOML parsing used by SVS for its saved index configuration.
+
+Package: robin-map
+Version: v1.4.0
+License: MIT License
+License URL: https://spdx.org/licenses/MIT.html
+Source URL: https://github.com/Tessil/robin-map
+Details: Hash map used by SVS.
+
 The following third-party data is embedded in source files outside of third_party/:
 
 Package: Apache Lucene (Stop Word Lists)

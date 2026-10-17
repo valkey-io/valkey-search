@@ -3265,7 +3265,7 @@ TEST_F(IndexSchemaScoreFieldTest, FallsBackToDefaultScoreWhenFieldMissing) {
       index_schema->GetDocumentScore(BorrowedInternedStringPtr(key)), 0.5f);
 }
 
-enum class IndexAttributeType { kText, kVector };
+enum class IndexAttributeType { kText, kVector, kSvs };
 
 struct GetMinVersionTestCase {
   std::string test_name;
@@ -3299,6 +3299,12 @@ TEST_P(GetMinVersionTest, ReturnsExpectedVersion) {
       vector_index->set_dimension_count(3);
       vector_index->set_initial_cap(100);
       vector_index->mutable_hnsw_algorithm();
+      break;
+    }
+    case IndexAttributeType::kSvs: {
+      auto *vector_index = attr->mutable_index()->mutable_vector_index();
+      vector_index->set_dimension_count(3);
+      vector_index->mutable_svs_vamana_algorithm();
       break;
     }
   }
@@ -3344,6 +3350,14 @@ INSTANTIATE_TEST_SUITE_P(GetMinVersionTests, GetMinVersionTest,
                                  .attribute_type = IndexAttributeType::kVector,
                                  .db_num = 0,
                                  .expected_version = kRelease10,
+                             },
+                             {
+                                 .test_name = "SvsVamanaVectorIndex",
+                                 .index_name = "svs_idx",
+                                 .language = data_model::LANGUAGE_ENGLISH,
+                                 .attribute_type = IndexAttributeType::kSvs,
+                                 .db_num = 0,
+                                 .expected_version = kRelease13,
                              },
                              {
                                  .test_name = "NonZeroDbNum",

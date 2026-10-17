@@ -124,6 +124,8 @@ valkey-search uses **CMake** for its build system. To simplify, a build script i
 ./build.sh
 ```
 
+On x86_64 Linux the build includes the `SVS_VAMANA` vector algorithm, compiled from the `third_party/svs` git submodule. `build.sh` initializes the submodule in a git checkout. GitHub's source archives don't include submodules, so build from a clone (or run `git submodule update --init third_party/svs` in one). The first configure also downloads SVS's dependencies (eve, fmt, spdlog, toml++, robin-map), so it needs network access.
+
 To view the available arguments, use:
 
 ```sh

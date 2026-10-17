@@ -74,9 +74,12 @@ def _module_external_memory(client: Valkey) -> int:
     passes through ValkeyModule_IncrExternalMemory lands here."""
     info = client.info("debug")
     if "used_memory_module_external" not in info:
-        raise AssertionError(
+        # Before Valkey 9.2 the module allocates SVS memory through its
+        # malloc wrappers instead: still accounted, but no huge pages and no
+        # external counter to check.
+        pytest.skip(
             "used_memory_module_external not present in INFO debug; "
-            "this Valkey build predates PR #4128"
+            "this Valkey build predates valkey-io/valkey#4128"
         )
     return int(info["used_memory_module_external"])
 

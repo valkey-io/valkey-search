@@ -524,6 +524,11 @@ class VectorBase : public IndexBase {
   bool IsValidSizeVector(absl::string_view record) const {
     return IsValidSizeVector(record.size());
   }
+  // Lets an index reject vector contents it can't store, such as non-finite
+  // components. Rejected input is treated like a wrong-size vector.
+  virtual bool IsValidVectorData(absl::string_view /*record*/) const {
+    return true;
+  }
   // Distance between `query` and the vector in `record`, where `record` is the
   // raw bytes just read back from the database rather than anything the index
   // holds.

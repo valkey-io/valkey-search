@@ -710,6 +710,18 @@ absl::StatusOr<std::shared_ptr<VectorSVS<T>>> VectorSVS<T>::LoadFromRDB(
 }
 
 template <typename T>
+bool VectorSVS<T>::IsValidVectorData(absl::string_view record) const {
+#if defined(__linux__) && defined(__x86_64__)
+  return CheckFiniteVector<T>(reinterpret_cast<const T*>(record.data()),
+                              record.size() / sizeof(T))
+      .ok();
+#else
+  (void)record;
+  return true;
+#endif
+}
+
+template <typename T>
 size_t VectorSVS<T>::GetCapacity() const {
   return 0;
 }

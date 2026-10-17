@@ -105,6 +105,9 @@ class VectorSVS : public VectorType<T> {
       std::optional<size_t> ef_runtime = std::nullopt,
       bool enable_partial_results = false) override
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  // Rejects vectors with non-finite components: SVS's graph search stalls on
+  // NaN distances.
+  bool IsValidVectorData(absl::string_view record) const override;
   absl::StatusOr<std::vector<Neighbor>> SearchRange(
       absl::string_view query, float radius, cancel::Token &cancellation_token,
       std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr) override

@@ -156,8 +156,9 @@ struct SearchPartitionResultsTracker {
                                              vmsdk::MakeUniqueValkeyString(
                                                  attribute_content.content())));
       }
-      // A shard sends distance_fp64 and score_fp64 instead of the float
-      // fields only when the value does not fit in a float.
+      // A shard sends distance_fp64 and score_fp64 only when the value does
+      // not fit in a float. An unset oneof reads as a float 0, which is how a
+      // shard predating these fields sends a zero distance.
       indexes::Neighbor neighbor{
           StringInternStore::Intern(neighbor_entry->key()),
           neighbor_entry->has_distance_fp64() ? neighbor_entry->distance_fp64()

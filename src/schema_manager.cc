@@ -773,7 +773,10 @@ void SchemaManager::PerformBackfill(ValkeyModuleCtx *ctx, uint32_t batch_size) {
   uint32_t remaining_count = batch_size;
   for (const auto &[db_num, inner_map] : db_to_index_schemas_) {
     for (const auto &[name, schema] : inner_map) {
-      remaining_count -= schema->PerformBackfill(ctx, remaining_count);
+      uint32_t scanned = schema->PerformBackfill(ctx, remaining_count);
+      // A schema can overshoot its budget: each Scan call returns a whole
+      // bucket. Clamp so remaining_count does not wrap around.
+      remaining_count -= std::min(scanned, remaining_count);
     }
   }
 }

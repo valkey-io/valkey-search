@@ -443,9 +443,10 @@ TEST_F(VectorSVSTest, SaveAndLoadSvsWithRecallAndMultipleChunks) {
 
 // -- Header validation --------------------------------------------------------
 //
-// LoadFromRDB hard-fails on five header/proto disagreements (OVERVIEW.md
-// "Round 2"): format_version, svs_version, build_config, dimensionality, and
-// element_type. Each case below builds one header that is otherwise valid
+// LoadFromRDB hard-fails on four header/proto disagreements: format_version,
+// build_config, dimensionality, and element_type. (An svs_version mismatch
+// rebuilds from the keyspace instead; see RebuildsFromKeyspaceOnSvsVersion-
+// Mismatch.) Each case below builds one header that is otherwise valid
 // and corrupts exactly one field, so a case can only pass by tripping the
 // gate it names, not some earlier one.
 
@@ -483,11 +484,6 @@ const HeaderGateCase kHeaderGateCases[] = {
        h.set_format_version(0xFFFFFFFFu);
      },
      "format_version mismatch"},
-    {"SvsVersion",
-     [](data_model::SVSIndexHeader &h) {
-       h.set_svs_version(h.svs_version() + 1);
-     },
-     "svs_version mismatch"},
     {"BuildConfig",
      [](data_model::SVSIndexHeader &h) {
        // design.md "Header": compression is the one build-config field that
@@ -1125,6 +1121,65 @@ TEST_F(VectorSVSTest, RestoredIndexMutatesUnderTheExclusiveLock) {
       << "a restored index must wait for the exclusive lock";
   EXPECT_EQ(AsBase(*restored)->GetLabelCount(), 2u);
   ValkeyModule_FreeString(nullptr, records[0]);
+}
+
+// -- SVS version mismatch on load --------------------------------------------
+
+// A payload written by another SVS version is skipped, and the index is
+// rebuilt from the vectors LoadTrackedKeys reads back from the keyspace.
+TEST_F(VectorSVSTest, RebuildsFromKeyspaceOnSvsVersionMismatch) {
+  const size_t kNumVectors = 20;
+  auto vectors =
+      DeterministicallyGenerateVectors(kNumVectors, kDimensions, 5.0);
+  std::vector<ValkeyModuleString *> records(kNumVectors);
+  for (size_t i = 0; i < kNumVectors; ++i) {
+    records[i] = ValkeyModule_CreateString(
+        nullptr, (const char *)vectors[i].data(), kDimensions * sizeof(float));
+  }
+  auto proto =
+      CreateSVSVectorIndexProto(kDimensions, data_model::DISTANCE_METRIC_L2,
+                                data_model::SVS_COMPRESSION_NONE);
+  auto index = VectorSVS<float>::Create(proto, attribute_identifier,
+                                        attribute_data_type, 0);
+  VMSDK_EXPECT_OK(index);
+  for (size_t i = 0; i < kNumVectors; ++i) {
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(**index, IndexToKey(i),
+                                                   VectorToStr(vectors[i])));
+  }
+
+  // Header from another SVS version, then a payload this build must skip.
+  FakeSafeRDB rdb;
+  data_model::SVSIndexHeader header = ValidHeaderFor(proto);
+  header.set_svs_version(header.svs_version() + 1);
+  header.set_has_index(true);
+  {
+    RDBChunkOutputStream out(&rdb);
+    VMSDK_EXPECT_OK(out.SaveString(header.SerializeAsString()));
+    VMSDK_EXPECT_OK(out.SaveString("payload from another SVS version"));
+    VMSDK_EXPECT_OK(out.Close());
+  }
+  VMSDK_EXPECT_OK((*index)->SaveTrackedKeys(RDBChunkOutputStream(&rdb)));
+  ExpectHashGetsForRecords(records);
+
+  auto loaded = VectorSVS<float>::LoadFromRDB(
+      &fake_ctx_, &hash_attribute_data_type_, proto, "attribute_identifier_2",
+      SupplementalContentChunkIter(&rdb), 0);
+  VMSDK_EXPECT_OK(loaded);
+  VMSDK_EXPECT_OK(
+      (*loaded)->LoadTrackedKeys(&fake_ctx_, &hash_attribute_data_type_,
+                                 SupplementalContentChunkIter(&rdb)));
+
+  EXPECT_EQ(AsBase(*loaded)->GetLabelCount(), kNumVectors);
+  for (size_t i : {size_t{0}, kNumVectors / 2, kNumVectors - 1}) {
+    auto result = (*loaded)->Search(VectorToStr(vectors[i]), 1, CancelNever());
+    VMSDK_EXPECT_OK(result);
+    ASSERT_EQ(result->size(), 1u);
+    EXPECT_EQ((*result)[0].external_id, IndexToKey(i));
+  }
+
+  for (auto *record : records) {
+    ValkeyModule_FreeString(nullptr, record);
+  }
 }
 
 // -- Timeouts -----------------------------------------------------------------

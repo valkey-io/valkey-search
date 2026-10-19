@@ -140,6 +140,10 @@ class VectorSVS : public VectorType<T> {
   std::optional<hnswlib::tableint> GetAlgoIdLockFree(
       uint64_t internal_id) const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
   uint64_t GetMaxLoadedLabel() const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  // Rebuilds the SVS index from the tracked vectors when LoadFromRDB skipped
+  // a payload written by a different SVS version.
+  absl::Status OnTrackedKeysLoaded() override
+      ABSL_LOCKS_EXCLUDED(resize_mutex_, label_mutex_);
   size_t GetLabelCount() const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
  private:
@@ -178,6 +182,9 @@ class VectorSVS : public VectorType<T> {
   // stay serialized, as before. Set once in LoadFromRDB before the instance is
   // published; read on every mutation.
   std::atomic<bool> mutations_exclusive_{false};
+  // Set by LoadFromRDB when the saved SVS payload was skipped; consumed by
+  // OnTrackedKeysLoaded on the main thread before the index is published.
+  bool rebuild_from_keyspace_{false};
   SVSBuildConfig build_config_;
   mutable absl::Mutex label_mutex_ ABSL_ACQUIRED_AFTER(resize_mutex_);
   mutable absl::node_hash_map<uint64_t, VectorRecord> label_to_record_

@@ -177,7 +177,10 @@ class IndexSchema : public KeyspaceEventSubscription,
                         std::shared_ptr<indexes::IndexBase> index,
                         AttributeOptions options = {});
 
-  void RespondWithInfo(ValkeyModuleCtx *ctx) const;
+  // `aliases` (owned by SchemaManager) is emitted in the FT.INFO reply.
+  // IndexSchema does not store aliases itself.
+  void RespondWithInfo(ValkeyModuleCtx *ctx,
+                       std::vector<std::string> aliases = {}) const;
 
   inline const AttributeDataType &GetAttributeDataType() const override {
     return *attribute_data_type_;
@@ -281,7 +284,9 @@ class IndexSchema : public KeyspaceEventSubscription,
   int GetTextAttributeCount() const;
   int GetTextItemCount() const;
 
-  virtual absl::Status RDBSave(SafeRDB *rdb) const;
+  virtual absl::Status RDBSave(
+      SafeRDB *rdb,
+      std::vector<data_model::IndexSchema::Alias> aliases = {}) const;
   absl::Status SaveIndexExtension(RDBChunkOutputStream output) const;
   absl::Status LoadIndexExtension(ValkeyModuleCtx *ctx,
                                   RDBChunkInputStream input);
@@ -304,7 +309,14 @@ class IndexSchema : public KeyspaceEventSubscription,
   void ProcessSingleMutationAsync(ValkeyModuleCtx *ctx, bool from_backfill,
                                   const Key &key,
                                   vmsdk::StopWatch *delay_capturer);
-  std::unique_ptr<data_model::IndexSchema> ToProto() const;
+  // Serializes the schema to a proto. `aliases` (owned by SchemaManager's
+  // Forward_Alias_Map) is injected into the proto's aliases field so that
+  // RDB serialization persists aliases without IndexSchema having to store
+  // them. IndexSchema itself is unaware of aliases; SchemaManager is the
+  // single source of truth.
+  std::unique_ptr<data_model::IndexSchema> ToProto(
+      std::vector<data_model::IndexSchema::Alias> aliases = {}) const;
+
   using MutatedAttributes = absl::flat_hash_map<std::string, AttributeData>;
   struct DocumentMutation {
     using AttributeData = valkey_search::AttributeData;

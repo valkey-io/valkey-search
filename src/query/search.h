@@ -57,11 +57,11 @@ struct SortByParameter {
   SortOrder order{SortOrder::kAscending};
 };
 
-// The attribute_contents key a SORTBY attribute is read under, resolved once
-// per query on the node that sorts. Rows merged from other shards carry the
-// same keys. Issue #1440.
+// Stores both original hash field and alias names for target field specified by
+// SORTBY
 struct SortByKey {
   SortByKey(const IndexSchema &schema, absl::string_view sortby_alias);
+  // Legacy needed as explained below in Find()
   static SortByKey Legacy(absl::string_view sortby_alias);
 
   std::string identifier;
@@ -70,10 +70,12 @@ struct SortByKey {
 
   RecordsMap::const_iterator Find(const RecordsMap &contents) const {
     auto it = contents.find(identifier);
-    // Not a JSON/HASH switch: JSON fetch paths disagree on the key (the
-    // full-content path renames the entry to the alias, the others keep the
-    // path), so JSON tries both. HASH never tries the alias: an undeclared
-    // hash field may carry that name.
+    // JSON objects are lookedup by alias instead of identifier.
+    // Notice alias vs. identifier lookup are not mutually exclusive purely
+    // based on condition is_json. This is because due to issue #1597 older
+    // version of vk search can return json path inconsistently, sometimes alias
+    // sometimes field name. As such this guard must remain until support for
+    // search V1.x is completely dropped.
     if (it == contents.end() && is_json) {
       it = contents.find(alias);
     }

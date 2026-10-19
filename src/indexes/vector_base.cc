@@ -514,7 +514,7 @@ absl::Status VectorBase::LoadTrackedKeys(
     save_vector = std::move(vector_record_with_size.vector_record);
   }
   inc_id_ = GetMaxLoadedLabel() + 1;
-  return absl::OkStatus();
+  return OnTrackedKeysLoaded();
 }
 
 std::unique_ptr<data_model::Index> VectorBase::ToProto() const {

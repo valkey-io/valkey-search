@@ -490,6 +490,10 @@ class VectorBase : public IndexBase {
   }
   bool IsVectorIndex() const override { return true; }
   virtual uint64_t GetMaxLoadedLabel() const { return 0; }
+  // Called at the end of LoadTrackedKeys, once every tracked key's vector has
+  // been read back from the keyspace. Lets an index that skipped its saved
+  // payload rebuild from those vectors.
+  virtual absl::Status OnTrackedKeysLoaded() { return absl::OkStatus(); }
   virtual size_t GetLabelCount() const { return 0; }
   FixedSizeAllocator *GetVectorAllocator() const {
     return vector_allocator_.get();

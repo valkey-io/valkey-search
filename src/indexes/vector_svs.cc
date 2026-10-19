@@ -37,6 +37,7 @@
 #include "src/valkey_search_options.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/debug.h"
+#include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -612,14 +613,12 @@ absl::StatusOr<std::shared_ptr<VectorSVS<T>>> VectorSVS<T>::LoadFromRDB(
           "SVS_VAMANA RDB header format_version mismatch: expected ",
           kSvsHeaderFormatVersion, ", got ", header.format_version()));
     }
-    uint32_t current_svs_version = svs_get_version();
-    if (header.svs_version() != current_svs_version) {
-      return absl::InvalidArgumentError(absl::StrCat(
-          "SVS_VAMANA RDB svs_version mismatch: index was saved with SVS "
-          "version ",
-          header.svs_version(), ", this build is SVS version ",
-          current_svs_version));
-    }
+    // A payload written by a different SVS version isn't guaranteed to load,
+    // so it's skipped and the index is rebuilt from the keyspace once the
+    // tracked keys are loaded (OnTrackedKeysLoaded).
+    const uint32_t current_svs_version = svs_get_version();
+    const bool svs_version_mismatch =
+        header.svs_version() != current_svs_version;
 
     if (header.dimensionality() != vector_index_proto.dimension_count()) {
       return absl::InvalidArgumentError(absl::StrCat(
@@ -640,6 +639,15 @@ absl::StatusOr<std::shared_ptr<VectorSVS<T>>> VectorSVS<T>::LoadFromRDB(
       return absl::InvalidArgumentError(absl::StrCat(
           "SVS_VAMANA RDB header element_type mismatch: expected ",
           instance->GetVectorDataType(), ", got ", header.element_type()));
+    }
+    if (svs_version_mismatch) {
+      VMSDK_LOG(WARNING, nullptr)
+          << "SVS_VAMANA index " << attribute_identifier
+          << " was saved with SVS version " << header.svs_version()
+          << "; this build is SVS version " << current_svs_version
+          << ". Rebuilding it from the keyspace.";
+      instance->rebuild_from_keyspace_ = header.has_index();
+      return instance;
     }
     if (!header.has_index()) {
       // Handle-less empty index (design.md "Empty index"): svs_index_ stays
@@ -1180,6 +1188,36 @@ std::optional<hnswlib::tableint> VectorSVS<T>::GetAlgoIdLockFree(
   // nullopt so no caller acts on a synthesized value; existence checks
   // against a VectorSVS use GetVector / label_to_record_ directly.
   return std::nullopt;
+}
+
+template <typename T>
+absl::Status VectorSVS<T>::OnTrackedKeysLoaded() {
+#if defined(__linux__) && defined(__x86_64__)
+  if (!rebuild_from_keyspace_) {
+    return absl::OkStatus();
+  }
+  rebuild_from_keyspace_ = false;
+  std::vector<std::pair<uint64_t, VectorRecord>> records;
+  {
+    absl::ReaderMutexLock map_lock(&label_mutex_);
+    records.reserve(label_to_record_.size());
+    for (const auto& [id, record] : label_to_record_) {
+      if (record) records.emplace_back(id, record);
+    }
+  }
+  std::vector<float> scratch;
+  for (const auto& [id, record] : records) {
+    VMSDK_ASSIGN_OR_RETURN(
+        const float* fp32,
+        PrepareSvsInput<T>(reinterpret_cast<const T*>(record.GetRawVector()),
+                           static_cast<size_t>(dimensions_), normalize_,
+                           scratch));
+    VMSDK_RETURN_IF_ERROR(InsertVector(id, fp32));
+  }
+  VMSDK_LOG(NOTICE, nullptr) << "SVS_VAMANA index rebuilt from "
+                             << records.size() << " vectors in the keyspace.";
+#endif
+  return absl::OkStatus();
 }
 
 template <typename T>

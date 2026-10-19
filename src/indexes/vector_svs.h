@@ -164,6 +164,10 @@ class VectorSVS : public VectorType<T> {
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
   absl::Status AddPoint(uint64_t internal_id, const float *fp32)
       ABSL_SHARED_LOCKS_REQUIRED(resize_mutex_);
+  // SVS reuses deleted slots only after consolidating and compacting. Does
+  // both once enough slots have been deleted, so update-heavy workloads stay
+  // bounded.
+  void MaybeConsolidate() ABSL_LOCKS_EXCLUDED(resize_mutex_, label_mutex_);
 #endif
 
   // Concurrency: the index is built with SVS_SYNC_KIND_FINE_GRAIN and guards
@@ -185,6 +189,9 @@ class VectorSVS : public VectorType<T> {
   // Set by LoadFromRDB when the saved SVS payload was skipped; consumed by
   // OnTrackedKeysLoaded on the main thread before the index is published.
   bool rebuild_from_keyspace_{false};
+  // Slots deleted in SVS since the last consolidation (or save, which also
+  // consolidates).
+  mutable std::atomic<size_t> deleted_since_consolidate_{0};
   SVSBuildConfig build_config_;
   mutable absl::Mutex label_mutex_ ABSL_ACQUIRED_AFTER(resize_mutex_);
   mutable absl::node_hash_map<uint64_t, VectorRecord> label_to_record_

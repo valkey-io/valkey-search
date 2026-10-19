@@ -59,6 +59,13 @@ struct SVSBuildConfig {
   uint32_t search_window_size{0};
   float alpha{0.0f};
   data_model::SVSCompressionType compression{data_model::SVS_COMPRESSION_NONE};
+  // Element type of the input vectors; with COMPRESSION NONE, SVS stores
+  // that type.
+  data_model::VectorDataType input_type{data_model::VECTOR_DATA_TYPE_FLOAT32};
+  // SVS allocation block for data and graph, sized from INITIAL_CAP.
+  size_t blocksize_bytes{0};
+  // INITIAL_CAP as given at FT.CREATE, reported by GetCapacity.
+  uint32_t initial_cap{0};
 };
 
 template <typename T>

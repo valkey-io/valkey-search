@@ -1200,6 +1200,44 @@ TEST_F(VectorSVSTest, DeleteAllConsolidatesAndKeepsAcceptingWrites) {
   EXPECT_EQ((*result)[0].external_id, IndexToKey(0));
 }
 
+// -- Per-field footprint
+// -------------------------------------------------------
+
+size_t SvsDataBytes(const VectorSVS<float> &index) {
+  svs_memory_breakdown_t breakdown = SVS_INIT_MEMORY_BREAKDOWN();
+  svs_error_h err = svs_error_create();
+  EXPECT_TRUE(svs_index_get_memory_breakdown(VectorSVSTestPeer::Handle(index),
+                                             &breakdown, err))
+      << svs_error_get_message(err);
+  svs_error_free(err);
+  return breakdown.data_bytes;
+}
+
+// INITIAL_CAP sizes SVS's allocation block, so a small index no longer
+// reserves the full 16 MiB on its first add; an index without INITIAL_CAP
+// keeps the maximum.
+TEST_F(VectorSVSTest, InitialCapSizesTheFirstReservation) {
+  auto vectors = DeterministicallyGenerateVectors(1, kDimensions, 1.0);
+  auto data_bytes_for = [&](uint32_t initial_cap) {
+    auto proto =
+        CreateSVSVectorIndexProto(kDimensions, data_model::DISTANCE_METRIC_L2,
+                                  data_model::SVS_COMPRESSION_NONE);
+    proto.set_initial_cap(initial_cap);
+    auto index = VectorSVS<float>::Create(proto, attribute_identifier,
+                                          attribute_data_type, 0);
+    CHECK(index.ok());
+    CHECK(testing_infra::AddVectorRecord(**index, IndexToKey(0),
+                                         VectorToStr(vectors[0]))
+              .ok());
+    EXPECT_EQ(AsBase(*index)->GetCapacity(), size_t{initial_cap});
+    EXPECT_EQ(AsBase(*index)->ToProto()->vector_index().initial_cap(),
+              initial_cap);
+    return SvsDataBytes(**index);
+  };
+  EXPECT_LE(data_bytes_for(100), 64u * 1024);
+  EXPECT_GE(data_bytes_for(0), 16u * 1024 * 1024);
+}
+
 // -- SVS version mismatch on load --------------------------------------------
 
 // A payload written by another SVS version is skipped, and the index is

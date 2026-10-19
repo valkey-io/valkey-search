@@ -116,11 +116,12 @@ namespace {
 // maxmemory just like the module's own malloc arena.
 constexpr size_t kSvsAllocatorHugePageSize = 2 * 1024 * 1024;
 
-// Block size for both svs_index_build_dynamic and the RDB stream load; a
-// mismatch makes a loaded index reserve differently. SVS's "default" (0)
-// resolves to 2^30 bytes, materialized up-front on the first HSET;
-// 16 MiB keeps the first-add reservation bounded. Measured 16–64 MiB
-// behave identically; smaller wastes per-block overhead at large DIM.
+// SVS allocates data and graph in blocks of this size, reserved on the first
+// add. SVS's own default (0) is 2^30 bytes. The block is sized to hold
+// INITIAL_CAP vectors, within these bounds; an index with no INITIAL_CAP
+// (saved before it was honored) uses the maximum. Measured 16–64 MiB behave
+// identically for large indexes.
+constexpr size_t kSvsMinBlockSizeBytes = 64 * 1024;
 constexpr size_t kSvsBlockSizeBytes = 16 * 1024 * 1024;
 
 // Consolidate once deleted slots reach a quarter of the live entries, and at
@@ -129,8 +130,9 @@ constexpr size_t kConsolidateMinDeleted = 1024;
 constexpr size_t kConsolidateLiveDivisor = 4;
 // svs_index_build_dynamic_ex rejects a block size that is not a power of two,
 // while the stream load rounds one down silently; keep the two paths agreeing.
-static_assert(std::has_single_bit(kSvsBlockSizeBytes),
-              "kSvsBlockSizeBytes must be a power of two");
+static_assert(std::has_single_bit(kSvsBlockSizeBytes) &&
+                  std::has_single_bit(kSvsMinBlockSizeBytes),
+              "SVS block sizes must be powers of two");
 
 // In the pinned SVS revision FINE_GRAIN is an alias of GLOBAL; once upstream
 // implements it, writers on one index run in parallel with no module change.
@@ -253,10 +255,15 @@ std::optional<svs_distance_metric_t> ToSvsDistanceMetric(
 // value. FLOAT32 storage is the default; FP16 and SQ8 are the two open
 // v1 compression kinds the SVS C API registers.
 std::optional<svs_data_type_t> CompressionToSvsDataType(
-    data_model::SVSCompressionType compression) {
+    data_model::SVSCompressionType compression,
+    data_model::VectorDataType input_type =
+        data_model::VECTOR_DATA_TYPE_FLOAT32) {
   switch (compression) {
     case data_model::SVS_COMPRESSION_NONE:
-      return SVS_DATA_TYPE_FLOAT32;
+      // No compression: store the input precision, without upcasting.
+      return input_type == data_model::VECTOR_DATA_TYPE_FLOAT16
+                 ? SVS_DATA_TYPE_FLOAT16
+                 : SVS_DATA_TYPE_FLOAT32;
     case data_model::SVS_COMPRESSION_FP16:
       return SVS_DATA_TYPE_FLOAT16;
     case data_model::SVS_COMPRESSION_SQ8:
@@ -426,6 +433,28 @@ float SvsToDistance(data_model::DistanceMetric metric, float value) {
   }
 }
 
+// Block size that holds INITIAL_CAP vectors of the stored type, rounded up to
+// a power of two (SVS requires one) and kept within the bounds above.
+size_t SvsBlockSizeBytes(const SVSBuildConfig& config, int dimensions) {
+  if (config.initial_cap == 0) return kSvsBlockSizeBytes;
+  size_t element_bytes = sizeof(float);
+  switch (CompressionToSvsDataType(config.compression, config.input_type)
+              .value_or(SVS_DATA_TYPE_FLOAT32)) {
+    case SVS_DATA_TYPE_FLOAT16:
+      element_bytes = 2;
+      break;
+    case SVS_DATA_TYPE_INT8:
+      element_bytes = 1;
+      break;
+    default:
+      break;
+  }
+  const size_t wanted = size_t{config.initial_cap} *
+                        static_cast<size_t>(dimensions) * element_bytes;
+  return std::clamp(std::bit_ceil(wanted), kSvsMinBlockSizeBytes,
+                    kSvsBlockSizeBytes);
+}
+
 // Algorithm/storage/builder trio shared by first-insert bootstrap and RDB
 // load, so a loaded index is structurally identical to a freshly built one.
 absl::StatusOr<BuilderPtr> AssembleIndexBuilder(
@@ -436,7 +465,8 @@ absl::StatusOr<BuilderPtr> AssembleIndexBuilder(
     return absl::InvalidArgumentError(
         "SVS_VAMANA: unsupported DISTANCE_METRIC");
   }
-  auto storage_type = CompressionToSvsDataType(config.compression);
+  auto storage_type =
+      CompressionToSvsDataType(config.compression, config.input_type);
   if (!storage_type.has_value()) {
     return absl::InvalidArgumentError(
         "SVS_VAMANA: COMPRESSION is proprietary / v2 and not available "
@@ -499,7 +529,7 @@ absl::StatusOr<svs_index_h> BootstrapIndexImpl(
   if (!builder.ok()) return builder.status();
 
   svs_dynamic_index_params_t params = SVS_INIT_DYNAMIC_INDEX_PARAMS();
-  params.blocksize_bytes = kSvsBlockSizeBytes;
+  params.blocksize_bytes = config.blocksize_bytes;
   params.sync_kind = kSvsSyncKind;
   svs_index_h index =
       svs_index_build_dynamic_ex(builder->get(), fp32_vector, &label,
@@ -581,6 +611,10 @@ absl::StatusOr<std::shared_ptr<VectorSVS<T>>> VectorSVS<T>::Create(
       svs_proto.search_window_size(), svs_proto.alpha(),
       svs_proto.compression(),
   };
+  instance->build_config_.input_type = instance->GetVectorDataType();
+  instance->build_config_.initial_cap = vector_index_proto.initial_cap();
+  instance->build_config_.blocksize_bytes =
+      SvsBlockSizeBytes(instance->build_config_, instance->dimensions_);
   // svs_index_ stays null until the first HSET bootstraps it via
   // svs_index_build_dynamic. The SVS C API requires num_vectors > 0 at
   // build time and offers no create-empty entry point.
@@ -676,7 +710,7 @@ absl::StatusOr<std::shared_ptr<VectorSVS<T>>> VectorSVS<T>::LoadFromRDB(
     if (!builder.ok()) return builder.status();
 
     svs_index_h index = svs_index_load_stream_dynamic(
-        builder->get(), &iface, /*blocksize_bytes=*/kSvsBlockSizeBytes,
+        builder->get(), &iface, instance->build_config_.blocksize_bytes,
         err.get());
     if (index == nullptr) {
       if (!adapter.status().ok()) return adapter.status();
@@ -736,7 +770,7 @@ bool VectorSVS<T>::IsValidVectorData(absl::string_view record) const {
 
 template <typename T>
 size_t VectorSVS<T>::GetCapacity() const {
-  return 0;
+  return build_config_.initial_cap;
 }
 
 #if defined(__linux__) && defined(__x86_64__)

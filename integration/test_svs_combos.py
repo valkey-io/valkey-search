@@ -88,8 +88,10 @@ class TestSVSTypeCompressionCombos(ValkeySearchTestCaseBase):
         assert reply[1] == key.encode(), reply
         # The query is the stored vector, so the distance is 0. The test
         # vectors are exact in FP16; COSINE's normalized copy is not, so FP16
-        # storage rounds its self-match slightly away from 0.
-        tolerance = 2e-3 if (metric, compression) == ("COSINE", "FP16") else 1e-6
+        # storage (COMPRESSION FP16, or TYPE FLOAT16 with NONE) rounds its
+        # self-match slightly away from 0.
+        fp16_storage = compression == "FP16" or vtype == "FLOAT16"
+        tolerance = 2e-3 if metric == "COSINE" and fp16_storage else 1e-6
         payload = dict(zip(reply[2][::2], reply[2][1::2]))
         assert float(payload[b"__v_score"]) == pytest.approx(0.0, abs=tolerance)
 

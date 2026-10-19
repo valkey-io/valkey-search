@@ -478,6 +478,30 @@ class TestSVSVamanaSmoke(ValkeySearchTestCaseBase):
             f"{after_drop})"
         )
 
+    def test_float16_input_stored_as_fp16(self):
+        """TYPE FLOAT16 with COMPRESSION NONE stores FP16 inside SVS: its
+        first reservation is half that of the same FLOAT32 index. FT.INFO
+        reports INITIAL_CAP as the capacity."""
+        client: Valkey = self.server.get_new_client()
+
+        def reserved_bytes(index, vtype, encode):
+            before = _module_external_memory(client)
+            client.execute_command(
+                "FT.CREATE", index, "PREFIX", "1", f"{index}:",
+                "SCHEMA", "v", "VECTOR", "SVS_VAMANA", "8",
+                "TYPE", vtype, "DIM", "64", "DISTANCE_METRIC", "L2",
+                "INITIAL_CAP", "4096",
+            )
+            client.hset(f"{index}:1", mapping={"v": encode([1.0] * 64)})
+            waiters.wait_for_equal(
+                lambda: _v_index(client, index)["size"], 1, timeout=5)
+            assert _v_index(client, index)["capacity"] == 4096
+            return _module_external_memory(client) - before
+
+        fp32 = reserved_bytes("cap32", "FLOAT32", _fp32)
+        fp16 = reserved_bytes("cap16", "FLOAT16", _fp16)
+        assert fp16 * 2 == pytest.approx(fp32, rel=0.25), (fp16, fp32)
+
     def test_knn_with_tag_filter_returns_only_matching(self):
         """Filtered KNN returns docs matching the tag predicate. Regression
         guard for the filter_rate hint: SVS's adaptive batch iterator takes

@@ -1227,6 +1227,42 @@ class TestSortByAliasGate(ValkeySearchTestCaseDebugMode):
             assert result == desc_ids, f"emulate-release {release}"
             assert legacy_uses() - before == counted
 
+    def test_sortby_alias_gate_counts_once_with_cursor(self):
+        # The first WITHCURSOR reply resolves the row format once; the gates
+        # must not count twice.
+        client: Valkey = self.server.get_new_client()
+        assert client.execute_command(
+            "FT.CREATE", "sbw_idx", "ON", "HASH", "PREFIX", "1", "sbw:",
+            "SCHEMA", "a", "AS", "b", "NUMERIC", "b", "AS", "c",
+            "NUMERIC") == b"OK"
+        for key, a, b in (("sbw:1", 7, 500), ("sbw:2", 5, 900),
+                          ("sbw:3", 6, 100)):
+            assert client.execute_command("HSET", key, "a", a, "b", b) == 2
+        IndexingTestHelper.wait_for_indexing_complete_on_node(client, "sbw_idx")
+        counters = ("search_compatibility-ft_search_sortby_alias",
+                    "search_compatibility-ft_search_sortkey_type_prefix",
+                    "search_compatibility-ft_search_sortkey_nil")
+
+        def uses():
+            info = client.info("SEARCH")
+            return [info.get(c, 0) for c in counters]
+
+        for release, per_reply in (("1.2.1", 1), ("1.3.0", 0)):
+            assert client.execute_command(
+                "CONFIG", "SET", "search.emulate-release", release) == b"OK"
+            before = uses()
+            total, rows, cursor = client.execute_command(
+                "FT.SEARCH", "sbw_idx", "@b:[0 10]", "SORTBY", "b", "ASC",
+                "WITHSORTKEYS", "RETURN", "1", "c", "WITHCURSOR", "COUNT", "2",
+                "DIALECT", "2")
+            assert total == 3 and len(rows) == 2 and cursor != 0
+            assert [n - b for n, b in zip(uses(), before)] == [per_reply] * 3
+            before = uses()
+            batch, cursor = client.execute_command(
+                "FT.CURSOR", "READ", "sbw_idx", cursor)
+            assert batch[0] == 1 and cursor == 0
+            assert [n - b for n, b in zip(uses(), before)] == [per_reply] * 3
+
     def test_sortby_knn_prefill_gate(self):
         # Below 1.3.0 the KNN pre-fill must keep the 12-digit index bytes.
         client: Valkey = self.server.get_new_client()

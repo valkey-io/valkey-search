@@ -77,6 +77,10 @@ struct SearchCommand : public QueryCommand {
   size_t ReplyRowElements(ValkeyModuleCtx *ctx,
                           const indexes::Neighbor &neighbor,
                           const RowFormat &format) const;
+  // GetRowFormat() runs the compatibility gates, which count; a reply must
+  // compute the format once and pass it down.
+  void ReplyRows(ValkeyModuleCtx *ctx, const query::SearchResult &search_result,
+                 size_t start, size_t end, const RowFormat &format) const;
 };
 
 }  // namespace valkey_search

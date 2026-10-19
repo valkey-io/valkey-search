@@ -498,7 +498,13 @@ size_t SearchCommand::ReplyRowElements(ValkeyModuleCtx *ctx,
 void SearchCommand::ReplyRows(ValkeyModuleCtx *ctx,
                               const query::SearchResult &search_result,
                               size_t start, size_t end) const {
-  auto format = GetRowFormat();
+  ReplyRows(ctx, search_result, start, end, GetRowFormat());
+}
+
+void SearchCommand::ReplyRows(ValkeyModuleCtx *ctx,
+                              const query::SearchResult &search_result,
+                              size_t start, size_t end,
+                              const RowFormat &format) const {
   for (auto i = start; i < end; ++i) {
     ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_LEN);
     ValkeyModule_ReplySetArrayLength(
@@ -563,7 +569,8 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
   ValkeyModule_ReplyWithArray(ctx, 3);
   ReplyAvailNeighbors(ctx, search_result, *this);
   ValkeyModule_ReplyWithArray(ctx, count);
-  ReplyRows(ctx, search_result, range.start_index, range.start_index + count);
+  ReplyRows(ctx, search_result, range.start_index, range.start_index + count,
+            format);
   if (count == range.count()) {
     ValkeyModule_ReplyWithLongLong(ctx, 0);
     return;

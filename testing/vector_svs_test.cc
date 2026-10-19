@@ -70,6 +70,9 @@ class VectorSVSTestPeer {
   static absl::Mutex &ResizeMutex(VectorSVS<float> &index) {
     return index.resize_mutex_;
   }
+  static size_t DeletedSinceConsolidate(const VectorSVS<float> &index) {
+    return index.deleted_since_consolidate_.load();
+  }
 };
 
 namespace {
@@ -1121,6 +1124,80 @@ TEST_F(VectorSVSTest, RestoredIndexMutatesUnderTheExclusiveLock) {
       << "a restored index must wait for the exclusive lock";
   EXPECT_EQ(AsBase(*restored)->GetLabelCount(), 2u);
   ValkeyModule_FreeString(nullptr, records[0]);
+}
+
+// -- Reclaiming deleted slots
+// --------------------------------------------------
+
+// Every modify deletes a slot in SVS. Without consolidation those slots are
+// never reused; with it, the deleted count stays below the trigger, and the
+// index keeps answering with each key's latest vector.
+TEST_F(VectorSVSTest, ModifyChurnConsolidatesDeletedSlots) {
+  const size_t kKeys = 50;
+  const size_t kRounds = 100;  // 5000 modifies, past the 1024-slot trigger
+  auto index = VectorSVS<float>::Create(
+      CreateSVSVectorIndexProto(kDimensions, data_model::DISTANCE_METRIC_L2,
+                                data_model::SVS_COMPRESSION_NONE),
+      attribute_identifier, attribute_data_type, 0);
+  VMSDK_EXPECT_OK(index);
+  auto vectors = DeterministicallyGenerateVectors(kKeys, kDimensions, 5.0);
+  for (size_t i = 0; i < kKeys; ++i) {
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(**index, IndexToKey(i),
+                                                   VectorToStr(vectors[i])));
+  }
+
+  size_t max_deleted = 0;
+  for (size_t round = 1; round <= kRounds; ++round) {
+    for (size_t i = 0; i < kKeys; ++i) {
+      for (auto &v : vectors[i]) v += 1.0f;  // a new value each round
+      auto valkey_str = vmsdk::MakeUniqueValkeyString(VectorToStr(vectors[i]));
+      auto vec = VectorRegistry::Instance().DedupOrConstruct(
+          IndexToKey(i), valkey_str.get(), data_model::ATTRIBUTE_DATA_TYPE_HASH,
+          0, AsBase(*index));
+      auto result =
+          (*index)->ModifyRecord(IndexToKey(i), AttributeData(std::move(vec)));
+      VMSDK_EXPECT_OK(result);
+      max_deleted = std::max(
+          max_deleted, VectorSVSTestPeer::DeletedSinceConsolidate(**index));
+    }
+  }
+  EXPECT_LT(max_deleted, 1024u) << "deleted slots were never consolidated";
+  EXPECT_EQ(AsBase(*index)->GetLabelCount(), kKeys);
+  for (size_t i = 0; i < kKeys; ++i) {
+    auto result = (*index)->Search(VectorToStr(vectors[i]), 1, CancelNever());
+    VMSDK_EXPECT_OK(result);
+    ASSERT_EQ(result->size(), 1u);
+    EXPECT_EQ((*result)[0].external_id, IndexToKey(i));
+  }
+}
+
+// Deleting every entry triggers consolidation with nothing left to compact
+// (SVS can't compact an empty index); the index must keep working.
+TEST_F(VectorSVSTest, DeleteAllConsolidatesAndKeepsAcceptingWrites) {
+  const size_t kKeys = 1100;  // past the 1024-slot trigger
+  auto index = VectorSVS<float>::Create(
+      CreateSVSVectorIndexProto(kDimensions, data_model::DISTANCE_METRIC_L2,
+                                data_model::SVS_COMPRESSION_NONE),
+      attribute_identifier, attribute_data_type, 0);
+  VMSDK_EXPECT_OK(index);
+  auto vectors = DeterministicallyGenerateVectors(kKeys, kDimensions, 5.0);
+  for (size_t i = 0; i < kKeys; ++i) {
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(**index, IndexToKey(i),
+                                                   VectorToStr(vectors[i])));
+  }
+  for (size_t i = 0; i < kKeys; ++i) {
+    VMSDK_EXPECT_OK(
+        (*index)->RemoveRecord(IndexToKey(i), indexes::DeletionType::kRecord));
+  }
+  EXPECT_LT(VectorSVSTestPeer::DeletedSinceConsolidate(**index), 1024u);
+  EXPECT_EQ(AsBase(*index)->GetLabelCount(), 0u);
+
+  VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(**index, IndexToKey(0),
+                                                 VectorToStr(vectors[0])));
+  auto result = (*index)->Search(VectorToStr(vectors[0]), 1, CancelNever());
+  VMSDK_EXPECT_OK(result);
+  ASSERT_EQ(result->size(), 1u);
+  EXPECT_EQ((*result)[0].external_id, IndexToKey(0));
 }
 
 // -- SVS version mismatch on load --------------------------------------------

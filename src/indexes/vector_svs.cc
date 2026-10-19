@@ -122,6 +122,11 @@ constexpr size_t kSvsAllocatorHugePageSize = 2 * 1024 * 1024;
 // 16 MiB keeps the first-add reservation bounded. Measured 16–64 MiB
 // behave identically; smaller wastes per-block overhead at large DIM.
 constexpr size_t kSvsBlockSizeBytes = 16 * 1024 * 1024;
+
+// Consolidate once deleted slots reach a quarter of the live entries, and at
+// least kConsolidateMinDeleted, so the full-graph pass is amortized.
+constexpr size_t kConsolidateMinDeleted = 1024;
+constexpr size_t kConsolidateLiveDivisor = 4;
 // svs_index_build_dynamic_ex rejects a block size that is not a power of two,
 // while the stream load rounds one down silently; keep the two paths agreeing.
 static_assert(std::has_single_bit(kSvsBlockSizeBytes),
@@ -935,6 +940,7 @@ absl::Status VectorSVS<T>::RemoveRecordImpl(uint64_t internal_id) {
                                            err.get())) {
         svs_status = SvsErrorToStatus(err.get(), "index_dynamic_delete_points");
       }
+      deleted_since_consolidate_.fetch_add(deleted, std::memory_order_relaxed);
     }
   }
   // Test hook: SVS no longer holds the id, the map still does. No lock is
@@ -946,8 +952,11 @@ absl::Status VectorSVS<T>::RemoveRecordImpl(uint64_t internal_id) {
   // that resolve labels through the map first cannot surface a stale
   // id, and a subsequent re-Add on the same id will not collide with
   // the reservation in AddRecordImpl.
-  absl::MutexLock map_lock(&label_mutex_);
-  label_to_record_.erase(internal_id);
+  {
+    absl::MutexLock map_lock(&label_mutex_);
+    label_to_record_.erase(internal_id);
+  }
+  MaybeConsolidate();
   return svs_status;
 #else
   (void)internal_id;
@@ -968,6 +977,7 @@ absl::Status VectorSVS<T>::ModifyRecordImpl(uint64_t internal_id,
       PrepareSvsInput<T>(raw, static_cast<size_t>(dimensions_), normalize_,
                          scratch));
 
+  bool replaced = false;
   {
     SvsMutationLock lock(&resize_mutex_,
                          mutations_exclusive_.load(std::memory_order_acquire));
@@ -980,6 +990,7 @@ absl::Status VectorSVS<T>::ModifyRecordImpl(uint64_t internal_id,
         return SvsErrorToStatus(err.get(),
                                 "modify: index_dynamic_delete_points");
       }
+      deleted_since_consolidate_.fetch_add(deleted, std::memory_order_relaxed);
       size_t added = 0;
       if (!svs_index_dynamic_add_points(svs_index_, fp32, &internal_id,
                                         /*num_vectors=*/1, &added, err.get())) {
@@ -992,10 +1003,16 @@ absl::Status VectorSVS<T>::ModifyRecordImpl(uint64_t internal_id,
         label_to_record_.erase(internal_id);
         return SvsErrorToStatus(err.get(), "modify: index_dynamic_add_points");
       }
-      absl::MutexLock map_lock(&label_mutex_);
-      label_to_record_[internal_id] = std::move(vector_record);
-      return absl::OkStatus();
+      {
+        absl::MutexLock map_lock(&label_mutex_);
+        label_to_record_[internal_id] = std::move(vector_record);
+      }
+      replaced = true;
     }
+  }
+  if (replaced) {
+    MaybeConsolidate();
+    return absl::OkStatus();
   }
   // No handle yet: the modify is the first add.
   VMSDK_RETURN_IF_ERROR(InsertVector(internal_id, fp32));
@@ -1031,6 +1048,40 @@ absl::Status VectorSVS<T>::InsertVector(uint64_t internal_id,
   if (!result.ok()) return result.status();
   svs_index_ = *result;
   return absl::OkStatus();
+}
+
+template <typename T>
+void VectorSVS<T>::MaybeConsolidate() {
+  const size_t live = GetLabelCount();
+  auto due = [this, live]() {
+    return deleted_since_consolidate_.load(std::memory_order_relaxed) >=
+           std::max(kConsolidateMinDeleted, live / kConsolidateLiveDivisor);
+  };
+  if (!due()) return;
+  // Consolidation rewrites graph edges, so it excludes the other writers;
+  // searches are already excluded by the mutation phase.
+  absl::WriterMutexLock lock(&resize_mutex_);
+  if (svs_index_ == nullptr || !due()) return;
+  ScopedSvsError err;
+  if (!svs_index_dynamic_consolidate(svs_index_, err.get())) {
+    VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 10)
+        << "SVS_VAMANA consolidate failed: "
+        << SvsErrorToStatus(err.get(), "index_dynamic_consolidate");
+    return;
+  }
+  // The C API's add_points only fills slots past the last compaction, so the
+  // slots consolidate freed are reused only after compacting. SVS can't
+  // compact an index with no live entries.
+  size_t live_in_svs = 0;
+  if (svs_index_get_size(svs_index_, &live_in_svs, err.get()) &&
+      live_in_svs > 0 &&
+      !svs_index_dynamic_compact(svs_index_, /*batchsize=*/0, err.get())) {
+    VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 10)
+        << "SVS_VAMANA compact failed: "
+        << SvsErrorToStatus(err.get(), "index_dynamic_compact");
+    return;
+  }
+  deleted_since_consolidate_.store(0, std::memory_order_relaxed);
 }
 
 template <typename T>
@@ -1133,6 +1184,8 @@ absl::Status VectorSVS<T>::SaveIndexImpl(
     if (!adapter.status().ok()) return adapter.status();
     return SvsErrorToStatus(err.get(), "index_save_stream");
   }
+  // The save consolidated and compacted the index.
+  deleted_since_consolidate_.store(0, std::memory_order_relaxed);
   return absl::OkStatus();
 #else
   (void)chunked_out;

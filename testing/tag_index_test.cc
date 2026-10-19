@@ -16,6 +16,7 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/tag.h"
 #include "src/query/predicate.h"
+#include "src/valkey_search_options.h"
 #include "testing/common.h"
 #include "vmsdk/src/testing_infra/utils.h"
 
@@ -68,7 +69,36 @@ TEST_F(TagIndexTest, AddRecordAndSearchTest) {
   EXPECT_THAT(Fetch(*entries_fetcher), testing::UnorderedElementsAre("key1"));
 }
 
+TEST_F(TagIndexTest, InvalidUtf8IsIndexedBeforeEmulateRelease1_3_0) {
+  const auto saved_emulate_release = options::GetEmulateRelease().GetValue();
+  VMSDK_EXPECT_OK(
+      options::GetEmulateRelease().SetValue(vmsdk::ValkeyVersion(1, 2, 0)));
+  const std::string invalid_utf8 = "invalid\xC3";
+
+  EXPECT_EQ(index->AddRecordResult("key1", invalid_utf8).value(),
+            RecordResult::kAdded);
+  EXPECT_TRUE(index->IsTracked("key1"));
+
+  EXPECT_TRUE(index->AddRecord("key2", "valid").value());
+  EXPECT_EQ(index->ModifyRecordResult("key2", invalid_utf8).value(),
+            RecordResult::kAdded);
+  EXPECT_TRUE(index->IsTracked("key2"));
+  EXPECT_EQ(index->GetTrackedKeyCount(), 2);
+
+  auto parsed_tags = FilterParser::ParseQueryTags(invalid_utf8).value();
+  query::TagPredicate predicate(index.get(), alias, identifier, invalid_utf8,
+                                parsed_tags);
+  auto entries_fetcher = index->Search(predicate, false);
+  EXPECT_THAT(Fetch(*entries_fetcher),
+              testing::UnorderedElementsAre("key1", "key2"));
+
+  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue(saved_emulate_release));
+}
+
 TEST_F(TagIndexTest, InvalidUtf8IsNotIndexed) {
+  const auto saved_emulate_release = options::GetEmulateRelease().GetValue();
+  VMSDK_EXPECT_OK(
+      options::GetEmulateRelease().SetValue(vmsdk::ValkeyVersion(1, 3, 0)));
   const std::string invalid_utf8 = "invalid\xC3";
 
   EXPECT_EQ(index->AddRecordResult("key1", invalid_utf8).value(),
@@ -88,6 +118,8 @@ TEST_F(TagIndexTest, InvalidUtf8IsNotIndexed) {
                                 parsed_tags);
   auto entries_fetcher = index->Search(predicate, false);
   EXPECT_EQ(entries_fetcher->Size(), 0);
+
+  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue(saved_emulate_release));
 }
 
 TEST_F(TagIndexTest, RemoveRecordAndSearchTest) {

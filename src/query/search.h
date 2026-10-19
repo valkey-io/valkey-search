@@ -74,7 +74,9 @@ struct SortByKey {
     // Notice alias vs. identifier lookup are not mutually exclusive purely
     // based on condition is_json. This is because due to issue #1597 older
     // version of vk search can return json path inconsistently, sometimes alias
-    // sometimes field name. As such this guard must remain until support for
+    // sometimes field name. Cluster running on old VK search version might have
+    // mixture of new/old node versions with such inconsistent json behavior
+    // during version upgrade, as such this guard must remain until support for
     // search V1.x is completely dropped.
     if (it == contents.end() && is_json) {
       it = contents.find(alias);

@@ -60,6 +60,16 @@ namespace {
 constexpr absl::string_view kUnavailableMsg =
     "SVS_VAMANA is not available on this build (requires x86_64 Linux).";
 
+// The alpha SVS builds with: ALPHA when given, otherwise SVS's per-metric
+// default (svs::VAMANA_ALPHA_MINIMIZE_DEFAULT for L2,
+// VAMANA_ALPHA_MAXIMIZE_DEFAULT for IP and COSINE), which SVS applies inside
+// its build and the C API doesn't report back.
+float EffectiveAlpha(const SVSBuildConfig& config,
+                     data_model::DistanceMetric metric) {
+  if (config.alpha > 0.0f) return config.alpha;
+  return metric == data_model::DISTANCE_METRIC_L2 ? 1.2f : 0.95f;
+}
+
 // Shared by ToProtoImpl and the RDB header's build_config echo, so the two
 // never drift apart. No SVS dependency: safe to call on any platform.
 void FillSvsVamanaProto(const SVSBuildConfig& config,
@@ -558,7 +568,6 @@ bool BuildConfigMatches(const SVSBuildConfig& expected,
   return expected.graph_max_degree == header_config.graph_max_degree() &&
          expected.construction_window_size ==
              header_config.construction_window_size() &&
-         expected.search_window_size == header_config.search_window_size() &&
          expected.alpha == header_config.alpha() &&
          expected.compression == header_config.compression();
 }
@@ -1158,7 +1167,8 @@ int VectorSVS<T>::RespondWithInfoImpl(ValkeyModuleCtx* ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, "search_window_size");
   ValkeyModule_ReplyWithLongLong(ctx, build_config_.search_window_size);
   ValkeyModule_ReplyWithSimpleString(ctx, "alpha");
-  ValkeyModule_ReplyWithDouble(ctx, build_config_.alpha);
+  ValkeyModule_ReplyWithDouble(
+      ctx, EffectiveAlpha(build_config_, this->distance_metric_));
   ValkeyModule_ReplyWithSimpleString(ctx, "compression");
   ValkeyModule_ReplyWithSimpleString(
       ctx,

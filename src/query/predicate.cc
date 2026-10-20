@@ -66,19 +66,20 @@ namespace {
 using PositionMaps = indexes::text::SingleKeyTermIterator::PositionMaps;
 
 // Probes `postings` for `target_key` in `field_mask`; the key's position map
-// is read under the word's bucket and retained for `require_positions`. It
-// stays valid after the bucket is released: only removing the key frees it,
-// which cannot be in flight for a key under evaluation.
+// is read under `lock_word`'s bucket when given (main thread) and retained for
+// `require_positions`. It stays valid after the bucket is released: only
+// removing the key frees it, which cannot be in flight for a key under
+// evaluation.
 bool ProbePostings(const indexes::text::TextIndexSchema &schema,
                    const indexes::text::Postings &postings,
-                   absl::string_view word, const InternedStringPtr &target_key,
-                   uint64_t field_mask, bool require_positions, bool lock,
-                   PositionMaps &maps) {
+                   std::optional<absl::string_view> lock_word,
+                   const InternedStringPtr &target_key, uint64_t field_mask,
+                   bool require_positions, PositionMaps &maps) {
   auto get = [&] {
     return postings.GetPostingValue(BorrowedInternedStringPtr(target_key),
                                     field_mask);
   };
-  auto value = lock ? schema.WithWordLock(word, get) : get();
+  auto value = lock_word ? schema.WithWordLock(*lock_word, get) : get();
   if (!value) return false;
   if (require_positions) maps.push_back(value->map);
   return true;
@@ -100,8 +101,9 @@ EvaluationResult ExpansionPredicate::Evaluate(
       [&](absl::string_view word,
           const indexes::text::InvasivePtr<indexes::text::Postings> &postings) {
         matched |=
-            ProbePostings(*GetTextIndexSchema(), *postings, word, target_key,
-                          field_mask, require_positions, lock, maps);
+            ProbePostings(*GetTextIndexSchema(), *postings,
+                          lock ? std::optional(word) : std::nullopt, target_key,
+                          field_mask, require_positions, maps);
         // A bare verdict is settled by the first hit; positions need every
         // word.
         return !matched || require_positions;
@@ -121,13 +123,12 @@ EvaluationResult ExpansionPredicate::Evaluate(
 // inflections) with its shared postings; one probe per word answers the key.
 EvaluationResult TermPredicate::Evaluate(const TermLeaf &leaf,
                                          const InternedStringPtr &target_key,
-                                         bool require_positions,
-                                         bool lock) const {
+                                         bool require_positions) const {
   PositionMaps maps;
   for (const TermGroup &group : leaf.groups) {
     for (const WordPostings &word : group.words) {
       if (ProbePostings(*text_index_schema_, *word.postings, word.word,
-                        target_key, group.field_mask, require_positions, lock,
+                        target_key, group.field_mask, require_positions,
                         maps) &&
           !require_positions) {
         return EvaluationResult(true);

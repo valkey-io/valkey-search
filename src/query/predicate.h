@@ -348,12 +348,12 @@ class TermPredicate : public TextPredicate {
   }
   absl::string_view GetTextString() const override { return term_; }
   EvaluationResult Evaluate(Evaluator& evaluator) const override;
-  // Probes each of the leaf's words for `target_key`. `lock` as on
-  // ExpansionPredicate::Evaluate. Under `require_positions` the result carries
-  // the iterator an enclosing AND/OR needs for its proximity check.
+  // Probes each of the leaf's words for `target_key`, locking per word when
+  // the leaf carries words (main thread). Under `require_positions` the result
+  // carries the iterator an enclosing AND/OR needs for its proximity check.
   EvaluationResult Evaluate(const TermLeaf& leaf,
                             const InternedStringPtr& target_key,
-                            bool require_positions, bool lock) const;
+                            bool require_positions) const;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const std::shared_ptr<indexes::text::TextIndex>& text_index,
       FieldMaskPredicate field_mask, bool require_positions,

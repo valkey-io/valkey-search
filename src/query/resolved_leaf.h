@@ -30,39 +30,53 @@ namespace valkey_search::query {
 // A word's shared posting list. Every tree (global and per-key) hands back the
 // same Postings object for a word, so one lookup answers for every candidate.
 struct WordPostings {
-  // Kept so main-thread probes can lock the postings via WithWordLock(word).
-  std::string word;
+  std::optional<std::string> word; // Main thread only: used to lock postings.
   indexes::text::InvasivePtr<indexes::text::Postings> postings;
 };
 
-// One BM25 term: tf is summed across its postings, scored with one IDF.
+// One BM25 term: tf is summed across `words`, scored with one idf.
 struct TermGroup {
-  // One word, except the inflection group, which holds every surface form of
-  // a stem root.
   absl::InlinedVector<WordPostings, indexes::text::kStemVariantsInlineCapacity>
       words;
   float idf = 0.0f;
-  // Fields an occurrence must be in to count: the predicate's mask for the
-  // surface word, the stem mask for root and inflections. ~0 when that is
-  // every text field, so probes skip the per-position scan.
+  // ~0 when it covers every text field, so probes skip the per-position scan.
   uint64_t field_mask = ~0ULL;
 };
 
-// Term leaf: sums up to 3 groups (exact word, stem root, stem inflections).
+// Term leaf: the word, its stem root and the root's inflections looked up once
+// per query so each candidate costs one probe per word and a BM25 term per
+// group. The groups are summed.
+//
+//   @title:running on a stemmed field, with run/runs/running indexed,
+//   resolves to:
+//     groups = [{[running],       idf(df),             title},
+//               {[run],           idf(df),             title & stem},
+//               {[running, runs], idf(docs with any),  title & stem}]
+//   "running" appears twice on purpose: the exact word scores on its own and
+//   again as an inflection, the exact-match boost. A query word that is its own
+//   root (`run`) has no root group; an unstemmed field or an exact term
+//   (`"running"`) has only the first.
 struct TermLeaf {
   absl::InlinedVector<TermGroup, 3> groups;
 };
 
-// Prefix/suffix/fuzzy leaf: scores ONE matched term per doc, never the sum.
+// Prefix/suffix/fuzzy leaf: scores ONE matched word per document, never the
+// sum. Nothing is looked up per query; the match depends on the document.
+//
+//   @title:run* starts with no representative.
+//     doc1 has "runner" (df 3):   walk doc1's tree, representative = runner
+//     doc2 has "runner":          one probe, done
+//     doc3 has "running" (df 90): probe misses, walk, representative = running
+//   The representative is the most common matched word seen so far, so later
+//   candidates that carry it skip the walk.
 struct ExpansionLeaf {
-  uint64_t field_mask = ~0ULL;  // Shared by all terms; expansions never stem.
+  // The predicate's fields (~0 when all), the same for every matched word.
+  uint64_t field_mask = ~0ULL;
   struct Term {
     WordPostings term;
     size_t df = 0;
     float idf = 0.0f;
   };
-  // The most common matched word seen so far. A doc that carries it is scored
-  // with one probe instead of a walk of its own tree.
   std::optional<Term> representative;
 };
 
@@ -78,7 +92,7 @@ struct ExpansionLeaf {
 struct TagLeaf {
   // One query value and its idf. Whether a document carries the value is
   // checked in different ways:
-  //   background: probe `bag`, the index's set of keys with this value. 
+  //   background: probe `bag`, the index's set of keys with this value.
   //               Avoids looking up TagInfo and a string comparison.
   //   main:       compare `value` against the fetched record's own tags
   //               because the bag doesn't provide stable access on main

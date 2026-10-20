@@ -46,7 +46,7 @@ ResolvedLeafCache::ResolvedLeafCache(
 
 size_t ResolvedLeafCache::KeyCount(const WordPostings &word) const {
   auto get = [&] { return word.postings->GetKeyCount(); };
-  return MainThread() ? text_index_schema_->WithWordLock(word.word, get)
+  return MainThread() ? text_index_schema_->WithWordLock(*word.word, get)
                       : get();
 }
 
@@ -54,7 +54,7 @@ std::optional<indexes::text::PostingValue> ResolvedLeafCache::Probe(
     const WordPostings &word, BorrowedInternedStringPtr key,
     uint64_t field_mask) const {
   auto get = [&] { return word.postings->GetPostingValue(key, field_mask); };
-  return MainThread() ? text_index_schema_->WithWordLock(word.word, get)
+  return MainThread() ? text_index_schema_->WithWordLock(*word.word, get)
                       : get();
 }
 
@@ -68,9 +68,10 @@ WordPostings ResolvedLeafCache::Lookup(absl::string_view word) const {
   auto find = [&](const indexes::text::TextIndex &index) {
     return index.GetPrefix().FindPostingsTarget(word);
   };
-  return {std::string(word), MainThread()
-                                 ? text_index_schema_->WithTextIndexLock(find)
-                                 : find(*text_index_schema_->GetTextIndex())};
+  if (MainThread()) {
+    return {std::string(word), text_index_schema_->WithTextIndexLock(find)};
+  }
+  return {std::nullopt, find(*text_index_schema_->GetTextIndex())};
 }
 
 ResolvedLeaf &ResolvedLeafCache::GetOrResolve(const Predicate *predicate) {
@@ -121,8 +122,11 @@ std::optional<ExpansionMatch> ResolvedLeafCache::FindExpansionMatch(
         auto [entry, df] =
             MainThread() ? text_index_schema_->WithWordLock(word, get) : get();
         if (!entry) return true;
-        found.emplace(
-            ExpansionMatch{{std::string(word), postings}, *entry, df});
+        found.emplace(ExpansionMatch{
+            {MainThread() ? std::optional(std::string(word)) : std::nullopt,
+             postings},
+            *entry,
+            df});
         return false;
       });
   return found;
@@ -264,7 +268,7 @@ EvaluationResult EvaluateText(
   if (const auto *leaf =
           std::get_if<TermLeaf>(&cache.GetOrResolve(&predicate))) {
     return static_cast<const TermPredicate &>(predicate).Evaluate(
-        *leaf, key, require_positions, cache.MainThread());
+        *leaf, key, require_positions);
   }
   const auto *index = per_key_index();
   if (index == nullptr) return EvaluationResult(false);

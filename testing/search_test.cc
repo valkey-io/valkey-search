@@ -2516,8 +2516,10 @@ struct SharedCacheScorer {
                           cache);
     return cands.empty() ? std::nullopt : std::optional(cands[0].score);
   }
-  // The representative word of the first expansion leaf under the root.
-  std::optional<std::string> Representative() {
+  // The first expansion leaf's representative, or null. Background-mode
+  // leaves carry no word, so tests identify it by postings via
+  // RepresentativeIs.
+  const query::ExpansionLeaf::Term *Representative() {
     const query::Predicate *leaf = parsed->root_predicate.get();
     if (leaf->GetType() == query::PredicateType::kComposedAnd) {
       leaf = static_cast<const query::ComposedPredicate *>(leaf)
@@ -2526,8 +2528,16 @@ struct SharedCacheScorer {
     }
     auto *expansion =
         std::get_if<query::ExpansionLeaf>(&cache.GetOrResolve(leaf));
-    if (expansion == nullptr || !expansion->representative) return std::nullopt;
-    return expansion->representative->term.word;
+    if (expansion == nullptr || !expansion->representative) return nullptr;
+    return &*expansion->representative;
+  }
+  bool RepresentativeIs(absl::string_view word) {
+    const auto *rep = Representative();
+    return rep != nullptr &&
+           rep->term.postings == schema.GetTextIndexSchema()
+                                     ->GetTextIndex()
+                                     ->GetPrefix()
+                                     .FindPostingsTarget(word);
   }
 
   MockIndexSchema &schema;
@@ -2545,20 +2555,20 @@ TEST_F(ScoreTextQueryTestBase, ExpansionRepresentativePromotesMostCommonTerm) {
       {"d_cat3", "cat", ""},
   });
   SharedCacheScorer prefix(*schema, "@text:cat* @rating:[0 100]");
-  EXPECT_FALSE(prefix.Representative().has_value());
+  EXPECT_EQ(prefix.Representative(), nullptr);
 
   // First document: nothing cached, its own walk finds `cats`.
   auto cats = prefix.Score("d_cats");
-  EXPECT_EQ(prefix.Representative(), "cats");
+  EXPECT_TRUE(prefix.RepresentativeIs("cats"));
   // A document without `cats` misses the probe, walks, and promotes `cat`.
   auto cat1 = prefix.Score("d_cat1");
-  EXPECT_EQ(prefix.Representative(), "cat");
+  EXPECT_TRUE(prefix.RepresentativeIs("cat"));
   // Later `cat` documents are answered by the probe; the representative holds.
   auto cat2 = prefix.Score("d_cat2");
-  EXPECT_EQ(prefix.Representative(), "cat");
+  EXPECT_TRUE(prefix.RepresentativeIs("cat"));
   // A `cats` document now misses and is still scored on its own term.
   auto cats_again = prefix.Score("d_cats");
-  EXPECT_EQ(prefix.Representative(), "cat");
+  EXPECT_TRUE(prefix.RepresentativeIs("cat"));
 
   ASSERT_TRUE(cats && cat1 && cat2 && cats_again);
   EXPECT_FLOAT_EQ(*cats,
@@ -2580,12 +2590,12 @@ TEST_F(ScoreTextQueryTestBase, ExpansionFallbackTakesFirstMatch) {
   });
   SharedCacheScorer prefix(*schema, "@text:ca* @rating:[0 100]");
   auto both = prefix.Score("d_both");
-  EXPECT_EQ(prefix.Representative(), "cab");
+  EXPECT_TRUE(prefix.RepresentativeIs("cab"));
   ASSERT_TRUE(both);
   EXPECT_FLOAT_EQ(*both,
                   *Score(*schema, "@text:cab @rating:[0 100]", "d_both"));
   prefix.Score("d_cat1");
-  EXPECT_EQ(prefix.Representative(), "cat");
+  EXPECT_TRUE(prefix.RepresentativeIs("cat"));
 }
 
 // The representative probe is field-gated: a document carrying the
@@ -2598,7 +2608,7 @@ TEST_F(ScoreTextQueryTestBase, ExpansionRepresentativeProbeIsFieldGated) {
                                          {"d3", "alxta", ""}});
   SharedCacheScorer body_prefix(*schema, "@body:al* @rating:[0 100]");
   auto d0 = body_prefix.Score("d0");
-  ASSERT_EQ(body_prefix.Representative(), "alxta");
+  ASSERT_TRUE(body_prefix.RepresentativeIs("alxta"));
   auto d1 = body_prefix.Score("d1");
   ASSERT_TRUE(d0 && d1);
   EXPECT_FLOAT_EQ(*d1, *Score(*schema, "@body:alzta @rating:[0 100]", "d1"));
@@ -2617,9 +2627,9 @@ TEST_F(ScoreTextQueryTestBase, ExpansionRepresentativeSuffixAndFuzzy) {
   });
   SharedCacheScorer suffix(*schema, "@text:*ing @rating:[0 100]");
   auto run = suffix.Score("d_run");
-  EXPECT_EQ(suffix.Representative(), "running");
+  EXPECT_TRUE(suffix.RepresentativeIs("running"));
   auto jog = suffix.Score("d_jog1");
-  EXPECT_EQ(suffix.Representative(), "jogging");
+  EXPECT_TRUE(suffix.RepresentativeIs("jogging"));
   ASSERT_TRUE(run && jog);
   EXPECT_FLOAT_EQ(*run,
                   *Score(*schema, "@text:running @rating:[0 100]", "d_run"));
@@ -2628,9 +2638,9 @@ TEST_F(ScoreTextQueryTestBase, ExpansionRepresentativeSuffixAndFuzzy) {
 
   SharedCacheScorer fuzzy(*schema, "@text:%cat% @rating:[0 100]");
   auto cat = fuzzy.Score("d_cat");
-  EXPECT_EQ(fuzzy.Representative(), "cat");
+  EXPECT_TRUE(fuzzy.RepresentativeIs("cat"));
   auto bat = fuzzy.Score("d_bat1");
-  EXPECT_EQ(fuzzy.Representative(), "bat");
+  EXPECT_TRUE(fuzzy.RepresentativeIs("bat"));
   ASSERT_TRUE(cat && bat);
   EXPECT_FLOAT_EQ(*cat, *Score(*schema, "@text:cat @rating:[0 100]", "d_cat"));
   EXPECT_FLOAT_EQ(*bat, *Score(*schema, "@text:bat @rating:[0 100]", "d_bat1"));

@@ -22,3 +22,9 @@ General development philosphy: Keep things concise and simple. Convolution is ba
 After the initial implementation is done and a PR is opened, myself and coworkers are going to leave comments on it for agents to address. Any design changes that appear during this stage should be documented in a new review amendments doc. All past docs are considered immutable and all docs should be preserved until I give the final approval and we're ready to merge the PR.
 
 Along the way, notable implementation decisions made by AI should be added to the AI choices doc.
+
+
+Some more advice about writing comments:
+- lead with purpose/cost
+- favour a concrete example instead of abstract comments
+- describe runtime behaviour over structure that can be inferred from the code if the reasoning and context behind the code is stated

@@ -152,8 +152,6 @@ std::optional<std::string> GetSortKeyValue(const indexes::Neighbor &neighbor,
   return std::string(vmsdk::ToStringView(it->second.value.get()));
 }
 
-// Issue #1440. Main thread only: the gate macro constructs its INFO counter
-// lazily.
 query::SortByKey ResolveSortByKey(const SearchCommand &command) {
   const std::string &alias = command.sortby_parameter->field;
   return VALKEY_SEARCH_COMPATIBILITY_FIX(

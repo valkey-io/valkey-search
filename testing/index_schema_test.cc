@@ -30,6 +30,7 @@
 #include "absl/strings/strip.h"
 #include "absl/types/optional.h"
 #include "gmock/gmock.h"
+#include "google/protobuf/any.pb.h"
 #include "gtest/gtest.h"
 #include "src/attribute_data_type.h"
 #include "src/index_schema.pb.h"
@@ -37,6 +38,7 @@
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
+#include "src/indexes/text/language_registry.h"
 #include "src/indexes/text/text_index.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
@@ -1639,7 +1641,8 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
 
     // Create text index with both proto and schema
     auto text_index_schema = std::make_shared<indexes::text::TextIndexSchema>(
-        language, punctuation, with_offsets, stop_words, min_stem_size);
+        indexes::text::LanguageRegistry::Instance().Get(language), punctuation,
+        stop_words, with_offsets, min_stem_size);
     auto text_index = std::make_shared<indexes::Text>(
         CreateTextIndexProto(with_suffix_trie, no_stem, 1.0),
         text_index_schema);
@@ -2354,8 +2357,39 @@ void IndexSchemaFriendTest::VerifyVectorIndexConsistency(
             vectors.size());
   EXPECT_EQ(stats.subscription_remove.success_cnt,
             stats.subscription_add.success_cnt);
-  // Test update consistency
-  for (size_t j = 0; j < iterations; ++j) {
+  // Test update consistency. Wave 1 adds every key; wave 2 races updates
+  // against already indexed keys, so every count below is exact or bounded.
+  const uint64_t adds_before_wave1 = stats.subscription_add.success_cnt;
+  const uint64_t modifies_before_wave1 = stats.subscription_modify.success_cnt +
+                                         stats.subscription_modify.skipped_cnt;
+  for (size_t i = 0; i < vectors.size(); ++i) {
+    auto key_interned =
+        StringInternStore::Intern(std::string(*key) + std::to_string(i));
+    auto data = testing_infra::MakeAttributeData(
+        *vector_index, key_interned,
+        absl::string_view(reinterpret_cast<const char *>(vectors[0].data()),
+                          dimensions * sizeof(float)));
+    IndexSchema::MutatedAttributes mutated_attributes;
+    mutated_attributes[attr_id] = std::move(data);
+    index_schema->ProcessMutation(&fake_ctx, mutated_attributes, key_interned,
+                                  false, false);
+  }
+  WaitWorkerTasksAreCompleted(mutations_thread_pool);
+  EXPECT_EQ(stats.subscription_add.success_cnt - adds_before_wave1,
+            vectors.size());
+  EXPECT_EQ(stats.subscription_modify.success_cnt +
+                stats.subscription_modify.skipped_cnt - modifies_before_wave1,
+            0u);
+  for (size_t i = 0; i < vectors.size(); ++i) {
+    auto interned_key =
+        StringInternStore::Intern(std::string(*key) + std::to_string(i));
+    EXPECT_TRUE(vector_index->IsTracked(interned_key));
+  }
+
+  const uint64_t adds_before_wave2 = stats.subscription_add.success_cnt;
+  const uint64_t modifies_before_wave2 = stats.subscription_modify.success_cnt +
+                                         stats.subscription_modify.skipped_cnt;
+  for (size_t j = 1; j < iterations; ++j) {
     for (size_t i = 0; i < vectors.size(); ++i) {
       auto key_interned =
           StringInternStore::Intern(std::string(*key) + std::to_string(i));
@@ -2387,9 +2421,12 @@ void IndexSchemaFriendTest::VerifyVectorIndexConsistency(
   EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 0);
   EXPECT_EQ(stats.subscription_remove.success_cnt + vectors.size(),
             stats.subscription_add.success_cnt);
-  EXPECT_GT(stats.subscription_modify.success_cnt +
-                stats.subscription_modify.skipped_cnt,
-            vectors.size() * 0.1);
+  const uint64_t wave2_modifies = stats.subscription_modify.success_cnt +
+                                  stats.subscription_modify.skipped_cnt -
+                                  modifies_before_wave2;
+  EXPECT_EQ(stats.subscription_add.success_cnt, adds_before_wave2);
+  EXPECT_GE(wave2_modifies, vectors.size());
+  EXPECT_LE(wave2_modifies, vectors.size() * iterations);
   for (size_t i = 0; i < vectors.size(); ++i) {
     auto interned_key =
         StringInternStore::Intern(std::string(*key) + std::to_string(i));
@@ -2731,9 +2768,10 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
     auto text_index = std::make_shared<indexes::Text>(
         CreateTextIndexProto(true, false, 1.0),
         std::make_shared<indexes::text::TextIndexSchema>(
-            data_model::LANGUAGE_ENGLISH,
-            " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~", true,
-            std::vector<std::string>{}, 6));
+            indexes::text::LanguageRegistry::Instance().Get(
+                data_model::LANGUAGE_ENGLISH),
+            " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",
+            std::vector<std::string>{}, true, 6));
     VMSDK_EXPECT_OK(
         index_schema->AddIndex("description", "desc_id", text_index));
 
@@ -3227,6 +3265,114 @@ TEST_F(IndexSchemaScoreFieldTest, FallsBackToDefaultScoreWhenFieldMissing) {
       index_schema->GetDocumentScore(BorrowedInternedStringPtr(key)), 0.5f);
 }
 
+enum class IndexAttributeType { kText, kVector };
+
+struct GetMinVersionTestCase {
+  std::string test_name;
+  std::string index_name;
+  data_model::Language language;
+  IndexAttributeType attribute_type;
+  int db_num;
+  vmsdk::ValkeyVersion expected_version;
+};
+
+class GetMinVersionTest
+    : public ValkeySearchTestWithParam<GetMinVersionTestCase> {};
+
+TEST_P(GetMinVersionTest, ReturnsExpectedVersion) {
+  const auto &tc = GetParam();
+
+  data_model::IndexSchema index_schema_proto;
+  index_schema_proto.set_name(tc.index_name);
+  index_schema_proto.set_language(tc.language);
+  if (tc.db_num != 0) {
+    index_schema_proto.set_db_num(tc.db_num);
+  }
+
+  auto *attr = index_schema_proto.add_attributes();
+  switch (tc.attribute_type) {
+    case IndexAttributeType::kText:
+      attr->mutable_index()->mutable_text_index();
+      break;
+    case IndexAttributeType::kVector: {
+      auto *vector_index = attr->mutable_index()->mutable_vector_index();
+      vector_index->set_dimension_count(3);
+      vector_index->set_initial_cap(100);
+      vector_index->mutable_hnsw_algorithm();
+      break;
+    }
+  }
+
+  google::protobuf::Any any_proto;
+  any_proto.PackFrom(index_schema_proto);
+
+  auto result = IndexSchema::GetMinVersion(any_proto);
+  VMSDK_EXPECT_OK(result);
+  EXPECT_EQ(result.value(), tc.expected_version);
+}
+
+INSTANTIATE_TEST_SUITE_P(GetMinVersionTests, GetMinVersionTest,
+                         ValuesIn<GetMinVersionTestCase>({
+                             {
+                                 .test_name = "EnglishTextIndex",
+                                 .index_name = "english_text_idx",
+                                 .language = data_model::LANGUAGE_ENGLISH,
+                                 .attribute_type = IndexAttributeType::kText,
+                                 .db_num = 0,
+                                 .expected_version = kRelease12,
+                             },
+                             {
+                                 .test_name = "UnspecifiedLanguageTextIndex",
+                                 .index_name = "unspecified_text_idx",
+                                 .language = data_model::LANGUAGE_UNSPECIFIED,
+                                 .attribute_type = IndexAttributeType::kText,
+                                 .db_num = 0,
+                                 .expected_version = kRelease12,
+                             },
+                             {
+                                 .test_name = "NonEnglishTextIndex",
+                                 .index_name = "french_text_idx",
+                                 .language = data_model::LANGUAGE_FRENCH,
+                                 .attribute_type = IndexAttributeType::kText,
+                                 .db_num = 0,
+                                 .expected_version = kRelease13,
+                             },
+                             {
+                                 .test_name = "VectorOnlyIndex",
+                                 .index_name = "vector_idx",
+                                 .language = data_model::LANGUAGE_ENGLISH,
+                                 .attribute_type = IndexAttributeType::kVector,
+                                 .db_num = 0,
+                                 .expected_version = kRelease10,
+                             },
+                             {
+                                 .test_name = "NonZeroDbNum",
+                                 .index_name = "dbnum_idx",
+                                 .language = data_model::LANGUAGE_UNSPECIFIED,
+                                 .attribute_type = IndexAttributeType::kVector,
+                                 .db_num = 2,
+                                 .expected_version = kRelease11,
+                             },
+                             {
+                                 .test_name = "EnglishText_DbNumNonZero",
+                                 .index_name = "english_text_dbnum_idx",
+                                 .language = data_model::LANGUAGE_ENGLISH,
+                                 .attribute_type = IndexAttributeType::kText,
+                                 .db_num = 3,
+                                 .expected_version = kRelease12,
+                             },
+                             {
+                                 .test_name = "NonEnglishText_DbNumNonZero",
+                                 .index_name = "french_text_dbnum_idx",
+                                 .language = data_model::LANGUAGE_FRENCH,
+                                 .attribute_type = IndexAttributeType::kText,
+                                 .db_num = 3,
+                                 .expected_version = kRelease13,
+                             },
+                         }),
+                         [](const TestParamInfo<GetMinVersionTestCase> &info) {
+                           return info.param.test_name;
+                         });
 TEST_F(IndexSchemaScoreFieldTest, KeyspaceNotificationDeletesRegistryEntry) {
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
   mutations_thread_pool.StartWorkers();
@@ -3617,5 +3763,42 @@ TEST(IndexSchemaMinVersionTest, LowPrecisionDominatesOtherContributors) {
 }
 
 }  // namespace
+
+// A multi/exec key whose mutation record has already been consumed (in the
+// deque, absent from the map) is skipped by SaveIndexExtension, not fatal.
+TEST_F(IndexSchemaFriendTest, OrphanMultiKeySkippedOnSave)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  auto k = StringInternStore::Intern("prefix1_orphan");
+  index_schema->SetDbMutationSequenceNumber(k, 1);
+  index_schema->EnqueueMultiMutation(k);  // deque=[K]
+  auto vectors = DeterministicallyGenerateVectors(1, dimensions, 2);
+  absl::string_view data_ptr((char *)&vectors[0][0],
+                             dimensions * sizeof(float));
+  {
+    auto a = CreateMutatedAttributes(attribute_identifier, data_ptr, k,
+                                     hnsw_index.get());
+    index_schema->TrackMutatedRecord(nullptr, k, std::move(a), 1, false, false,
+                                     /*from_multi=*/true, 0);  // map={K}
+  }
+  // Drive the real consumer (the writer-pool task body) to index and erase the
+  // mutation record, leaving K referenced only by the deque.
+  index_schema->ProcessSingleMutationAsync(&fake_ctx, /*from_backfill=*/false,
+                                           k,
+                                           /*delay_capturer=*/nullptr);
+
+  // Confirm the state under test: K is in the deque but not the map.
+  {
+    absl::MutexLock lock(&index_schema->mutated_records_mutex_);
+    ASSERT_EQ(index_schema->multi_mutations_keys_.Get().size(), 1u);
+    EXPECT_EQ(index_schema->multi_mutations_keys_.Get().front()->Str(),
+              "prefix1_orphan");
+    EXPECT_EQ(index_schema->tracked_mutated_records_.find(k),
+              index_schema->tracked_mutated_records_.end());
+  }
+
+  FakeSafeRDB rdb;
+  EXPECT_TRUE(
+      index_schema->SaveIndexExtension(RDBChunkOutputStream(&rdb)).ok());
+}
 
 }  // namespace valkey_search

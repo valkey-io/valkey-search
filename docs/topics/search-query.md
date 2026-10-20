@@ -45,7 +45,7 @@ Where:
   - `ADHOC_BF` evaluates the filter first, then computes exact distances for the matching vectors.
   - `BATCHES` searches the vector index first and applies the filter while traversing vector candidates. An explicit `BATCHES` also takes precedence when `INKEYS` is supplied; the named keys remain part of the inline candidate filter. With the automatic policy, `INKEYS` uses filter-first execution.
   - When omitted, Valkey Search chooses the path using its existing planner heuristic.
-- `AS <name>` (optional): Overrides the default naming of the output distance field. By default this field is constructed by appending the string "\_\_score" to the name of the vector field.
+- `AS <name>` (optional): Overrides the default naming of the output distance field; the supplied name is used as-is. By default this field is named `__<field>_score`, where `<field>` is the field named in `@<field>` (the attribute's `AS` alias from `FT.CREATE`, if it has one). For example, `@vec` produces `__vec_score`.
 
 For example, this query forces exact filter-first execution for documents tagged `electronics`:
 
@@ -53,7 +53,7 @@ For example, this query forces exact filter-first execution for documents tagged
 FT.SEARCH products "@category:{electronics}=>[KNN 10 @embedding $query_vector HYBRID_POLICY ADHOC_BF]" PARAMS 2 query_vector "<vector blob>" DIALECT 2
 ```
 
-`HYBRID_POLICY` is accepted only inside the KNN brackets. Post-KNN query-attribute syntax is not supported; for example, the following form returns an error:
+`HYBRID_POLICY` is accepted only inside the KNN brackets. Query-attribute syntax after the KNN brackets is not supported; for example, the following form returns an error:
 
 ```
 @category:{electronics}=>[KNN 10 @embedding $query_vector]=>{$HYBRID_POLICY: ADHOC_BF}

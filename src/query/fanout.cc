@@ -470,6 +470,96 @@ absl::Status PerformSearchFanoutAsync(
 // FT.HYBRID multi-arm fanout.
 // ---------------------------------------------------------------------------
 
+// Local shard answers every arm or none, like a remote shard.
+class LocalMultiArmGate {
+ public:
+  explicit LocalMultiArmGate(
+      std::vector<std::shared_ptr<SearchPartitionResultsTracker>> trackers)
+      : trackers_(std::move(trackers)),
+        arms_(trackers_.size()),
+        remaining_(trackers_.size()) {}
+
+  // `arm` is null for an arm that never ran.
+  void Report(size_t arm_index, std::unique_ptr<SearchParameters> arm,
+              const absl::Status &status) {
+    CHECK(arm != nullptr || !status.ok());
+    std::vector<std::shared_ptr<SearchPartitionResultsTracker>> trackers;
+    std::vector<std::unique_ptr<SearchParameters>> arms;
+    absl::Status first_error;
+    {
+      absl::MutexLock lock(&mutex_);
+      if (!status.ok() && first_error_.ok()) {
+        first_error_ = status;
+      }
+      arms_[arm_index] = std::move(arm);
+      CHECK(remaining_ > 0);
+      if (--remaining_ > 0) {
+        return;
+      }
+      trackers = std::move(trackers_);
+      arms = std::move(arms_);
+      first_error = first_error_;
+    }
+    // Runs unlocked: dropping `trackers` may run fusion.
+    for (size_t i = 0; i < trackers.size(); ++i) {
+      auto &tracker = trackers[i];
+      if (first_error.ok()) {
+        tracker->has_successful_node.store(true);
+        tracker->AddResults(arms[i]->search_result.neighbors);
+        tracker->AddTotalCount(arms[i]->search_result.total_count);
+      } else {
+        // Same path as a failed remote shard.
+        coordinator::SearchIndexPartitionResponse empty;
+        tracker->HandleResponse(empty, "local", ToGrpcStatus(first_error));
+      }
+      if (arms[i] != nullptr) {
+        // Keeps the arm alive; its neighbors point into it.
+        absl::MutexLock lock(&tracker->mutex);
+        tracker->parameters->local_responder_ = std::move(arms[i]);
+      }
+    }
+  }
+
+ private:
+  absl::Mutex mutex_;
+  std::vector<std::shared_ptr<SearchPartitionResultsTracker>> trackers_
+      ABSL_GUARDED_BY(mutex_);
+  std::vector<std::unique_ptr<SearchParameters>> arms_ ABSL_GUARDED_BY(mutex_);
+  size_t remaining_ ABSL_GUARDED_BY(mutex_);
+  absl::Status first_error_ ABSL_GUARDED_BY(mutex_);
+};
+
+// A local multi-arm search arm; reports to the gate, not its tracker.
+class LocalMultiArmResponder : public query::SearchParameters {
+ public:
+  std::shared_ptr<LocalMultiArmGate> gate;
+  size_t arm_index{0};
+
+  void QueryCompleteMainThread(
+      std::unique_ptr<SearchParameters> self) override {
+    CHECK(vmsdk::IsMainThread());
+    QueryCompleteImpl(std::move(self));
+  }
+
+  void QueryCompleteBackground(
+      std::unique_ptr<SearchParameters> self) override {
+    CHECK(!vmsdk::IsMainThread());
+    QueryCompleteImpl(std::move(self));
+  }
+
+ private:
+  void QueryCompleteImpl(std::unique_ptr<SearchParameters> self) {
+    // Keep neighbors: real failures can carry partial results.
+    if (search_result.status.ok()) {
+      search_result.status = ForcedMultiArmFailure(arm_index);
+    }
+    // Release our gate ref to avoid a reference cycle.
+    auto gate_copy = std::move(gate);
+    const absl::Status status = search_result.status;
+    gate_copy->Report(arm_index, std::move(self), status);
+  }
+};
+
 // Demuxes one shard's MultiSearchIndexPartitionResponse into the per-arm
 // trackers. sub_responses[i] feeds per_arm_trackers[i].
 void PerformRemoteMultiSearchRequest(
@@ -677,40 +767,28 @@ absl::Status PerformMultiSearchFanoutAsync(
     }
   }
 
-  // Local shard: run each arm locally, reporting into its per-arm tracker via
-  // a LocalResponderSearch (mirrors the single-arm path).
+  // Local shard: run each arm, reporting through one gate.
   if (has_local_target) {
     // Every arm must be accounted for, so nothing in this loop returns early.
-    // Bailing out on arm i would leave arms i+1..N-1 waiting on a local shard
-    // that never reports -- they would merge the remote shards alone and say
-    // nothing about it -- and the error would travel back to CreateCommand,
-    // which replies to a client DispatchFanoutAsync has already blocked and
-    // the meta-tracker will later unblock and reply to again.
-    //
-    // A failure is instead recorded through the same entry point a failed
-    // remote shard uses, so the local shard's loss follows the identical
-    // partial-results policy with no second implementation of it.
-    auto fail_arm = [&](size_t arm, const absl::Status &status) {
-      coordinator::SearchIndexPartitionResponse empty;
-      per_arm_trackers[arm]->HandleResponse(empty, "local",
-                                            ToGrpcStatus(status));
-    };
+    // A failed arm is reported to the gate, so it still counts down.
+    auto gate = std::make_shared<LocalMultiArmGate>(per_arm_trackers);
     for (size_t i = 0; i < num_arms; ++i) {
-      auto local_parameters = std::make_unique<LocalResponderSearch>();
+      auto local_parameters = std::make_unique<LocalMultiArmResponder>();
       auto convert = coordinator::GRPCSearchRequestToParameters(
           *arm_requests[i], nullptr, local_parameters.get());
       if (!convert.ok()) {
-        fail_arm(i, convert);
+        gate->Report(i, nullptr, convert);
         continue;
       }
-      local_parameters->tracker = per_arm_trackers[i];
+      local_parameters->gate = gate;
+      local_parameters->arm_index = i;
       auto status = query::SearchAsync(std::move(local_parameters), thread_pool,
                                        SearchMode::kLocal);
       if (!status.ok()) {
         VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
             << "Failed to handle FT.HYBRID arm locally during fan-out: "
             << status.message();
-        fail_arm(i, status);
+        gate->Report(i, nullptr, status);
       }
     }
   }

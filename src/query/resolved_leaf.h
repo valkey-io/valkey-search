@@ -66,24 +66,33 @@ struct ExpansionLeaf {
   std::optional<Term> representative;
 };
 
-// Tag leaf: each matched tag value is a BM25 term with tf = 1.
+// Tag leaf: the predicate's values parsed once per query so each candidate
+// costs a membership check and a BM25 term (tf = 1) per value it carries.
+//
+//   @color:{red|Red|blue|purple|gr*} on a case-insensitive index with no
+//   "purple" documents resolves to:
+//     tag_values   = [{red, idf, bag}, {blue, idf, bag}]
+//     tag_prefixes = [gr*]
+//   "Red" is a case-duplicate of "red", "purple" can never match, and the
+//   prefix is kept as-is because its match depends on the document.
 struct TagLeaf {
-  // The values the query names (e.g. `{red|blue}`), minus any absent from the
-  // index. Strings are borrowed from the predicate, which outlives the cache.
+  // One query value and its idf. Whether a document carries the value is
+  // checked in different ways:
+  //   background: probe `bag`, the index's set of keys with this value. 
+  //               Avoids looking up TagInfo and a string comparison.
+  //   main:       compare `value` against the fetched record's own tags
+  //               because the bag doesn't provide stable access on main
+  //               thread.
   struct Value {
+    // Borrowed from the predicate, which outlives the cache.
     absl::string_view value;
-    // Background only: the keys that have this value, borrowed from the index
-    // and probed once per candidate. Unset on the main thread, which checks
-    // membership against the fetched record's tags instead.
+    // Background only, borrowed from the index.
     std::optional<BorrowedBagOfInternedStringPtrs> bag;
     float idf = 0.0f;
   };
   absl::InlinedVector<Value, 4> tag_values;
-  // The query's prefix values (`re*`). Nothing is resolved for them: a prefix
-  // credits the doc's first matching tag, so dt is looked up while scoring.
-  // They are kept here so the split from exact values and the case-dedup
-  // (`{re*|Re*}` on a case-insensitive index) happen once per query, not once
-  // per candidate.
+  // A prefix credits the document's first matching tag, so its dt and idf are
+  // looked up while scoring.
   // Note: We could move this parsing into the predicate.
   absl::InlinedVector<absl::string_view, 2> tag_prefixes;
 };

@@ -139,8 +139,8 @@ TEST(CoordinatorTlsConfigTest, DefaultsReloadIntervalWhenServerDoesNotReload) {
 // an unknown config must not take the module down.
 TEST(CoordinatorTlsConfigTest, ToleratesServerWithoutReloadInterval) {
   auto values = EnabledConfig();
-  auto config = LoadTlsConfig(
-      [&values](const char *name) -> absl::StatusOr<std::string> {
+  auto config =
+      LoadTlsConfig([&values](const char *name) -> absl::StatusOr<std::string> {
         if (std::string(name) == "tls-auto-reload-interval") {
           return absl::NotFoundError("unknown config");
         }

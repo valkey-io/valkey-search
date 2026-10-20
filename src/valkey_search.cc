@@ -1150,8 +1150,7 @@ absl::StatusOr<std::string> GetConfigGetReply(ValkeyModuleCtx *ctx,
   // An unknown config (e.g. one added in a newer server) yields an empty array.
   if (ValkeyModule_CallReplyType(reply.get()) != VALKEYMODULE_REPLY_ARRAY ||
       ValkeyModule_CallReplyLength(reply.get()) < 2) {
-    return absl::NotFoundError(
-        absl::StrFormat("Config not found: %s", config));
+    return absl::NotFoundError(absl::StrFormat("Config not found: %s", config));
   }
   ValkeyModuleCallReply *config_reply =
       ValkeyModule_CallReplyArrayElement(reply.get(), 1);

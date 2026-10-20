@@ -154,9 +154,17 @@ std::optional<std::string> GetSortKeyValue(const indexes::Neighbor &neighbor,
 
 query::SortByKey ResolveSortByKey(const SearchCommand &command) {
   const std::string &alias = command.sortby_parameter->field;
+  query::SortByKey key(*command.index_schema, alias);
+
+  if (key.identifier == alias) {
+    if (options::EnabledInVersion(1, 3, 0)) {
+      return key;
+    }
+    return query::SortByKey::Legacy(alias);
+  }
+
   return VALKEY_SEARCH_COMPATIBILITY_FIX(
-      1, 3, 0, "ft_search_sortby_alias",
-      [&]() { return query::SortByKey(*command.index_schema, alias); },
+      1, 3, 0, "ft_search_sortby_alias", [&]() { return key; },
       [&]() { return query::SortByKey::Legacy(alias); });
 }
 

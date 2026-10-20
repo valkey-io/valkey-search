@@ -61,7 +61,7 @@ struct SortByParameter {
 // SORTBY
 struct SortByKey {
   SortByKey(const IndexSchema &schema, absl::string_view sortby_alias);
-  // Legacy needed as explained below in Find()
+  // Build a key using the query name for pre-1.3 behavior.
   static SortByKey Legacy(absl::string_view sortby_alias);
 
   std::string identifier;
@@ -70,14 +70,7 @@ struct SortByKey {
 
   RecordsMap::const_iterator Find(const RecordsMap &contents) const {
     auto it = contents.find(identifier);
-    // JSON objects are lookedup by alias instead of identifier.
-    // Notice alias vs. identifier lookup are not mutually exclusive purely
-    // based on condition is_json. This is because due to issue #1597 older
-    // version of vk search can return json path inconsistently, sometimes alias
-    // sometimes field name. Cluster running on old VK search version might have
-    // mixture of new/old node versions with such inconsistent json behavior
-    // during version upgrade, as such this guard must remain until support for
-    // search V1.x is completely dropped.
+    // Older cluster nodes may return JSON content under either name (#1597).
     if (it == contents.end() && is_json) {
       it = contents.find(alias);
     }

@@ -489,17 +489,17 @@ absl::StatusOr<RecordsMap> GetContent(
             vmsdk::RetainUniqueValkeyString(itr->second.value.get())));
   }
 
-  // Filed twice: the sort reads the identifier; an older coordinator in a
-  // rolling upgrade reads the alias. Neither reaches the reply.
+  // Keep both names for mixed-version coordinators; the extra entries are
+  // internal.
   if (parameters.sortby_parameter.has_value()) {
     auto itr = content.find(sortby_identifier);
     if (itr != content.end()) {
       ValkeyModuleString *value = itr->second.value.get();
-      auto identifier = vmsdk::MakeUniqueValkeyString(sortby_identifier);
-      auto identifier_view = vmsdk::ToStringView(identifier.get());
+      auto owned_identifier = vmsdk::MakeUniqueValkeyString(sortby_identifier);
+      auto identifier_view = vmsdk::ToStringView(owned_identifier.get());
       return_content.emplace(
           identifier_view,
-          RecordsMapValue(std::move(identifier),
+          RecordsMapValue(std::move(owned_identifier),
                           vmsdk::RetainUniqueValkeyString(value)));
       return_content.emplace(
           parameters.sortby_parameter->field,

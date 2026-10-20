@@ -1227,6 +1227,30 @@ class TestSortByAliasGate(ValkeySearchTestCaseDebugMode):
             assert result == desc_ids, f"emulate-release {release}"
             assert legacy_uses() - before == counted
 
+    def test_sortby_without_alias_does_not_count(self):
+        # Without AS the alias is the hash field, so the fix changes nothing
+        # and the counter must not call the query a legacy use.
+        client: Valkey = self.server.get_new_client()
+        assert client.execute_command(
+            "FT.CREATE", "sbn_idx", "ON", "HASH", "PREFIX", "1", "sbn:",
+            "SCHEMA", "price", "NUMERIC", "n", "NUMERIC") == b"OK"
+        for key, price in (("sbn:1", 7), ("sbn:2", 5), ("sbn:3", 6)):
+            assert client.execute_command(
+                "HSET", key, "price", price, "n", 1) == 2
+        IndexingTestHelper.wait_for_indexing_complete_on_node(client, "sbn_idx")
+        counter = "search_compatibility-ft_search_sortby_alias"
+        for release in ("1.2.1", "1.3.0"):
+            assert client.execute_command(
+                "CONFIG", "SET", "search.emulate-release", release) == b"OK"
+            before = client.info("SEARCH").get(counter, 0)
+            result = client.execute_command(
+                "FT.SEARCH", "sbn_idx", "@n:[0 10]", "SORTBY", "price", "ASC",
+                "WITHSORTKEYS", "RETURN", "1", "n", "DIALECT", "2")
+            assert result[1::3] == [b"sbn:2", b"sbn:3", b"sbn:1"], (release,
+                                                                    result)
+            assert result[2::3] == [b"#5", b"#6", b"#7"], (release, result)
+            assert client.info("SEARCH").get(counter, 0) - before == 0, release
+
     def test_sortby_alias_gate_counts_once_with_cursor(self):
         # The first WITHCURSOR reply resolves the row format once; the gates
         # must not count twice.

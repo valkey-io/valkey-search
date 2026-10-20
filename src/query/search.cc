@@ -688,33 +688,32 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
     indexes::IndexBase *index;
   };
   std::vector<AttributeInfo> attributes;
-  // Issue #1440. Gated: a sort attribute the index cannot serve (TEXT, or
-  // missing on a document) sends the row to the main-thread fetch, which
-  // changes the RETURN bytes of indexed numerics.
+  // Gated: for 1.3.0 and later, fetch the document on the main thread when
+  // SORTBY cannot be served by the index, such as for TEXT or a missing value.
+  // This also returns stored bytes for other RETURN fields instead of indexed
+  // copies. Issue #1440.
   std::optional<SortByKey> sortby_key;
   // Sorted from Neighbor::distance, not from attribute_contents.
-  const bool sort_by_synthesized_field =
+  const bool sort_by_computed_key =
       parameters.sortby_parameter.has_value() &&
       ((parameters.score_as &&
         parameters.sortby_parameter->field ==
             vmsdk::ToStringView(parameters.score_as.get())) ||
        parameters.sortby_parameter->field == GetVrScoreFieldName(parameters));
-  if (parameters.sortby_parameter.has_value() && !sort_by_synthesized_field &&
+  if (parameters.sortby_parameter.has_value() && !sort_by_computed_key &&
       options::EnabledInVersion(1, 3, 0)) {
     const std::string &sortby_field = parameters.sortby_parameter->field;
     sortby_key.emplace(*parameters.index_schema, sortby_field);
-    const bool sortby_served_by_return = std::any_of(
+    const bool sort_key_already_returned = std::any_of(
         parameters.return_attributes.begin(),
         parameters.return_attributes.end(), [&](const ReturnAttribute &attr) {
           return attr.identifier.get() &&
                  vmsdk::ToStringView(attr.identifier.get()) ==
                      sortby_key->identifier;
         });
-    if (!sortby_served_by_return) {
+    if (!sort_key_already_returned) {
       auto index = parameters.index_schema->GetIndex(sortby_field);
-      // Unreachable from FT.SEARCH: the parser validated the field, and a shard
-      // refuses a request whose schema differs from the coordinator's. A caller
-      // that bypasses both gets the keyspace fetch, not a crash.
+      // Defensive guard for callers that bypass parser and shard validation.
       DCHECK(index.ok()) << index.status();
       if (!index.ok()) {
         return results;

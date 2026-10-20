@@ -280,6 +280,11 @@
                             "name": "FLAT",
                             "type": "pure-token",
                             "token": "FLAT"
+                          },
+                          {
+                            "name": "SVS_VAMANA",
+                            "type": "pure-token",
+                            "token": "SVS_VAMANA"
                           }
                         ]
                       },
@@ -290,7 +295,7 @@
                       {
                         "name": "vector-params",
                         "type": "block",
-                        "description": "Vector algorithm parameters (DIM, TYPE, DISTANCE_METRIC, INITIAL_CAP, M, EF_CONSTRUCTION, EF_RUNTIME)",
+                        "description": "Vector algorithm parameters (DIM, TYPE, DISTANCE_METRIC, INITIAL_CAP; M, EF_CONSTRUCTION, EF_RUNTIME for HNSW; GRAPH_MAX_DEGREE, CONSTRUCTION_WINDOW_SIZE, SEARCH_WINDOW_SIZE, ALPHA, COMPRESSION for SVS_VAMANA)",
                         "arguments": [
                           {
                             "name": "type",
@@ -364,6 +369,48 @@
                             "token": "EF_RUNTIME",
                             "type": "integer",
                             "optional": true
+                          },
+                          {
+                            "name": "graph_max_degree",
+                            "token": "GRAPH_MAX_DEGREE",
+                            "type": "integer",
+                            "optional": true
+                          },
+                          {
+                            "name": "construction_window_size",
+                            "token": "CONSTRUCTION_WINDOW_SIZE",
+                            "type": "integer",
+                            "optional": true
+                          },
+                          {
+                            "name": "search_window_size",
+                            "token": "SEARCH_WINDOW_SIZE",
+                            "type": "integer",
+                            "optional": true
+                          },
+                          {
+                            "name": "alpha",
+                            "token": "ALPHA",
+                            "type": "double",
+                            "optional": true
+                          },
+                          {
+                            "name": "compression",
+                            "token": "COMPRESSION",
+                            "type": "oneof",
+                            "optional": true,
+                            "arguments": [
+                              {
+                                "name": "none",
+                                "type": "pure-token",
+                                "token": "NONE"
+                              },
+                              {
+                                "name": "fp16",
+                                "type": "pure-token",
+                                "token": "FP16"
+                              }
+                            ]
                           }
                         ]
                       }

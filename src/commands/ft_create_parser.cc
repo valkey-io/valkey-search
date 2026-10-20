@@ -1019,8 +1019,8 @@ absl::Status SVSVamanaParameters::Verify() const {
   const auto max_m_value = options::GetMaxM().GetValue();
   VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(graph_max_degree, 2, max_m_value))
       << kGraphMaxDegreeParam
-      << " must be a positive integer greater than 2 and cannot exceed "
-      << max_m_value << ".";
+      << " must be an integer of at least 2 and cannot exceed " << max_m_value
+      << ".";
   const auto max_ef_construction_value =
       options::GetMaxEfConstruction().GetValue();
   VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(construction_window_size, 1,

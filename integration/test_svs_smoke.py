@@ -172,6 +172,27 @@ class TestSVSVamanaSmoke(ValkeySearchTestCaseBase):
         assert algo["search_window_size"] == 10
         assert algo["compression"] == "SVS_COMPRESSION_NONE"
 
+    @pytest.mark.parametrize("metric,alpha_args,expected", [
+        ("L2", [], 1.2),
+        ("IP", [], 0.95),
+        ("COSINE", [], 0.95),
+        ("L2", ["ALPHA", "1.5"], 1.5),
+        ("COSINE", ["ALPHA", "0.9"], 0.9),
+    ])
+    def test_ft_info_reports_effective_alpha(self, metric, alpha_args,
+                                             expected):
+        """FT.INFO shows the alpha SVS builds with: ALPHA when given,
+        otherwise SVS's default for the metric."""
+        client: Valkey = self.server.get_new_client()
+        client.execute_command(
+            "FT.CREATE", "alpha_idx",
+            "SCHEMA", "v", "VECTOR", "SVS_VAMANA",
+            str(6 + len(alpha_args)), "TYPE", "FLOAT32", "DIM", str(DIM),
+            "DISTANCE_METRIC", metric, *alpha_args,
+        )
+        alpha = _v_index(client, "alpha_idx")["algorithm"]["alpha"]
+        assert float(alpha) == pytest.approx(expected, abs=1e-6)
+
     def test_ingest_bootstrap_and_add_points(self):
         """First HSET bootstraps svs_index_; subsequent HSETs go through
         svs_index_dynamic_add_points. FT.INFO size tracks label_to_record_."""
@@ -322,6 +343,22 @@ class TestSVSVamanaSmoke(ValkeySearchTestCaseBase):
             return {int(k[len(prefix):]) for k in reply[1:]}
 
         assert range_docs("svs_m") == range_docs("flat_m") == {2, 3}
+
+    def test_vector_range_accepts_epsilon(self):
+        """$EPSILON is accepted on a VECTOR_RANGE over an SVS_VAMANA field,
+        as for HNSW, and doesn't change the result."""
+        client: Valkey = self.server.get_new_client()
+        _create_metric_index(client, "svs_m", "SVS_VAMANA", "COSINE")
+
+        def range_docs(attrs):
+            reply = client.execute_command(
+                "FT.SEARCH", "svs_m", f"@v:[VECTOR_RANGE $r $q]{attrs}",
+                "NOCONTENT", "PARAMS", "4", "r", "0.3",
+                "q", _fp32(METRIC_QUERY["COSINE"]), "DIALECT", "2",
+            )
+            return {int(k[len(b"svs_m:"):]) for k in reply[1:]}
+
+        assert range_docs("=>{$epsilon: 0.1}") == range_docs("") == {2, 3}
 
     def test_ft_hybrid_vsim_on_svs_field(self):
         """FT.HYBRID accepts an SVS_VAMANA field in its VSIM arm."""

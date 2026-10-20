@@ -1000,6 +1000,17 @@ INSTANTIATE_TEST_SUITE_P(
                  "greater than 0 and cannot exceed 1000000.",
          },
          {
+             .test_name = "svs_graph_max_degree_below_two",
+             .success = false,
+             .command_str = "idx1 SChema hash_field1 vector SVS_VAMANA 8 "
+                            "TYPE FLOAT32 DIM 3 DISTANCE_METRIC L2 "
+                            "GRAPH_MAX_DEGREE 1",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Invalid range: "
+                 "Value below minimum; GRAPH_MAX_DEGREE must be an integer of "
+                 "at least 2 and cannot exceed 2000000.",
+         },
+         {
              .test_name = "svs_alpha_negative_nan",
              .success = false,
              .command_str = "idx1 SChema hash_field1 vector SVS_VAMANA 8 "

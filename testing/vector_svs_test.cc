@@ -507,6 +507,27 @@ const HeaderGateCase kHeaderGateCases[] = {
      "element_type mismatch"},
 };
 
+// SEARCH_WINDOW_SIZE is a search-time setting, not part of the stored
+// layout, so an RDB saved with a different value still loads.
+TEST_F(VectorSVSTest, LoadIgnoresSearchWindowSize) {
+  FakeSafeRDB rdb;
+  auto proto =
+      CreateSVSVectorIndexProto(kDimensions, data_model::DISTANCE_METRIC_L2,
+                                data_model::SVS_COMPRESSION_NONE);
+  data_model::SVSIndexHeader header = ValidHeaderFor(proto);
+  header.mutable_build_config()->set_search_window_size(
+      proto.svs_vamana_algorithm().search_window_size() + 5);
+  {
+    RDBChunkOutputStream out(&rdb);
+    VMSDK_EXPECT_OK(out.SaveString(header.SerializeAsString()));
+    VMSDK_EXPECT_OK(out.Close());
+  }
+  auto loaded = VectorSVS<float>::LoadFromRDB(
+      &fake_ctx_, &hash_attribute_data_type_, proto, "attribute_identifier_2",
+      SupplementalContentChunkIter(&rdb), 0);
+  VMSDK_EXPECT_OK(loaded) << loaded.status();
+}
+
 class VectorSVSHeaderGateTest
     : public VectorSVSTest,
       public testing::WithParamInterface<HeaderGateCase> {};

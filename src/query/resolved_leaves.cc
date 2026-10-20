@@ -25,11 +25,18 @@
 
 namespace valkey_search::query {
 
+namespace {
+
+// Collapses an all-fields mask (what the parser builds for an unscoped query)
+// to the `~0ULL` sentinel so posting probes skip the per-position scan. Field
+// numbers are dense from 0 (TextIndexSchema::AllocateTextFieldNumber).
 uint64_t ScoringFieldMask(uint64_t field_mask, uint8_t num_fields) {
   if (num_fields == 0 || num_fields >= 64) return field_mask;
   const uint64_t all_fields = (1ULL << num_fields) - 1;
   return (field_mask & all_fields) == all_fields ? ~0ULL : field_mask;
 }
+
+}  // namespace
 
 ResolvedLeafCache::ResolvedLeafCache(
     const indexes::text::TextIndexSchema *text_index_schema, CorpusStats stats,
@@ -64,14 +71,19 @@ float ResolvedLeafCache::Idf(size_t dt) const {
        static_cast<uint32_t>(std::min<size_t>(dt, stats_.total_docs))});
 }
 
+std::optional<std::string> ResolvedLeafCache::LockWord(
+    absl::string_view word) const {
+  if (MainThread()) return std::string(word);
+  return std::nullopt;
+}
+
 WordPostings ResolvedLeafCache::Lookup(absl::string_view word) const {
   auto find = [&](const indexes::text::TextIndex &index) {
     return index.GetPrefix().FindPostingsTarget(word);
   };
-  if (MainThread()) {
-    return {std::string(word), text_index_schema_->WithTextIndexLock(find)};
-  }
-  return {std::nullopt, find(*text_index_schema_->GetTextIndex())};
+  return {LockWord(word), MainThread()
+                              ? text_index_schema_->WithTextIndexLock(find)
+                              : find(*text_index_schema_->GetTextIndex())};
 }
 
 ResolvedLeaf &ResolvedLeafCache::GetOrResolve(const Predicate *predicate) {
@@ -122,11 +134,7 @@ std::optional<ExpansionMatch> ResolvedLeafCache::FindExpansionMatch(
         auto [entry, df] =
             MainThread() ? text_index_schema_->WithWordLock(word, get) : get();
         if (!entry) return true;
-        found.emplace(ExpansionMatch{
-            {MainThread() ? std::optional(std::string(word)) : std::nullopt,
-             postings},
-            *entry,
-            df});
+        found.emplace(ExpansionMatch{{LockWord(word), postings}, *entry, df});
         return false;
       });
   return found;
@@ -134,11 +142,8 @@ std::optional<ExpansionMatch> ResolvedLeafCache::FindExpansionMatch(
 
 ResolvedLeaf ResolvedLeafCache::ResolveText(
     const TextPredicate *predicate) const {
-  // Resolved once per query, so the per-document walk never pays a
-  // dynamic_cast.
-  auto text_index_schema = predicate->GetTextIndexSchema();
-  CHECK(text_index_schema.get() == text_index_schema_);
-  const uint8_t num_text_fields = text_index_schema->GetNumTextFields();
+  CHECK(predicate->GetTextIndexSchema().get() == text_index_schema_);
+  const uint8_t num_text_fields = text_index_schema_->GetNumTextFields();
 
   if (dynamic_cast<const ExpansionPredicate *>(predicate)) {
     ExpansionLeaf leaf;
@@ -151,9 +156,7 @@ ResolvedLeaf ResolvedLeafCache::ResolveText(
 
   TermLeaf leaf;
 
-  // A single-word BM25 term (the exact surface term or the stem root
-  // literal): one posting list, IDF from that word's own df. An absent word
-  // adds no group.
+  // A single-word group; an absent word adds none.
   auto add_word_group = [&](absl::string_view word, uint64_t field_mask) {
     WordPostings found = Lookup(word);
     if (!found.postings) return;
@@ -167,31 +170,24 @@ ResolvedLeaf ResolvedLeafCache::ResolveText(
   // Fires once per query here rather than per key; test_cancel.py pauses on it.
   BACKGROUND_PAUSEPOINT("search_term_predicate");
   const absl::string_view word = term_pred->GetTextString();
-  // Group 1: the exact surface term. For a stemmed term this same word is
-  // scored again in the inflection group below (it is one of its parents), the
-  // deliberate exact-match boost.
+  // Group 1: the exact word.
   add_word_group(word,
                  ScoringFieldMask(term_pred->GetFieldMask(), num_text_fields));
 
   const uint64_t stem_field_mask =
-      term_pred->GetFieldMask() & text_index_schema->GetStemTextFieldMask();
+      term_pred->GetFieldMask() & text_index_schema_->GetStemTextFieldMask();
   if (!term_pred->IsExact() && stem_field_mask != 0) {
-    // Parents of the stem root: every surface word that stems to it with
-    // surface != root (a self-stemming word is never added to the stem tree,
-    // so the root literal is not among them). Includes the query word.
-    const std::string stemmed = text_index_schema->GetLexer().StemWord(word);
+    const std::string stemmed = text_index_schema_->GetLexer().StemWord(word);
     auto add_stem_groups = [&](const indexes::text::Rax &stem_tree) {
-      // Group 2: the stem root literal, only when it differs from the
-      // query word (else it is group 1) and is itself indexed.
+      // Group 2: the root, when it differs from the word.
       if (stemmed != word) {
         add_word_group(stemmed,
                        ScoringFieldMask(stem_field_mask, num_text_fields));
       }
+      // Group 3: the root's inflections, with dt the distinct-doc count kept
+      // at ingestion (summing the words' dfs would double-count).
       const auto root = stem_tree.FindStemParentsTarget(stemmed);
       if (!root) return;
-
-      // Group 3: the stem inflections. F sums the per-doc frequencies of
-      // every inflection; dt is the distinct doc count counted at ingestion.
       TermGroup stem;
       const size_t max_words = options::GetMaxTermExpansions().GetValue();
       for (const auto &parent :
@@ -207,8 +203,8 @@ ResolvedLeaf ResolvedLeafCache::ResolveText(
         leaf.groups.push_back(std::move(stem));
       }
     };
-    MainThread() ? text_index_schema->WithStemTreeLock(add_stem_groups)
-                 : add_stem_groups(text_index_schema->GetStemTree());
+    MainThread() ? text_index_schema_->WithStemTreeLock(add_stem_groups)
+                 : add_stem_groups(text_index_schema_->GetStemTree());
   }
   return leaf;
 }
@@ -221,33 +217,20 @@ ResolvedLeaf ResolvedLeafCache::ResolveTag(const Predicate *predicate) const {
   const indexes::Tag *tag_index = tag_pred->GetIndex();
   if (tag_index == nullptr) return std::monostate{};
 
-  // A tag value is scored as a BM25 term with F ≡ 1: IDF over the number of
-  // documents carrying that value (dt). A union (`{red|blue}`) resolves several
-  // values, each contributing its own term.
   TagLeaf leaf;
-  // Dedupe query values that collapse to the same tag under the index's case
-  // rules (e.g. `{red|Red}` on a case-insensitive index).
   const bool case_sensitive = tag_index->IsCaseSensitive();
   absl::flat_hash_set<std::string> seen;
   for (const auto &value : tag_pred->GetTags()) {
     std::string norm = case_sensitive ? value : absl::AsciiStrToLower(value);
     if (!seen.insert(norm).second) continue;
-    // A prefix value (`foo*`) credits a single representative matched value
-    // per document, which depends on the document, so dt/IDF resolve per
-    // candidate.
     if (!value.empty() && value.back() == '*') {
       leaf.tag_prefixes.push_back(value);
       continue;
     }
-    // A value absent from the index has no matching document and never
-    // contributes a term.
     TagLeaf::Value resolved{value};
     size_t dt = 0;
-    // In the background the read phase keeps the index stable, so the leaf
-    // keeps the borrowed bag and answers each candidate with a probe. The main
-    // thread is outside that phase: the bag could change under it, so it takes
-    // the index mutex just long enough to read dt and later checks membership
-    // against the fetched record's own tags.
+    // The main thread takes the index mutex only to read dt; see
+    // TagLeaf::Value.
     if (MainThread()) {
       dt = tag_index->GetTagValueDocCount(value, /*lock=*/true);
     } else {

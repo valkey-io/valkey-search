@@ -1152,7 +1152,6 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       const indexes::Tag *tag_index = tag_pred->GetIndex();
 
       const uint32_t doc_len = score_ctx.DocLen(key);
-      const uint32_t total_docs = score_ctx.cache.Stats().total_docs;
 
       // Membership: the value's bag on the background path; on the main thread
       // the record's own tags, since the index may not reflect the mutation.
@@ -1184,17 +1183,13 @@ std::optional<float> ScoreNode(const Predicate *predicate,
                                    predicate->GetWeight());
       }
       // Each prefix contributes ONE matched value (the doc's first), never the
-      // sum; a union still sums. Clamp dt: it and total_docs come from
-      // independently-locked counters.
+      // sum; a union still sums.
       for (absl::string_view prefix : leaf->tag_prefixes) {
-        const uint32_t dt = static_cast<uint32_t>(std::min<size_t>(
-            tag_index->GetPrefixMatchDocCount(
-                prefix, key, /*lock=*/score_ctx.cache.MainThread()),
-            total_docs));
+        const size_t dt = tag_index->GetPrefixMatchDocCount(
+            prefix, key, /*lock=*/score_ctx.cache.MainThread());
         if (dt == 0) continue;
-        sum += score_ctx.ScoreLeaf(
-            score_ctx.cache.Scorer()->PrecomputeIDF({total_docs, dt}),
-            /*tf=*/1, doc_len, predicate->GetWeight());
+        sum += score_ctx.ScoreLeaf(score_ctx.cache.Idf(dt), /*tf=*/1, doc_len,
+                                   predicate->GetWeight());
       }
       return sum;
     }

@@ -8,22 +8,19 @@
 #ifndef VALKEYSEARCH_SRC_QUERY_RESOLVED_LEAVES_H_
 #define VALKEYSEARCH_SRC_QUERY_RESOLVED_LEAVES_H_
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
-#include <utility>
-#include <variant>
 
-#include "absl/container/inlined_vector.h"
 #include "absl/container/node_hash_map.h"
 #include "absl/functional/function_ref.h"
 #include "absl/strings/string_view.h"
-#include "src/indexes/tag.h"
-#include "src/indexes/text/invasive_ptr.h"
 #include "src/indexes/text/posting.h"
 #include "src/indexes/text/text_index.h"
 #include "src/query/predicate.h"
 #include "src/query/resolved_leaf.h"
+#include "src/utils/string_interning.h"
 
 namespace valkey_search::indexes::scoring {
 class Scorer;
@@ -31,20 +28,12 @@ class Scorer;
 
 namespace valkey_search::query {
 
-// Collapses an all-fields mask (what the parser builds for an unscoped query)
-// to the `~0ULL` sentinel so posting probes skip the per-position scan. Field
-// numbers are dense from 0 (TextIndexSchema::AllocateTextFieldNumber).
-uint64_t ScoringFieldMask(uint64_t field_mask, uint8_t num_fields);
-
 // Which locks the cache and its probes take. The main thread never waits on
 // the time-sliced mutex (a reader arriving during a write phase would stall for
 // the whole phase); it takes the short locks each writer takes instead.
 enum class LockMode {
-  // The caller holds the time-sliced mutex in read mode, excluding ingestion.
-  kBackground,
-  // Global lookups under the tree lock, each posting probe under its word's
-  // bucket, tag counts under the tag index's mutex.
-  kMainThread,
+  kBackground,  // Caller holds the time-sliced mutex in read mode.
+  kMainThread,  // Tree lock, word bucket and tag mutex, each held briefly.
 };
 
 // Corpus-wide scoring inputs, read once per query.
@@ -63,12 +52,9 @@ struct ExpansionMatch {
   size_t df = 0;
 };
 
-// Query-scoped, lazily filled cache of per-leaf resolutions keyed on the base
-// Predicate*, shared by filtering and scoring so each leaf's tree walk happens
-// once per query rather than once per candidate per phase. Also carries the
-// query-invariant scoring inputs, so a reply-scoped instance is everything
-// main-thread rescoring needs. Unsynchronized: a background Search() runs as
-// one task, and the main-thread reply loop builds its own.
+// Per-leaf resolutions, done once per query and shared by filtering and
+// scoring. Not thread-safe: a background Search() is one task, and the
+// main-thread reply loop builds its own instance.
 class ResolvedLeafCache {
  public:
   // `text_index_schema` may be null when the index has no TEXT field; no text
@@ -104,6 +90,10 @@ class ResolvedLeafCache {
       const indexes::text::TextIndex &per_key_index,
       const InternedStringPtr &key) const;
 
+  // IDF for a term carried by `dt` documents, clamped to the corpus size since
+  // the two counts come from independently locked counters.
+  float Idf(size_t dt) const;
+
   bool MainThread() const { return mode_ == LockMode::kMainThread; }
 
   const indexes::scoring::Scorer *Scorer() const { return scorer_; }
@@ -117,7 +107,8 @@ class ResolvedLeafCache {
   ResolvedLeaf ResolveText(const TextPredicate *predicate) const;
   ResolvedLeaf ResolveTag(const Predicate *predicate) const;
   WordPostings Lookup(absl::string_view word) const;
-  float Idf(size_t dt) const;
+  // The word only when probes will lock on it (main thread).
+  std::optional<std::string> LockWord(absl::string_view word) const;
 
   const indexes::text::TextIndexSchema *text_index_schema_;
   CorpusStats stats_;

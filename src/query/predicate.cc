@@ -484,7 +484,7 @@ EvaluationResult ComposedPredicate::EvaluateWithContext(Evaluator &evaluator,
   // the caller to write into Neighbor::distance. Only one VR predicate can be
   // present per query (enforced at parse time), so at most one child sets this.
   bool has_vr_distance = false;
-  float vr_distance = 0.0f;
+  double vr_distance = 0.0;
   auto carry_vr = [&](const EvaluationResult &r) {
     if (r.has_vr_distance) {
       has_vr_distance = true;

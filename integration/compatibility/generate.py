@@ -267,7 +267,7 @@ class BaseCompatibilityTest:
         cmd = orig_cmd[0].split() if len(orig_cmd) == 1 else [*orig_cmd]
         self.execute_command(cmd)
 
-@pytest.mark.parametrize("vector_data_type", ["FLOAT32", "FLOAT16", "BFLOAT16"])
+@pytest.mark.parametrize("vector_data_type", ["FLOAT32", "FLOAT16", "BFLOAT16", "FLOAT64"])
 @pytest.mark.parametrize("dialect", [2])
 @pytest.mark.parametrize("key_type", ["json", "hash"])
 class TestAggregateCompatibility(BaseCompatibilityTest):
@@ -323,7 +323,9 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         # accepts it. The compatibility consumer (`compatibility_test.py`) replays
         # this same cmd verbatim against a Valkey-search index of the same type.
         vdt = getattr(self, "vector_data_type", "FLOAT32")
-        if vdt == "FLOAT16":
+        if vdt == "FLOAT64":
+            blob = struct.pack(f"<{VECTOR_DIM}d", *query_vector)
+        elif vdt == "FLOAT16":
             blob = struct.pack(f"<{VECTOR_DIM}e", *query_vector)
         elif vdt == "BFLOAT16":
             # FP32 -> BF16 with round-to-nearest, ties-to-even. Mirrors the
@@ -427,6 +429,13 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                     self.checkvec(dialect, f"ft.aggregate {key_type}_idx1 * load 1 __key", query_vector=[x, y, z])
                     self.checkvec(dialect, f"ft.aggregate {key_type}_idx1 * load 2 __v1_score __key", query_vector=[x, y, z])
                     self.checkvec(dialect, f"ft.search {key_type}_idx1 *", query_vector=[x, y, z])
+        if vector_data_type == "FLOAT64":
+            # 1 + 1e-9 is 1 in float, yet shows within the 12 significant
+            # digits a distance is replied with, so a FLOAT64 distance
+            # narrowed to float anywhere does not match.
+            query_vector = [1 + 1e-9, -0.75, 0.5]
+            self.checkvec(dialect, f"ft.aggregate {key_type}_idx1 * load 2 __v1_score __key", query_vector=query_vector)
+            self.checkvec(dialect, f"ft.search {key_type}_idx1 *", query_vector=query_vector)
     @pytest.mark.parametrize("algo", ["flat", "hnsw"])
     @pytest.mark.parametrize("metric", ["l2", "ip", "cosine"])
     def test_vector_return_clause(self, key_type, dialect, algo, metric,

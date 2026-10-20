@@ -9,6 +9,7 @@
 #define VALKEYSEARCH_SRC_INDEXES_VECTOR_BASE_H_
 
 #include <algorithm>
+#include <atomic>
 #include <bit>
 #include <cstddef>
 #include <cstdint>
@@ -17,6 +18,7 @@
 #include <optional>
 #include <queue>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -58,17 +60,42 @@ inline constexpr size_t UpperBoundToMultipleOf64(size_t num) {
   return (num + 63) & ~size_t(63);
 }
 
+// Storage header placed immediately before a VectorRecord's vector data. Its
+// layout depends on the type the reciprocal magnitude is kept in. In every
+// layout the reference count is the 4 bytes at data - 8, so type-erased code
+// can always reach it.
+template <typename MagnitudeT>
+struct VectorRecordHeader;
+
+template <>
+struct VectorRecordHeader<float> {
+  mutable std::atomic<uint32_t> ref_count_{1};
+  const float reciprocal_magnitude_{1.0f};
+};
+
+template <>
+struct VectorRecordHeader<double> {
+  const double reciprocal_magnitude_{1.0};
+  mutable std::atomic<uint32_t> ref_count_{1};
+  const uint32_t padding_{0};
+};
+
+static_assert(sizeof(VectorRecordHeader<float>) == 8);
+static_assert(sizeof(VectorRecordHeader<double>) == 16);
+static_assert(sizeof(VectorRecordHeader<float>) -
+                  offsetof(VectorRecordHeader<float>, ref_count_) ==
+              8);
+static_assert(sizeof(VectorRecordHeader<double>) -
+                  offsetof(VectorRecordHeader<double>, ref_count_) ==
+              8);
+
+// Type-erased handle to vector data that carries a VectorRecordHeader. The
+// header type is not part of the handle's type: the top bit of the reference
+// count marks a VectorRecordHeader<double>, which is all that copying,
+// releasing and GetReciprocalMagnitude() need to know. Code that knows the
+// header type statically uses TypedVectorRecord instead.
 class VectorRecord {
  public:
-  struct Header {
-    mutable std::atomic<uint32_t> ref_count_{1};
-    const float reciprocal_magnitude_{1.0f};
-  };
-
-  static constexpr size_t kStorageHeaderSize = sizeof(Header);
-  static_assert(kStorageHeaderSize == 8,
-                "VectorRecord::Header must be exactly 8 bytes");
-
   VectorRecord() noexcept : data_(nullptr) {}
   VectorRecord(std::nullptr_t) noexcept : data_(nullptr) {}
 
@@ -76,7 +103,7 @@ class VectorRecord {
       : data_(other.data_.load(std::memory_order_relaxed)) {
     const char *ptr = data_.load(std::memory_order_relaxed);
     if (ptr) {
-      GetHeader(ptr)->ref_count_.fetch_add(1, std::memory_order_relaxed);
+      GetRefCount(ptr)->fetch_add(1, std::memory_order_relaxed);
     }
   }
 
@@ -87,7 +114,7 @@ class VectorRecord {
     if (this != &other) {
       const char *new_ptr = other.data_.load(std::memory_order_relaxed);
       if (new_ptr) {
-        GetHeader(new_ptr)->ref_count_.fetch_add(1, std::memory_order_relaxed);
+        GetRefCount(new_ptr)->fetch_add(1, std::memory_order_relaxed);
       }
       const char *old_ptr = data_.exchange(new_ptr, std::memory_order_acq_rel);
       if (old_ptr) {
@@ -128,28 +155,31 @@ class VectorRecord {
     }
   }
 
-  static VectorRecord Construct(absl::string_view vector,
-                                float reciprocal_magnitude,
-                                Allocator *allocator);
+  // Builds a record whose header keeps the reciprocal magnitude as MagnitudeT.
+  template <typename MagnitudeT = float>
+  static VectorRecord Construct(
+      absl::string_view vector,
+      std::type_identity_t<MagnitudeT> reciprocal_magnitude,
+      Allocator *allocator);
 
   const char *GetRawVector() const noexcept {
     return data_.load(std::memory_order_relaxed);
   }
 
-  float GetReciprocalMagnitude() const noexcept {
+  double GetReciprocalMagnitude() const noexcept {
     const char *ptr = data_.load(std::memory_order_relaxed);
-    return ptr ? GetHeader(ptr)->reciprocal_magnitude_ : 1.0f;
-  }
-
-  // Reciprocal magnitude of the record whose (non-null) vector data starts at
-  // data_ptr. Lets hot loops that hold only the raw vector pointer read it.
-  static float ReciprocalMagnitudeOf(const char *data_ptr) noexcept {
-    return GetHeader(data_ptr)->reciprocal_magnitude_;
+    if (!ptr) {
+      return 1.0;
+    }
+    return HasDoubleHeader(ptr) ? GetHeader<double>(ptr)->reciprocal_magnitude_
+                                : GetHeader<float>(ptr)->reciprocal_magnitude_;
   }
 
   uint32_t RefCount() const noexcept {
     const char *ptr = data_.load(std::memory_order_relaxed);
-    return ptr ? GetHeader(ptr)->ref_count_.load(std::memory_order_relaxed) : 0;
+    return ptr ? GetRefCount(ptr)->load(std::memory_order_relaxed) &
+                     kRefCountMask
+               : 0;
   }
 
   bool empty() const noexcept {
@@ -177,15 +207,37 @@ class VectorRecord {
               << ")";
   }
 
+ protected:
+  template <typename MagnitudeT>
+  static VectorRecordHeader<MagnitudeT> *GetHeader(
+      const char *data_ptr) noexcept {
+    return const_cast<VectorRecordHeader<MagnitudeT> *>(
+        reinterpret_cast<const VectorRecordHeader<MagnitudeT> *>(data_ptr) - 1);
+  }
+
  private:
-  static Header *GetHeader(const char *data_ptr) noexcept {
-    return const_cast<Header *>(reinterpret_cast<const Header *>(data_ptr) - 1);
+  // Set in the reference count of a record with a VectorRecordHeader<double>.
+  static constexpr uint32_t kDoubleHeaderBit = 1u << 31;
+  static constexpr uint32_t kRefCountMask = ~kDoubleHeaderBit;
+
+  static std::atomic<uint32_t> *GetRefCount(const char *data_ptr) noexcept {
+    return reinterpret_cast<std::atomic<uint32_t> *>(
+        const_cast<char *>(data_ptr) - 8);
+  }
+
+  static bool HasDoubleHeader(const char *data_ptr) noexcept {
+    return GetRefCount(data_ptr)->load(std::memory_order_relaxed) &
+           kDoubleHeaderBit;
   }
 
   static void Release(const char *data_ptr) noexcept {
-    Header *h = GetHeader(data_ptr);
-    if (h->ref_count_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-      Allocator::Free(reinterpret_cast<char *>(h));
+    uint32_t prev =
+        GetRefCount(data_ptr)->fetch_sub(1, std::memory_order_acq_rel);
+    if ((prev & kRefCountMask) == 1) {
+      size_t header_size = (prev & kDoubleHeaderBit)
+                               ? sizeof(VectorRecordHeader<double>)
+                               : sizeof(VectorRecordHeader<float>);
+      Allocator::Free(const_cast<char *>(data_ptr) - header_size);
     }
   }
 
@@ -196,6 +248,38 @@ class VectorRecord {
 
 static_assert(sizeof(VectorRecord) == sizeof(void *),
               "VectorRecord must be single pointer sized");
+
+// A VectorRecord whose header type is known statically, so hot loops read the
+// reciprocal magnitude without inspecting the header. It adds no state: index
+// slots hold these and hand them out as VectorRecord.
+template <typename MagnitudeT>
+class TypedVectorRecord : public VectorRecord {
+ public:
+  static constexpr size_t kStorageHeaderSize =
+      sizeof(VectorRecordHeader<MagnitudeT>);
+
+  TypedVectorRecord() noexcept = default;
+  TypedVectorRecord(std::nullptr_t) noexcept {}
+  // The caller guarantees `record` was built with Construct<MagnitudeT>.
+  explicit TypedVectorRecord(const VectorRecord &record) noexcept
+      : VectorRecord(record) {}
+  explicit TypedVectorRecord(VectorRecord &&record) noexcept
+      : VectorRecord(std::move(record)) {}
+
+  MagnitudeT GetReciprocalMagnitude() const noexcept {
+    const char *ptr = GetRawVector();
+    return ptr ? ReciprocalMagnitudeOf(ptr) : MagnitudeT{1};
+  }
+
+  // Reciprocal magnitude of the record whose (non-null) vector data starts at
+  // data_ptr. Lets hot loops that hold only the raw vector pointer read it.
+  static MagnitudeT ReciprocalMagnitudeOf(const char *data_ptr) noexcept {
+    return GetHeader<MagnitudeT>(data_ptr)->reciprocal_magnitude_;
+  }
+};
+
+static_assert(sizeof(TypedVectorRecord<float>) == sizeof(VectorRecord));
+static_assert(sizeof(TypedVectorRecord<double>) == sizeof(VectorRecord));
 
 struct VectorRecordWithSize {
   VectorRecord vector_record;
@@ -212,17 +296,24 @@ struct VectorRecordWithSize {
   bool operator!=(absl::string_view bytes) const { return !(*this == bytes); }
 };
 
+// Type a T vector's reciprocal magnitude and distances are computed and stored
+// in: double for FLOAT64, float for every other storage type.
+template <typename T>
+using MagnitudeOf =
+    std::conditional_t<std::is_same_v<T, double>, double, float>;
+
 // Computes 1/||v|| over `size` elements of storage type T. Templated because
 // FLOAT16/BFLOAT16 vectors are 2 bytes per element: reading them as float
 // would both walk off the end of the buffer and produce garbage magnitudes.
-// The accumulation is always done in float regardless of T.
+// The accumulation is done in MagnitudeOf<T>, so float for the 2-byte types.
 template <typename T>
-float CalcReciprocalMagnitude(const T *src, size_t size);
+MagnitudeOf<T> CalcReciprocalMagnitude(const T *src, size_t size);
 
 extern template float CalcReciprocalMagnitude<float>(const float *, size_t);
 extern template float CalcReciprocalMagnitude<float16>(const float16 *, size_t);
 extern template float CalcReciprocalMagnitude<bfloat16>(const bfloat16 *,
                                                         size_t);
+extern template double CalcReciprocalMagnitude<double>(const double *, size_t);
 
 // Verify the running CPU exposes a SIMD-targeted BF16 path required by the
 // current simsimd build. Returns OkStatus when:
@@ -237,23 +328,15 @@ extern template float CalcReciprocalMagnitude<bfloat16>(const bfloat16 *,
 absl::Status CheckSimsimdBf16Capability();
 
 // Scales `record` by `reciprocal_magnitude`, interpreting it as elements of
-// storage type T. The scale is applied in float and rounded once back into T.
+// storage type T. The scale is applied in MagnitudeOf<T> and rounded once back
+// into T.
 template <typename T>
 std::vector<char> NormalizeVector(absl::string_view record,
-                                  float reciprocal_magnitude);
+                                  MagnitudeOf<T> reciprocal_magnitude);
 
 template <typename T>
 std::vector<char> NormalizeVector(absl::string_view record,
-                                  float *magnitude = nullptr);
-
-// Runtime-dispatched variants, for the few call sites that hold only a
-// data-type enum rather than a compile-time T (VectorRegistry, QueryVector).
-float CalcReciprocalMagnitude(absl::string_view record,
-                              data_model::VectorDataType data_type);
-
-std::vector<char> NormalizeVector(absl::string_view record,
-                                  data_model::VectorDataType data_type,
-                                  float reciprocal_magnitude);
+                                  MagnitudeOf<T> *magnitude = nullptr);
 
 // Default score value used when no scorer has been applied yet.
 inline constexpr float kDefaultScore = 0.0f;
@@ -270,8 +353,8 @@ static_assert(std::is_trivially_destructible_v<BorrowedNeighbor>,
 
 struct Neighbor {
   InternedStringPtr external_id;
-  float distance;
-  float score;
+  double distance;
+  double score;
   uint64_t sequence_number;
   // False only for a compound VECTOR_RANGE match that carries no VR distance
   // (e.g. a doc matched via the non-VR branch of an OR and lies outside the
@@ -285,19 +368,19 @@ struct Neighbor {
         score(kDefaultScore),
         sequence_number(0),
         has_vr_distance(true) {}
-  Neighbor(const InternedStringPtr &external_id, float distance)
+  Neighbor(const InternedStringPtr &external_id, double distance)
       : external_id(external_id),
         distance(distance),
         score(distance),
         sequence_number(0),
         has_vr_distance(true) {}
-  Neighbor(const InternedStringPtr &external_id, float distance, float score)
+  Neighbor(const InternedStringPtr &external_id, double distance, double score)
       : external_id(external_id),
         distance(distance),
         score(score),
         sequence_number(0),
         has_vr_distance(true) {}
-  Neighbor(const InternedStringPtr &external_id, float distance,
+  Neighbor(const InternedStringPtr &external_id, double distance,
            std::optional<RecordsMap> &&attribute_contents)
       : external_id(external_id),
         distance(distance),
@@ -353,7 +436,8 @@ const absl::NoDestructor<
     absl::flat_hash_map<absl::string_view, data_model::VectorDataType>>
     kVectorDataTypeByStr({{"FLOAT32", data_model::VECTOR_DATA_TYPE_FLOAT32},
                           {"FLOAT16", data_model::VECTOR_DATA_TYPE_FLOAT16},
-                          {"BFLOAT16", data_model::VECTOR_DATA_TYPE_BFLOAT16}});
+                          {"BFLOAT16", data_model::VECTOR_DATA_TYPE_BFLOAT16},
+                          {"FLOAT64", data_model::VECTOR_DATA_TYPE_FLOAT64}});
 
 template <typename V>
 absl::string_view LookupKeyByValue(
@@ -430,11 +514,21 @@ class VectorBase : public IndexBase {
     auto it = key_by_internal_id_.find(internal_id);
     return it == key_by_internal_id_.end() ? nullptr : &it->second;
   }
-  bool AddPrefilteredKey(
-      absl::string_view query, float query_magnitude,
-      const InternedStringPtr &key, uint64_t count,
-      std::priority_queue<std::pair<float, hnswlib::labeltype>> &results,
-      absl::flat_hash_set<const char *> &top_keys) const;
+  // The `count` keys nearest to a query, among keys offered one at a time by
+  // pre-filtering. Distances stay in the type the index computes them in.
+  class NearestKeys {
+   public:
+    virtual ~NearestKeys() = default;
+    // Keeps `key` if it is tracked and fewer than `count` keys are kept, or it
+    // is nearer than the farthest kept key, which it then replaces; the
+    // replaced key is also erased from `top_keys`. Returns whether `key` was
+    // kept.
+    virtual bool Add(const InternedStringPtr &key,
+                     absl::flat_hash_set<const char *> &top_keys) = 0;
+    virtual absl::StatusOr<std::vector<Neighbor>> CreateReply() = 0;
+  };
+  virtual std::unique_ptr<NearestKeys> CreateNearestKeys(
+      absl::string_view query, uint64_t count) = 0;
   template <typename T>
   absl::StatusOr<std::vector<Neighbor>> CreateReply(
       std::priority_queue<std::pair<T, hnswlib::labeltype>> &knn_res);
@@ -451,41 +545,23 @@ class VectorBase : public IndexBase {
   // keys; it falls back to SearchRangeExhaustive when the fetch fills the cap
   // with the farthest candidate still in range.
   virtual absl::StatusOr<std::vector<Neighbor>> SearchRange(
-      absl::string_view query, float radius, cancel::Token &cancellation_token,
+      absl::string_view query, double radius, cancel::Token &cancellation_token,
       std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr) = 0;
-
-  // Distance and internal label for `key`, or an error if untracked. Backs
-  // IsWithinVectorRange. Search-phase only: lock-free, like
-  // GetVectorDuringSearch.
-  absl::StatusOr<std::pair<float, hnswlib::labeltype>>
-  ComputeDistanceFromRecord(const InternedStringPtr &key,
-                            absl::string_view query) const;
 
   // Returns the distance from the stored vector for `key` to `query` if the
   // distance is <= `radius`; returns std::nullopt if outside the radius;
-  // returns an error if the key is not tracked in this index.
-  absl::StatusOr<std::optional<float>> IsWithinVectorRange(
+  // returns an error if the key is not tracked in this index. Search-phase
+  // only: lock-free, like GetVectorDuringSearch.
+  virtual absl::StatusOr<std::optional<double>> IsWithinVectorRange(
       const InternedStringPtr &key, absl::string_view query,
-      float radius) const {
-    auto result = ComputeDistanceFromRecord(key, query);
-    if (!result.ok()) {
-      return result.status();
-    }
-    float distance = ClampCosineDistance(result->first);
-    if (distance > radius) {
-      return std::nullopt;
-    }
-    return distance;
-  }
+      double radius) const = 0;
   // Range test for `record`, the raw vector bytes just read back from the
   // database. Like RecomputeDistance it touches no index structure, so it is
   // safe on the main thread outside the search phase, where
   // IsWithinVectorRange is not.
-  bool IsRecordWithinVectorRange(absl::string_view record,
-                                 absl::string_view query, float radius) const {
-    auto distance = RecomputeDistance(record, query);
-    return distance.ok() && ClampCosineDistance(*distance) <= radius;
-  }
+  virtual bool IsRecordWithinVectorRange(absl::string_view record,
+                                         absl::string_view query,
+                                         double radius) const = 0;
   bool IsVectorIndex() const override { return true; }
   virtual uint64_t GetMaxLoadedLabel() const { return 0; }
   virtual size_t GetLabelCount() const { return 0; }
@@ -531,15 +607,17 @@ class VectorBase : public IndexBase {
   // about a different one. Taking the bytes as an argument is what keeps this
   // callable from the main thread, where the index structures are not held
   // under a reader lock.
-  absl::StatusOr<float> RecomputeDistance(absl::string_view record,
-                                          absl::string_view query) const;
+  virtual absl::StatusOr<double> RecomputeDistance(
+      absl::string_view record, absl::string_view query) const = 0;
   const InternedStringPtr &GetInternedAttributeIdentifier() const {
     return interned_attribute_identifier_;
   }
-  // Computes 1/||record|| interpreting `record` as elements of the concrete
-  // storage type. Implemented by VectorType<T>; VectorBase cannot know the
-  // element width.
-  virtual float ComputeReciprocalMagnitude(absl::string_view record) const = 0;
+  // Builds a record of `record` and its reciprocal magnitude, interpreting
+  // `record` as elements of the concrete storage type and using the header
+  // type the index stores. Implemented by VectorType<T>; VectorBase cannot know
+  // the element width.
+  virtual VectorRecord ConstructRecord(absl::string_view record,
+                                       Allocator *allocator) const = 0;
   ~VectorBase() override ABSL_NO_THREAD_SAFETY_ANALYSIS;
   data_model::AttributeDataType GetAttributeDataType() const {
     return attribute_data_type_;
@@ -547,6 +625,7 @@ class VectorBase : public IndexBase {
 
  protected:
   VectorBase(IndexerType indexer_type, int dimensions, size_t element_size,
+             size_t record_header_size,
              data_model::AttributeDataType attribute_data_type,
              absl::string_view attribute_identifier, int db_num)
       : IndexBase(indexer_type),
@@ -559,8 +638,8 @@ class VectorBase : public IndexBase {
 #ifndef SAN_BUILD
         ,
         vector_allocator_(CREATE_UNIQUE_PTR(
-            FixedSizeAllocator,
-            VectorRecord::kStorageHeaderSize + dimensions * element_size, true))
+            FixedSizeAllocator, record_header_size + dimensions * element_size,
+            true))
 #endif  // !SAN_BUILD
   {
   }
@@ -568,73 +647,23 @@ class VectorBase : public IndexBase {
   VectorBase(IndexerType indexer_type, int dimensions,
              data_model::AttributeDataType attribute_data_type,
              absl::string_view attribute_identifier, int db_num)
-      : VectorBase(indexer_type, dimensions, sizeof(float), attribute_data_type,
-                   attribute_identifier, db_num) {}
+      : VectorBase(indexer_type, dimensions, sizeof(float),
+                   TypedVectorRecord<float>::kStorageHeaderSize,
+                   attribute_data_type, attribute_identifier, db_num) {}
   void RemoveRecordDueToError(const InternedStringPtr &key,
                               std::optional<uint64_t> internal_id)
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
 
   int RespondWithInfo(ValkeyModuleCtx *ctx) const override;
 
-  // Clamped distance for a range search; `query` from NormalizeQueryIfNeeded,
-  // `query_magnitude` its reciprocal magnitude (1 unless normalize_).
-  float RangeDistance(absl::string_view query, float query_magnitude,
-                      const VectorRecord &record) const {
-    if (normalize_) {
-      query_magnitude *= record.GetReciprocalMagnitude();
-    }
-    return ClampCosineDistance(ComputeDistance(query, record, query_magnitude));
-  }
-
-  // Every tracked key within `radius` of `query`, unordered, for FLAT/HNSW
-  // alike. Lock-free: phase-based locking keeps queries and mutations
-  // mutually exclusive, so key_to_metadata_mutex_ is not needed here.
-  std::vector<Neighbor> SearchRangeExhaustive(
-      absl::string_view query, float radius, cancel::Token &cancellation_token,
-      hnswlib::BaseFilterFunctor *filter = nullptr) const
-      ABSL_NO_THREAD_SAFETY_ANALYSIS;
-
-  // Holds an optionally-normalized query vector. `view` is always valid and
-  // points either into `storage` (if normalization was applied) or into the
-  // original caller-owned buffer.
-  struct NormalizedQuery {
-    std::vector<char> storage;  // owns normalized data when normalize_ is true
-    absl::string_view view;     // always usable as the query input
-  };
-
-  // Returns a normalized copy of `query` when the index uses cosine distance,
-  // or a zero-copy view into the original buffer otherwise.
-  NormalizedQuery NormalizeQueryIfNeeded(absl::string_view query) const {
-    if (normalize_) {
-      float reciprocal_magnitude =
-          CalcReciprocalMagnitude(query, GetVectorDataType());
-      auto norm =
-          NormalizeVector(query, GetVectorDataType(), reciprocal_magnitude);
-      absl::string_view v(reinterpret_cast<const char *>(norm.data()),
-                          norm.size());
-      return {std::move(norm), v};
-    }
-    return {{}, query};
-  }
-
-  // Clamps a cosine distance to [0, 2]; no tolerance window, since one wide
-  // enough to absorb FP noise also swallows real near-duplicates/antipodes.
-  // Non-finite values are classified from their bits (-ffast-math breaks
-  // isnan/isfinite) and reported as +inf, outside every radius; an IP -inf
-  // is kept as-is, within every radius, matching Redis.
-  float ClampCosineDistance(float dist) const {
-    constexpr uint32_t kExponentMask = 0x7f800000u;
-    constexpr uint32_t kNegativeInfinity = 0xff800000u;
-    const auto bits = std::bit_cast<uint32_t>(dist);
-    if ((bits & kExponentMask) == kExponentMask) {
-      return !normalize_ && bits == kNegativeInfinity
-                 ? dist
-                 : std::bit_cast<float>(kExponentMask);
-    }
-    if (!normalize_) {
-      return dist;
-    }
-    return std::clamp(dist, 0.0f, 2.0f);
+  // Lock-free search optimization: Phase-based locking guarantees that queries
+  // and resizes/mutations are strictly mutually exclusive. Therefore, no data
+  // races can occur during the search phase.
+  absl::StatusOr<uint64_t> GetInternalIdDuringSearch(
+      const InternedStringPtr &key) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  const InternedStringHashMap<TrackedKeyMetadata> &
+  GetTrackedMetadataDuringSearch() const ABSL_NO_THREAD_SAFETY_ANALYSIS {
+    return tracked_metadata_by_key_;
   }
 
   virtual absl::Status AddRecordImpl(uint64_t internal_id,
@@ -660,9 +689,6 @@ class VectorBase : public IndexBase {
   bool normalize_{false};
   data_model::AttributeDataType attribute_data_type_;
   data_model::DistanceMetric distance_metric_;
-  virtual float ComputeDistance(absl::string_view query,
-                                const VectorRecord &vector_record,
-                                float query_magnitude) const = 0;
   virtual std::optional<hnswlib::tableint> GetAlgoIdLockFree(
       uint64_t internal_id) const = 0;
   mutable absl::Mutex resize_mutex_;
@@ -679,11 +705,6 @@ class VectorBase : public IndexBase {
       ABSL_LOCKS_EXCLUDED(resize_mutex_, key_to_metadata_mutex_);
   absl::StatusOr<uint64_t> GetInternalId(const InternedStringPtr &key) const
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
-  // Lock-free search optimization: Phase-based locking guarantees that queries
-  // and resizes/mutations are strictly mutually exclusive. Therefore, no data
-  // races can occur during the search phase.
-  absl::StatusOr<uint64_t> GetInternalIdDuringSearch(
-      const InternedStringPtr &key) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
   absl::flat_hash_map<uint64_t, InternedStringPtr> key_by_internal_id_
       ABSL_GUARDED_BY(key_to_metadata_mutex_);
 
@@ -691,10 +712,6 @@ class VectorBase : public IndexBase {
       ABSL_GUARDED_BY(key_to_metadata_mutex_);
   uint64_t inc_id_ ABSL_GUARDED_BY(key_to_metadata_mutex_){0};
   mutable absl::Mutex key_to_metadata_mutex_;
-  absl::StatusOr<std::pair<float, hnswlib::labeltype>>
-  ComputeDistanceFromRecord(const InternedStringPtr &key,
-                            absl::string_view query,
-                            float query_magnitude) const;
   UniqueFixedSizeAllocatorPtr vector_allocator_{nullptr, nullptr};
 };
 

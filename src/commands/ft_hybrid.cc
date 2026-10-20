@@ -83,7 +83,7 @@ void ConvertVectorArmScoresToSimilarity(std::vector<indexes::Neighbor> &ns,
         similarity = d > -1.0 ? 1.0 / (1.0 + d) : 0.0;
         break;
     }
-    n.score = static_cast<float>(similarity);
+    n.score = similarity;
   }
 }
 

@@ -29,26 +29,23 @@
 
 namespace valkey_search::indexes {
 
+// MagnitudeT is the type of the record's reciprocal magnitude, which is also
+// the type HNSW computes distances in.
+template <typename MagnitudeT = float>
 class QueryVector {
  public:
   // Holds a query or inserted vector and caches its raw data pointer and
   // reciprocal magnitude so HNSW distance evaluations do not reload the record
   // header on every candidate.
-  QueryVector(const VectorRecord &vector_record, size_t vector_record_size = 0,
-              bool normalize = false,
-              data_model::VectorDataType data_type =
-                  data_model::VECTOR_DATA_TYPE_FLOAT32) noexcept
+  QueryVector(const VectorRecord &vector_record) noexcept
       : record_ref_(&vector_record),
         raw_vector_(vector_record.GetRawVector()),
-        reciprocal_magnitude_(vector_record.GetReciprocalMagnitude()) {}
+        reciprocal_magnitude_(ReciprocalMagnitudeOf(vector_record)) {}
 
-  QueryVector(VectorRecord &&vector_record, size_t vector_record_size = 0,
-              bool normalize = false,
-              data_model::VectorDataType data_type =
-                  data_model::VECTOR_DATA_TYPE_FLOAT32) noexcept
+  QueryVector(VectorRecord &&vector_record) noexcept
       : owned_record_(std::move(vector_record)),
         raw_vector_(owned_record_.GetRawVector()),
-        reciprocal_magnitude_(owned_record_.GetReciprocalMagnitude()) {}
+        reciprocal_magnitude_(ReciprocalMagnitudeOf(owned_record_)) {}
 
   QueryVector(const QueryVector &other) noexcept
       : record_ref_(other.record_ref_),
@@ -73,17 +70,23 @@ class QueryVector {
   }
 
   const char *GetRawVector() const noexcept { return raw_vector_; }
-  float GetReciprocalMagnitude() const noexcept {
+  MagnitudeT GetReciprocalMagnitude() const noexcept {
     return reciprocal_magnitude_;
   }
 
   VectorRecord GetVectorRecord() const noexcept { return GetRecord(); }
 
  private:
+  static MagnitudeT ReciprocalMagnitudeOf(const VectorRecord &record) noexcept {
+    const char *ptr = record.GetRawVector();
+    return ptr ? TypedVectorRecord<MagnitudeT>::ReciprocalMagnitudeOf(ptr)
+               : MagnitudeT{1};
+  }
+
   const VectorRecord *record_ref_{nullptr};
   VectorRecord owned_record_;
   const char *raw_vector_{nullptr};
-  float reciprocal_magnitude_{1.0f};
+  MagnitudeT reciprocal_magnitude_{1};
 };
 
 template <typename T>
@@ -101,14 +104,17 @@ class VectorHNSW : public VectorType<T> {
   using VectorType<T>::GetDataTypeSize;
   using VectorType<T>::GetVectorAllocator;
   using VectorType<T>::GetVectorDataSize;
-  using VectorType<T>::GetVectorDataType;
   using VectorType<T>::IsValidSizeVector;
   using VectorType<T>::EmitDataTypeInfo;
   using VectorType<T>::SetProtoDataType;
   using VectorType<T>::Init;
 
  public:
-  using HNSWIndex = hnswlib::HierarchicalNSW<float, QueryVector, VectorRecord>;
+  using typename VectorType<T>::MagnitudeT;
+  using typename VectorType<T>::DistanceT;
+  using typename VectorType<T>::StoredVector;
+  using Query = QueryVector<MagnitudeT>;
+  using HNSWIndex = hnswlib::HierarchicalNSW<DistanceT, Query, StoredVector>;
 
   static absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> Create(
       const data_model::VectorIndex &vector_index_proto,
@@ -123,7 +129,7 @@ class VectorHNSW : public VectorType<T> {
       int db_num) ABSL_NO_THREAD_SAFETY_ANALYSIS;
   ~VectorHNSW() override = default;
 
-  const hnswlib::SpaceInterface<float> *GetSpace() const {
+  const hnswlib::SpaceInterface<DistanceT> *GetSpace() const {
     return space_.get();
   }
 
@@ -155,7 +161,7 @@ class VectorHNSW : public VectorType<T> {
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
   absl::StatusOr<std::vector<Neighbor>> SearchRange(
-      absl::string_view query, float radius, cancel::Token &cancellation_token,
+      absl::string_view query, double radius, cancel::Token &cancellation_token,
       std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr)
       ABSL_LOCKS_EXCLUDED(resize_mutex_) override;
 
@@ -176,9 +182,9 @@ class VectorHNSW : public VectorType<T> {
   // Lock-free search optimization: Phase-based locking guarantees that queries
   // and resizes/mutations are strictly mutually exclusive. Therefore, no data
   // races can occur during the search phase.
-  float ComputeDistance(
+  DistanceT ComputeDistance(
       absl::string_view query, const VectorRecord &vector_record,
-      float query_magnitude) const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
+      MagnitudeT query_magnitude) const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
   VectorRecord &GetVectorLockFree(uint64_t internal_id) const override
       ABSL_NO_THREAD_SAFETY_ANALYSIS {
     auto *ptr = algo_->GetPointLockFree(internal_id);

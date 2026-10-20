@@ -7,7 +7,10 @@
 
 #include "src/coordinator/server.h"
 
+#include <bit>
+#include <cmath>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <string>
 #include <thread>
@@ -97,13 +100,38 @@ void RecordSearchMetrics(bool failure,
   }
 }
 
+namespace {
+// Whether `value` is exactly representable as a float. Only FLOAT64 indexes
+// produce values that do not. Infinity and NaN are detected by their bits,
+// because -ffast-math makes comparisons with them unreliable.
+bool IsRepresentableAsFloat(double value) {
+  constexpr uint64_t kExponentMask = 0x7ff0000000000000ULL;
+  if ((std::bit_cast<uint64_t>(value) & kExponentMask) == kExponentMask) {
+    return true;
+  }
+  // Converting a finite value beyond the float range is undefined behavior.
+  if (std::abs(value) > std::numeric_limits<float>::max()) {
+    return false;
+  }
+  return static_cast<double>(static_cast<float>(value)) == value;
+}
+}  // namespace
+
 void SerializeNeighbors(SearchIndexPartitionResponse *response,
                         const std::vector<indexes::Neighbor> &neighbors) {
   for (const auto &neighbor : neighbors) {
     auto *neighbor_proto = response->add_neighbors();
     neighbor_proto->set_key(std::move(*neighbor.external_id));
-    neighbor_proto->set_score(neighbor.score);
-    neighbor_proto->set_distance(neighbor.distance);
+    if (IsRepresentableAsFloat(neighbor.score)) {
+      neighbor_proto->set_score(static_cast<float>(neighbor.score));
+    } else {
+      neighbor_proto->set_score_fp64(neighbor.score);
+    }
+    if (IsRepresentableAsFloat(neighbor.distance)) {
+      neighbor_proto->set_distance(static_cast<float>(neighbor.distance));
+    } else {
+      neighbor_proto->set_distance_fp64(neighbor.distance);
+    }
     if (neighbor.attribute_contents) {
       const auto &attribute_contents = neighbor.attribute_contents.value();
       for (const auto &[identifier, record] : attribute_contents) {

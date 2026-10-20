@@ -73,20 +73,20 @@ class BruteforceSearch
 
   // Computes the distance between a query and a stored vector.
   // When normalized_ is true (e.g. Cosine metric), both vectors
-  // are unnormalized and their reciprocal magnitudes are applied in float.
+  // are unnormalized and their reciprocal magnitudes are applied in dist_t.
   // The query is not pre-normalized: for FLOAT16/BFLOAT16 that would round the
   // scaled query back to two bytes, changing near-tie rankings and diverging
   // from VectorBase::RecomputeDistance. Templated on kNormalized so the scan in
   // searchKnn picks the magnitude handling at compile time.
   template <bool kNormalized>
   inline dist_t EvaluateDistance(const VectorRecordT &query,
-                                 float query_reciprocal_magnitude,
+                                 dist_t query_reciprocal_magnitude,
                                  const VectorRecordT &stored) const {
     return fstdistfunc_(
         query.GetRawVector(), stored.GetRawVector(), dist_func_param_,
         kNormalized
             ? query_reciprocal_magnitude * stored.GetReciprocalMagnitude()
-            : 1.0f);
+            : dist_t{1});
   }
 
   void clear() {
@@ -190,8 +190,8 @@ class BruteforceSearch
     if (cur_element_count_ == 0 || k == 0) {
       return topResults;
     }
-    const float query_rm =
-        kNormalized ? query_data.GetReciprocalMagnitude() : 1.0f;
+    const dist_t query_rm =
+        kNormalized ? query_data.GetReciprocalMagnitude() : dist_t{1};
     const size_t initial_count = std::min(k, cur_element_count_);
     size_t i = 0;
     for (; i < initial_count && (!isCancelled || !isCancelled->isCancelled());

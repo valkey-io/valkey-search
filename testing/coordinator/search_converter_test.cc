@@ -9,6 +9,7 @@
 
 #include <bit>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
@@ -290,6 +291,50 @@ TEST_F(SearchConverterTest, HybridPolicyRoundTrips) {
         GRPCSearchRequestToParameters(*request, /*context=*/nullptr, &decoded));
     EXPECT_EQ(decoded.hybrid_policy, value);
   }
+}
+
+TEST_F(SearchConverterTest, RejectsMalformedVectorRangeInputs) {
+  auto index = indexes::VectorHNSW<float>::Create(
+                   CreateHNSWVectorIndexProto(2, data_model::DISTANCE_METRIC_L2,
+                                              10, 16, 200, 10),
+                   "vec", data_model::ATTRIBUTE_DATA_TYPE_HASH, 0)
+                   .value();
+  VMSDK_EXPECT_OK(index_schema_->AddIndex("vec", "vec", index));
+  const std::vector<float> query = {0.0f, 0.0f};
+  const std::string valid_query = std::string(VectorToStr(query));
+  auto decode = [&](double radius, const std::string& query_blob) {
+    Predicate proto;
+    auto* vr = proto.mutable_vector_range();
+    vr->set_attribute_alias("vec");
+    vr->set_radius(radius);
+    vr->set_vector_param_name("blob");
+    vr->set_query_vector(query_blob);
+    absl::flat_hash_set<std::string> identifiers;
+    return GRPCPredicateToPredicate(proto, index_schema_, identifiers);
+  };
+
+  constexpr double kNaN = std::bit_cast<double>(uint64_t{0x7ff8000000000000});
+  constexpr double kNegativeInf =
+      std::bit_cast<double>(uint64_t{0xfff0000000000000});
+  for (double radius : {kNaN, -1.0, kNegativeInf}) {
+    auto result = decode(radius, valid_query);
+    EXPECT_EQ(result.status().code(), absl::StatusCode::kInvalidArgument)
+        << "radius " << radius;
+  }
+  for (size_t size :
+       {size_t{0}, valid_query.size() - 1, valid_query.size() + 1}) {
+    auto result = decode(1.0, std::string(size, '\0'));
+    EXPECT_EQ(result.status().code(), absl::StatusCode::kInvalidArgument)
+        << "query size " << size;
+  }
+
+  constexpr double kPositiveInf =
+      std::bit_cast<double>(uint64_t{0x7ff0000000000000});
+  auto result = decode(kPositiveInf, valid_query);
+  ASSERT_TRUE(result.ok()) << result.status();
+  auto* vr = dynamic_cast<query::VectorRangePredicate*>(result->get());
+  ASSERT_NE(vr, nullptr);
+  EXPECT_EQ(vr->GetRadius(), std::numeric_limits<float>::max());
 }
 
 // Older nodes accept $epsilon values such as inf, nan and 1e40 and forward them

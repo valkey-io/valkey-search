@@ -553,6 +553,11 @@ class HierarchicalNSW
          ((!isIdAllowed) || (*isIdAllowed)(GetExternalLabel(ep_id))))) {
       const StoredVectorT &ep_data = GetDataByInternalId(ep_id);
       dist_t dist = EvaluateDistance<kNormalized>(data_point, ep_data);
+      if (!bare_bone_search && stop_condition &&
+          stop_condition->observe_distance(dist)) {
+        visited_list_pool_->releaseVisitedList(vl);
+        return top_candidates;
+      }
       lowerBound = dist;
       top_candidates.emplace(dist, ep_id);
       if (!bare_bone_search && stop_condition) {
@@ -567,7 +572,8 @@ class HierarchicalNSW
 
     visited_array[ep_id] = visited_array_tag;
 
-    while (!candidate_set.empty()) {
+    bool stop_search = false;
+    while (!candidate_set.empty() && !stop_search) {
       std::pair<dist_t, tableint> current_node_pair = candidate_set.top();
       dist_t candidate_dist = -current_node_pair.first;
 
@@ -681,6 +687,11 @@ class HierarchicalNSW
         tableint candidate_id = unv[k];
         const char *vec = vp[k];
         dist_t dist = EvaluateDistance<kNormalized>(data_point, vec);
+        if (!bare_bone_search && stop_condition &&
+            stop_condition->observe_distance(dist)) {
+          stop_search = true;
+          break;
+        }
 
         bool flag_consider_candidate;
         if (!bare_bone_search && stop_condition) {
@@ -2004,6 +2015,9 @@ class HierarchicalNSW
 
     tableint currObj = enterpoint_node_.load(std::memory_order_acquire);
     dist_t curdist = EvaluateDistance(query_data, GetDataByInternalId(currObj));
+    if (stop_condition.observe_distance(curdist)) {
+      return result;
+    }
 
     for (int level = element_levels_[currObj]; level > 0; level--) {
       bool changed = true;
@@ -2022,6 +2036,9 @@ class HierarchicalNSW
           if (cand < 0 || cand > max_elements_)
             throw std::runtime_error("cand error");
           dist_t d = EvaluateDistance(query_data, GetDataByInternalId(cand));
+          if (stop_condition.observe_distance(d)) {
+            return result;
+          }
 
           if (d < curdist) {
             curdist = d;

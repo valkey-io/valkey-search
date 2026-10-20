@@ -1878,6 +1878,10 @@ void RecordNonVectorResultsFetchedLimited() {
   nonvector_results_fetched_limited_count.Increment();
 }
 
+int64_t GetNonVectorResultsFetchedLimitedCount() {
+  return nonvector_results_fetched_limited_count.Get();
+}
+
 SearchResult::SearchResult()
     : total_count(0), is_limited_with_buffer(false), is_offsetted(false) {}
 

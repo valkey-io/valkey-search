@@ -524,6 +524,12 @@ class VectorBase : public IndexBase {
   bool IsValidSizeVector(absl::string_view record) const {
     return IsValidSizeVector(record.size());
   }
+  // Validates the query blob and radius at a SearchRange boundary. Returns a
+  // finite, non-negative radius: positive infinity is normalized to FLT_MAX,
+  // matching command parsing. Malformed input returns a status rather than
+  // reaching a distance kernel or a fatal internal invariant.
+  absl::StatusOr<float> ValidateRangeSearchInputs(absl::string_view query,
+                                                  float radius) const;
   // Distance between `query` and the vector in `record`, where `record` is the
   // raw bytes just read back from the database rather than anything the index
   // holds.

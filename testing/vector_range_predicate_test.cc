@@ -124,6 +124,20 @@ TEST_F(VectorRangePredicateTest, SearchEpsilonSaturatesAtFloatMax) {
   }
 }
 
+TEST_F(VectorRangePredicateTest, SearchEpsilonPreservesZeroSemantics) {
+  constexpr double kNegativeZero =
+      std::bit_cast<double>(uint64_t{0x8000000000000000});
+  for (double epsilon : {0.0, kNegativeZero, 1e-46}) {
+    VectorRangePredicate pred("vec", "v_id", 1.0, "blob", std::nullopt,
+                              epsilon);
+    ASSERT_TRUE(pred.GetEpsilon().has_value());
+    EXPECT_EQ(std::bit_cast<uint64_t>(*pred.GetEpsilon()),
+              std::bit_cast<uint64_t>(epsilon));
+    EXPECT_EQ(std::bit_cast<uint32_t>(pred.GetSearchEpsilon()), uint32_t{0})
+        << "epsilon bits " << std::bit_cast<uint64_t>(epsilon);
+  }
+}
+
 TEST_F(VectorRangePredicateTest, ZeroRadius) {
   VectorRangePredicate pred("vec", "v_id", 0.0, "blob", std::nullopt,
                             std::nullopt);

@@ -214,6 +214,8 @@ absl::Status VectorFlat<T>::RemoveRecordImpl(uint64_t internal_id) {
   return absl::OkStatus();
 }
 
+namespace {
+
 // Paper over the impedance mismatch between the
 // cancel::Token and hnswlib::BaseCancellationFunctor.
 class CancelCondition : public hnswlib::BaseCancellationFunctor {
@@ -226,6 +228,8 @@ class CancelCondition : public hnswlib::BaseCancellationFunctor {
  private:
   cancel::Token &token_;
 };
+
+}  // namespace
 
 template <typename T>
 absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::Search(
@@ -280,6 +284,8 @@ template <typename T>
 absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::SearchRange(
     absl::string_view query, float radius, cancel::Token &cancellation_token,
     float /*epsilon*/, std::unique_ptr<hnswlib::BaseFilterFunctor> filter) {
+  VMSDK_ASSIGN_OR_RETURN(radius,
+                         this->ValidateRangeSearchInputs(query, radius));
   auto nq = this->NormalizeQueryIfNeeded(query);
   const float query_magnitude =
       normalize_ ? CalcReciprocalMagnitude(nq.view, this->GetVectorDataType())

@@ -10,10 +10,12 @@
 #include <sys/types.h>
 
 #include <algorithm>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -36,6 +38,7 @@
 #include "src/indexes/fp16.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
+#include "src/indexes/scoring/scorer.h"
 #include "src/indexes/tag.h"
 #include "src/query/predicate.h"
 #include "src/rdb_serialization.h"
@@ -624,6 +627,33 @@ absl::Status VectorBase::ForEachTrackedKey(
 absl::Status VectorBase::ForEachUnTrackedKey(
     absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn) const {
   return absl::OkStatus();
+}
+
+absl::StatusOr<float> VectorBase::ValidateRangeSearchInputs(
+    absl::string_view query, float radius) const {
+  if (!IsValidSizeVector(query)) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Error parsing vector similarity query: query vector blob size (",
+        query.size(), ") does not match index's expected size (",
+        GetVectorDataSize(), ")."));
+  }
+
+  if (scoring::IsNaN(radius)) {
+    return absl::InvalidArgumentError(
+        "VECTOR_RANGE radius is not a valid number");
+  }
+  constexpr uint32_t kSignMask = uint32_t{1} << 31;
+  const uint32_t radius_bits = std::bit_cast<uint32_t>(radius);
+  const uint32_t magnitude = radius_bits & ~kSignMask;
+  if ((radius_bits & kSignMask) != 0 && magnitude != 0) {
+    return absl::InvalidArgumentError(
+        "VECTOR_RANGE radius must be non-negative");
+  }
+  if (scoring::IsInf(radius)) {
+    return std::numeric_limits<float>::max();
+  }
+  // Normalize -0 to +0 so shell arithmetic and diagnostics have one zero.
+  return magnitude == 0 ? 0.0f : radius;
 }
 
 std::vector<Neighbor> VectorBase::SearchRangeExhaustive(

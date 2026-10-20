@@ -237,16 +237,22 @@ class VectorRangePredicate : public Predicate {
   // round-trips on the wire.
   std::optional<double> GetEpsilon() const { return epsilon_; }
   // The HNSW traversal shell factor: $epsilon, or 0.01 as in RediSearch.
-  // Anything outside [0, FLT_MAX] becomes the largest float, which saturates
-  // the shell: NaN, +inf and values beyond float range (which Redis accepts,
-  // and older nodes forward unchecked), and negative values (which only a
-  // hand-crafted request carries). Comparing the bits catches NaN under
-  // -ffast-math and keeps the narrowing cast in range.
+  // Either signed zero stays zero. Anything else outside [0, FLT_MAX] becomes
+  // the largest float, which saturates the shell: NaN, +inf and values beyond
+  // float range (which Redis accepts, and older nodes forward unchecked), and
+  // negative values (which only a hand-crafted request carries). A tiny
+  // positive double may narrow to float zero, matching Redis acceptance.
+  // Comparing the bits catches NaN under -ffast-math and keeps the narrowing
+  // cast in range.
   float GetSearchEpsilon() const {
     constexpr double kMaxEpsilon = std::numeric_limits<float>::max();
+    constexpr uint64_t kSignMask = uint64_t{1} << 63;
     const double epsilon = epsilon_.value_or(0.01);
-    return std::bit_cast<uint64_t>(epsilon) >
-                   std::bit_cast<uint64_t>(kMaxEpsilon)
+    const uint64_t epsilon_bits = std::bit_cast<uint64_t>(epsilon);
+    if ((epsilon_bits & ~kSignMask) == 0) {
+      return 0.0f;
+    }
+    return epsilon_bits > std::bit_cast<uint64_t>(kMaxEpsilon)
                ? std::numeric_limits<float>::max()
                : static_cast<float>(epsilon);
   }

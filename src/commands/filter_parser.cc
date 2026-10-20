@@ -474,8 +474,9 @@ FilterParser::ParseVectorRangePredicate(const std::string& attribute_alias) {
   while (!IsEnd() && Peek() != ']') {
     // Try to match known optional parameter keywords
     if (MatchInsensitive("EF_RUNTIME")) {
-      // Parsed and ignored: HNSW SearchRange sets ef from
-      // search.max-nonvector-search-results-fetched.
+      // Parsed and ignored: the HNSW field's configured EF_RUNTIME supplies
+      // the initial range beam. search.max-nonvector-search-results-fetched
+      // separately caps shell candidates and triggers exact fallback.
       VMSDK_ASSIGN_OR_RETURN(auto ef_value,
                              ParseToken("]", "EF_RUNTIME argument is missing"));
       (void)ef_value;

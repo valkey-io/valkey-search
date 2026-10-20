@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -171,6 +172,85 @@ TEST_F(VectorIndexTest, InitializationFlat) ABSL_NO_THREAD_SAFETY_ANALYSIS {
     EXPECT_EQ(index.value()->GetCapacity(), kInitialCap);
     EXPECT_EQ(index.value()->GetBlockSize(), kBlockSize);
   }
+}
+
+TEST_F(VectorIndexTest, HnswStopConditionObservesEntryAndUpperLayerDistances) {
+  class RecordingStopCondition
+      : public hnswlib::BaseSearchStopCondition<float> {
+   public:
+    explicit RecordingStopCondition(bool stop_on_observation)
+        : stop_on_observation_(stop_on_observation) {}
+
+    bool observe_distance(float) override {
+      ++observations_;
+      if (result_count_ == 0) {
+        ++observations_before_first_result_;
+      }
+      return stop_on_observation_;
+    }
+    void add_point_to_result(hnswlib::labeltype, const void *, float) override {
+      ++result_count_;
+    }
+    void remove_point_from_result(hnswlib::labeltype, const void *,
+                                  float) override {
+      --result_count_;
+    }
+    bool should_stop_search(float, float) override { return result_count_ > 0; }
+    bool should_consider_candidate(float, float) override { return false; }
+    bool should_remove_extra() override { return false; }
+    void filter_results(
+        std::vector<std::pair<float, hnswlib::labeltype>> &) override {}
+
+    int observations() const { return observations_; }
+    int observations_before_first_result() const {
+      return observations_before_first_result_;
+    }
+    int result_count() const { return result_count_; }
+
+   private:
+    const bool stop_on_observation_;
+    int observations_{0};
+    int observations_before_first_result_{0};
+    int result_count_{0};
+  };
+
+  constexpr size_t kPoints = 64;
+  hnswlib::L2Space space{kDimensions};
+  VectorHNSW<float>::HNSWIndex algo(
+      &space, kPoints, /*normalized=*/false, /*M=*/4, kEFConstruction,
+      /*allow_replace_deleted=*/false, /*random_seed=*/100);
+  auto allocator = CREATE_UNIQUE_PTR(
+      FixedSizeAllocator,
+      VectorRecord::kStorageHeaderSize + kDimensions * sizeof(float), true);
+  for (size_t i = 0; i < kPoints; ++i) {
+    std::vector<float> values(kDimensions, 0.0f);
+    values[0] = static_cast<float>(i) / static_cast<float>(kPoints);
+    const std::string bytes = std::string(VectorToStr(values));
+    algo.addPoint(QueryVector(VectorRecord::Construct(bytes, kDefaultMagnitude,
+                                                      allocator.get()),
+                              bytes.size(), /*normalized=*/false,
+                              data_model::VECTOR_DATA_TYPE_FLOAT32),
+                  i);
+  }
+  ASSERT_GT(algo.maxlevel_.load(std::memory_order_relaxed), 0);
+
+  const std::vector<float> query_values(kDimensions, 0.5f);
+  const std::string query = std::string(VectorToStr(query_values));
+  QueryVector embedding(
+      VectorRecord::Construct(query, kDefaultMagnitude, allocator.get()),
+      query.size(), /*normalized=*/false, data_model::VECTOR_DATA_TYPE_FLOAT32);
+
+  RecordingStopCondition stop_at_entry(/*stop_on_observation=*/true);
+  auto stopped = algo.searchStopConditionClosest(embedding, stop_at_entry);
+  EXPECT_TRUE(stopped.empty());
+  EXPECT_EQ(stop_at_entry.observations(), 1);
+  EXPECT_EQ(stop_at_entry.result_count(), 0);
+
+  RecordingStopCondition record_layers(/*stop_on_observation=*/false);
+  auto searched = algo.searchStopConditionClosest(embedding, record_layers);
+  EXPECT_FALSE(searched.empty());
+  EXPECT_GT(record_layers.observations_before_first_result(), 2)
+      << "expected entrypoint, upper-layer neighbor, and base entry distances";
 }
 
 enum class ExpectedResults { kSuccess, kMissing, kInvalidData, kError };
@@ -1170,9 +1250,50 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
     VMSDK_EXPECT_OK(fetch_cap.SetValue(saved_cap));
   };
   VMSDK_EXPECT_OK(fetch_cap.SetValue(1));
+  const int64_t counter_before =
+      query::GetNonVectorResultsFetchedLimitedCount();
   auto searched = index.SearchRange(query, kRadius, CancelNever(), kEpsilon);
   ASSERT_TRUE(searched.ok()) << searched.status();
   EXPECT_EQ(ToMap(*searched), expected);
+  EXPECT_EQ(query::GetNonVectorResultsFetchedLimitedCount(),
+            counter_before + 1);
+}
+
+TEST_F(SearchRangeFp32, RejectsMalformedRangeInputs) {
+  auto hnsw = MakeIndex(/*hnsw=*/true, data_model::DISTANCE_METRIC_L2);
+  auto flat = MakeIndex(/*hnsw=*/false, data_model::DISTANCE_METRIC_L2);
+  ASSERT_NE(hnsw, nullptr);
+  ASSERT_NE(flat, nullptr);
+  const std::string query = Bytes(std::vector<float>(kDims, 0.0f));
+  constexpr float kNaN = std::bit_cast<float>(uint32_t{0x7fc00000});
+  constexpr float kNegativeInf = std::bit_cast<float>(uint32_t{0xff800000});
+  constexpr float kPositiveInf = std::bit_cast<float>(uint32_t{0x7f800000});
+
+  for (indexes::VectorBase *index :
+       {static_cast<indexes::VectorBase *>(hnsw.get()),
+        static_cast<indexes::VectorBase *>(flat.get())}) {
+    for (const std::string &bad_query :
+         {query.substr(1), query + std::string(1, '\0')}) {
+      auto result = index->SearchRange(bad_query, 1.0f, CancelNever(),
+                                       /*epsilon=*/0.01f);
+      EXPECT_EQ(result.status().code(), absl::StatusCode::kInvalidArgument)
+          << "query size " << bad_query.size();
+    }
+    for (float radius : {kNaN, -1.0f, kNegativeInf}) {
+      auto result = index->SearchRange(query, radius, CancelNever(),
+                                       /*epsilon=*/0.01f);
+      EXPECT_EQ(result.status().code(), absl::StatusCode::kInvalidArgument)
+          << "radius bits " << std::bit_cast<uint32_t>(radius);
+    }
+    auto normalized_radius =
+        index->ValidateRangeSearchInputs(query, kPositiveInf);
+    ASSERT_TRUE(normalized_radius.ok()) << normalized_radius.status();
+    EXPECT_EQ(*normalized_radius, std::numeric_limits<float>::max());
+    auto result = index->SearchRange(query, kPositiveInf, CancelNever(),
+                                     /*epsilon=*/0.01f);
+    ASSERT_TRUE(result.ok()) << result.status();
+    EXPECT_TRUE(result->empty());
+  }
 }
 
 // The shell calculation remains finite when either multiplication would
@@ -1283,10 +1404,13 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   ASSERT_EQ(expected.size(), 1u);
   ASSERT_TRUE(expected.contains("target"));
 
+  const int64_t counter_before =
+      query::GetNonVectorResultsFetchedLimitedCount();
   auto searched =
       index.SearchRange(query, kRadius, CancelNever(), /*epsilon=*/0.01f);
   ASSERT_TRUE(searched.ok()) << searched.status();
   EXPECT_EQ(ToMap(*searched), expected);
+  EXPECT_EQ(query::GetNonVectorResultsFetchedLimitedCount(), counter_before);
 }
 
 // With allow-replace-deleted a new key takes a deleted key's hnswlib slot under

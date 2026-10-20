@@ -314,6 +314,8 @@ absl::Status VectorHNSW<T>::RemoveRecordImpl(uint64_t internal_id) {
   return absl::OkStatus();
 }
 
+namespace {
+
 // Paper over the impedance mismatch between the
 // cancel::Token and hnswlib::BaseCancellationFunctor.
 class CancelCondition : public hnswlib::BaseCancellationFunctor {
@@ -357,15 +359,24 @@ class RangeStopCondition : public hnswlib::BaseSearchStopCondition<float> {
     CHECK(!scoring::IsInf(shell_));
   }
 
+  bool observe_distance(float dist) override {
+    if (!scoring::IsNaN(dist)) {
+      return false;
+    }
+    encountered_nan_ = true;
+    return true;
+  }
+
   void add_point_to_result(hnswlib::labeltype, const void *,
                            float dist) override {
+    ++num_results_;
     if (scoring::IsNaN(dist)) {
       encountered_nan_ = true;
+      return;
     }
-    ++num_results_;
     if (nearest_.size() < ef_) {
       nearest_.push(dist);
-    } else if (dist < nearest_.top()) {
+    } else if (nearest_.top() > shell_ && dist < nearest_.top()) {
       nearest_.pop();
       nearest_.push(dist);
     }
@@ -375,6 +386,9 @@ class RangeStopCondition : public hnswlib::BaseSearchStopCondition<float> {
     --num_results_;
   }
   bool should_stop_search(float candidate_dist, float lower_bound) override {
+    if (encountered_nan_) {
+      return true;
+    }
     // Once the fetch is full within the shell it stays so (later results only
     // displace farther ones), and SearchRange then scans exhaustively.
     if (num_results_ >= max_results_ &&
@@ -420,6 +434,8 @@ class RangeStopCondition : public hnswlib::BaseSearchStopCondition<float> {
   std::priority_queue<float> nearest_;  // The ef nearest distances, max on top.
 };
 
+}  // namespace
+
 template <typename T>
 absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
     absl::string_view query, uint64_t count, cancel::Token &cancellation_token,
@@ -458,6 +474,8 @@ template <typename T>
 absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
     absl::string_view query, float radius, cancel::Token &cancellation_token,
     float epsilon, std::unique_ptr<hnswlib::BaseFilterFunctor> filter) {
+  VMSDK_ASSIGN_OR_RETURN(radius,
+                         this->ValidateRangeSearchInputs(query, radius));
   const size_t max_candidates = static_cast<size_t>(
       options::GetMaxNonVectorSearchResultsFetched().GetValue());
 
@@ -490,7 +508,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
                         nq.view.size(), normalize_, GetVectorDataType());
   std::vector<std::pair<float, hnswlib::labeltype>> raw_results;
   RangeStopCondition stop_condition(ComputeRangeShell(radius, epsilon),
-                                    algo_->ef_, max_candidates);
+                                    GetEfRuntime(), max_candidates);
   try {
     CancelCondition cancel_condition(cancellation_token);
     raw_results = algo_->searchStopConditionClosest(
@@ -504,13 +522,15 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
   // scan do; the reply is a timeout error unless partial results are enabled.
   const bool cancelled = cancellation_token->IsCancelled();
 
-  // A NaN rejected before entering the candidate queue can hide keys reachable
-  // only through that graph node, and therefore never appears in raw_results.
-  // A full fetch likewise may have stopped before visiting every in-radius key.
-  // In either case scan exhaustively, unless cancellation requests a partial
-  // result.
-  if (!cancelled && (stop_condition.EncounteredNaN() ||
-                     raw_results.size() >= max_candidates)) {
+  // A NaN rejected before entering a priority queue can hide keys reachable
+  // only through that graph node. Scan exactly unless cancellation requests a
+  // partial result, but do not count this as a fetch-cap fallback.
+  if (!cancelled && stop_condition.EncounteredNaN()) {
+    return this->SearchRangeExhaustive(query, radius, cancellation_token,
+                                       filter.get());
+  }
+  // A full fetch may have stopped before visiting every in-radius key.
+  if (!cancelled && raw_results.size() >= max_candidates) {
     query::RecordNonVectorResultsFetchedLimited();
     return this->SearchRangeExhaustive(query, radius, cancellation_token,
                                        filter.get());
@@ -528,7 +548,6 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
       if (cancelled) {
         continue;
       }
-      query::RecordNonVectorResultsFetchedLimited();
       return this->SearchRangeExhaustive(query, radius, cancellation_token,
                                          filter.get());
     }

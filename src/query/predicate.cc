@@ -123,18 +123,12 @@ EvaluationResult TermPredicate::Evaluate(const TermLeaf &leaf,
                                          const InternedStringPtr &target_key,
                                          bool require_positions,
                                          bool lock) const {
-  // Raw predicate masks, not the collapsed scoring masks: TermIterator
-  // intersects QueryFieldMask() across AND children.
-  const uint64_t field_mask = field_mask_;
-  const uint64_t stem_field_mask =
-      field_mask & text_index_schema_->GetStemTextFieldMask();
   PositionMaps maps;
   for (const TermGroup &group : leaf.groups) {
-    const uint64_t mask =
-        group.kind == TermGroup::Kind::kOriginal ? field_mask : stem_field_mask;
     for (const WordPostings &word : group.words) {
       if (ProbePostings(*text_index_schema_, *word.postings, word.word,
-                        target_key, mask, require_positions, lock, maps) &&
+                        target_key, group.field_mask, require_positions, lock,
+                        maps) &&
           !require_positions) {
         return EvaluationResult(true);
       }
@@ -143,8 +137,10 @@ EvaluationResult TermPredicate::Evaluate(const TermLeaf &leaf,
   if (maps.empty()) {
     return EvaluationResult(false);
   }
+  // The raw predicate mask, not a group's collapsed one: TermIterator
+  // intersects QueryFieldMask() across AND children.
   auto iterator = std::make_unique<indexes::text::SingleKeyTermIterator>(
-      target_key, maps, field_mask);
+      target_key, maps, field_mask_);
   return BuildTextEvaluationResult(std::move(iterator));
 }
 

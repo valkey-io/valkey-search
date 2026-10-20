@@ -8,10 +8,9 @@
 #ifndef VALKEYSEARCH_SRC_QUERY_RESOLVED_LEAF_H_
 #define VALKEYSEARCH_SRC_QUERY_RESOLVED_LEAF_H_
 
-// What ResolvedLeafCache hands a predicate for one leaf of the query: the data
-// the predicate evaluates a key against, resolved once per query instead of
-// once per key. Structs only, so predicate.h can take them as parameters
-// without depending on the cache.
+// Per-leaf query data resolved once per query rather than once per key.
+// Structs only, so predicate.h can take them as parameters without depending
+// on the cache.
 
 #include <cstddef>
 #include <cstdint>
@@ -26,30 +25,26 @@
 #include "src/indexes/text/text_index.h"
 #include "src/utils/string_interning.h"
 
-namespace valkey_search::indexes {
-class Tag;
-}
-
 namespace valkey_search::query {
 
 // A word's shared posting list. Every tree (global and per-key) hands back the
 // same Postings object for a word, so one lookup answers for every candidate.
-// The word names the bucket a main-thread probe takes.
 struct WordPostings {
+  // Kept so main-thread probes can lock the postings via WithWordLock(word).
   std::string word;
   indexes::text::InvasivePtr<indexes::text::Postings> postings;
 };
 
 // One BM25 term: tf is summed across its postings, scored with one IDF.
 struct TermGroup {
-  // Which part of the stemmed query this group is; membership gates the
-  // original word with the predicate's field mask and the rest with the stem
-  // mask.
-  enum class Kind { kOriginal, kStemRoot, kInflections };
-  Kind kind = Kind::kOriginal;
+  // One word, except the inflection group, which holds every surface form of
+  // a stem root.
   absl::InlinedVector<WordPostings, indexes::text::kStemVariantsInlineCapacity>
       words;
   float idf = 0.0f;
+  // Fields an occurrence must be in to count: the predicate's mask for the
+  // surface word, the stem mask for root and inflections. ~0 when that is
+  // every text field, so probes skip the per-position scan.
   uint64_t field_mask = ~0ULL;
 };
 
@@ -59,34 +54,24 @@ struct TermLeaf {
 };
 
 // Prefix/suffix/fuzzy leaf: scores ONE matched term per doc, never the sum.
-// Nothing is walked globally for it. Scoring probes `representative` first and
-// on a miss walks the document's own tree for a match, which replaces the
-// representative if it is more common; every candidate that carries it is
-// answered by one btree probe.
 struct ExpansionLeaf {
   uint64_t field_mask = ~0ULL;  // Shared by all terms; expansions never stem.
   struct Term {
     WordPostings term;
-    size_t key_count = 0;
+    size_t df = 0;
     float idf = 0.0f;
   };
+  // The most common matched word seen so far. A doc that carries it is scored
+  // with one probe instead of a walk of its own tree.
   std::optional<Term> representative;
-};
-
-// One of an expansion's matching words that a document carries, with the
-// document's entry and the word's key count, read together under one lock.
-struct ExpansionMatch {
-  WordPostings term;
-  indexes::text::PostingValue entry;
-  size_t key_count = 0;
 };
 
 // Tag leaf: each matched tag value is a BM25 term with tf = 1.
 struct TagLeaf {
   // The values the query names (e.g. `{red|blue}`), minus any absent from the
-  // index.
+  // index. Strings are borrowed from the predicate, which outlives the cache.
   struct Value {
-    std::string value;
+    absl::string_view value;
     // Background only: the keys that have this value, borrowed from the index
     // and probed once per candidate. Unset on the main thread, which checks
     // membership against the fetched record's tags instead.

@@ -95,12 +95,11 @@ ResolvedLeaf ResolvedLeafCache::Resolve(const Predicate *predicate) const {
 
 float ResolvedLeafCache::OfferExpansionTerm(ExpansionLeaf &leaf,
                                             const ExpansionMatch &match) const {
-  if (leaf.representative &&
-      leaf.representative->key_count >= match.key_count) {
-    return Idf(match.key_count);
+  if (leaf.representative && leaf.representative->df >= match.df) {
+    return Idf(match.df);
   }
   leaf.representative.emplace(
-      ExpansionLeaf::Term{match.term, match.key_count, Idf(match.key_count)});
+      ExpansionLeaf::Term{match.term, match.df, Idf(match.df)});
   return leaf.representative->idf;
 }
 
@@ -119,11 +118,11 @@ std::optional<ExpansionMatch> ResolvedLeafCache::FindExpansionMatch(
                                BorrowedInternedStringPtr(key), field_mask),
                            postings->GetKeyCount()};
         };
-        auto [entry, key_count] =
+        auto [entry, df] =
             MainThread() ? text_index_schema_->WithWordLock(word, get) : get();
         if (!entry) return true;
         found.emplace(
-            ExpansionMatch{{std::string(word), postings}, *entry, key_count});
+            ExpansionMatch{{std::string(word), postings}, *entry, df});
         return false;
       });
   return found;
@@ -151,12 +150,10 @@ ResolvedLeaf ResolvedLeafCache::ResolveText(
   // A single-word BM25 term (the exact surface term or the stem root
   // literal): one posting list, IDF from that word's own df. An absent word
   // adds no group.
-  auto add_word_group = [&](absl::string_view word, uint64_t field_mask,
-                            TermGroup::Kind kind) {
+  auto add_word_group = [&](absl::string_view word, uint64_t field_mask) {
     WordPostings found = Lookup(word);
     if (!found.postings) return;
     TermGroup group;
-    group.kind = kind;
     group.idf = Idf(KeyCount(found));
     group.field_mask = field_mask;
     group.words.push_back(std::move(found));
@@ -170,8 +167,7 @@ ResolvedLeaf ResolvedLeafCache::ResolveText(
   // scored again in the inflection group below (it is one of its parents), the
   // deliberate exact-match boost.
   add_word_group(word,
-                 ScoringFieldMask(term_pred->GetFieldMask(), num_text_fields),
-                 TermGroup::Kind::kOriginal);
+                 ScoringFieldMask(term_pred->GetFieldMask(), num_text_fields));
 
   const uint64_t stem_field_mask =
       term_pred->GetFieldMask() & text_index_schema->GetStemTextFieldMask();
@@ -185,8 +181,7 @@ ResolvedLeaf ResolvedLeafCache::ResolveText(
       // query word (else it is group 1) and is itself indexed.
       if (stemmed != word) {
         add_word_group(stemmed,
-                       ScoringFieldMask(stem_field_mask, num_text_fields),
-                       TermGroup::Kind::kStemRoot);
+                       ScoringFieldMask(stem_field_mask, num_text_fields));
       }
       const auto root = stem_tree.FindStemParentsTarget(stemmed);
       if (!root) return;
@@ -194,7 +189,6 @@ ResolvedLeaf ResolvedLeafCache::ResolveText(
       // Group 3: the stem inflections. F sums the per-doc frequencies of
       // every inflection; dt is the distinct doc count counted at ingestion.
       TermGroup stem;
-      stem.kind = TermGroup::Kind::kInflections;
       const size_t max_words = options::GetMaxTermExpansions().GetValue();
       for (const auto &parent :
            absl::MakeConstSpan(root->parents)

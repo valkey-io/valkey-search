@@ -45,8 +45,9 @@ struct sb_stemmer;
 
 namespace valkey_search::indexes::text {
 
-// Inline capacity for stem variants extracted from stem tree
-constexpr size_t kStemVariantsInlineCapacity = 20;
+// Inline capacity for the surface forms of one stem root; a handful in
+// practice.
+constexpr size_t kStemVariantsInlineCapacity = 5;
 
 // token -> (PositionMap, suffix support)
 using TokenPositions =

@@ -55,6 +55,14 @@ struct CorpusStats {
   float default_document_score = 1.0f;
 };
 
+// One of an expansion's matching words that a document carries, with the
+// document's entry and the word's df, read together under one lock.
+struct ExpansionMatch {
+  WordPostings term;
+  indexes::text::PostingValue entry;
+  size_t df = 0;
+};
+
 // Query-scoped, lazily filled cache of per-leaf resolutions keyed on the base
 // Predicate*, shared by filtering and scoring so each leaf's tree walk happens
 // once per query rather than once per candidate per phase. Also carries the

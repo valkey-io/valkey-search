@@ -9,6 +9,7 @@ break SVS?" during iteration on the branch, and is what to run before
 opening a review.
 """
 
+import random
 import struct
 
 import pytest
@@ -394,6 +395,49 @@ class TestSVSVamanaSmoke(ValkeySearchTestCaseBase):
         assert svs_reply[0] > 0, svs_reply
         assert sorted(map(repr, svs_reply[1:])) == \
             sorted(map(repr, aggregate("flat_h")[1:]))
+
+    @pytest.mark.parametrize("metric", ["IP", "COSINE"])
+    def test_updates_keep_scores_matching_flat(self, metric):
+        """Updates normalize (COSINE) and re-score like adds: overwrite a doc
+        with a scaled, rotated vector, then churn past the consolidation
+        trigger, and SVS scores keep matching FLAT."""
+        client: Valkey = self.server.get_new_client()
+        _create_metric_index(client, "svs_m", "SVS_VAMANA", metric)
+        _create_metric_index(client, "flat_m", "FLAT", metric)
+        query = METRIC_QUERY[metric]
+
+        def update(doc, vector):
+            for index in ("svs_m", "flat_m"):
+                client.hset(f"{index}:{doc}", mapping={"v": _fp32(vector)})
+
+        def assert_matches_flat():
+            def settled():
+                return all(
+                    FTInfoParser(client.execute_command("FT.INFO", i))
+                    .mutation_queue_size == 0 for i in ("svs_m", "flat_m"))
+
+            waiters.wait_for_equal(settled, True, timeout=30)
+            svs = _knn_scores(client, "svs_m", query)
+            flat = _knn_scores(client, "flat_m", query)
+            assert list(svs)[0] == list(flat)[0], (svs, flat)
+            for doc, score in flat.items():
+                assert svs[doc] == pytest.approx(score, abs=1e-5), (svs, flat)
+
+        # Doc 1 was orthogonal to the query; make it the nearest, scaled and
+        # rotated so a missing normalization would show in its score.
+        update(1, [2.9, 0.4, 0.0, 0.0] if metric == "COSINE"
+               else [0.99, 0.14, 0.0, 0.0])
+        assert_matches_flat()
+
+        # 1,100 updates: past the 1,024 deleted-slot consolidation trigger.
+        rng = random.Random(5)
+        for _ in range(1100):
+            doc = rng.randint(1, 5)
+            v = [rng.uniform(-1, 1) for _ in range(DIM)]
+            if metric == "COSINE":
+                v = [x * rng.uniform(0.5, 4.0) for x in v]
+            update(doc, v)
+        assert_matches_flat()
 
     @pytest.mark.parametrize("metric", ["IP", "COSINE"])
     def test_zero_query_scores_one(self, metric):

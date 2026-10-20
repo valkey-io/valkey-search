@@ -1147,12 +1147,22 @@ absl::StatusOr<std::string> GetConfigGetReply(ValkeyModuleCtx *ctx,
     return absl::InternalError(
         absl::StrFormat("Failed to get config: %s", config));
   }
+  // An unknown config (e.g. one added in a newer server) yields an empty array.
+  if (ValkeyModule_CallReplyType(reply.get()) != VALKEYMODULE_REPLY_ARRAY ||
+      ValkeyModule_CallReplyLength(reply.get()) < 2) {
+    return absl::NotFoundError(
+        absl::StrFormat("Config not found: %s", config));
+  }
   ValkeyModuleCallReply *config_reply =
       ValkeyModule_CallReplyArrayElement(reply.get(), 1);
 
   size_t reply_len;
   const char *reply_str =
       ValkeyModule_CallReplyStringPtr(config_reply, &reply_len);
+  if (reply_str == nullptr) {
+    return absl::FailedPreconditionError(
+        absl::StrFormat("Config is not a string: %s", config));
+  }
   return std::string(reply_str, reply_len);
 }
 

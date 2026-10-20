@@ -135,6 +135,23 @@ TEST(CoordinatorTlsConfigTest, DefaultsReloadIntervalWhenServerDoesNotReload) {
             TlsConfig::kDefaultRefreshIntervalSecs);
 }
 
+// Servers before 9.1 do not know tls-auto-reload-interval, and CONFIG GET for
+// an unknown config must not take the module down.
+TEST(CoordinatorTlsConfigTest, ToleratesServerWithoutReloadInterval) {
+  auto values = EnabledConfig();
+  auto config = LoadTlsConfig(
+      [&values](const char *name) -> absl::StatusOr<std::string> {
+        if (std::string(name) == "tls-auto-reload-interval") {
+          return absl::NotFoundError("unknown config");
+        }
+        auto it = values.find(name);
+        return it == values.end() ? std::string() : it->second;
+      });
+  ASSERT_TRUE(config.ok());
+  EXPECT_EQ(config->refresh_interval_secs,
+            TlsConfig::kDefaultRefreshIntervalSecs);
+}
+
 TEST(CoordinatorTlsConfigTest, RejectsInvalidReloadInterval) {
   for (const char *value : {"-1", "soon"}) {
     auto values = EnabledConfig();

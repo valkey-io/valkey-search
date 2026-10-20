@@ -42,6 +42,18 @@ absl::StatusOr<std::string> RequireFile(
   return value;
 }
 
+// Reads a config the server may not have (older servers lack newer ones). A
+// missing config reads as empty, as if it were unset.
+absl::StatusOr<std::string> GetOptional(
+    absl::FunctionRef<absl::StatusOr<std::string>(const char *)> get_config,
+    const char *name) {
+  auto value = get_config(name);
+  if (absl::IsNotFound(value.status())) {
+    return std::string();
+  }
+  return value;
+}
+
 absl::Status RejectIfSet(
     absl::FunctionRef<absl::StatusOr<std::string>(const char *)> get_config,
     const char *name, absl::string_view reason) {
@@ -115,9 +127,9 @@ absl::StatusOr<TlsConfig> LoadTlsConfig(
 
   // A dedicated client identity is a pair; one half alone is a mistake, not a
   // request to use the server identity.
-  auto client_cert = get_config("tls-client-cert-file");
+  auto client_cert = GetOptional(get_config, "tls-client-cert-file");
   if (!client_cert.ok()) return client_cert.status();
-  auto client_key = get_config("tls-client-key-file");
+  auto client_key = GetOptional(get_config, "tls-client-key-file");
   if (!client_key.ok()) return client_key.status();
   if (client_cert->empty() != client_key->empty()) {
     return absl::FailedPreconditionError(
@@ -145,11 +157,13 @@ absl::StatusOr<TlsConfig> LoadTlsConfig(
         absl::StrCat("Unexpected tls-auth-clients value: ", *auth_clients));
   }
 
-  auto reload_interval = get_config("tls-auto-reload-interval");
+  // Servers before 9.1 have no tls-auto-reload-interval; use the default then.
+  auto reload_interval = GetOptional(get_config, "tls-auto-reload-interval");
   if (!reload_interval.ok()) return reload_interval.status();
   int interval_secs = 0;
-  if (!absl::SimpleAtoi(*reload_interval, &interval_secs) ||
-      interval_secs < 0) {
+  if (!reload_interval->empty() &&
+      (!absl::SimpleAtoi(*reload_interval, &interval_secs) ||
+       interval_secs < 0)) {
     return absl::InternalError(absl::StrCat(
         "Unexpected tls-auto-reload-interval value: ", *reload_interval));
   }

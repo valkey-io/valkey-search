@@ -106,6 +106,17 @@ The following field is always present:
 - `ef_construction` (integer) The count of vectors in the index. The default is 200, and the max is 4096\. Higher values increase the time needed to create indexes, but improve the recall ratio.
 - `ef_runtime` (integer) The count of vectors to be examined during a query operation. The default is 10, and the max is 4096\.
 
+#### SVS_VAMANA VECTOR Field Type Extension.
+
+For `SVS_VAMANA`, `capacity` is the `INITIAL_CAP` given to `FT.CREATE`, or 0 if none was given; the index grows as needed.
+
+- `name` (string) `SVS_VAMANA`.
+- `graph_max_degree` (integer) The maximum number of outgoing edges for each node in the graph.
+- `construction_window_size` (integer) The number of candidates examined when inserting a vector.
+- `search_window_size` (integer) The number of candidates examined during a query, unless the query sets `EF_RUNTIME`.
+- `alpha` (double) The pruning parameter the graph is built with: the `ALPHA` given to `FT.CREATE`, or the default for the distance metric (1.2 for `L2`, 0.95 for `IP` and `COSINE`).
+- `compression` (string) How SVS stores the vectors: `SVS_COMPRESSION_NONE` or `SVS_COMPRESSION_FP16`.
+
 ### Response when the PRIMARY option is specified.
 
 An array of key value pairs

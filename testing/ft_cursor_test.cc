@@ -335,15 +335,16 @@ TEST_F(FTCursorTest, DestructionObeysBackgroundCleanupSetting) {
 
   VMSDK_EXPECT_OK(background.SetValue(false));
   std::atomic<bool> destroyed{false};
+  // Hold the utility pool so that no worker can satisfy either check: with
+  // the setting off the cursor must be destroyed inline, and with it on the
+  // scheduled destruction must not run before the cursor is checked.
+  auto &utility_pool = *ValkeySearch::Instance().GetUtilityThreadPool();
+  VMSDK_EXPECT_OK(utility_pool.SuspendWorkers());
   CursorTable::Instance().Erase(InsertCursor(1, &destroyed));
   EXPECT_TRUE(destroyed);
 
   VMSDK_EXPECT_OK(background.SetValue(true));
   destroyed.store(false);
-  // An idle utility worker can run the scheduled destruction before the check
-  // below, so hold the pool until the cursor is known to be still alive.
-  auto &utility_pool = *ValkeySearch::Instance().GetUtilityThreadPool();
-  VMSDK_EXPECT_OK(utility_pool.SuspendWorkers());
   CursorTable::Instance().Erase(InsertCursor(1, &destroyed));
   EXPECT_FALSE(destroyed);
   EXPECT_EQ(utility_pool.QueueSize(), 1);

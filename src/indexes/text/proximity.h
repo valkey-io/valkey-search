@@ -5,8 +5,8 @@
  *
  */
 
-#ifndef _VALKEY_SEARCH_INDEXES_TEXT_PHRASE_H_
-#define _VALKEY_SEARCH_INDEXES_TEXT_PHRASE_H_
+#ifndef VALKEY_SEARCH_INDEXES_TEXT_PHRASE_H_
+#define VALKEY_SEARCH_INDEXES_TEXT_PHRASE_H_
 
 #include "absl/container/inlined_vector.h"
 #include "src/indexes/text.h"
@@ -47,19 +47,20 @@ of (slop=2, in_order=true):
 class ProximityIterator : public TextIterator {
  public:
   ProximityIterator(absl::InlinedVector<std::unique_ptr<TextIterator>,
-                                        kProximityTermsInlineCapacity>&& iters,
+                                        kProximityTermsInlineCapacity> &&iters,
                     const std::optional<uint32_t> slop, const bool in_order,
                     bool skip_positional_checks, float weight = 1.0f);
   /* Implementation of TextIterator APIs */
   FieldMaskPredicate QueryFieldMask() const override;
   // Key-level iteration
   bool DoneKeys() const override;
-  const Key& CurrentKey() const override;
+  const Key &CurrentKey() const override;
+  DocId CurrentDocId() const override { return current_doc_id_; }
   bool NextKey() override;
-  bool SeekForwardKey(const Key& target_key) override;
+  bool SeekForwardKey(const Key &target_key) override;
   // Position-level iteration
   bool DonePositions() const override;
-  const PositionRange& CurrentPosition() const override;
+  const PositionRange &CurrentPosition() const override;
   bool NextPosition() override;
   bool SeekForwardPosition(Position target_position) override;
   FieldMaskPredicate CurrentFieldMask() const override;
@@ -77,7 +78,7 @@ class ProximityIterator : public TextIterator {
   // group's own weight.
   float GetScore() const override {
     float total = 0.0f;
-    for (const auto& iter : iters_) {
+    for (const auto &iter : iters_) {
       total += iter->GetScore();
     }
     return total * weight_;
@@ -94,6 +95,7 @@ class ProximityIterator : public TextIterator {
   FieldMaskPredicate query_field_mask_;
   // Current key/position/field
   Key current_key_;
+  DocId current_doc_id_{kInvalidDocId};
   std::optional<PositionRange> current_position_;
   FieldMaskPredicate current_field_mask_;
   // Vectors used for positional checks

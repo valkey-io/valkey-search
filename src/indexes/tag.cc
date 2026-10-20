@@ -11,7 +11,6 @@
 #include <memory>
 #include <string>
 #include <utility>
-#include <vector>
 
 #include "absl/base/optimization.h"
 #include "absl/container/flat_hash_set.h"
@@ -100,8 +99,9 @@ bool IsValidPrefix(absl::string_view str) {
 Tag::Tag(const data_model::TagIndex &tag_index_proto)
     : IndexBase(IndexerType::kTag),
       separator_(tag_index_proto.separator()[0]),
-      case_sensitive_(tag_index_proto.case_sensitive()),
-      tree_(raxNew()) {}
+      case_sensitive_(tag_index_proto.case_sensitive()) {
+  tree_ = raxNew();
+}
 
 Tag::~Tag() { raxFreeWithCallback(tree_, &TagFreeCallback); }
 
@@ -141,22 +141,24 @@ absl::StatusOr<RecordResult> Tag::AddRecord(const InternedStringPtr &key,
     return RecordResult::kInvalidData;
   }
 
-  auto interned_data = StringInternStore::Intern(data_sv);
-  auto parsed_tags = ParseRecordTags(*interned_data, separator_);
-  absl::MutexLock lock(&index_mutex_);
-  if (parsed_tags.empty()) {
+  auto interned_data = StringInternStore::Intern(data_sv, nullptr);
+  if (!HasRecordTags(*interned_data, separator_)) {
+    absl::MutexLock lock(&index_mutex_);
     // An empty tag set is a missing value, not invalid data. (Non-UTF-8
     // content is handled above by RejectNonUtf8.)
     untracked_keys_.insert(key);
     return RecordResult::kMissing;
   }
-  auto [_, succ] = tracked_tags_by_keys_.insert(
+  absl::MutexLock lock(&index_mutex_);
+  auto [it, succ] = tracked_tags_by_keys_.insert(
       {key, TagInfo{.raw_tag_string = std::move(interned_data)}});
   if (!succ) {
     return absl::AlreadyExistsError(
         absl::StrCat("Key `", key->Str(), "` already exists"));
   }
   untracked_keys_.erase(key);
+
+  auto parsed_tags = ParseRecordTags(*it->second.raw_tag_string, separator_);
   for (const auto &tag : parsed_tags) {
     IndexTagForKey(tag, key);
   }
@@ -240,6 +242,15 @@ absl::flat_hash_set<absl::string_view> Tag::ParseRecordTags(
   return parsed_tags;
 }
 
+bool Tag::HasRecordTags(absl::string_view data, char separator) {
+  for (const auto &part : absl::StrSplit(data, separator)) {
+    if (!absl::StripAsciiWhitespace(part).empty()) {
+      return true;
+    }
+  }
+  return false;
+}
+
 absl::StatusOr<RecordResult> Tag::ModifyRecord(const InternedStringPtr &key,
                                                AttributeData &&data) {
   auto str = data.ConsumeString();
@@ -250,9 +261,8 @@ absl::StatusOr<RecordResult> Tag::ModifyRecord(const InternedStringPtr &key,
     return RecordResult::kInvalidData;
   }
 
-  auto interned_data = StringInternStore::Intern(data_sv);
-  auto new_parsed_tags = ParseRecordTags(*interned_data, separator_);
-  if (new_parsed_tags.empty()) {
+  auto interned_data = StringInternStore::Intern(data_sv, nullptr);
+  if (!HasRecordTags(*interned_data, separator_)) {
     [[maybe_unused]] auto res =
         RemoveRecord(key, indexes::DeletionType::kIdentifier);
     return RecordResult::kMissing;
@@ -265,22 +275,25 @@ absl::StatusOr<RecordResult> Tag::ModifyRecord(const InternedStringPtr &key,
         absl::StrCat("Key `", key->Str(), "` not found"));
   }
   auto &tag_info = it->second;
-  auto old_parsed_tags = ParseRecordTags(*tag_info.raw_tag_string, separator_);
+  auto old_raw_tag_string = std::move(tag_info.raw_tag_string);
+  auto old_parsed_tags = ParseRecordTags(*old_raw_tag_string, separator_);
+
+  tag_info.raw_tag_string = std::move(interned_data);
+  auto persistent_new_tags =
+      ParseRecordTags(*tag_info.raw_tag_string, separator_);
 
   // insert new tags that are not present in the old tags.
-  for (const auto &tag : new_parsed_tags) {
+  for (const auto &tag : persistent_new_tags) {
     if (!old_parsed_tags.contains(tag)) {
       IndexTagForKey(tag, key);
     }
   }
   // remove old tags that are not present in the new tags.
   for (const auto &tag : old_parsed_tags) {
-    if (!new_parsed_tags.contains(tag)) {
+    if (!persistent_new_tags.contains(tag)) {
       DeindexTagForKey(tag, key);
     }
   }
-
-  tag_info.raw_tag_string = std::move(interned_data);
   return RecordResult::kAdded;
 }
 
@@ -358,6 +371,15 @@ std::optional<absl::flat_hash_set<absl::string_view>> Tag::GetValue(
   return std::nullopt;
 }
 
+std::optional<absl::string_view> Tag::GetRawTagString(
+    const InternedStringPtr &key) const {
+  if (auto it = tracked_tags_by_keys_.find(key);
+      it != tracked_tags_by_keys_.end()) {
+    return *it->second.raw_tag_string;
+  }
+  return std::nullopt;
+}
+
 bool Tag::ContainsKey(absl::string_view value,
                       BorrowedInternedStringPtr key) const {
   // Lock-free by the same read-side invariant GetValue relies on: the index is
@@ -380,8 +402,7 @@ bool Tag::ContainsKey(absl::string_view value,
 // -- Search / EntriesFetcher / EntriesFetcherIterator --------------------
 
 Tag::EntriesFetcherIterator::EntriesFetcherIterator(
-    const std::vector<void *> &slots,
-    const std::vector<InternedStringPtr> &extras)
+    const Tag::SlotsVector &slots, const Tag::ExtrasVector &extras)
     : slots_(slots), extras_(extras) {
   AdvanceToNextNonEmpty();
 }
@@ -400,7 +421,6 @@ void Tag::EntriesFetcherIterator::Next() {
   if (!slots_done_) {
     ++bag_it_;
     if (bag_it_ != bag_end_) {
-      current_ = *bag_it_;
       return;
     }
     (void)bag_.Release();
@@ -409,13 +429,13 @@ void Tag::EntriesFetcherIterator::Next() {
     return;
   }
   ++extras_idx_;
-  if (extras_idx_ < extras_.size()) {
-    current_ = extras_[extras_idx_];
-  }
 }
 
 const InternedStringPtr &Tag::EntriesFetcherIterator::operator*() const {
-  return current_;
+  if (!slots_done_) {
+    return *bag_it_;
+  }
+  return extras_[extras_idx_];
 }
 
 void Tag::EntriesFetcherIterator::AdvanceToNextNonEmpty() {
@@ -425,16 +445,12 @@ void Tag::EntriesFetcherIterator::AdvanceToNextNonEmpty() {
     bag_it_ = bag_.begin();
     bag_end_ = bag_.end();
     if (bag_it_ != bag_end_) {
-      current_ = *bag_it_;
       return;
     }
     (void)bag_.Release();
     ++slot_idx_;
   }
   slots_done_ = true;
-  if (extras_idx_ < extras_.size()) {
-    current_ = extras_[extras_idx_];
-  }
 }
 
 std::unique_ptr<EntriesFetcherIteratorBase> Tag::EntriesFetcher::Begin() {
@@ -444,14 +460,38 @@ std::unique_ptr<EntriesFetcherIteratorBase> Tag::EntriesFetcher::Begin() {
 // TODO: b/357027854 - Support Suffix/Infix Search
 std::unique_ptr<EntriesFetcherBase> Tag::Search(
     const query::TagPredicate &predicate, bool negate) const {
+  const auto &tags = predicate.GetTags();
+  if (!negate && tags.size() == 1) {
+    absl::string_view tag = *tags.begin();
+    const bool is_prefix = !tag.empty() && tag.back() == '*';
+    if (!is_prefix) {
+      std::string norm = Normalize(tag);
+      auto *qbytes =
+          reinterpret_cast<unsigned char *>(const_cast<char *>(norm.data()));
+      void *p = nullptr;
+      if (raxFind(tree_, qbytes, norm.size(), &p) == 1 && p != nullptr) {
+        SlotsVector matched_slots;
+        matched_slots.push_back(p);
+        auto bag = BagOfInternedStringPtrs::Adopt(SlotToStorage(p));
+        size_t total = bag.size();
+        (void)bag.Release();
+        return std::make_unique<EntriesFetcher>(std::move(matched_slots),
+                                                ExtrasVector{}, total);
+      }
+      return std::make_unique<EntriesFetcher>(SlotsVector{}, ExtrasVector{}, 0);
+    }
+  }
+
   // Collect matched rax slots (each slot's 8 bytes encode a bag) without
   // iterating their postings; the iterator yields lazily during Begin().
   absl::flat_hash_set<void *> seen;
-  std::vector<void *> matched_slots;
+  seen.reserve(predicate.GetTags().size());
+  SlotsVector matched_slots;
+  matched_slots.reserve(predicate.GetTags().size());
   size_t total = 0;
 
   auto collect_slot = [&](void *slot) {
-    if (!slot || !seen.insert(slot).second) {
+    if (slot == nullptr || !seen.insert(slot).second) {
       return;
     }
     matched_slots.push_back(slot);
@@ -484,12 +524,12 @@ std::unique_ptr<EntriesFetcherBase> Tag::Search(
     }
   }
 
-  std::vector<InternedStringPtr> extras;
+  ExtrasVector extras;
   size_t out_size = total;
 
   if (negate) {
     // Yield every posting NOT in `seen`, plus every untracked key.
-    std::vector<void *> negate_slots;
+    SlotsVector negate_slots;
     size_t negate_total = 0;
     raxIterator it;
     raxStart(&it, tree_);
@@ -567,7 +607,6 @@ size_t Tag::GetPrefixMatchDocCount(absl::string_view prefix_value,
   }
   return 0;
 }
-
 bool Tag::IsTracked(const InternedStringPtr &key) const {
   absl::MutexLock lock(&index_mutex_);
   return tracked_tags_by_keys_.contains(key);

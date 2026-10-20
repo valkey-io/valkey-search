@@ -108,6 +108,7 @@ finalize_test_flags(filter_test)
 
 # 1. Indexes Test Suite - consolidates index-related tests
 set(INDEXES_TEST_SOURCES
+    ${CMAKE_CURRENT_LIST_DIR}/doc_id_map_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/index_schema_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/numeric_index_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/posting_test.cc
@@ -125,6 +126,12 @@ target_link_libraries(indexes_test PRIVATE testing_common_base)
 target_link_libraries(indexes_test PRIVATE text)
 target_link_libraries(indexes_test PRIVATE hnswlib_vmsdk)
 finalize_test_flags(indexes_test)
+
+add_executable(doc_id_map_test ${CMAKE_CURRENT_LIST_DIR}/doc_id_map_test.cc)
+target_include_directories(doc_id_map_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(doc_id_map_test PRIVATE testing_common_base)
+target_link_libraries(doc_id_map_test PRIVATE text)
+finalize_test_flags(doc_id_map_test)
 
 # Vector Index Test Suite - dedicated suite for vector index and registry tests
 set(VECTOR_INDEX_TEST_SOURCES
@@ -240,7 +247,7 @@ finalize_test_flags(valkey_utils_test)
 
 # 7. Text Index Test Suite
 add_executable(text_index_test
-    ${CMAKE_CURRENT_LIST_DIR}/flat_position_map_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/for128_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/radix_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/rax_wrapper_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/text_index_schema_test.cc)

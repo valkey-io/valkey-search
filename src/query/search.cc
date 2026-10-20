@@ -532,7 +532,7 @@ void EvaluatePrefilteredKeys(
     const SearchParameters &parameters,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
     absl::AnyInvocable<bool(const InternedStringPtr &,
-                            absl::flat_hash_set<const char *> &)>
+                            absl::flat_hash_set<InternedStringPtr> &)>
         appender,
     size_t max_keys, bool stop_on_fetch_limit) {
   // If there was a union operation, we need to handle deduplication.
@@ -540,7 +540,7 @@ void EvaluatePrefilteredKeys(
   // for performance.
   bool needs_dedup =
       NeedsDeduplication(parameters.filter_parse_results.query_operations);
-  absl::flat_hash_set<const char *> result_keys;
+  absl::flat_hash_set<InternedStringPtr> result_keys;
   if (needs_dedup) {
     result_keys.reserve(max_keys);
   }
@@ -564,7 +564,7 @@ void EvaluatePrefilteredKeys(
     while (!iterator->Done()) {
       const auto &key = **iterator;
       // 1. Skip if already processed (only if dedup is needed)
-      if (needs_dedup && result_keys.contains(key->Str().data())) {
+      if (needs_dedup && result_keys.contains(key)) {
         iterator->Next();
         continue;
       }
@@ -591,7 +591,7 @@ void EvaluatePrefilteredKeys(
       if (matched) {
         bool result = appender(key, result_keys);
         if (needs_dedup && result) {
-          result_keys.insert(key->Str().data());
+          result_keys.insert(key);
         }
         // For non-vector queries that exceed the fetch limit, return early
         if (stop_on_fetch_limit && !result) {
@@ -620,7 +620,7 @@ CalcBestMatchingPrefilteredKeys(
   auto results_appender =
       [&results, &parameters, vector_index, query_magnitude](
           const InternedStringPtr &key,
-          absl::flat_hash_set<const char *> &top_keys) -> bool {
+          absl::flat_hash_set<InternedStringPtr> &top_keys) -> bool {
     return vector_index->AddPrefilteredKey(parameters.query, query_magnitude,
                                            key, parameters.k, results,
                                            top_keys);
@@ -646,7 +646,7 @@ CalcBestMatchingInkeys(const SearchParameters &parameters,
   }
   // Passed for API compatibility with AddPrefilteredKey, dedup is a no-op here
   // since INKEYS are already unique (flat_hash_set, iterated once).
-  absl::flat_hash_set<const char *> top_keys;
+  absl::flat_hash_set<InternedStringPtr> top_keys;
   for (const auto &key_str : *parameters.inkeys) {
     if (parameters.cancellation_token->IsCancelled()) {
       break;
@@ -855,7 +855,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
   // Deduplication setup
   bool needs_dedup =
       NeedsDeduplication(parameters.filter_parse_results.query_operations);
-  absl::flat_hash_set<const char *> result_keys;
+  absl::flat_hash_set<BorrowedInternedStringPtr> result_keys;
   if (needs_dedup) {
     result_keys.reserve(
         std::min(qualified_entries, kInitialNeighborReserveSize));
@@ -901,7 +901,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
     auto iterator = fetcher->Begin();
     while (!iterator->Done()) {
       const auto &key = **iterator;
-      if (needs_dedup && result_keys.contains(key->Str().data())) {
+      if (needs_dedup && result_keys.contains(BorrowedInternedStringPtr(key))) {
         iterator->Next();
         continue;
       }
@@ -953,7 +953,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
         neighbors.emplace_back(key, distance);
         neighbors.back().has_vr_distance = has_vr_distance;
         if (needs_dedup) {
-          result_keys.insert(key->Str().data());
+          result_keys.insert(BorrowedInternedStringPtr(key));
         }
       }
       iterator->Next();
@@ -1698,12 +1698,13 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
   const size_t max_keys = static_cast<size_t>(
       options::GetMaxNonVectorSearchResultsFetched().GetValue());
   std::vector<indexes::BorrowedNeighbor> borrowed;
-  borrowed.reserve(std::min(qualified_entries, kInitialNeighborReserveSize));
+  borrowed.reserve(std::min(qualified_entries,
+                            std::min(max_keys, kInitialNeighborReserveSize)));
   bool fetch_limited = false;
   auto results_appender =
       [&borrowed, max_keys, &fetch_limited](
           const InternedStringPtr &key,
-          absl::flat_hash_set<const char *> &top_keys) -> bool {
+          absl::flat_hash_set<InternedStringPtr> &top_keys) -> bool {
     if (borrowed.size() >= max_keys) {
       fetch_limited = true;
       return false;
@@ -1726,9 +1727,10 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
     // score to the one entry instead of the repeats being dropped. Only
     // pure-text OR accumulates: score_in_drain excludes tag/numeric/negate, so
     // the other dedup user (tag) adds 0 and is scored by the extra step.
-    absl::flat_hash_map<const char *, size_t> seen_at;
+    absl::flat_hash_map<BorrowedInternedStringPtr, size_t> seen_at;
     if (needs_dedup) {
-      seen_at.reserve(std::min(qualified_entries, kInitialNeighborReserveSize));
+      seen_at.reserve(std::min(
+          qualified_entries, std::min(max_keys, kInitialNeighborReserveSize)));
     }
     while (!entries_fetchers.empty()) {
       auto fetcher = std::move(entries_fetchers.front());
@@ -1755,8 +1757,8 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
           // the max_keys break the index is left one past the end. Safe only
           // because that break is mirrored by the outer loop and nothing reads
           // seen_at afterward.
-          auto [it, inserted] =
-              seen_at.try_emplace(key->Str().data(), borrowed.size());
+          auto [it, inserted] = seen_at.try_emplace(
+              BorrowedInternedStringPtr(key), borrowed.size());
           if (!inserted) {
             borrowed[it->second].score += raw;
             iterator->Next();

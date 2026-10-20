@@ -901,7 +901,8 @@ TEST_F(ValkeySearchTest, WithCursorReleasesRowsAsTheyAreRead) {
 
   const size_t interned_before = StringInternStore::Instance().UniqueStrings();
   std::vector<indexes::Neighbor> neighbors;
-  for (auto id : {"row0", "row1", "row2", "row3", "row4"}) {
+  for (auto id : {"cursor_row0", "cursor_row1", "cursor_row2", "cursor_row3",
+                  "cursor_row4"}) {
     neighbors.push_back(ToIndexesNeighbor({.external_id = id, .score = 1.0f}));
   }
   auto neighbor_count = neighbors.size();

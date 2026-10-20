@@ -16,6 +16,7 @@
 
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_set.h"
+#include "absl/container/inlined_vector.h"
 #include "absl/functional/any_invocable.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
@@ -32,7 +33,7 @@
 
 namespace valkey_search::indexes {
 
-// Tag index backed by an in-tree vs_rax radix tree.
+// Tag index backed by an in-tree Rax radix tree.
 //
 // Storage model:
 //   - tracked_tags_by_keys_: doc-key → interned raw tag string.
@@ -96,6 +97,10 @@ class Tag : public IndexBase {
       const InternedStringPtr &key,
       bool &case_sensitive) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
+  // Returns the raw tag string for `key`, or nullopt if `key` is not tracked.
+  std::optional<absl::string_view> GetRawTagString(
+      const InternedStringPtr &key) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
+
   // Returns whether `key` carries tag value `value`. `value` is normalized
   // (lowercased unless case-sensitive) before lookup, so callers pass the raw
   // query value. Unlike GetValue, this avoids parsing/allocating the document's
@@ -107,13 +112,16 @@ class Tag : public IndexBase {
   bool ContainsKey(absl::string_view value, BorrowedInternedStringPtr key) const
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
+  using SlotsVector = absl::InlinedVector<void *, 4>;
+  using ExtrasVector = absl::InlinedVector<InternedStringPtr, 4>;
+
   // Iterator yielded by EntriesFetcher::Begin(). Walks a vector of rax slots
   // (each slot's 8 bytes encode a BagOfInternedStringPtrs); for negated
   // queries, also walks an extras vector of untracked keys.
   class EntriesFetcherIterator : public EntriesFetcherIteratorBase {
    public:
-    EntriesFetcherIterator(const std::vector<void *> &slots,
-                           const std::vector<InternedStringPtr> &extras);
+    EntriesFetcherIterator(const SlotsVector &slots,
+                           const ExtrasVector &extras);
     ~EntriesFetcherIterator() override;
     bool Done() const override;
     void Next() override;
@@ -122,8 +130,8 @@ class Tag : public IndexBase {
    private:
     void AdvanceToNextNonEmpty();
 
-    const std::vector<void *> &slots_;
-    const std::vector<InternedStringPtr> &extras_;
+    const SlotsVector &slots_;
+    const ExtrasVector &extras_;
     size_t slot_idx_{0};
     bool slots_done_{false};
     size_t extras_idx_{0};
@@ -132,13 +140,11 @@ class Tag : public IndexBase {
     BagOfInternedStringPtrs bag_;
     BagOfInternedStringPtrs::const_iterator bag_it_;
     BagOfInternedStringPtrs::const_iterator bag_end_;
-    InternedStringPtr current_;
   };
 
   class EntriesFetcher : public EntriesFetcherBase {
    public:
-    EntriesFetcher(std::vector<void *> matched_slots,
-                   std::vector<InternedStringPtr> extras, size_t size)
+    EntriesFetcher(SlotsVector matched_slots, ExtrasVector extras, size_t size)
         : size_(size),
           matched_slots_(std::move(matched_slots)),
           extras_(std::move(extras)) {}
@@ -147,8 +153,8 @@ class Tag : public IndexBase {
 
    private:
     size_t size_;
-    std::vector<void *> matched_slots_;
-    std::vector<InternedStringPtr> extras_;
+    SlotsVector matched_slots_;
+    ExtrasVector extras_;
   };
 
   // Kept virtual so unit tests can mock Search; no production subclass.
@@ -164,7 +170,7 @@ class Tag : public IndexBase {
   // callers pass the raw query value. Feeds the BM25 IDF document frequency
   // (dt) for tag scoring. O(1) rax lookup plus a bag size read.
   size_t GetTagValueDocCount(absl::string_view value) const
-      ABSL_LOCKS_EXCLUDED(index_mutex_);
+      ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
   // Document count (dt) of the first value on `key` matching prefix query value
   // `prefix_value` (must end in '*') -- the value a tag prefix is scored on,
@@ -177,6 +183,7 @@ class Tag : public IndexBase {
       absl::string_view data, char separator);
   static absl::flat_hash_set<absl::string_view> ParseRecordTags(
       absl::string_view data, char separator);
+  static bool HasRecordTags(absl::string_view data, char separator);
   // Unescape a tag string (e.g. escaped pipe becomes literal pipe)
   static std::string UnescapeTag(absl::string_view tag);
 

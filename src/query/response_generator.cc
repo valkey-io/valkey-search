@@ -301,16 +301,23 @@ FilterVerification VerifyFilter(
   return recompute(result);
 }
 
-// Check if this node owns the slot for the given key in cluster mode
+// Check if this node answers for the given key in cluster mode: it owns the
+// key's slot or is importing it (keys moved without COPY exist only on the
+// importing node until SETSLOT NODE).
+//
+// query::Search() already drops these hits on the reader thread against the
+// cluster-map snapshot (see DropUnownedSlotHits). This second check is kept
+// deliberately: it runs on the main thread with a map that is refreshed when
+// expired, so it catches a slot handed over between the reader-thread filter
+// and the content fetch, and it is the only ownership check when the
+// coordinator is disabled (where the snapshot is not kept fresh).
 bool CheckSlotOwnership(ValkeyModuleCtx *ctx, absl::string_view key) {
   // In standalone mode, we own all keys.
   if (!ValkeySearch::Instance().IsCluster()) {
     return true;
   }
   auto cluster_map = ValkeySearch::Instance().GetOrRefreshClusterMap(ctx);
-  auto key_str = vmsdk::MakeUniqueValkeyString(key);
-  unsigned int slot = ValkeyModule_ClusterKeySlot(key_str.get());
-  return cluster_map->IOwnSlot(static_cast<uint16_t>(slot));
+  return cluster_map->IOwnOrImportSlot(vmsdk::KeyHashSlot(key));
 }
 
 absl::StatusOr<RecordsMap> GetContentNoReturnJson(

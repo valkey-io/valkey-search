@@ -196,6 +196,28 @@ std::optional<absl::string_view> ParseHashTag(absl::string_view s) {
   return s.substr(start + 1, tag_size);
 }
 
+uint16_t KeyHashSlot(absl::string_view key) {
+  // CRC16-CCITT (XMODEM): polynomial 0x1021, init 0, no reflection, no final
+  // xor -- the variant the server's crc16() implements.
+  static constexpr auto kTable = [] {
+    std::array<uint16_t, 256> table{};
+    for (uint32_t i = 0; i < 256; ++i) {
+      uint32_t c = i << 8;
+      for (int k = 0; k < 8; ++k) {
+        c = (c & 0x8000) ? ((c << 1) ^ 0x1021) : (c << 1);
+      }
+      table[i] = static_cast<uint16_t>(c);
+    }
+    return table;
+  }();
+  absl::string_view hashed = ParseHashTag(key).value_or(key);
+  uint16_t crc = 0;
+  for (unsigned char b : hashed) {
+    crc = static_cast<uint16_t>((crc << 8) ^ kTable[((crc >> 8) ^ b) & 0xFF]);
+  }
+  return crc & 0x3FFF;
+}
+
 //
 // This is done "C" style to avoid memory allocations, so that it
 // can be part of a crash dump.

@@ -12,9 +12,11 @@
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <map>
 #include <memory>
 #include <string>
+#include <thread>
 
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -48,7 +50,8 @@ ConfigMap EnabledConfig() {
   return {{"tls-cert-file", "/certs/server.crt"},
           {"tls-key-file", "/certs/server.key"},
           {"tls-ca-cert-file", "/certs/ca.pem"},
-          {"tls-auth-clients", "yes"}};
+          {"tls-auth-clients", "yes"},
+          {"tls-auto-reload-interval", "0"}};
 }
 
 TEST(CoordinatorTlsConfigTest, ReadsServerConfig) {
@@ -104,6 +107,39 @@ TEST(CoordinatorTlsConfigTest, FailsInsteadOfFallingBackToPlaintext) {
     auto config = Load(values);
     ASSERT_FALSE(config.ok()) << missing;
     EXPECT_EQ(config.status().code(), absl::StatusCode::kFailedPrecondition);
+  }
+}
+
+TEST(CoordinatorTlsConfigTest, RejectsHalfOfAClientIdentity) {
+  for (const char *name : {"tls-client-cert-file", "tls-client-key-file"}) {
+    auto values = EnabledConfig();
+    values[name] = "/certs/client.file";
+    auto config = Load(values);
+    ASSERT_FALSE(config.ok()) << name;
+    EXPECT_EQ(config.status().code(), absl::StatusCode::kFailedPrecondition);
+  }
+}
+
+TEST(CoordinatorTlsConfigTest, UsesServerReloadInterval) {
+  auto values = EnabledConfig();
+  values["tls-auto-reload-interval"] = "5";
+  auto config = Load(values);
+  ASSERT_TRUE(config.ok());
+  EXPECT_EQ(config->refresh_interval_secs, 5u);
+}
+
+TEST(CoordinatorTlsConfigTest, DefaultsReloadIntervalWhenServerDoesNotReload) {
+  auto config = Load(EnabledConfig());  // tls-auto-reload-interval is 0
+  ASSERT_TRUE(config.ok());
+  EXPECT_EQ(config->refresh_interval_secs,
+            TlsConfig::kDefaultRefreshIntervalSecs);
+}
+
+TEST(CoordinatorTlsConfigTest, RejectsInvalidReloadInterval) {
+  for (const char *value : {"-1", "soon"}) {
+    auto values = EnabledConfig();
+    values["tls-auto-reload-interval"] = value;
+    EXPECT_FALSE(Load(values).ok()) << value;
   }
 }
 
@@ -221,10 +257,63 @@ TEST_F(CoordinatorTlsHandshakeTest, ClientFromUntrustedCaIsRejected) {
 
 TEST_F(CoordinatorTlsHandshakeTest, ServerFromUntrustedCaIsRejected) {
   int port = 0;
-  auto server = StartServer(ConfigFor("rogue", "other_ca"), &port);
+  // The server's certificate is from another CA, while the client's own
+  // certificate is accepted, so only the client's check of the server can
+  // reject this connection.
+  auto server = StartServer(ConfigFor("rogue", "ca"), &port);
   ASSERT_NE(server, nullptr);
   EXPECT_FALSE(
       CanConnect(MakeTlsChannelCredentials(ConfigFor("client", "ca")), port));
+}
+
+TEST_F(CoordinatorTlsHandshakeTest, ValidationAcceptsUsableFiles) {
+  EXPECT_TRUE(ValidateTlsConfig(ConfigFor("server", "ca")).ok());
+}
+
+TEST_F(CoordinatorTlsHandshakeTest, ValidationRejectsUnusableFiles) {
+  auto missing = ConfigFor("server", "ca");
+  missing.cert_file = Path("missing.crt");
+  EXPECT_FALSE(ValidateTlsConfig(missing).ok());
+
+  auto not_pem = ConfigFor("server", "ca");
+  std::ofstream(Path("garbage.pem")) << "not a certificate";
+  not_pem.ca_file = Path("garbage.pem");
+  EXPECT_FALSE(ValidateTlsConfig(not_pem).ok());
+
+  // An unusable dedicated client identity is caught even when the server
+  // identity is fine.
+  auto bad_client = ConfigFor("server", "ca");
+  bad_client.client_cert_file = Path("missing.crt");
+  EXPECT_FALSE(ValidateTlsConfig(bad_client).ok());
+}
+
+// A certificate that is replaced on disk must take effect on the same
+// credentials without a restart, which is what keeps pooled channels working
+// across rotation.
+TEST_F(CoordinatorTlsHandshakeTest, ReplacedCertificateIsPickedUp) {
+  auto config = ConfigFor("server", "ca");
+  config.cert_file = Path("live.crt");
+  config.key_file = Path("live.key");
+  config.refresh_interval_secs = 1;
+  auto copy = [this](const std::string &from, const std::string &to) {
+    std::filesystem::copy_file(
+        Path(from), Path(to),
+        std::filesystem::copy_options::overwrite_existing);
+  };
+  // Start with an identity the client does not trust.
+  copy("rogue.key", "live.key");
+  copy("rogue.crt", "live.crt");
+
+  int port = 0;
+  auto server = StartServer(config, &port);
+  ASSERT_NE(server, nullptr);
+  auto client_creds = MakeTlsChannelCredentials(ConfigFor("client", "ca"));
+  EXPECT_FALSE(CanConnect(client_creds, port));
+
+  copy("server.key", "live.key");
+  copy("server.crt", "live.crt");
+  std::this_thread::sleep_for(std::chrono::seconds(3));
+  EXPECT_TRUE(CanConnect(client_creds, port));
 }
 
 }  // namespace

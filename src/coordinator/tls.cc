@@ -7,12 +7,14 @@
 
 #include "src/coordinator/tls.h"
 
+#include <fstream>
 #include <memory>
 #include <string>
 
 #include "absl/functional/function_ref.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "grpc/grpc_security_constants.h"
@@ -25,9 +27,6 @@
 namespace valkey_search::coordinator {
 
 namespace {
-
-// How often the certificate files are checked for changes.
-constexpr unsigned int kCertRefreshIntervalSecs = 60;
 
 absl::StatusOr<std::string> RequireFile(
     absl::FunctionRef<absl::StatusOr<std::string>(const char *)> get_config,
@@ -56,9 +55,32 @@ absl::Status RejectIfSet(
 
 std::shared_ptr<grpc::experimental::FileWatcherCertificateProvider>
 MakeProvider(const std::string &key_file, const std::string &cert_file,
-             const std::string &ca_file) {
+             const std::string &ca_file, unsigned int refresh_interval_secs) {
   return std::make_shared<grpc::experimental::FileWatcherCertificateProvider>(
-      key_file, cert_file, ca_file, kCertRefreshIntervalSecs);
+      key_file, cert_file, ca_file, refresh_interval_secs);
+}
+
+absl::Status ValidateFiles(const std::string &key_file,
+                           const std::string &cert_file,
+                           const std::string &ca_file) {
+  // ValidateCredentials() only checks the PEM of what was loaded, and passes
+  // when a file is missing, so make sure every file is there and not empty.
+  for (const std::string *file : {&key_file, &cert_file, &ca_file}) {
+    std::ifstream in(*file);
+    if (!in.is_open() || in.peek() == std::ifstream::traits_type::eof()) {
+      return absl::FailedPreconditionError(absl::StrCat(
+          "Coordinator TLS cannot read ", *file, " (missing or empty)"));
+    }
+  }
+  auto status = MakeProvider(key_file, cert_file, ca_file,
+                             TlsConfig::kDefaultRefreshIntervalSecs)
+                    ->ValidateCredentials();
+  if (!status.ok()) {
+    return absl::FailedPreconditionError(
+        absl::StrCat("Coordinator TLS cannot use ", cert_file, " / ", key_file,
+                     " / ", ca_file, ": ", status.message()));
+  }
+  return absl::OkStatus();
 }
 
 }  // namespace
@@ -91,15 +113,23 @@ absl::StatusOr<TlsConfig> LoadTlsConfig(
   }
   config.ca_file = *std::move(ca);
 
+  // A dedicated client identity is a pair; one half alone is a mistake, not a
+  // request to use the server identity.
   auto client_cert = get_config("tls-client-cert-file");
+  if (!client_cert.ok()) return client_cert.status();
   auto client_key = get_config("tls-client-key-file");
-  if (client_cert.ok() && client_key.ok() && !client_cert->empty() &&
-      !client_key->empty()) {
-    config.client_cert_file = *std::move(client_cert);
-    config.client_key_file = *std::move(client_key);
-  } else {
+  if (!client_key.ok()) return client_key.status();
+  if (client_cert->empty() != client_key->empty()) {
+    return absl::FailedPreconditionError(
+        "Coordinator TLS requires tls-client-cert-file and "
+        "tls-client-key-file to be set together");
+  }
+  if (client_cert->empty()) {
     config.client_cert_file = config.cert_file;
     config.client_key_file = config.key_file;
+  } else {
+    config.client_cert_file = *std::move(client_cert);
+    config.client_key_file = *std::move(client_key);
   }
 
   auto auth_clients = get_config("tls-auth-clients");
@@ -114,13 +144,37 @@ absl::StatusOr<TlsConfig> LoadTlsConfig(
     return absl::InternalError(
         absl::StrCat("Unexpected tls-auth-clients value: ", *auth_clients));
   }
+
+  auto reload_interval = get_config("tls-auto-reload-interval");
+  if (!reload_interval.ok()) return reload_interval.status();
+  int interval_secs = 0;
+  if (!absl::SimpleAtoi(*reload_interval, &interval_secs) ||
+      interval_secs < 0) {
+    return absl::InternalError(absl::StrCat(
+        "Unexpected tls-auto-reload-interval value: ", *reload_interval));
+  }
+  if (interval_secs > 0) {
+    config.refresh_interval_secs = interval_secs;
+  }
   return config;
+}
+
+absl::Status ValidateTlsConfig(const TlsConfig &config) {
+  auto status =
+      ValidateFiles(config.key_file, config.cert_file, config.ca_file);
+  if (status.ok() && (config.client_cert_file != config.cert_file ||
+                      config.client_key_file != config.key_file)) {
+    status = ValidateFiles(config.client_key_file, config.client_cert_file,
+                           config.ca_file);
+  }
+  return status;
 }
 
 std::shared_ptr<grpc::ServerCredentials> MakeTlsServerCredentials(
     const TlsConfig &config) {
   grpc::experimental::TlsServerCredentialsOptions options(
-      MakeProvider(config.key_file, config.cert_file, config.ca_file));
+      MakeProvider(config.key_file, config.cert_file, config.ca_file,
+                   config.refresh_interval_secs));
   options.watch_root_certs();
   options.watch_identity_key_cert_pairs();
   switch (config.client_auth) {
@@ -142,8 +196,9 @@ std::shared_ptr<grpc::ServerCredentials> MakeTlsServerCredentials(
 std::shared_ptr<grpc::ChannelCredentials> MakeTlsChannelCredentials(
     const TlsConfig &config) {
   grpc::experimental::TlsChannelCredentialsOptions options;
-  options.set_certificate_provider(MakeProvider(
-      config.client_key_file, config.client_cert_file, config.ca_file));
+  options.set_certificate_provider(
+      MakeProvider(config.client_key_file, config.client_cert_file,
+                   config.ca_file, config.refresh_interval_secs));
   options.watch_root_certs();
   options.watch_identity_key_cert_pairs();
   // Peers are dialed by the IP the cluster reports, and certificates are

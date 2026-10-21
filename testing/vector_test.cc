@@ -3224,12 +3224,13 @@ TEST_F(VectorIndexTest, SearchRangeCosineNearDuplicatesHighDims) {
   }
 }
 
-// A stored vector with a NaN or infinite component is rejected at ingest, so
-// only a non-finite query vector can make the distance non-finite here. As on
-// Redis, a NaN or +inf distance is within no radius, and neither is any
-// non-finite COSINE distance, while an IP distance of -inf is within every
-// radius and reported as -inf. An infinite radius reaches VectorBase as the
-// largest float.
+// A NaN or infinite component in the stored or the query vector makes the
+// distance non-finite. As on Redis, a NaN or +inf distance is within no
+// radius, and neither is any non-finite COSINE distance, while an IP distance
+// of -inf is within every radius and reported as -inf. An infinite radius
+// reaches VectorBase as the largest float. Under -ffast-math the radius
+// comparison admitted NaN distances at every radius, and std::clamp turned a
+// non-finite COSINE distance into 0 or 2.
 TEST_F(VectorIndexTest, SearchRangeNonFiniteDistance) {
   const int kDim = 4;
   auto from_bits = [](uint32_t bits) {
@@ -3246,9 +3247,9 @@ TEST_F(VectorIndexTest, SearchRangeNonFiniteDistance) {
   const float kNegNaN = from_bits(0xffc00000u);
   const float kInf = from_bits(0x7f800000u);
   const float kMaxFloat = from_bits(0x7f7fffffu);
-  // Keys 0 and 1 are at distance 0 and 1 (2 for L2) from {1, 0, 0, 0}. Keys 2
-  // to 5 are non-finite and rejected, so they are never indexed.
-  constexpr int kFiniteDocs = 2;
+  // Keys 0 and 1 are at distance 0 and 1 (2 for L2) from {1, 0, 0, 0}. Every
+  // distance of keys 2 to 5 to it is non-finite; for IP, key 4 is at -inf and
+  // key 5 at +inf.
   const std::vector<std::vector<float>> docs = {
       {1, 0, 0, 0},       {0, 1, 0, 0},    {kNaN, 0, 0, 0},
       {0, 1, 0, kNegNaN}, {kInf, 0, 0, 0}, {-kInf, 0, 0, 0}};
@@ -3262,10 +3263,10 @@ TEST_F(VectorIndexTest, SearchRangeNonFiniteDistance) {
     std::vector<int> ip_neg_inf;
   };
   // Every distance to the NaN query is NaN. To the infinite one, the IP
-  // distance of key 0 is -inf, and every other distance is NaN or +inf.
-  const std::vector<Case> cases = {{"finite", {1, 0, 0, 0}, true, {}},
+  // distance of keys 0 and 4 is -inf, and every other distance is NaN or +inf.
+  const std::vector<Case> cases = {{"finite", {1, 0, 0, 0}, true, {4}},
                                    {"nan", {1, 0, kNaN, 0}, false, {}},
-                                   {"inf", {kInf, 0, 0, 0}, false, {0}}};
+                                   {"inf", {kInf, 0, 0, 0}, false, {0, 4}}};
   for (auto metric :
        {data_model::DISTANCE_METRIC_L2, data_model::DISTANCE_METRIC_IP,
         data_model::DISTANCE_METRIC_COSINE}) {
@@ -3285,12 +3286,8 @@ TEST_F(VectorIndexTest, SearchRangeNonFiniteDistance) {
     for (VectorBase *index : {static_cast<VectorBase *>(hnsw_index->get()),
                               static_cast<VectorBase *>(flat_index->get())}) {
       for (int i = 0; i < static_cast<int>(docs.size()); ++i) {
-        auto added = testing_infra::AddVectorRecord(*index, IndexToKey(i),
-                                                    VectorToStr(docs[i]));
-        VMSDK_EXPECT_OK(added);
-        EXPECT_EQ(*added, i < kFiniteDocs ? RecordResult::kAdded
-                                          : RecordResult::kInvalidData)
-            << "metric " << metric << " key " << i;
+        VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(*index, IndexToKey(i),
+                                                       VectorToStr(docs[i])));
       }
       for (const auto &c : cases) {
         absl::string_view query = VectorToStr(c.query);
@@ -3301,8 +3298,7 @@ TEST_F(VectorIndexTest, SearchRangeNonFiniteDistance) {
           for (const auto &n : *result) {
             found[n.external_id->Str()] = n.distance;
           }
-          EXPECT_LE(found.size(), static_cast<size_t>(kFiniteDocs));
-          for (int i = 0; i < kFiniteDocs; ++i) {
+          for (int i = 0; i < static_cast<int>(docs.size()); ++i) {
             const bool neg_inf =
                 metric == data_model::DISTANCE_METRIC_IP &&
                 std::find(c.ip_neg_inf.begin(), c.ip_neg_inf.end(), i) !=

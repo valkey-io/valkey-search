@@ -73,6 +73,7 @@ import logging
 import os
 import random
 import shutil
+import socket
 import subprocess
 import threading
 import time
@@ -85,7 +86,12 @@ from absl.testing import parameterized
 
 import utils
 
-_PORT = 7300
+# Collision-free per-worker port: under pytest-xdist the two parametrized cases
+# run on different workers concurrently, so a hardcoded shared port let one
+# case's client reach the other case's node -- which already holds the index --
+# and fail FT.CREATE with "index already exists". Derive the port per worker the
+# same way the rest of the suite does.
+_PORT = utils.get_worker_cluster_ports(num_nodes=1)[0]
 _INDEX_NAME = "fork_wedge_repro"
 _VECTOR_FIELD = "embedding"
 _TAG_FIELD = "tag"
@@ -202,6 +208,31 @@ def _random_vector() -> bytes:
             vector = vector / norm
         return vector.astype(np.float32).tobytes()
     return os.urandom(_VECTOR_DIMENSIONS * 4)
+
+
+def _wait_for_port_free(port: int, timeout_sec: float = 30.0) -> None:
+    """Block until nothing is listening on `port`, bounded by `timeout_sec`.
+
+    Both parametrized cases reuse `_PORT`. tearDown's terminate() can return
+    before the kernel has released the socket (worse when the node needed a
+    SIGKILL mid-BGSAVE), so the next case's setUp could otherwise reach the
+    previous, still-dying node -- which already holds the index -- and fail its
+    FT.CREATE with "index already exists". Waiting for the port to be bindable
+    makes each case start against a genuinely fresh node regardless of order.
+    """
+    deadline = time.monotonic() + timeout_sec
+    while time.monotonic() < deadline:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                probe.bind(("127.0.0.1", port))
+                return
+            except OSError:
+                time.sleep(0.1)
+    raise TimeoutError(
+        f"Port {port} was still in use {timeout_sec}s after the previous "
+        f"case's node was asked to terminate"
+    )
 
 
 def _client(timeout_sec: float = _CLIENT_TIMEOUT_SEC) -> valkey.Valkey:
@@ -582,6 +613,12 @@ class ForkSuspendWedgeTest(parameterized.TestCase):
         node_dir = os.path.join(os.environ["TEST_TMPDIR"], f"{case}_{_PORT}")
         shutil.rmtree(node_dir, ignore_errors=True)
         os.makedirs(node_dir)
+
+        # The previous case's node may not have released _PORT yet (terminate()
+        # can return before the kernel frees the socket). Wait, so this case
+        # starts against a fresh node and its FT.CREATE cannot hit a stale node
+        # that still holds the index.
+        _wait_for_port_free(_PORT)
 
         self.server = utils.start_valkey_process(
             os.environ["VALKEY_SERVER_PATH"],

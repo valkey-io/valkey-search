@@ -1947,9 +1947,7 @@ class HierarchicalNSW
       BaseFilterFunctor *isIdAllowed = nullptr,
       BaseCancellationFunctor *isCancelled = nullptr) const {
     std::priority_queue<std::pair<dist_t, labeltype>> result;
-    const size_t element_count =
-        cur_element_count_.load(std::memory_order_relaxed);
-    if (element_count == 0) return result;
+    if (cur_element_count_ == 0) return result;
 
     tableint currObj = enterpoint_node_.load(std::memory_order_acquire);
     dist_t curdist = EvaluateDistance(query_data, GetDataByInternalId(currObj));
@@ -2013,9 +2011,7 @@ class HierarchicalNSW
       BaseSearchStopCondition<dist_t> &stop_condition,
       BaseFilterFunctor *isIdAllowed = nullptr) const {
     std::vector<std::pair<dist_t, labeltype>> result;
-    const size_t element_count =
-        cur_element_count_.load(std::memory_order_relaxed);
-    if (element_count == 0) return result;
+    if (cur_element_count_ == 0) return result;
 
     tableint currObj = enterpoint_node_.load(std::memory_order_acquire);
     dist_t curdist = EvaluateDistance(query_data, GetDataByInternalId(currObj));

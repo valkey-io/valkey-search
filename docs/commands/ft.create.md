@@ -109,16 +109,17 @@ See [Numeric Field Format](../topics/search-data-formats.md#numeric-fields) for 
   - `CONSTRUCTION_WINDOW_SIZE <number>` (optional): Number of candidates examined when inserting a vector. Higher values improve recall at the cost of indexing time. The default is 128. It must be at least `GRAPH_MAX_DEGREE`.
   - `SEARCH_WINDOW_SIZE <number>` (optional): Number of candidates examined during a query. The default is 10. A query can override it with `EF_RUNTIME`. Higher values increase query times, but improve query recall.
   - `ALPHA <number>` (optional): Pruning parameter that decides which edges are kept when the graph is built. It must be at least 1.0 for `L2` and in (0, 1.0] for `IP` and `COSINE`; the defaults are 1.2 and 0.95. Moving it away from 1.0 keeps more long-range edges, which can improve recall at the cost of memory.
-  - `COMPRESSION [NONE | FP16]` (optional): How SVS stores the vectors. The default is `NONE`, which stores them in the declared `TYPE`. `FP16` stores `FLOAT32` vectors as 16-bit floats, halving their memory; scores then differ slightly from the exact ones, on the order of 1e-3 for normalized vectors.
+  - `COMPRESSION [NONE | FP16 | SQ8]` (optional): How SVS stores the vectors. The default is `NONE`, which stores them in the declared `TYPE`. `FP16` stores `FLOAT32` vectors as 16-bit floats, halving their memory; scores then differ slightly from the exact ones, on the order of 1e-3 for normalized vectors. `SQ8` stores each element as an 8-bit integer, using one scale and offset for the whole index, set from the smallest and largest element of the vectors the index is built from (see `TRAINING_THRESHOLD`). Each element is then off by at most half a step, where a step is that range divided by 255, so scores differ slightly from the exact ones.
+  - `TRAINING_THRESHOLD <number>` (optional): Only for `COMPRESSION SQ8`; rejected with the other compressions. The number of vectors the index holds uncompressed before it converts to `SQ8`, so `SQ8` can set its range from all of them. The minimum is 64, the default 1024 and the maximum 1000000. The conversion keeps the graph and pauses writes and searches on the index while it runs: about 0.4 seconds for 1000000 vectors of 128 dimensions. Elements of vectors added after the conversion that fall outside the range are clamped to it, so the first vectors should be representative of the data.
 
   The upper bounds of `GRAPH_MAX_DEGREE`, `CONSTRUCTION_WINDOW_SIZE` and `SEARCH_WINDOW_SIZE` are set by the configs `search.max-vector-m`, `search.max-vector-ef-construction` and `search.max-vector-ef-runtime`, which also bound `HNSW`'s `M`, `EF_CONSTRUCTION` and `EF_RUNTIME`.
 
   Element storage for each `TYPE` and `COMPRESSION`:
 
-  | `TYPE`    | `COMPRESSION NONE` | `COMPRESSION FP16` |
-  | :-------- | :----------------- | :----------------- |
-  | `FLOAT32` | 4 bytes            | 2 bytes            |
-  | `FLOAT16` | 2 bytes            | 2 bytes            |
+  | `TYPE`    | `COMPRESSION NONE` | `COMPRESSION FP16` | `COMPRESSION SQ8` |
+  | :-------- | :----------------- | :----------------- | :---------------- |
+  | `FLOAT32` | 4 bytes            | 2 bytes            | 1 byte            |
+  | `FLOAT16` | 2 bytes            | 2 bytes            | 1 byte            |
 
 See [SVS_VAMANA notes](#svs_vamana-notes) for behavior specific to this algorithm.
 
@@ -138,7 +139,7 @@ This table shows the actual computation that Search uses when computing the dist
 
 - **Version:** `SVS_VAMANA` requires 1.3.0 or later. A module older than that refuses to load an RDB file with an `SVS_VAMANA` index.
 - **Memory:** SVS allocations count toward `used_memory` and `maxmemory`. On Valkey 9.2 or later they are reported as `used_memory_module_external` in `INFO debug`, and allocations of 2 MiB or more try huge pages first. On earlier Valkey versions they are still counted, but huge pages aren't used.
-- **Building:** the index is built when the first vector is added, so an empty `SVS_VAMANA` field allocates no SVS memory.
+- **Building:** the index is built when the first vector is added, so an empty `SVS_VAMANA` field allocates no SVS memory. With `COMPRESSION SQ8` it starts uncompressed and converts to `SQ8` once it holds `TRAINING_THRESHOLD` vectors. An index saved before its conversion loads uncompressed and converts later.
 - **Filtered queries:** SVS applies a filter to batches of candidates after each graph traversal, rather than at every node it visits. A query with a filter can therefore return fewer than `K` results when few vectors match. For very selective filters the query planner evaluates the filter first and computes exact distances instead (see `HYBRID_POLICY` in [Search - query language](../topics/search-query.md)).
 - **Persistence:** the index is saved in the RDB file. If the file was written by a different version of the SVS library, the index is rebuilt from the keyspace when it loads.
 

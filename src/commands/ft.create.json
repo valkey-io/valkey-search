@@ -295,7 +295,7 @@
                       {
                         "name": "vector-params",
                         "type": "block",
-                        "description": "Vector algorithm parameters (DIM, TYPE, DISTANCE_METRIC, INITIAL_CAP; M, EF_CONSTRUCTION, EF_RUNTIME for HNSW; GRAPH_MAX_DEGREE, CONSTRUCTION_WINDOW_SIZE, SEARCH_WINDOW_SIZE, ALPHA, COMPRESSION for SVS_VAMANA)",
+                        "description": "Vector algorithm parameters (DIM, TYPE, DISTANCE_METRIC, INITIAL_CAP; M, EF_CONSTRUCTION, EF_RUNTIME for HNSW; GRAPH_MAX_DEGREE, CONSTRUCTION_WINDOW_SIZE, SEARCH_WINDOW_SIZE, ALPHA, COMPRESSION, TRAINING_THRESHOLD for SVS_VAMANA)",
                         "arguments": [
                           {
                             "name": "type",
@@ -409,8 +409,19 @@
                                 "name": "fp16",
                                 "type": "pure-token",
                                 "token": "FP16"
+                              },
+                              {
+                                "name": "sq8",
+                                "type": "pure-token",
+                                "token": "SQ8"
                               }
                             ]
+                          },
+                          {
+                            "name": "training_threshold",
+                            "token": "TRAINING_THRESHOLD",
+                            "type": "integer",
+                            "optional": true
                           }
                         ]
                       }

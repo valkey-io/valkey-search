@@ -9,6 +9,7 @@ break SVS?" during iteration on the branch, and is what to run before
 opening a review.
 """
 
+import math
 import random
 import struct
 
@@ -46,6 +47,24 @@ def _fp32(values):
 
 def _fp16(values):
     return struct.pack(f"<{len(values)}e", *values)
+
+
+# Docs and queries for the SQ8 calibration checks, as in vector_svs_test.cc,
+# padded to the minimum TRAINING_THRESHOLD (64) with docs inside each case's
+# range, so the range and each doc's error bound stay the same.
+SQ8_MIN_THRESHOLD = 64
+_SQ8_FILLERS = SQ8_MIN_THRESHOLD - 4
+SQ8_CASES = {
+    "L2": ([[1, 0, 0, 0], [100, 0, 0, 0], [200, 0, 0, 0], [300, 0, 0, 0]]
+           + [[2 + 297 * i / (_SQ8_FILLERS - 1), 0, 0, 0]
+              for i in range(_SQ8_FILLERS)],
+           [200, 0, 0, 0]),
+    "COSINE": ([[2, 0, 0, 0], [-3, 0, 0, 0], [0, -4, 0, 0], [0, 0, 5, 0]]
+               + [[math.cos(math.pi / 2 * (i + 1) / (_SQ8_FILLERS + 1)),
+                   math.sin(math.pi / 2 * (i + 1) / (_SQ8_FILLERS + 1)),
+                   0, 0] for i in range(_SQ8_FILLERS)],
+               [-7, 0, 0, 0]),
+}
 
 
 def _v_index(client: Valkey, index: str) -> dict:
@@ -282,19 +301,86 @@ class TestSVSVamanaSmoke(ValkeySearchTestCaseBase):
             )
         assert "BFLOAT16" in str(exc_info.value)
 
-    def test_compression_sq8_rejected_at_parse(self):
-        """COMPRESSION SQ8 is fenced in v1: the first-add bootstrap
-        calibrates the int8 range on one vector and later components
-        outside that range saturate. Re-enabled when calibration lands."""
+    @pytest.mark.parametrize("compression", ["NONE", "FP16"])
+    def test_training_threshold_rejected_without_sq8(self, compression):
+        """TRAINING_THRESHOLD applies only to compressions that train on the
+        data (SQ8)."""
         client: Valkey = self.server.get_new_client()
         with pytest.raises(Exception) as exc_info:
             client.execute_command(
-                "FT.CREATE", "sq8_idx",
+                "FT.CREATE", "tt_idx",
                 "SCHEMA", "v", "VECTOR", "SVS_VAMANA",
-                "8", "TYPE", "FLOAT32", "DIM", str(DIM),
-                "DISTANCE_METRIC", "L2", "COMPRESSION", "SQ8",
+                "10", "TYPE", "FLOAT32", "DIM", str(DIM),
+                "DISTANCE_METRIC", "L2", "COMPRESSION", compression,
+                "TRAINING_THRESHOLD", "100",
             )
-        assert "SQ8" in str(exc_info.value)
+        assert "TRAINING_THRESHOLD only applies to COMPRESSION SQ8" in \
+            str(exc_info.value)
+
+    @pytest.mark.parametrize("metric", ["L2", "COSINE"])
+    def test_sq8_scores_match_flat(self, metric):
+        """Below TRAINING_THRESHOLD the index is uncompressed and scores like
+        FLAT. The doc that reaches it converts the index to SQ8, calibrated
+        on all of them, so scores stay within quantization error of FLAT's.
+        Compressed from the first doc alone, the later docs fall outside its
+        range."""
+        docs, query = SQ8_CASES[metric]
+        client: Valkey = self.server.get_new_client()
+        args = {
+            "sq8": ["SVS_VAMANA", "10", "COMPRESSION", "SQ8",
+                    "TRAINING_THRESHOLD", str(len(docs))],
+            "flat": ["FLAT", "6"],
+        }
+        for index, (algorithm, nargs, *extra) in args.items():
+            client.execute_command(
+                "FT.CREATE", index, "PREFIX", "1", "s:",
+                "SCHEMA", "v", "VECTOR", algorithm, nargs,
+                "TYPE", "FLOAT32", "DIM", str(DIM),
+                "DISTANCE_METRIC", metric, *extra,
+            )
+        assert _v_index(client, "sq8")["algorithm"]["training_threshold"] \
+            == len(docs)
+
+        def scores(index, n):
+            waiters.wait_for_equal(
+                lambda: _v_index(client, index)["size"], n, timeout=5)
+            reply = client.execute_command(
+                "FT.SEARCH", index, f"*=>[KNN {n} @v $q]",
+                "PARAMS", "2", "q", _fp32(query), "LIMIT", "0", str(n),
+                "DIALECT", "2",
+            )
+            assert reply[0] == n, reply
+            return _score_map(reply)
+
+        for i, values in enumerate(docs[:-1]):
+            client.hset(f"s:{i}", mapping={"v": _fp32(values)})
+        assert _v_index(client, "sq8")["algorithm"]["compression_pending"] \
+            == 1
+        uncompressed = scores("sq8", len(docs) - 1)
+        assert uncompressed == pytest.approx(scores("flat", len(docs) - 1),
+                                       abs=1e-5)
+
+        client.hset(f"s:{len(docs) - 1}", mapping={"v": _fp32(docs[-1])})
+        built = scores("sq8", len(docs))
+        assert _v_index(client, "sq8")["algorithm"]["compression_pending"] \
+            == 0
+        exact = scores("flat", len(docs))
+        for i, values in enumerate(docs):
+            key = f"s:{i}".encode()
+            if metric == "L2":
+                # SVS quantizes the query too: each component's difference is
+                # off by at most a step, so a squared distance moves by at
+                # most 2 * step * |x - q| + step^2. Range [0, 300].
+                step = 300 / 255
+                gap = abs(values[0] - query[0])
+                tolerance = 2 * step * gap + step * step
+            else:
+                # Normalized range [-1, 1]; the query stays fp32, each doc
+                # component is off by at most step / 2, and the query is
+                # one-hot.
+                tolerance = (2 / 255) / 2 + 1e-6
+            assert built[key] == pytest.approx(exact[key], abs=tolerance), \
+                f"doc {i}"
 
     @pytest.mark.parametrize("metric", ["IP", "COSINE"])
     def test_alpha_above_one_rejected_for_ip_cosine(self, metric):
@@ -621,11 +707,10 @@ class TestSVSVamanaSmoke(ValkeySearchTestCaseBase):
             assert int(key.split(b":")[1]) % 2 == 0, \
                 f"filter leaked non-red doc: {key!r}"
 
-    @pytest.mark.parametrize("compression", ["NONE", "FP16"])
+    @pytest.mark.parametrize("compression", ["NONE", "FP16", "SQ8"])
     def test_ft_create_supports_each_open_compression(self, compression):
-        """NONE / FP16 are the v1 open compression kinds. SQ8 is fenced
-        (see test_compression_sq8_rejected_at_parse); LVQ / LEANVEC are
-        proprietary and rejected at parse."""
+        """NONE / FP16 / SQ8 are the v1 open compression kinds; LVQ /
+        LEANVEC are proprietary and rejected at parse."""
         client: Valkey = self.server.get_new_client()
         idx = f"comp_{compression.lower()}_idx"
         client.execute_command(
@@ -639,6 +724,11 @@ class TestSVSVamanaSmoke(ValkeySearchTestCaseBase):
         assert idx_info["size"] == 3
         assert idx_info["algorithm"]["compression"] == \
             f"SVS_COMPRESSION_{compression}"
+        # SQ8 stays uncompressed until 1024 docs by default.
+        assert idx_info["algorithm"].get("training_threshold") == \
+            (1024 if compression == "SQ8" else None)
+        assert idx_info["algorithm"].get("compression_pending") == \
+            (1 if compression == "SQ8" else None)
 
 
 class TestSVSVamanaDebugMode(ValkeySearchTestCaseDebugMode):

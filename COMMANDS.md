@@ -73,7 +73,8 @@ FT.CREATE <index-name>
   - **CONSTRUCTION_WINDOW_SIZE \<number\>** (optional): Number of candidates examined when inserting a vector. The default is 128; it must be at least GRAPH_MAX_DEGREE, and the maximum is set by `search.max-vector-ef-construction`.
   - **SEARCH_WINDOW_SIZE \<number\>** (optional): Number of candidates examined during a query. The default is 10, and the maximum is set by `search.max-vector-ef-runtime`. A query can override it with EF_RUNTIME.
   - **ALPHA \<number\>** (optional): Graph pruning parameter. At least 1.0 for L2 and in (0, 1.0] for IP and COSINE; the defaults are 1.2 and 0.95.
-  - **COMPRESSION [NONE | FP16]** (optional): NONE (the default) stores vectors in the declared TYPE; FP16 stores FLOAT32 vectors as 16-bit floats, halving their memory, with scores that differ slightly from the exact ones.
+  - **COMPRESSION [NONE | FP16 | SQ8]** (optional): NONE (the default) stores vectors in the declared TYPE; FP16 stores FLOAT32 vectors as 16-bit floats, halving their memory, with scores that differ slightly from the exact ones; SQ8 stores 8-bit integers, with one range for the index set from the vectors it is built from.
+  - **TRAINING_THRESHOLD \<number\>** (optional): Only for COMPRESSION SQ8. The number of vectors the index holds uncompressed before it converts to SQ8, keeping its graph. The minimum is 64, the default 1024 and the maximum 1000000. Later elements outside the range those vectors set are clamped.
 
 ### Field options
 
@@ -138,7 +139,7 @@ LOCAL: An array of key value pairs.
         - **m** (integer) The count of maximum permitted outgoing edges for each node in the graph in each layer. The maximum number of outgoing edges is 2\*M for layer 0\. The Default is 16\. The maximum is 512\.
         - **ef_construction** (integer) The count of vectors in the index. The default is 200, and the max is 4096\. Higher values increase the time needed to create indexes, but improve the recall ratio.
         - **ef_runtime** (integer) The count of vectors to be examined during a query operation. The default is 10, and the max is 4096\.
-        - For SVS_VAMANA, **graph_max_degree**, **construction_window_size**, **search_window_size**, **alpha** (the effective value, including the per-metric default) and **compression** (`SVS_COMPRESSION_NONE` or `SVS_COMPRESSION_FP16`) instead. See [FT.INFO](docs/commands/ft.info.md).
+        - For SVS_VAMANA, **graph_max_degree**, **construction_window_size**, **search_window_size**, **alpha** (the effective value, including the per-metric default) and **compression** (`SVS_COMPRESSION_NONE`, `SVS_COMPRESSION_FP16` or `SVS_COMPRESSION_SQ8`), plus **training_threshold** and **compression_pending** (1 until the index converts) for SQ8, instead. See [FT.INFO](docs/commands/ft.info.md).
 
 ## FT.\_LIST
 

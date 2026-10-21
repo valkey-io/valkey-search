@@ -13,18 +13,22 @@
 
 #include "src/indexes/vector_svs.h"
 
+#include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <numeric>
 #include <optional>
+#include <random>
 #include <string>
 #include <thread>
 #include <vector>
 
 #include "absl/algorithm/container.h"
 #include "absl/cleanup/cleanup.h"
+#include "absl/container/flat_hash_map.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -72,6 +76,9 @@ class VectorSVSTestPeer {
   }
   static size_t DeletedSinceConsolidate(const VectorSVS<float> &index) {
     return index.deleted_since_consolidate_.load();
+  }
+  static bool CompressionPending(const VectorSVS<float> &index) {
+    return index.compression_pending_.load();
   }
 };
 
@@ -1313,6 +1320,387 @@ TEST_F(VectorSVSTest, RebuildsFromKeyspaceOnSvsVersionMismatch) {
     EXPECT_EQ((*result)[0].external_id, IndexToKey(i));
   }
 
+  for (auto *record : records) {
+    ValkeyModule_FreeString(nullptr, record);
+  }
+}
+
+// -- SQ8 training threshold ---------------------------------------------------
+
+data_model::VectorIndex Sq8Proto(int dimensions,
+                                 data_model::DistanceMetric metric,
+                                 uint32_t training_threshold) {
+  auto proto = CreateSVSVectorIndexProto(dimensions, metric,
+                                         data_model::SVS_COMPRESSION_SQ8);
+  proto.mutable_svs_vamana_algorithm()->set_training_threshold(
+      training_threshold);
+  return proto;
+}
+
+// Seeded random vectors in [-1, 1]. DeterministicallyGenerateVectors' rows are
+// nearly parallel once normalized, closer under COSINE than SQ8 resolves.
+std::vector<std::vector<float>> RandomVectors(size_t count, int dimensions) {
+  std::mt19937 rng(42);
+  std::uniform_real_distribution<float> component(-1.0f, 1.0f);
+  std::vector<std::vector<float>> vectors(count,
+                                          std::vector<float>(dimensions));
+  for (auto &vector : vectors) {
+    for (auto &v : vector) v = component(rng);
+  }
+  return vectors;
+}
+
+AttributeData VectorData(VectorBase &index, int i,
+                         const std::vector<float> &vector) {
+  return std::move(PrepareRecord(index, i, vector).data);
+}
+
+class VectorSVSSq8MetricTest
+    : public VectorSVSTest,
+      public testing::WithParamInterface<data_model::DistanceMetric> {};
+
+// Below the threshold the index is uncompressed, so it scores like FLAT. The
+// vector that reaches the threshold converts it to SQ8, keeping the graph,
+// the modified vector and the removed key's deletion.
+TEST_P(VectorSVSSq8MetricTest, ConvertsAtTrainingThreshold) {
+  constexpr uint32_t kThreshold = 10;
+  const auto metric = GetParam();
+  auto index =
+      VectorSVS<float>::Create(Sq8Proto(kDimensions, metric, kThreshold),
+                               attribute_identifier, attribute_data_type, 0);
+  VMSDK_EXPECT_OK(index);
+  auto flat = VectorFlat<float>::Create(
+      CreateFlatVectorIndexProto(kDimensions, metric,
+                                 /*initial_cap=*/20, /*block_size=*/20),
+      "attribute_identifier_2", attribute_data_type, 0);
+  VMSDK_EXPECT_OK(flat);
+  auto vectors = RandomVectors(kThreshold + 2, kDimensions);
+  // Keys 0..9 added, with key 0 modified to vector 10 and key 1 removed.
+  for (size_t i = 0; i < kThreshold; ++i) {
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(**index, IndexToKey(i),
+                                                   VectorToStr(vectors[i])));
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(**flat, IndexToKey(i),
+                                                   VectorToStr(vectors[i])));
+    if (i == 1) {
+      VMSDK_EXPECT_OK((*index)->ModifyRecord(
+          IndexToKey(0), VectorData(**index, 0, vectors[kThreshold])));
+      VMSDK_EXPECT_OK((*flat)->ModifyRecord(
+          IndexToKey(0), VectorData(**flat, 0, vectors[kThreshold])));
+      VMSDK_EXPECT_OK(
+          (*index)->RemoveRecord(IndexToKey(1), DeletionType::kRecord));
+      VMSDK_EXPECT_OK(
+          (*flat)->RemoveRecord(IndexToKey(1), DeletionType::kRecord));
+    }
+  }
+  // Nine vectors: one short of the threshold.
+  EXPECT_NE(VectorSVSTestPeer::Handle(**index), nullptr);
+  EXPECT_TRUE(VectorSVSTestPeer::CompressionPending(**index));
+  ASSERT_EQ(AsBase(*index)->GetLabelCount(), kThreshold - 1);
+
+  for (size_t q : {size_t{3}, size_t{kThreshold}}) {
+    const auto query = VectorToStr(vectors[q]);
+    auto result = (*index)->Search(query, 5, CancelNever());
+    VMSDK_EXPECT_OK(result);
+    auto expected = (*flat)->Search(query, 5, CancelNever());
+    VMSDK_EXPECT_OK(expected);
+    ASSERT_EQ(result->size(), expected->size());
+    for (size_t r = 0; r < result->size(); ++r) {
+      EXPECT_EQ((*result)[r].external_id, (*expected)[r].external_id)
+          << "query " << q << " rank " << r;
+      EXPECT_NEAR((*result)[r].distance, (*expected)[r].distance, 1e-5f)
+          << "query " << q << " rank " << r;
+    }
+  }
+  // Filters apply before the conversion too.
+  class OnlyKeyFive : public hnswlib::BaseFilterFunctor {
+   public:
+    explicit OnlyKeyFive(VectorBase *index) : index_(index) {}
+    bool operator()(hnswlib::labeltype id) override {
+      auto key = index_->GetKeyDuringSearch(id);
+      return key.ok() && *key == IndexToKey(5);
+    }
+
+   private:
+    VectorBase *index_;
+  };
+  auto filtered =
+      (*index)->Search(VectorToStr(vectors[3]), 5, CancelNever(),
+                       std::make_unique<OnlyKeyFive>(AsBase(*index)));
+  VMSDK_EXPECT_OK(filtered);
+  ASSERT_EQ(filtered->size(), 1u);
+  EXPECT_EQ((*filtered)[0].external_id, IndexToKey(5));
+
+  VMSDK_EXPECT_OK(
+      testing_infra::AddVectorRecord(**index, IndexToKey(kThreshold + 1),
+                                     VectorToStr(vectors[kThreshold + 1])));
+  EXPECT_FALSE(VectorSVSTestPeer::CompressionPending(**index));
+  auto removed =
+      (*index)->Search(VectorToStr(vectors[1]), kThreshold + 2, CancelNever());
+  VMSDK_EXPECT_OK(removed);
+  EXPECT_EQ(removed->size(), kThreshold);
+  for (const auto &neighbor : *removed) {
+    EXPECT_NE(neighbor.external_id, IndexToKey(1));
+  }
+  for (size_t key = 0; key <= kThreshold + 1; ++key) {
+    if (key == 1 || key == kThreshold) continue;
+    const size_t vector = key == 0 ? kThreshold : key;
+    auto result =
+        (*index)->Search(VectorToStr(vectors[vector]), 1, CancelNever());
+    VMSDK_EXPECT_OK(result);
+    ASSERT_EQ(result->size(), 1u);
+    EXPECT_EQ((*result)[0].external_id, IndexToKey(key)) << "key " << key;
+  }
+}
+
+// An index saved before its conversion saves and loads its uncompressed
+// payload, then converts once it reaches the threshold. The converted index
+// is self-synchronizing, so mutations stop being exclusive.
+TEST_P(VectorSVSSq8MetricTest, PendingIndexRoundTrip) {
+  constexpr uint32_t kThreshold = 10;
+  constexpr size_t kStaged = 5;
+  auto proto = Sq8Proto(kDimensions, GetParam(), kThreshold);
+  auto index = VectorSVS<float>::Create(proto, attribute_identifier,
+                                        attribute_data_type, 0);
+  VMSDK_EXPECT_OK(index);
+  auto vectors = RandomVectors(kThreshold, kDimensions);
+  std::vector<ValkeyModuleString *> records(kStaged);
+  for (size_t i = 0; i < kStaged; ++i) {
+    records[i] = ValkeyModule_CreateString(
+        nullptr, (const char *)vectors[i].data(), kDimensions * sizeof(float));
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(**index, IndexToKey(i),
+                                                   VectorToStr(vectors[i])));
+  }
+  FakeSafeRDB rdb;
+  VMSDK_EXPECT_OK((*index)->SaveIndex(RDBChunkOutputStream(&rdb)));
+  VMSDK_EXPECT_OK((*index)->SaveTrackedKeys(RDBChunkOutputStream(&rdb)));
+  ExpectHashGetsForRecords(records);
+
+  auto loaded = VectorSVS<float>::LoadFromRDB(
+      &fake_ctx_, &hash_attribute_data_type_, proto, "attribute_identifier_2",
+      SupplementalContentChunkIter(&rdb), 0);
+  VMSDK_EXPECT_OK(loaded);
+  VMSDK_EXPECT_OK(
+      (*loaded)->LoadTrackedKeys(&fake_ctx_, &hash_attribute_data_type_,
+                                 SupplementalContentChunkIter(&rdb)));
+  EXPECT_NE(VectorSVSTestPeer::Handle(**loaded), nullptr);
+  EXPECT_TRUE(VectorSVSTestPeer::CompressionPending(**loaded));
+  EXPECT_TRUE(VectorSVSTestPeer::MutationsExclusive(**loaded));
+  EXPECT_EQ(AsBase(*loaded)->GetLabelCount(), kStaged);
+  for (size_t i = 0; i < kStaged; ++i) {
+    auto result = (*loaded)->Search(VectorToStr(vectors[i]), 1, CancelNever());
+    VMSDK_EXPECT_OK(result);
+    ASSERT_EQ(result->size(), 1u);
+    EXPECT_EQ((*result)[0].external_id, IndexToKey(i)) << "key " << i;
+  }
+  EXPECT_EQ(AsBase(*loaded)
+                ->ToProto()
+                ->vector_index()
+                .svs_vamana_algorithm()
+                .training_threshold(),
+            kThreshold);
+
+  for (size_t i = kStaged; i < kThreshold; ++i) {
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(**loaded, IndexToKey(i),
+                                                   VectorToStr(vectors[i])));
+  }
+  EXPECT_FALSE(VectorSVSTestPeer::CompressionPending(**loaded));
+  EXPECT_FALSE(VectorSVSTestPeer::MutationsExclusive(**loaded));
+  for (size_t i = 0; i < kThreshold; ++i) {
+    auto result = (*loaded)->Search(VectorToStr(vectors[i]), 1, CancelNever());
+    VMSDK_EXPECT_OK(result);
+    ASSERT_EQ(result->size(), 1u);
+    EXPECT_EQ((*result)[0].external_id, IndexToKey(i)) << "key " << i;
+  }
+  for (auto *record : records) {
+    ValkeyModule_FreeString(nullptr, record);
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    Metrics, VectorSVSSq8MetricTest,
+    testing::Values(data_model::DISTANCE_METRIC_L2,
+                    data_model::DISTANCE_METRIC_COSINE),
+    [](const testing::TestParamInfo<data_model::DistanceMetric> &info) {
+      return data_model::DistanceMetric_Name(info.param);
+    });
+
+// SQ8 fixes one scale and bias for every component from the min and max of
+// the vectors it compresses, step = (max - min) / 255. The cases below
+// convert once all their docs are in; compressed from the first doc alone,
+// the later docs clamp to the first doc's range and score wrongly.
+struct Sq8Scores {
+  InternedStringPtr top;
+  std::vector<float> svs;   // by doc
+  std::vector<float> flat;  // by doc
+};
+
+Sq8Scores ScoreSq8AgainstFlat(data_model::DistanceMetric metric,
+                              const std::vector<std::vector<float>> &docs,
+                              const std::vector<float> &query) {
+  const int dims = query.size();
+  auto svs =
+      VectorSVS<float>::Create(Sq8Proto(dims, metric, docs.size()), "svs",
+                               data_model::ATTRIBUTE_DATA_TYPE_HASH, 0);
+  CHECK(svs.ok()) << svs.status();
+  auto flat = VectorFlat<float>::Create(
+      CreateFlatVectorIndexProto(dims, metric, /*initial_cap=*/10,
+                                 /*block_size=*/10),
+      "flat", data_model::ATTRIBUTE_DATA_TYPE_HASH, 0);
+  CHECK(flat.ok()) << flat.status();
+  for (size_t i = 0; i < docs.size(); ++i) {
+    CHECK(testing_infra::AddVectorRecord(**svs, IndexToKey(i),
+                                         VectorToStr(docs[i]))
+              .ok());
+    CHECK(testing_infra::AddVectorRecord(**flat, IndexToKey(i),
+                                         VectorToStr(docs[i]))
+              .ok());
+  }
+  EXPECT_FALSE(VectorSVSTestPeer::CompressionPending(**svs));
+
+  Sq8Scores scores{
+      {}, std::vector<float>(docs.size()), std::vector<float>(docs.size())};
+  auto by_doc = [&](const std::vector<Neighbor> &result,
+                    std::vector<float> &out) {
+    EXPECT_EQ(result.size(), docs.size());
+    for (const auto &neighbor : result) {
+      for (size_t i = 0; i < docs.size(); ++i) {
+        if (neighbor.external_id == IndexToKey(i)) out[i] = neighbor.distance;
+      }
+    }
+  };
+  auto svs_result =
+      (*svs)->Search(VectorToStr(query), docs.size(), CancelNever());
+  CHECK(svs_result.ok()) << svs_result.status();
+  if (!svs_result->empty()) scores.top = (*svs_result)[0].external_id;
+  by_doc(*svs_result, scores.svs);
+  auto flat_result =
+      (*flat)->Search(VectorToStr(query), docs.size(), CancelNever());
+  CHECK(flat_result.ok()) << flat_result.status();
+  by_doc(*flat_result, scores.flat);
+  return scores;
+}
+
+// Range [0, 300]. For L2, SVS quantizes the query as well as the docs, so
+// each component's difference is off by at most one step; scores are
+// squared distances, so a doc at |x - q| moves by at most
+// 2 * step * |x - q| + step^2. Built from (1,0,0,0) alone, 100, 200 and 300
+// all clamp to one code and score 0 against the query at 200.
+TEST_F(VectorSVSTest, Sq8CalibratesOnTheTrainingVectorsL2) {
+  const std::vector<std::vector<float>> docs = {
+      {1, 0, 0, 0}, {100, 0, 0, 0}, {200, 0, 0, 0}, {300, 0, 0, 0}};
+  const std::vector<float> query = {200, 0, 0, 0};
+  auto scores =
+      ScoreSq8AgainstFlat(data_model::DISTANCE_METRIC_L2, docs, query);
+  EXPECT_EQ(scores.top, IndexToKey(2));
+  constexpr float kStep = 300.0f / 255;
+  for (size_t i = 0; i < docs.size(); ++i) {
+    const float gap = std::abs(docs[i][0] - query[0]);
+    EXPECT_NEAR(scores.svs[i], scores.flat[i], 2 * kStep * gap + kStep * kStep)
+        << "doc " << i;
+  }
+}
+
+// COSINE vectors are normalized before SVS sees them, so the range is
+// [-1, 1]. For dot product SVS keeps the query in fp32 and quantizes only the
+// docs, each component off by at most step / 2; with a one-hot unit query
+// the score moves by at most step / 2. Built from (1,0,0,0) alone, the -1
+// components clamp to 0, so docs 1 and 2 become zero vectors and score 1.
+TEST_F(VectorSVSTest, Sq8CalibratesOnTheTrainingVectorsCosine) {
+  const std::vector<std::vector<float>> docs = {
+      {2, 0, 0, 0}, {-3, 0, 0, 0}, {0, -4, 0, 0}, {0, 0, 5, 0}};
+  const std::vector<float> query = {-7, 0, 0, 0};
+  auto scores =
+      ScoreSq8AgainstFlat(data_model::DISTANCE_METRIC_COSINE, docs, query);
+  EXPECT_EQ(scores.top, IndexToKey(1));
+  constexpr float kStep = 2.0f / 255;
+  constexpr float kFloatRounding = 1e-6f;
+  for (size_t i = 0; i < docs.size(); ++i) {
+    EXPECT_NEAR(scores.svs[i], scores.flat[i], kStep / 2 + kFloatRounding)
+        << "doc " << i;
+  }
+}
+
+// Writers racing past the threshold: the index converts once, and keeps every
+// vector added before and after it.
+TEST_F(VectorSVSTest, Sq8ConcurrentAddsCrossTheThreshold) {
+  auto index = VectorSVS<float>::Create(
+      Sq8Proto(kDimensions, data_model::DISTANCE_METRIC_L2,
+               kLoadConcurrentVectors / 4),
+      attribute_identifier, attribute_data_type, 0);
+  VMSDK_EXPECT_OK(index);
+  auto vectors = DeterministicallyGenerateVectors(kLoadConcurrentVectors,
+                                                  kDimensions, 10.0);
+  std::vector<PreparedRecord> prepared;
+  prepared.reserve(kLoadConcurrentVectors);
+  for (int i = 0; i < kLoadConcurrentVectors; ++i) {
+    prepared.push_back(PrepareRecord(**index, i, vectors[i]));
+  }
+  auto statuses = RunWriters(kLoadWriters, [&](int w) {
+    for (int i = w * kLoadPerWriter; i < (w + 1) * kLoadPerWriter; ++i) {
+      auto result =
+          (*index)->AddRecord(prepared[i].key, std::move(prepared[i].data));
+      if (!result.ok()) return result.status();
+    }
+    return absl::OkStatus();
+  });
+  for (const auto &status : statuses) EXPECT_TRUE(status.ok()) << status;
+
+  ASSERT_NE(VectorSVSTestPeer::Handle(**index), nullptr);
+  EXPECT_FALSE(VectorSVSTestPeer::CompressionPending(**index));
+  size_t svs_size = 0;
+  svs_error_h err = svs_error_create();
+  EXPECT_TRUE(
+      svs_index_get_size(VectorSVSTestPeer::Handle(**index), &svs_size, err))
+      << svs_error_get_message(err);
+  svs_error_free(err);
+  EXPECT_EQ(svs_size, static_cast<size_t>(kLoadConcurrentVectors));
+  EXPECT_EQ(AsBase(*index)->GetLabelCount(),
+            static_cast<size_t>(kLoadConcurrentVectors));
+}
+
+// A payload from another SVS version is skipped; the rebuild from the keyspace
+// starts uncompressed and converts, since it holds the threshold.
+TEST_F(VectorSVSTest, Sq8RebuildFromKeyspaceConverts) {
+  constexpr size_t kNumVectors = 20;
+  auto proto = Sq8Proto(kDimensions, data_model::DISTANCE_METRIC_L2, 10);
+  auto index = VectorSVS<float>::Create(proto, attribute_identifier,
+                                        attribute_data_type, 0);
+  VMSDK_EXPECT_OK(index);
+  auto vectors = RandomVectors(kNumVectors, kDimensions);
+  std::vector<ValkeyModuleString *> records(kNumVectors);
+  for (size_t i = 0; i < kNumVectors; ++i) {
+    records[i] = ValkeyModule_CreateString(
+        nullptr, (const char *)vectors[i].data(), kDimensions * sizeof(float));
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(**index, IndexToKey(i),
+                                                   VectorToStr(vectors[i])));
+  }
+  FakeSafeRDB rdb;
+  data_model::SVSIndexHeader header = ValidHeaderFor(proto);
+  header.set_svs_version(header.svs_version() + 1);
+  header.set_has_index(true);
+  {
+    RDBChunkOutputStream out(&rdb);
+    VMSDK_EXPECT_OK(out.SaveString(header.SerializeAsString()));
+    VMSDK_EXPECT_OK(out.SaveString("payload from another SVS version"));
+    VMSDK_EXPECT_OK(out.Close());
+  }
+  VMSDK_EXPECT_OK((*index)->SaveTrackedKeys(RDBChunkOutputStream(&rdb)));
+  ExpectHashGetsForRecords(records);
+
+  auto loaded = VectorSVS<float>::LoadFromRDB(
+      &fake_ctx_, &hash_attribute_data_type_, proto, "attribute_identifier_2",
+      SupplementalContentChunkIter(&rdb), 0);
+  VMSDK_EXPECT_OK(loaded);
+  VMSDK_EXPECT_OK(
+      (*loaded)->LoadTrackedKeys(&fake_ctx_, &hash_attribute_data_type_,
+                                 SupplementalContentChunkIter(&rdb)));
+  EXPECT_FALSE(VectorSVSTestPeer::CompressionPending(**loaded));
+  for (size_t i = 0; i < kNumVectors; ++i) {
+    auto result = (*loaded)->Search(VectorToStr(vectors[i]), 1, CancelNever());
+    VMSDK_EXPECT_OK(result);
+    ASSERT_EQ(result->size(), 1u);
+    EXPECT_EQ((*result)[0].external_id, IndexToKey(i)) << "key " << i;
+  }
   for (auto *record : records) {
     ValkeyModule_FreeString(nullptr, record);
   }

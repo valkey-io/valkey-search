@@ -66,6 +66,10 @@ struct SVSBuildConfig {
   size_t blocksize_bytes{0};
   // INITIAL_CAP as given at FT.CREATE, reported by GetCapacity.
   uint32_t initial_cap{0};
+  // For a compression that trains on the data (SQ8): the index stays
+  // uncompressed until it holds this many vectors, then converts. 0 compresses
+  // from the first add.
+  uint32_t training_threshold{0};
 };
 
 template <typename T>
@@ -171,6 +175,14 @@ class VectorSVS : public VectorType<T> {
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
   absl::Status AddPoint(uint64_t internal_id, const float *fp32)
       ABSL_SHARED_LOCKS_REQUIRED(resize_mutex_);
+  // The configuration of the storage svs_index_ uses now: build_config_, or
+  // its uncompressed form while compression_pending_.
+  SVSBuildConfig StorageConfig() const;
+  // Converts the index to build_config_'s compression once it holds
+  // training_threshold vectors. SVS keeps the graph and calibrates the
+  // compression on every vector in the index. A failed conversion is logged
+  // and retried on the next add.
+  void MaybeConvert() ABSL_LOCKS_EXCLUDED(resize_mutex_, label_mutex_);
   // SVS reuses deleted slots only after consolidating and compacting. Does
   // both once enough slots have been deleted, so update-heavy workloads stay
   // bounded.
@@ -193,6 +205,10 @@ class VectorSVS : public VectorType<T> {
   // stay serialized, as before. Set once in LoadFromRDB before the instance is
   // published; read on every mutation.
   std::atomic<bool> mutations_exclusive_{false};
+  // True while svs_index_ (or the index the next add builds) is uncompressed,
+  // awaiting MaybeConvert. Written under the writer side of resize_mutex_;
+  // atomic so adds can check it without the lock.
+  std::atomic<bool> compression_pending_{false};
   // Set by LoadFromRDB when the saved SVS payload was skipped; consumed by
   // OnTrackedKeysLoaded on the main thread before the index is published.
   bool rebuild_from_keyspace_{false};

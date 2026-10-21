@@ -168,6 +168,10 @@ message SVSVamanaAlgorithm {
   // KEEP (default): retain intern store for exact vector retrieval.
   // DROP: skip intern store, use SVS native reconstruct/get_distance APIs.
   RawVectorStorage raw_vector_storage = 8;
+  // Number of vectors to accumulate before building an index whose
+  // compression trains on the data (SQ8; later LVQ / LeanVec). 0 for the
+  // other compressions.
+  uint32 training_threshold = 7;
   reserved 9;
   reserved "distance_match_epsilon_per_dim";
 
@@ -175,8 +179,5 @@ message SVSVamanaAlgorithm {
   // Required when compression is one of the LEANVEC* variants. Number of
   // dimensions the LeanVec projection reduces to; must be < dim.
   uint32 leanvec_dims = 6;
-  // Number of vectors to accumulate before training the LeanVec matrices
-  // and building the index. Only used for LEANVEC* compression.
-  uint32 leanvec_training_threshold = 7;
 }
 

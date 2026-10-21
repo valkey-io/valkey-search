@@ -98,6 +98,15 @@ VectorBase *AsBase(const std::shared_ptr<VectorSVS<float>> &p) {
   return p.get();
 }
 
+// A token that is never cancelled and never checks the deadline, for tests
+// that search from several threads at once.
+class NeverCancelledToken : public cancel::Base {
+ public:
+  bool IsCancelled() override { return false; }
+  bool IsCancelledNow() override { return false; }
+  void Cancel() override {}
+};
+
 class VectorSVSTest : public ValkeySearchTest {
  public:
   // Enabling a pause point flips a process-global switch that makes every
@@ -348,9 +357,11 @@ TEST_F(VectorSVSTest, SaveWhileSearchingIsExclusive) {
   std::vector<std::thread> readers;
   for (int t = 0; t < 4; ++t) {
     readers.emplace_back([&, t] {
+      // A token per reader that never reads the clock: a token serves one
+      // query at a time, and the test module's clock isn't thread-safe.
+      cancel::Token token = std::make_shared<NeverCancelledToken>();
       for (size_t q = t; !stop.load(); q = (q + 1) % kNumVectors) {
-        auto result =
-            (*index)->Search(VectorToStr(vectors[q]), 5, CancelNever());
+        auto result = (*index)->Search(VectorToStr(vectors[q]), 5, token);
         if (!result.ok() || result->empty()) ++failed_searches;
       }
     });

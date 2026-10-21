@@ -67,7 +67,7 @@ struct TermScoringParams {
 // candidates) builds one from the position maps that Postings::GetPostingValue
 // copied out and uses it as the leaf TextIterator; TermIterator embeds one and
 // re-targets it at each key the merge lands on. Never scores: per-key callers
-// score through ResolvedLeafCache::Probe.
+// score through QueryContext::Probe.
 class SingleKeyTermIterator final : public TextIterator {
  public:
   using PositionMaps =
@@ -142,7 +142,7 @@ class SingleKeyTermIterator final : public TextIterator {
            current_field_mask_ != 0ULL;
   }
   // Unreachable from current callers: TermIterator scores from its own
-  // cursors and per-key evaluation scores through ResolvedLeafCache::Probe.
+  // cursors and per-key evaluation scores through QueryContext::Probe.
   // The constant stub keeps the contract if a composite ever asks.
   float GetScore() const override { return done_ ? 0.0f : 1.0f; }
 

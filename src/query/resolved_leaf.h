@@ -30,7 +30,7 @@ namespace valkey_search::query {
 // A word's shared posting list. Every tree (global and per-key) hands back the
 // same Postings object for a word, so one lookup answers for every candidate.
 struct WordPostings {
-  std::optional<std::string> word; // Main thread only: used to lock postings.
+  std::optional<std::string> word;  // Main thread only: used to lock postings.
   indexes::text::InvasivePtr<indexes::text::Postings> postings;
 };
 
@@ -111,8 +111,8 @@ struct TagLeaf {
   absl::InlinedVector<absl::string_view, 2> tag_prefixes;
 };
 
-// monostate: a leaf that resolves to nothing scoreable (infix, a non-Tag kTag
-// mock, any non-leaf type). Cached so the walk never re-asks.
+// monostate: a predicate with nothing to resolve (numeric, vector range, any
+// composite). Cached so the walk never re-asks.
 using ResolvedLeaf =
     std::variant<std::monostate, TermLeaf, ExpansionLeaf, TagLeaf>;
 

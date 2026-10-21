@@ -5,7 +5,7 @@
  *
  */
 
-#include "src/query/resolved_leaves.h"
+#include "src/query/query_context.h"
 
 #include <algorithm>
 #include <memory>
@@ -16,6 +16,7 @@
 #include "absl/log/check.h"
 #include "absl/strings/ascii.h"
 #include "absl/types/span.h"
+#include "src/index_schema.h"
 #include "src/indexes/scoring/scorer.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text/rax_wrapper.h"
@@ -36,28 +37,75 @@ uint64_t ScoringFieldMask(uint64_t field_mask, uint8_t num_fields) {
   return (field_mask & all_fields) == all_fields ? ~0ULL : field_mask;
 }
 
+// Corpus-wide scoring inputs. kBackground requires the time-sliced mutex held
+// in read mode; kMainThread takes the short locks each field's writer takes.
+CorpusStats ReadCorpusStats(const IndexSchema &index_schema,
+                            LockMode mode) ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  const auto text = index_schema.GetTextIndexSchema();
+  return {
+      .total_docs =
+          static_cast<uint32_t>(mode == LockMode::kBackground
+                                    ? index_schema.GetIndexKeyInfoSize()
+                                    : index_schema.GetIndexKeyInfoSizeLocked()),
+      // Atomic, so readable from the main thread without the time-sliced mutex.
+      .total_doc_len = text ? text->GetMetadata().total_doc_len.load() : 0,
+      .has_score_field = index_schema.HasScoreField(),
+      .default_document_score = index_schema.GetScore(),
+  };
+}
+
 }  // namespace
 
-ResolvedLeafCache::ResolvedLeafCache(
-    const indexes::text::TextIndexSchema *text_index_schema, CorpusStats stats,
-    const indexes::scoring::Scorer *scorer, LockMode mode)
-    : text_index_schema_(text_index_schema),
-      stats_(stats),
+QueryContext::QueryContext(const IndexSchema &index_schema,
+                           const indexes::scoring::Scorer *scorer,
+                           LockMode mode)
+    : index_schema_(index_schema),
+      text_index_schema_(index_schema.GetTextIndexSchema().get()),
+      stats_(ReadCorpusStats(index_schema, mode)),
       scorer_(scorer),
       mode_(mode),
       needs_doc_len_(scorer->NeedsDocumentLength()),
-      avg_doc_len_(needs_doc_len_ && stats.total_docs > 0
-                       ? static_cast<float>(stats.total_doc_len) /
-                             static_cast<float>(stats.total_docs)
+      avg_doc_len_(needs_doc_len_ && stats_.total_docs > 0
+                       ? static_cast<float>(stats_.total_doc_len) /
+                             static_cast<float>(stats_.total_docs)
                        : 0.0f) {}
 
-size_t ResolvedLeafCache::KeyCount(const WordPostings &word) const {
+const indexes::text::TextIndex *QueryContext::PerKeyTextIndex(
+    const InternedStringPtr &key) const {
+  if (text_index_schema_ == nullptr) return nullptr;
+  // On the main thread the map lock guards the find; the tree itself is stable
+  // because the revalidated key has no in-flight mutation.
+  return text_index_schema_->GetPerKeyTextIndex(key, MainThread());
+}
+
+// The LockMode records what the caller holds: a background caller holds the
+// time-sliced mutex, which the analyzer cannot see through the runtime branch.
+uint32_t QueryContext::DocLen(BorrowedInternedStringPtr key) const
+    ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  if (!needs_doc_len_ || text_index_schema_ == nullptr) return 0;
+  return text_index_schema_->GetKeyDocLen(key, MainThread());
+}
+
+float QueryContext::DocScore(BorrowedInternedStringPtr key) const
+    ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  if (!stats_.has_score_field) return stats_.default_document_score;
+  return MainThread() ? index_schema_.GetDocumentScoreLocked(key)
+                      : index_schema_.GetDocumentScore(key);
+}
+
+size_t QueryContext::TagPrefixDocCount(const indexes::Tag &index,
+                                       absl::string_view prefix,
+                                       BorrowedInternedStringPtr key) const {
+  return index.GetPrefixMatchDocCount(prefix, key, MainThread());
+}
+
+size_t QueryContext::KeyCount(const WordPostings &word) const {
   auto get = [&] { return word.postings->GetKeyCount(); };
   return MainThread() ? text_index_schema_->WithWordLock(*word.word, get)
                       : get();
 }
 
-std::optional<indexes::text::PostingValue> ResolvedLeafCache::Probe(
+std::optional<indexes::text::PostingValue> QueryContext::Probe(
     const WordPostings &word, BorrowedInternedStringPtr key,
     uint64_t field_mask) const {
   auto get = [&] { return word.postings->GetPostingValue(key, field_mask); };
@@ -65,19 +113,19 @@ std::optional<indexes::text::PostingValue> ResolvedLeafCache::Probe(
                       : get();
 }
 
-float ResolvedLeafCache::Idf(size_t dt) const {
+float QueryContext::Idf(size_t dt) const {
   return scorer_->PrecomputeIDF(
       {stats_.total_docs,
        static_cast<uint32_t>(std::min<size_t>(dt, stats_.total_docs))});
 }
 
-std::optional<std::string> ResolvedLeafCache::LockWord(
+std::optional<std::string> QueryContext::LockWord(
     absl::string_view word) const {
   if (MainThread()) return std::string(word);
   return std::nullopt;
 }
 
-WordPostings ResolvedLeafCache::Lookup(absl::string_view word) const {
+WordPostings QueryContext::Lookup(absl::string_view word) const {
   auto find = [&](const indexes::text::TextIndex &index) {
     return index.GetPrefix().FindPostingsTarget(word);
   };
@@ -86,38 +134,28 @@ WordPostings ResolvedLeafCache::Lookup(absl::string_view word) const {
                               : find(*text_index_schema_->GetTextIndex())};
 }
 
-ResolvedLeaf &ResolvedLeafCache::GetOrResolve(const Predicate *predicate) {
+ResolvedLeaf &QueryContext::GetOrResolve(const Predicate *predicate) {
   CHECK(predicate != nullptr);
-  auto it = leaves_.find(predicate);
-  if (it == leaves_.end()) {
-    it = leaves_.emplace(predicate, Resolve(predicate)).first;
+  auto it = leaf_cache_.find(predicate);
+  if (it == leaf_cache_.end()) {
+    it = leaf_cache_.emplace(predicate, Resolve(predicate)).first;
   }
   return it->second;
 }
 
-ResolvedLeaf ResolvedLeafCache::Resolve(const Predicate *predicate) const {
+ResolvedLeaf QueryContext::Resolve(const Predicate *predicate) const {
   switch (predicate->GetType()) {
     case PredicateType::kText:
       return ResolveText(static_cast<const TextPredicate *>(predicate));
     case PredicateType::kTag:
-      return ResolveTag(predicate);
+      return ResolveTag(static_cast<const TagPredicate *>(predicate));
     default:
       return std::monostate{};
   }
 }
 
-float ResolvedLeafCache::OfferExpansionTerm(ExpansionLeaf &leaf,
-                                            const ExpansionMatch &match) const {
-  if (leaf.representative && leaf.representative->df >= match.df) {
-    return Idf(match.df);
-  }
-  leaf.representative.emplace(
-      ExpansionLeaf::Term{match.term, match.df, Idf(match.df)});
-  return leaf.representative->idf;
-}
-
-std::optional<ExpansionMatch> ResolvedLeafCache::FindExpansionMatch(
-    const ExpansionPredicate &predicate,
+std::optional<ExpansionMatch> QueryContext::FindExpansionMatch(
+    ExpansionLeaf &leaf, const ExpansionPredicate &predicate,
     const indexes::text::TextIndex &per_key_index,
     const InternedStringPtr &key) const {
   const uint64_t field_mask = predicate.GetFieldMask();
@@ -126,6 +164,7 @@ std::optional<ExpansionMatch> ResolvedLeafCache::FindExpansionMatch(
       per_key_index,
       [&](absl::string_view word,
           const indexes::text::InvasivePtr<indexes::text::Postings> &postings) {
+        // Entry and df under one bucket hold.
         auto get = [&] {
           return std::pair{postings->GetPostingValue(
                                BorrowedInternedStringPtr(key), field_mask),
@@ -134,14 +173,18 @@ std::optional<ExpansionMatch> ResolvedLeafCache::FindExpansionMatch(
         auto [entry, df] =
             MainThread() ? text_index_schema_->WithWordLock(word, get) : get();
         if (!entry) return true;
-        found.emplace(ExpansionMatch{{LockWord(word), postings}, *entry, df});
+        const float idf = Idf(df);
+        if (!leaf.representative || leaf.representative->df < df) {
+          leaf.representative.emplace(
+              ExpansionLeaf::Term{{LockWord(word), postings}, df, idf});
+        }
+        found.emplace(ExpansionMatch{idf, *entry});
         return false;
       });
   return found;
 }
 
-ResolvedLeaf ResolvedLeafCache::ResolveText(
-    const TextPredicate *predicate) const {
+ResolvedLeaf QueryContext::ResolveText(const TextPredicate *predicate) const {
   CHECK(predicate->GetTextIndexSchema().get() == text_index_schema_);
   const uint8_t num_text_fields = text_index_schema_->GetNumTextFields();
 
@@ -151,8 +194,7 @@ ResolvedLeaf ResolvedLeafCache::ResolveText(
         ScoringFieldMask(predicate->GetFieldMask(), num_text_fields);
     return leaf;
   }
-  auto term_pred = dynamic_cast<const TermPredicate *>(predicate);
-  if (term_pred == nullptr) return std::monostate{};
+  auto term_pred = static_cast<const TermPredicate *>(predicate);
 
   TermLeaf leaf;
 
@@ -209,14 +251,8 @@ ResolvedLeaf ResolvedLeafCache::ResolveText(
   return leaf;
 }
 
-ResolvedLeaf ResolvedLeafCache::ResolveTag(const Predicate *predicate) const {
-  // Only a real TagPredicate carries the index + values needed to score; a
-  // non-TagPredicate kTag leaf (e.g. a test mock) contributes 0.
-  auto tag_pred = dynamic_cast<const TagPredicate *>(predicate);
-  if (tag_pred == nullptr) return std::monostate{};
+ResolvedLeaf QueryContext::ResolveTag(const TagPredicate *tag_pred) const {
   const indexes::Tag *tag_index = tag_pred->GetIndex();
-  if (tag_index == nullptr) return std::monostate{};
-
   TagLeaf leaf;
   const bool case_sensitive = tag_index->IsCaseSensitive();
   absl::flat_hash_set<std::string> seen;
@@ -245,18 +281,18 @@ ResolvedLeaf ResolvedLeafCache::ResolveTag(const Predicate *predicate) const {
 }
 
 EvaluationResult EvaluateText(
-    ResolvedLeafCache &cache, const TextPredicate &predicate,
+    QueryContext &query_ctx, const TextPredicate &predicate,
     const InternedStringPtr &key, bool require_positions,
     absl::FunctionRef<const indexes::text::TextIndex *()> per_key_index) {
   if (const auto *leaf =
-          std::get_if<TermLeaf>(&cache.GetOrResolve(&predicate))) {
+          std::get_if<TermLeaf>(&query_ctx.GetOrResolve(&predicate))) {
     return static_cast<const TermPredicate &>(predicate).Evaluate(
         *leaf, key, require_positions);
   }
   const auto *index = per_key_index();
   if (index == nullptr) return EvaluationResult(false);
   return static_cast<const ExpansionPredicate &>(predicate).Evaluate(
-      *index, key, require_positions, cache.MainThread());
+      *index, key, require_positions, query_ctx.MainThread());
 }
 
 }  // namespace valkey_search::query

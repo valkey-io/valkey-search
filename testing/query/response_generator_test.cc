@@ -585,7 +585,7 @@ TEST_F(ResponseGeneratorTest, VectorScoreOnlyArmRefreshesScoreWithDistance) {
 // A document that mutated between shard-side scoring and content fetch is
 // re-checked by VerifyFilter, and a text predicate is re-checked against the
 // text index rather than the fetched records, through a main-thread
-// ResolvedLeafCache that takes the writers' own short locks and never the
+// QueryContext that takes the writers' own short locks and never the
 // time-sliced mutex.
 
 namespace {
@@ -672,7 +672,7 @@ void RunTextReplyPath(ValkeyModuleCtx *fake_ctx,
 // The matching half: a mutated document whose text predicate still matches
 // survives the revalidation and comes out with a freshly recomputed relevance
 // score. A match can only be produced by the text branch, so this also says the
-// evaluator was handed a cache.
+// evaluator was handed a context.
 TEST_F(ResponseGeneratorTest, MutatedTextDocumentRevalidatedAndRescored) {
   ValkeyModuleCtx fake_ctx;
   EXPECT_CALL(*kMockValkeyModule, GetExpire(testing::_))
@@ -922,8 +922,9 @@ class VectorRangeRevalidationTest
                       RecordsMapValue(vmsdk::MakeUniqueValkeyString(identifier),
                                       vmsdk::MakeUniqueValkeyString(*current)));
     }
-    std::unique_ptr<query::ResolvedLeafCache> cache;
-    return query::VerifyFilter(parameters, records, neighbor, cache).matches;
+    std::unique_ptr<query::QueryContext> query_ctx;
+    return query::VerifyFilter(parameters, records, neighbor, query_ctx)
+        .matches;
   }
 
   // Squared L2 from the origin: 0.25 for inside_, 81 for outside_.

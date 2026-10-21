@@ -835,12 +835,11 @@ TEST_P(FetchFilteredKeysTest, ParseParams) {
     entries_fetchers.push(std::make_unique<TestedNumericEntriesFetcher>(
         entries_range, std::make_pair(key_range.first, key_range.second)));
   }
-  query::ResolvedLeafCache cache(
-      index_schema->GetTextIndexSchema().get(),
-      query::ReadCorpusStats(*index_schema, query::LockMode::kBackground),
+  query::QueryContext query_ctx(
+      *index_schema,
       indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std));
   auto results = CalcBestMatchingPrefilteredKeys(params, entries_fetchers,
-                                                 vector_index, 0, cache);
+                                                 vector_index, 0, query_ctx);
   auto neighbors = vector_index->CreateReply(results).value();
   EXPECT_EQ(neighbors.size(), test_case.expected_keys.size());
   for (auto it = neighbors.begin(); it != neighbors.end(); ++it) {
@@ -1697,11 +1696,9 @@ class ScoreTextQueryTestBase : public ValkeySearchTest {
     const auto *scorer =
         indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std);
     vmsdk::ReaderMutexLock lock(&schema.GetTimeSlicedMutex());
-    query::ResolvedLeafCache cache(
-        schema.GetTextIndexSchema().get(),
-        query::ReadCorpusStats(schema, query::LockMode::kBackground), scorer);
+    query::QueryContext query_ctx(schema, scorer);
     query::ScoreTextQuery(schema, parsed.value().root_predicate.get(), scorer,
-                          cands, cache);
+                          cands, query_ctx);
     if (cands.empty()) {
       return std::nullopt;
     }
@@ -1709,7 +1706,7 @@ class ScoreTextQueryTestBase : public ValkeySearchTest {
   }
 
   // Main-thread recompute of `key` for `filter`, as VerifyFilter does for a
-  // mutated document: a fresh main-thread cache, no time-sliced lock, tag
+  // mutated document: a fresh main-thread context, no time-sliced lock, tag
   // membership from `record_tags` (field identifier -> tag string).
   std::optional<float> Recompute(
       MockIndexSchema &schema, absl::string_view filter, const std::string &key,
@@ -1720,10 +1717,7 @@ class ScoreTextQueryTestBase : public ValkeySearchTest {
     EXPECT_TRUE(parsed.ok()) << parsed.status();
     const auto *scorer =
         indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std);
-    query::ResolvedLeafCache cache(
-        schema.GetTextIndexSchema().get(),
-        query::ReadCorpusStats(schema, query::LockMode::kMainThread), scorer,
-        query::LockMode::kMainThread);
+    query::QueryContext query_ctx(schema, scorer, query::LockMode::kMainThread);
     RecordsMap records;
     for (const auto &[field, value] : record_tags) {
       records.emplace(field,
@@ -1733,7 +1727,7 @@ class ScoreTextQueryTestBase : public ValkeySearchTest {
     query::RecordTags tags(records);
     return query::RecomputeDocumentScore(
         schema, parsed.value().root_predicate.get(),
-        StringInternStore::Intern(key), cache, tags);
+        StringInternStore::Intern(key), query_ctx, tags);
   }
 
   // Score `key` for `filter` through the IN-ITERATOR path
@@ -2051,12 +2045,9 @@ TEST_F(ScoreTextQueryTestBase, NaNScoreIsClampedBeforeReachingNeighbor) {
   NaNScorer nan_scorer;
   {
     vmsdk::ReaderMutexLock lock(&schema->GetTimeSlicedMutex());
-    query::ResolvedLeafCache cache(
-        schema->GetTextIndexSchema().get(),
-        query::ReadCorpusStats(*schema, query::LockMode::kBackground),
-        &nan_scorer);
+    query::QueryContext query_ctx(*schema, &nan_scorer);
     query::ScoreTextQuery(*schema, parsed.value().root_predicate.get(),
-                          &nan_scorer, cands, cache);
+                          &nan_scorer, cands, query_ctx);
   }
   ASSERT_EQ(cands.size(), 1u);
   EXPECT_FALSE(indexes::scoring::IsNaN(cands[0].score));
@@ -2487,7 +2478,7 @@ TEST_F(ScoreTextQueryTestBase, ExpansionFieldScopePicksTermInQueriedField) {
   }
 }
 
-// --- Expansion representative (ResolvedLeafCache) ----------------------------
+// --- Expansion representative (QueryContext) ----------------------------
 //
 // An expansion leaf caches one representative term: the most common match a
 // scored document has offered so far. A document carrying it is scored by one
@@ -2495,16 +2486,14 @@ TEST_F(ScoreTextQueryTestBase, ExpansionFieldScopePicksTermInQueriedField) {
 // promoting it if more common. Either route scores the document's own term,
 // never 0.
 
-// Parses `filter` once and scores `keys` in order through one shared cache, as
-// a query does. Returns the per-key scores (nullopt = filter did not match)
-// and exposes the cache for inspection.
+// Parses `filter` once and scores `keys` in order through one shared context,
+// as a query does. Returns the per-key scores (nullopt = filter did not match)
+// and exposes the context for inspection.
 struct SharedCacheScorer {
   SharedCacheScorer(MockIndexSchema &schema, absl::string_view filter)
       : schema(schema),
         parsed(FilterParser(schema, filter, TextParsingOptions{}).Parse()),
-        cache(schema.GetTextIndexSchema().get(),
-              query::ReadCorpusStats(schema, query::LockMode::kBackground),
-              scorer) {
+        query_ctx(schema, scorer) {
     EXPECT_TRUE(parsed.ok()) << parsed.status();
   }
   std::optional<float> Score(const std::string &key) {
@@ -2513,7 +2502,7 @@ struct SharedCacheScorer {
         {BorrowedInternedStringPtr(interned), 0.0f, 0.0f}};
     vmsdk::ReaderMutexLock lock(&schema.GetTimeSlicedMutex());
     query::ScoreTextQuery(schema, parsed->root_predicate.get(), scorer, cands,
-                          cache);
+                          query_ctx);
     return cands.empty() ? std::nullopt : std::optional(cands[0].score);
   }
   // The first expansion leaf's representative, or null. Background-mode
@@ -2527,7 +2516,7 @@ struct SharedCacheScorer {
                  .get();
     }
     auto *expansion =
-        std::get_if<query::ExpansionLeaf>(&cache.GetOrResolve(leaf));
+        std::get_if<query::ExpansionLeaf>(&query_ctx.GetOrResolve(leaf));
     if (expansion == nullptr || !expansion->representative) return nullptr;
     return &*expansion->representative;
   }
@@ -2544,7 +2533,7 @@ struct SharedCacheScorer {
   const indexes::scoring::Scorer *scorer =
       indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std);
   absl::StatusOr<FilterParseResults> parsed;
-  query::ResolvedLeafCache cache;
+  query::QueryContext query_ctx;
 };
 
 TEST_F(ScoreTextQueryTestBase, ExpansionRepresentativePromotesMostCommonTerm) {
@@ -2580,7 +2569,7 @@ TEST_F(ScoreTextQueryTestBase, ExpansionRepresentativePromotesMostCommonTerm) {
 }
 
 // A document carrying several matches is scored on the first its tree yields
-// and the walk stops there; the cache still keeps the more common term if a
+// and the walk stops there; the context still keeps the more common term if a
 // later document offers it.
 TEST_F(ScoreTextQueryTestBase, ExpansionFallbackTakesFirstMatch) {
   auto schema = BuildTextTagSchema({
@@ -2646,7 +2635,7 @@ TEST_F(ScoreTextQueryTestBase, ExpansionRepresentativeSuffixAndFuzzy) {
   EXPECT_FLOAT_EQ(*bat, *Score(*schema, "@text:bat @rating:[0 100]", "d_bat1"));
 }
 
-// The point of the cache: filtering and scoring together walk the trees once
+// The point of the context: filtering and scoring together walk the trees once
 // per term leaf per query, however many candidates there are. Stemming is on so
 // the leaf carries every group kind, and the negation makes the prefilter
 // evaluate the text child instead of trusting the entries fetcher.
@@ -2664,10 +2653,8 @@ TEST_F(ScoreTextQueryTestBase, TermLeavesWalkTreesOncePerQuery) {
   ASSERT_TRUE(parsed.ok()) << parsed.status();
 
   auto walks_for = [&](int candidates) {
-    query::ResolvedLeafCache cache(
-        schema->GetTextIndexSchema().get(),
-        query::ReadCorpusStats(*schema, query::LockMode::kBackground), scorer);
-    indexes::PrefilterEvaluator evaluator(cache, parsed->query_operations,
+    query::QueryContext query_ctx(*schema, scorer);
+    indexes::PrefilterEvaluator evaluator(query_ctx, parsed->query_operations,
                                           *schema);
     std::vector<InternedStringPtr> keys;
     std::vector<indexes::BorrowedNeighbor> matched;
@@ -2680,7 +2667,7 @@ TEST_F(ScoreTextQueryTestBase, TermLeavesWalkTreesOncePerQuery) {
       }
     }
     query::ScoreTextQuery(*schema, parsed->root_predicate.get(), scorer,
-                          matched, cache);
+                          matched, query_ctx);
     return indexes::text::rax_walks.Get() - before;
   };
   const long long one = walks_for(1);
@@ -2701,10 +2688,8 @@ TEST_F(ScoreTextQueryTestBase, EvaluateFullRefetchesPerKeyTreeForEachKey) {
   const std::string filter = "-@text:gam*";
   auto parsed = FilterParser(*schema, filter, TextParsingOptions{}).Parse();
   ASSERT_TRUE(parsed.ok()) << parsed.status();
-  query::ResolvedLeafCache cache(
-      schema->GetTextIndexSchema().get(),
-      query::ReadCorpusStats(*schema, query::LockMode::kBackground), scorer);
-  indexes::PrefilterEvaluator evaluator(cache, parsed->query_operations,
+  query::QueryContext query_ctx(*schema, scorer);
+  indexes::PrefilterEvaluator evaluator(query_ctx, parsed->query_operations,
                                         *schema);
   const auto d0 = StringInternStore::Intern("d0");
   const auto d1 = StringInternStore::Intern("d1");
@@ -2733,10 +2718,8 @@ TEST_F(ScoreTextQueryTestBase, TagValuesLookedUpOncePerQuery) {
   ASSERT_TRUE(parsed.ok()) << parsed.status();
 
   auto lookups_for = [&](int candidates) {
-    query::ResolvedLeafCache cache(
-        schema->GetTextIndexSchema().get(),
-        query::ReadCorpusStats(*schema, query::LockMode::kBackground), scorer);
-    indexes::PrefilterEvaluator evaluator(cache, parsed->query_operations,
+    query::QueryContext query_ctx(*schema, scorer);
+    indexes::PrefilterEvaluator evaluator(query_ctx, parsed->query_operations,
                                           *schema);
     std::vector<InternedStringPtr> keys;
     std::vector<indexes::BorrowedNeighbor> matched;
@@ -2750,16 +2733,16 @@ TEST_F(ScoreTextQueryTestBase, TagValuesLookedUpOncePerQuery) {
     }
     EXPECT_EQ(matched.size(), candidates / 2);
     query::ScoreTextQuery(*schema, parsed->root_predicate.get(), scorer,
-                          matched, cache);
+                          matched, query_ctx);
     return indexes::tag_value_lookups.Get() - before;
   };
   EXPECT_EQ(lookups_for(2), 2);  // red, green
   EXPECT_EQ(lookups_for(100), 2);
 }
 
-// A main-thread cache resolves from the same global trees under the writers'
+// A main-thread context resolves from the same global trees under the writers'
 // own short locks rather than the time-sliced mutex, so filtering verdicts and
-// scores must match the background cache exactly.
+// scores must match the background context exactly.
 TEST_F(ScoreTextQueryTestBase, MainThreadLockModesMatchBackground) {
   auto schema = BuildTextTagSchema(
       {
@@ -2801,13 +2784,8 @@ TEST_F(ScoreTextQueryTestBase, MainThreadLockModesMatchBackground) {
   for (const auto &[filter, options] : filters) {
     auto parsed = FilterParser(*schema, filter, options).Parse();
     ASSERT_TRUE(parsed.ok()) << parsed.status();
-    query::ResolvedLeafCache background(
-        text_schema,
-        query::ReadCorpusStats(*schema, query::LockMode::kBackground), scorer);
-    query::ResolvedLeafCache main(
-        text_schema,
-        query::ReadCorpusStats(*schema, query::LockMode::kMainThread), scorer,
-        query::LockMode::kMainThread);
+    query::QueryContext background(*schema, scorer);
+    query::QueryContext main(*schema, scorer, query::LockMode::kMainThread);
     indexes::PrefilterEvaluator bg_eval(background, parsed->query_operations,
                                         *schema);
     indexes::PrefilterEvaluator main_eval(main, parsed->query_operations,
@@ -2839,16 +2817,14 @@ TEST_F(ScoreTextQueryTestBase, MatchAllLeavesCacheUntouched) {
   auto schema = BuildTextTagSchema({{"d1", "hello", ""}});
   const auto *scorer =
       indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std);
-  query::ResolvedLeafCache cache(
-      schema->GetTextIndexSchema().get(),
-      query::ReadCorpusStats(*schema, query::LockMode::kBackground), scorer);
+  query::QueryContext query_ctx(*schema, scorer);
   auto interned = StringInternStore::Intern("d1");
   std::vector<indexes::BorrowedNeighbor> cands{
       {BorrowedInternedStringPtr(interned), 0.0f, 0.0f}};
   vmsdk::ReaderMutexLock lock(&schema->GetTimeSlicedMutex());
-  query::ScoreTextQuery(*schema, nullptr, scorer, cands, cache);
+  query::ScoreTextQuery(*schema, nullptr, scorer, cands, query_ctx);
   EXPECT_GT(cands[0].score, 0.0f);
-  EXPECT_EQ(cache.Size(), 0);
+  EXPECT_EQ(query_ctx.Size(), 0);
 }
 
 // --- Tag prefix expansion scoring (extra-step path) --------------------------

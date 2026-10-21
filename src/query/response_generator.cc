@@ -24,7 +24,7 @@
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
 #include "src/query/predicate.h"
-#include "src/query/resolved_leaves.h"
+#include "src/query/query_context.h"
 #include "src/query/search.h"
 #include "src/valkey_search.h"
 #include "vmsdk/src/info.h"
@@ -82,22 +82,20 @@ vmsdk::config::Number &GetMaxSearchResultFieldsCount() {
 
 namespace valkey_search::query {
 
-// Revalidates a mutated document against the fetched record (tags, numerics)
-// and the text index (text). Runs on the main thread, so text goes through a
-// main-thread ResolvedLeafCache and never the time-sliced mutex.
+// Revalidates a mutated document against the fetched record (tags, numerics,
+// vector range) and the text index (text). Runs on the main thread, so text
+// goes through a main-thread QueryContext and never the time-sliced mutex.
 class PredicateEvaluator : public query::Evaluator {
  public:
   PredicateEvaluator(const RecordsMap &records, RecordTags &tags,
-                     InternedStringPtr target_key,
-                     const indexes::text::TextIndexSchema *text_index_schema,
-                     ResolvedLeafCache &cache, QueryOperations query_operations,
-                     const valkey_search::IndexSchema *index_schema)
+                     InternedStringPtr target_key, QueryContext &query_ctx,
+                     QueryOperations query_operations,
+                     const IndexSchema &index_schema)
       : Evaluator(query_operations),
         records_(records),
         tags_(tags),
         target_key_(std::move(target_key)),
-        text_index_schema_(text_index_schema),
-        cache_(cache),
+        query_ctx_(query_ctx),
         index_schema_(index_schema) {}
 
   const InternedStringPtr &GetTargetKey() const override { return target_key_; }
@@ -127,27 +125,18 @@ class PredicateEvaluator : public query::Evaluator {
 
   EvaluationResult EvaluateText(const query::TextPredicate &predicate,
                                 bool require_positions) override {
-    return query::EvaluateText(cache_, predicate, target_key_,
-                               require_positions, [this] {
-                                 // The map lock guards the find; the tree
-                                 // itself is stable because a revalidated key
-                                 // has no in-flight mutation.
-                                 return text_index_schema_->GetPerKeyTextIndex(
-                                     target_key_, /*lock=*/true);
-                               });
+    return query::EvaluateText(
+        query_ctx_, predicate, target_key_, require_positions,
+        [this] { return query_ctx_.PerKeyTextIndex(target_key_); });
   }
 
   EvaluationResult EvaluateVectorRange(
       const query::VectorRangePredicate &predicate) override {
-    if (!index_schema_) {
-      // No index schema available — cannot re-verify; pass through.
-      return EvaluationResult(true);
-    }
     auto query_vector = predicate.GetQueryVector();
     if (query_vector.empty()) {
       return EvaluationResult(false);
     }
-    auto index = index_schema_->GetIndex(predicate.GetAlias());
+    auto index = index_schema_.GetIndex(predicate.GetAlias());
     if (!index.ok()) {
       return EvaluationResult(false);
     }
@@ -165,7 +154,7 @@ class PredicateEvaluator : public query::Evaluator {
     ValkeyModuleString *record = it->second.value.get();
     // A JSON vector is fetched as text; convert it the way ingestion does.
     vmsdk::UniqueValkeyString converted;
-    if (index_schema_->GetAttributeDataType().AttributesProvidedAsString()) {
+    if (index_schema_.GetAttributeDataType().AttributesProvidedAsString()) {
       converted = vector_index->NormalizeStringAttribute(
           vmsdk::RetainUniqueValkeyString(record));
       if (!converted) {
@@ -181,9 +170,8 @@ class PredicateEvaluator : public query::Evaluator {
   const RecordsMap &records_;
   RecordTags &tags_;
   InternedStringPtr target_key_;
-  const indexes::text::TextIndexSchema *text_index_schema_;
-  ResolvedLeafCache &cache_;
-  const valkey_search::IndexSchema *index_schema_ = nullptr;
+  QueryContext &query_ctx_;
+  const IndexSchema &index_schema_;
 };
 
 DEV_INTEGER_COUNTER(query, predicate_revalidation);
@@ -197,7 +185,7 @@ DEV_INTEGER_COUNTER(query, predicate_revalidation);
 FilterVerification VerifyFilter(const query::SearchParameters &parameters,
                                 const RecordsMap &records,
                                 const indexes::Neighbor &n,
-                                std::unique_ptr<ResolvedLeafCache> &cache,
+                                std::unique_ptr<QueryContext> &query_ctx,
                                 std::optional<bool> recompute_score_override) {
   auto predicate = parameters.filter_parse_results.root_predicate.get();
   if (predicate == nullptr) {
@@ -220,21 +208,17 @@ FilterVerification VerifyFilter(const query::SearchParameters &parameters,
   predicate_revalidation.Increment();
 
   const IndexSchema &index_schema = *parameters.index_schema;
-  const auto text_index_schema = index_schema.GetTextIndexSchema();
-  const auto query_operations =
-      parameters.filter_parse_results.query_operations;
-  // One cache per reply: leaves resolve on the first mutated document and are
+  // One context per reply: leaves resolve on the first mutated document and are
   // reused for the rest.
-  if (!cache) {
-    cache = std::make_unique<ResolvedLeafCache>(
-        text_index_schema.get(),
-        ReadCorpusStats(index_schema, LockMode::kMainThread),
-        indexes::scoring::GetScorer(parameters.scorer), LockMode::kMainThread);
+  if (!query_ctx) {
+    query_ctx = std::make_unique<QueryContext>(
+        index_schema, indexes::scoring::GetScorer(parameters.scorer),
+        LockMode::kMainThread);
   }
   RecordTags record_tags(records);
-  PredicateEvaluator evaluator(records, record_tags, n.external_id,
-                               text_index_schema.get(), *cache,
-                               query_operations, parameters.index_schema.get());
+  PredicateEvaluator evaluator(records, record_tags, n.external_id, *query_ctx,
+                               parameters.filter_parse_results.query_operations,
+                               index_schema);
   EvaluationResult result = predicate->Evaluate(evaluator);
 
   // The document changed between shard-side scoring and this content fetch, so
@@ -250,7 +234,7 @@ FilterVerification VerifyFilter(const query::SearchParameters &parameters,
   // nullopt (empty corpus / non-match) degrades to 0 rather than dropping the
   // already-admitted document.
   result.score = RecomputeDocumentScore(index_schema, predicate, n.external_id,
-                                        *cache, record_tags)
+                                        *query_ctx, record_tags)
                      .value_or(0.0f);
   return {true, result.score};
 }
@@ -272,7 +256,7 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
     const query::SearchParameters &parameters,
     const indexes::Neighbor &neighbor,
     const std::optional<std::string> &vector_identifier,
-    std::unique_ptr<query::ResolvedLeafCache> &leaf_cache,
+    std::unique_ptr<query::QueryContext> &query_ctx,
     std::optional<float> *out_recomputed_score = nullptr) {
   auto key = neighbor.external_id->Str();
   absl::flat_hash_set<absl::string_view> identifiers;
@@ -325,7 +309,7 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
     }
     return content;
   }
-  auto verification = VerifyFilter(parameters, content, neighbor, leaf_cache);
+  auto verification = VerifyFilter(parameters, content, neighbor, query_ctx);
   if (!verification.matches) {
     return absl::NotFoundError("Verify filter failed");
   }
@@ -361,14 +345,14 @@ absl::StatusOr<RecordsMap> GetContent(
     const query::SearchParameters &parameters,
     const indexes::Neighbor &neighbor,
     const std::optional<std::string> &vector_identifier,
-    std::unique_ptr<query::ResolvedLeafCache> &leaf_cache,
+    std::unique_ptr<query::QueryContext> &query_ctx,
     std::optional<float> *out_recomputed_score = nullptr) {
   auto key = neighbor.external_id->Str();
   if (attribute_data_type.ToProto() ==
           data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON &&
       parameters.return_attributes.empty()) {
     return GetContentNoReturnJson(ctx, attribute_data_type, parameters,
-                                  neighbor, vector_identifier, leaf_cache,
+                                  neighbor, vector_identifier, query_ctx,
                                   out_recomputed_score);
   }
   absl::flat_hash_set<absl::string_view> identifiers;
@@ -417,7 +401,7 @@ absl::StatusOr<RecordsMap> GetContent(
   if (parameters.filter_parse_results.filter_identifiers.empty()) {
     return content;
   }
-  auto verification = VerifyFilter(parameters, content, neighbor, leaf_cache);
+  auto verification = VerifyFilter(parameters, content, neighbor, query_ctx);
   if (!verification.matches) {
     return absl::NotFoundError("Verify filter failed");
   }
@@ -546,7 +530,7 @@ void ProcessNeighborsForReply(
   // Lazily built by VerifyFilter on the first mutated document and reused for
   // the rest of the reply, so leaf resolution runs once instead of once per
   // recomputed document.
-  std::unique_ptr<query::ResolvedLeafCache> leaf_cache;
+  std::unique_ptr<query::QueryContext> query_ctx;
   for (auto &neighbor : neighbors) {
     // Remote neighbors (from fanout) always have attribute_contents populated,
     // so they skip this entire block. Only local neighbors without content
@@ -562,7 +546,7 @@ void ProcessNeighborsForReply(
     }
     std::optional<float> recomputed_score;
     auto content = GetContent(ctx, attribute_data_type, parameters, neighbor,
-                              vector_identifier, leaf_cache, &recomputed_score);
+                              vector_identifier, query_ctx, &recomputed_score);
     if (!content.ok()) {
       continue;
     }

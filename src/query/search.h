@@ -31,7 +31,7 @@
 #include "src/indexes/scoring/scorer.h"
 #include "src/indexes/vector_base.h"
 #include "src/query/predicate.h"
-#include "src/query/resolved_leaves.h"
+#include "src/query/query_context.h"
 #include "src/utils/cancel.h"
 #include "src/valkey_search_options.h"
 #include "third_party/hnswlib/hnswlib.h"
@@ -399,21 +399,21 @@ size_t EvaluateFilterAsPrimary(
 // Defined in the header to support testing
 absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
     indexes::VectorBase *vector_index, const SearchParameters &parameters,
-    ResolvedLeafCache &cache);
+    QueryContext &query_ctx);
 
 // Vector Range query (no KNN): returns the keys matching the filter, with the
 // VR distance in Neighbor::distance, in key order. A query that is only the VR
 // predicate is answered by VectorBase::SearchRange; a compound one evaluates
 // the full predicate tree per fetched key.
 absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
-    const SearchParameters &parameters, ResolvedLeafCache &cache);
+    const SearchParameters &parameters, QueryContext &query_ctx);
 
 std::priority_queue<std::pair<float, hnswlib::labeltype>>
 CalcBestMatchingPrefilteredKeys(
     const SearchParameters &parameters,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
     indexes::VectorBase *vector_index, size_t qualified_entries,
-    ResolvedLeafCache &cache);
+    QueryContext &query_ctx);
 
 bool QueryHasTextPredicate(const SearchParameters &parameters);
 
@@ -445,21 +445,17 @@ void RecordNonVectorResultsFetchedLimited();
 // Exposed for testing.
 size_t FindVectorDelimiter(absl::string_view expr);
 
-// Corpus-wide scoring inputs for a ResolvedLeafCache. kBackground requires
-// the time-sliced mutex held in read mode; kMainThread takes the short locks
-// each field's writer takes.
-CorpusStats ReadCorpusStats(const IndexSchema &index_schema, LockMode mode);
-
 // Scores admitted candidate documents by walking the predicate tree.
 // For each TermPredicate leaf, looks up each candidate's term frequency
 // and feeds the scorer. Writes scores into candidates in-place. Sorting and
 // trimming to the requested limit happen later in SearchResult::TrimResults.
-// `cache` is the query's, so leaves resolved while filtering are reused here.
+// `query_ctx` is the query's, so leaves resolved while filtering are reused
+// here.
 void ScoreTextQuery(const IndexSchema &index_schema,
                     const Predicate *root_predicate,
                     const indexes::scoring::Scorer *scorer,
                     std::vector<indexes::BorrowedNeighbor> &candidates,
-                    ResolvedLeafCache &cache);
+                    QueryContext &query_ctx);
 
 // A revalidated document's own tags, parsed from the fetched record on first
 // use per field. The index may not reflect the mutation yet, so main-thread
@@ -480,14 +476,14 @@ class RecordTags {
 };
 
 // Main-thread rescoring of one revalidated document, through the same ScoreNode
-// walk ScoreTextQuery runs so the result is on the shard-side scale. `cache`
-// must be in a main-thread LockMode: this runs outside any time-sliced read
-// phase and never acquires that mutex. nullopt when ScoreNode re-derives a
-// non-match; callers score 0 rather than drop the document.
+// walk ScoreTextQuery runs so the result is on the shard-side scale.
+// `query_ctx` must be in a main-thread LockMode: this runs outside any
+// time-sliced read phase and never acquires that mutex. nullopt when ScoreNode
+// re-derives a non-match; callers score 0 rather than drop the document.
 std::optional<float> RecomputeDocumentScore(const IndexSchema &index_schema,
                                             const Predicate *root_predicate,
                                             const InternedStringPtr &key,
-                                            ResolvedLeafCache &cache,
+                                            QueryContext &query_ctx,
                                             RecordTags &record_tags);
 
 }  // namespace valkey_search::query

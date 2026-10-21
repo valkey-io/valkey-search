@@ -411,7 +411,7 @@ void RevalidateArmsBeforeFusion(MultiSearchParameters &params) {
     const bool can_recompute_distance = arm_score_is_distance &&
                                         vector_index != nullptr &&
                                         vector_identifier[i].has_value();
-    std::unique_ptr<query::ResolvedLeafCache> leaf_cache;
+    std::unique_ptr<query::QueryContext> query_ctx;
     std::vector<char> drop(neighbors.size(), 0);
     size_t dropped = 0;
     bool rescored = false;
@@ -445,7 +445,7 @@ void RevalidateArmsBeforeFusion(MultiSearchParameters &params) {
       }
       const RecordsMap &records = *fetched;
       auto verification = query::VerifyFilter(
-          *arm, records, n, leaf_cache,
+          *arm, records, n, query_ctx,
           /*recompute_score_override=*/!arm_score_is_distance);
       if (!verification.matches) {
         drop[j] = 1;

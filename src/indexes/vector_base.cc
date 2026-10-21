@@ -39,7 +39,7 @@
 #include "src/indexes/tag.h"
 #include "src/indexes/text/text_index.h"
 #include "src/query/predicate.h"
-#include "src/query/resolved_leaves.h"
+#include "src/query/query_context.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
@@ -144,13 +144,12 @@ std::vector<char> NormalizeVector(absl::string_view record,
   }
 }
 
-PrefilterEvaluator::PrefilterEvaluator(query::ResolvedLeafCache &cache,
+PrefilterEvaluator::PrefilterEvaluator(query::QueryContext &query_ctx,
                                        QueryOperations query_operations,
                                        const IndexSchema &index_schema)
     : query::Evaluator(query_operations),
-      cache_(cache),
-      index_schema_(index_schema),
-      text_index_schema_(index_schema.GetTextIndexSchema().get()) {}
+      query_ctx_(query_ctx),
+      index_schema_(index_schema) {}
 
 bool PrefilterEvaluator::Evaluate(const query::Predicate &predicate,
                                   const InternedStringPtr &key) {
@@ -171,11 +170,7 @@ query::EvaluationResult PrefilterEvaluator::EvaluateFull(
 const text::TextIndex *PrefilterEvaluator::PerKeyTextIndex() {
   if (!per_key_index_fetched_) {
     per_key_index_fetched_ = true;
-    // lock=false: the caller holds the time-sliced mutex in read mode, which
-    // excludes the writers of the per-key map.
-    per_key_index_ = text_index_schema_
-                         ? text_index_schema_->GetPerKeyTextIndex(*key_, false)
-                         : nullptr;
+    per_key_index_ = query_ctx_.PerKeyTextIndex(*key_);
   }
   return per_key_index_;
 }
@@ -184,7 +179,7 @@ query::EvaluationResult PrefilterEvaluator::EvaluateTags(
     const query::TagPredicate &predicate) {
   CHECK(key_);
   return predicate.Evaluate(
-      std::get<query::TagLeaf>(cache_.GetOrResolve(&predicate)), *key_);
+      std::get<query::TagLeaf>(query_ctx_.GetOrResolve(&predicate)), *key_);
 }
 
 query::EvaluationResult PrefilterEvaluator::EvaluateNumeric(
@@ -197,7 +192,7 @@ query::EvaluationResult PrefilterEvaluator::EvaluateNumeric(
 query::EvaluationResult PrefilterEvaluator::EvaluateText(
     const query::TextPredicate &predicate, bool require_positions) {
   CHECK(key_);
-  return query::EvaluateText(cache_, predicate, *key_, require_positions,
+  return query::EvaluateText(query_ctx_, predicate, *key_, require_positions,
                              [this] { return PerKeyTextIndex(); });
 }
 

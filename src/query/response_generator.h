@@ -54,8 +54,9 @@ struct FilterVerification {
 // since then returns a match with no recomputed score, which is the common
 // case and costs one integer compare.
 //
-// `cache` is built here on the first mutated document and reused for the rest
-// of the reply. Runs on the main thread and never takes the time-sliced mutex.
+// `query_ctx` is built here on the first mutated document and reused for the
+// rest of the reply. Runs on the main thread and never takes the time-sliced
+// mutex.
 //
 // `recompute_score_override` decides whether a changed document is rescored.
 // Left unset it follows the query's own shape, rescoring only a non-vector
@@ -63,8 +64,7 @@ struct FilterVerification {
 // only when that arm is a pure vector search.
 FilterVerification VerifyFilter(
     const query::SearchParameters &parameters, const RecordsMap &records,
-    const indexes::Neighbor &n,
-    std::unique_ptr<query::ResolvedLeafCache> &cache,
+    const indexes::Neighbor &n, std::unique_ptr<query::QueryContext> &query_ctx,
     std::optional<bool> recompute_score_override = std::nullopt);
 
 // Adds all local content for neighbors to the list of neighbors.

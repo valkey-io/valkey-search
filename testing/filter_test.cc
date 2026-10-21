@@ -18,7 +18,7 @@
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
-#include "src/query/resolved_leaves.h"
+#include "src/query/query_context.h"
 #include "src/utils/string_interning.h"
 #include "testing/common.h"
 namespace valkey_search {
@@ -173,18 +173,17 @@ TEST_P(FilterTest, ParseParams) {
   // Now evaluate all predicates, including text predicates
   if (test_case.evaluate_success.has_value()) {
     auto interned_key = StringInternStore::Intern(test_case.key);
-    const auto *text_index_schema = index_schema->GetTextIndexSchema().get();
     const auto query_operations = parse_results.value().query_operations;
     const auto &root = *parse_results.value().root_predicate;
 
-    query::ResolvedLeafCache cache(
-        text_index_schema, query::CorpusStats{.total_docs = 1},
+    query::QueryContext query_ctx(
+        *index_schema,
         indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std));
-    indexes::PrefilterEvaluator evaluator(cache, query_operations,
+    indexes::PrefilterEvaluator evaluator(query_ctx, query_operations,
                                           *index_schema);
     EXPECT_EQ(test_case.evaluate_success.value(),
               evaluator.Evaluate(root, interned_key));
-    // The cache is warm now; a second evaluation must not change the verdict.
+    // The context is warm now; a second evaluation must not change the verdict.
     EXPECT_EQ(test_case.evaluate_success.value(),
               evaluator.Evaluate(root, interned_key));
   }

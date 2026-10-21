@@ -49,7 +49,7 @@ class IndexSchema;
 }  // namespace valkey_search
 
 namespace valkey_search::query {
-class ResolvedLeafCache;
+class QueryContext;
 }
 
 namespace valkey_search::indexes {
@@ -709,7 +709,7 @@ class VectorBase : public IndexBase {
 class PrefilterEvaluator : public query::Evaluator {
  public:
   // Built once per query and reused across candidates.
-  PrefilterEvaluator(query::ResolvedLeafCache &cache,
+  PrefilterEvaluator(query::QueryContext &query_ctx,
                      QueryOperations query_operations,
                      const IndexSchema &index_schema);
   bool Evaluate(const query::Predicate &predicate,
@@ -735,13 +735,11 @@ class PrefilterEvaluator : public query::Evaluator {
   query::EvaluationResult EvaluateVectorRange(
       const query::VectorRangePredicate &predicate) override;
   // The candidate's own tree, fetched on the first leaf that needs it. Many
-  // predicates never do (tag/numeric, or text served from the cache).
+  // predicates never do (tag/numeric, or text served from the context).
   const text::TextIndex *PerKeyTextIndex();
 
-  query::ResolvedLeafCache &cache_;
+  query::QueryContext &query_ctx_;
   const IndexSchema &index_schema_;
-  // Null on a schema with no TEXT fields.
-  const text::TextIndexSchema *text_index_schema_;
   const InternedStringPtr *key_{nullptr};
   const text::TextIndex *per_key_index_{nullptr};
   bool per_key_index_fetched_{false};

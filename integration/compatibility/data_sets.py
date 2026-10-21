@@ -46,6 +46,12 @@ SCORING_DOC_LEN_CHOICES = [10, 10, 16, 16, 25, 40, 70, 140]
 # per-doc sampling bias: spreads pool terms per doc, and so doc_len and the norm
 SCORING_DOC_WEIGHTS = [0.2, 0.4, 0.7, 1.0, 1.5, 2.5, 4.0]
 SCORING_FILLER_TERMS = 60
+# default English stop list, shared by both engines; "stopwords" mixes it into filler
+SCORING_STOPWORDS = [
+    "a", "is", "the", "an", "and", "are", "as", "at", "be", "but", "by", "for",
+    "if", "in", "into", "it", "no", "not", "of", "on", "or", "such", "that",
+    "their", "then", "there", "these", "they", "this", "to", "was", "will", "with",
+]
 SCORING_CROSS_FIELD_RATE = 0.2
 # planted frequencies, summing to N
 SCORING_TAG_FREQS = {"amber": 180, "azure": 105, "cerise": 80, "cobalt": 55,
@@ -700,7 +706,7 @@ SCHEMA_FLAGS = {
 #
 # "default" stems both text fields; mixing in NOSTEM diverges from the reference
 SCORING_SCHEMA_FLAGS = {
-    "text": {"nostem": "NOSTEM", "docscore": "NOSTEM", "default": ""},
+    "text": {"nostem": "NOSTEM", "docscore": "NOSTEM", "default": "", "stopwords": "NOSTEM"},
     "tag": "",
     "numeric": "",
     "vector": f"FLAT 6 TYPE FLOAT32 DIM {VECTOR_DIM} DISTANCE_METRIC L2",
@@ -714,6 +720,7 @@ SCHEMA_INDEX_ATTRS = {
     "docscore": {"hash": "SCORE 0.5 SCORE_FIELD boost",
                  "json": "SCORE 0.5 SCORE_FIELD $.boost"},
     "default": {"hash": "", "json": ""},
+    "stopwords": {"hash": "", "json": ""},
 }
 
 def _build_field_schema(field: str, field_type: str, schema_type: str, for_json: bool = False) -> str:
@@ -748,8 +755,9 @@ def _build_scoring_create(key_type: str, schema_type: str) -> str:
         for field in SCORING_SCHEMA[field_type]
     ]
     on = "HASH" if key_type == "hash" else "JSON"
-    # STOPWORDS 0: no term is ever dropped, so the two engines' default lists can't differ
-    head = f"FT.CREATE {key_type}_idx1 ON {on} PREFIX 1 {key_type}: STOPWORDS 0"
+    # STOPWORDS 0 except on "stopwords", which compares the default list
+    stopwords = "" if schema_type == "stopwords" else "STOPWORDS 0"
+    head = f"FT.CREATE {key_type}_idx1 ON {on} PREFIX 1 {key_type}: {stopwords}".strip()
     attrs = SCHEMA_INDEX_ATTRS[schema_type][key_type]
     return " ".join(p for p in [head, attrs, "SCHEMA", *parts] if p)
 
@@ -2098,7 +2106,10 @@ def _scoring_vocab(schema_type):
     text = TEXT_DATASETS['pure text']['field_values']
     extra = STEMMING_SCORING_EXTRA_WORDS if schema_type == "default" else SCORING_EXTRA_WORDS
     pool = text['title'] + text['body'] + extra
-    return pool, _make_scoring_terms(SCORING_FILLER_TERMS, "w")
+    filler = _make_scoring_terms(SCORING_FILLER_TERMS, "w")
+    if schema_type == "stopwords":
+        filler += SCORING_STOPWORDS
+    return pool, filler
 
 def compute_scoring_corpus(seed=123, schema_type="nostem"):
     """Build the scoring corpus from a term -> doc incidence matrix.

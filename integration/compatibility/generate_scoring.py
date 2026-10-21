@@ -13,7 +13,7 @@ Capture RediSearch answers for BM25STD relevance scores.
 '''
 
 
-SCHEMA_TYPES = ["nostem", "docscore", "default"]
+SCHEMA_TYPES = ["nostem", "docscore", "default", "stopwords"]
 
 
 @pytest.mark.parametrize("schema_type", SCHEMA_TYPES)
@@ -38,6 +38,12 @@ class TestScoringCompatibility(BaseCompatibilityTest):
         load_data(self.client, self.DATA_SET_NAME, key_type,
                   schema_type=schema_type)
         self._wait_for_indexing(f"{key_type}_idx1")
+
+    @classmethod
+    def teardown_class(cls):
+        # group by index so the replay loads each one once
+        cls.answers.sort(key=lambda a: (a["key_type"], a["schema_type"]))
+        super().teardown_class()
 
     def _wait_for_indexing(self, index_name, timeout=30):
         """Wait out Redis' asynchronous indexing."""

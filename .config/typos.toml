@@ -15,12 +15,12 @@ extend-exclude = [
 
 [default]
 extend-ignore-re = [
-    "grea.*",
-    "Grea.*",
+    "grea",
     "opposit",
     "uniqu",
-    "worl*",
-    ".*unning"
+    # Wildcard query terms in test data: gam*, *ing, *ell*
+    "\\*[A-Za-z]+",
+    "[A-Za-z]+\\*"
 ]
 [default.extend-words]
 continuent = "continuent"

@@ -233,9 +233,9 @@ FilterVerification VerifyFilter(const query::SearchParameters &parameters,
   }
   // nullopt (empty corpus / non-match) degrades to 0 rather than dropping the
   // already-admitted document.
-  result.score = RecomputeDocumentScore(index_schema, predicate, n.external_id,
-                                        *query_ctx, record_tags)
-                     .value_or(0.0f);
+  result.score =
+      RecomputeDocumentScore(predicate, n.external_id, *query_ctx, record_tags)
+          .value_or(0.0f);
   return {true, result.score};
 }
 

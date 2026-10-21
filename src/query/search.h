@@ -445,15 +445,11 @@ void RecordNonVectorResultsFetchedLimited();
 // Exposed for testing.
 size_t FindVectorDelimiter(absl::string_view expr);
 
-// Scores admitted candidate documents by walking the predicate tree.
-// For each TermPredicate leaf, looks up each candidate's term frequency
-// and feeds the scorer. Writes scores into candidates in-place. Sorting and
-// trimming to the requested limit happen later in SearchResult::TrimResults.
-// `query_ctx` is the query's, so leaves resolved while filtering are reused
-// here.
-void ScoreTextQuery(const IndexSchema &index_schema,
-                    const Predicate *root_predicate,
-                    const indexes::scoring::Scorer *scorer,
+// Scores admitted candidates in place by walking the predicate tree per
+// document. Sorting and trimming to the requested limit happen later in
+// SearchResult::TrimResults. `query_ctx` is the query's, so leaves resolved
+// while filtering are reused here.
+void ScoreTextQuery(const Predicate *root_predicate,
                     std::vector<indexes::BorrowedNeighbor> &candidates,
                     QueryContext &query_ctx);
 
@@ -480,8 +476,7 @@ class RecordTags {
 // `query_ctx` must be in a main-thread LockMode: this runs outside any
 // time-sliced read phase and never acquires that mutex. nullopt when ScoreNode
 // re-derives a non-match; callers score 0 rather than drop the document.
-std::optional<float> RecomputeDocumentScore(const IndexSchema &index_schema,
-                                            const Predicate *root_predicate,
+std::optional<float> RecomputeDocumentScore(const Predicate *root_predicate,
                                             const InternedStringPtr &key,
                                             QueryContext &query_ctx,
                                             RecordTags &record_tags);

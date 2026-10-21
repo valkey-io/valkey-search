@@ -93,6 +93,8 @@ class QueryContext {
   // IDF for a term carried by `dt` documents, clamped to the corpus size since
   // the two counts come from independently locked counters.
   float Idf(size_t dt) const;
+  // One BM25 term for one document.
+  float ScoreLeaf(float idf, uint32_t tf, uint32_t doc_len, float weight) const;
 
   // Per-document index reads, each under the locks `mode` requires. Every
   // lock choice by mode lives in this class.
@@ -108,7 +110,6 @@ class QueryContext {
 
   const indexes::scoring::Scorer *Scorer() const { return scorer_; }
   const CorpusStats &Stats() const { return stats_; }
-  float AvgDocLen() const { return avg_doc_len_; }
   size_t Size() const { return leaf_cache_.size(); }
 
  private:

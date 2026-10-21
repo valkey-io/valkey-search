@@ -1697,8 +1697,8 @@ class ScoreTextQueryTestBase : public ValkeySearchTest {
         indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std);
     vmsdk::ReaderMutexLock lock(&schema.GetTimeSlicedMutex());
     query::QueryContext query_ctx(schema, scorer);
-    query::ScoreTextQuery(schema, parsed.value().root_predicate.get(), scorer,
-                          cands, query_ctx);
+    query::ScoreTextQuery(parsed.value().root_predicate.get(), cands,
+                          query_ctx);
     if (cands.empty()) {
       return std::nullopt;
     }
@@ -1725,9 +1725,9 @@ class ScoreTextQueryTestBase : public ValkeySearchTest {
                                       vmsdk::MakeUniqueValkeyString(value)));
     }
     query::RecordTags tags(records);
-    return query::RecomputeDocumentScore(
-        schema, parsed.value().root_predicate.get(),
-        StringInternStore::Intern(key), query_ctx, tags);
+    return query::RecomputeDocumentScore(parsed.value().root_predicate.get(),
+                                         StringInternStore::Intern(key),
+                                         query_ctx, tags);
   }
 
   // Score `key` for `filter` through the IN-ITERATOR path
@@ -2046,8 +2046,8 @@ TEST_F(ScoreTextQueryTestBase, NaNScoreIsClampedBeforeReachingNeighbor) {
   {
     vmsdk::ReaderMutexLock lock(&schema->GetTimeSlicedMutex());
     query::QueryContext query_ctx(*schema, &nan_scorer);
-    query::ScoreTextQuery(*schema, parsed.value().root_predicate.get(),
-                          &nan_scorer, cands, query_ctx);
+    query::ScoreTextQuery(parsed.value().root_predicate.get(), cands,
+                          query_ctx);
   }
   ASSERT_EQ(cands.size(), 1u);
   EXPECT_FALSE(indexes::scoring::IsNaN(cands[0].score));
@@ -2501,8 +2501,7 @@ struct SharedCacheScorer {
     std::vector<indexes::BorrowedNeighbor> cands{
         {BorrowedInternedStringPtr(interned), 0.0f, 0.0f}};
     vmsdk::ReaderMutexLock lock(&schema.GetTimeSlicedMutex());
-    query::ScoreTextQuery(schema, parsed->root_predicate.get(), scorer, cands,
-                          query_ctx);
+    query::ScoreTextQuery(parsed->root_predicate.get(), cands, query_ctx);
     return cands.empty() ? std::nullopt : std::optional(cands[0].score);
   }
   // The first expansion leaf's representative, or null. Background-mode
@@ -2666,8 +2665,7 @@ TEST_F(ScoreTextQueryTestBase, TermLeavesWalkTreesOncePerQuery) {
         matched.push_back({BorrowedInternedStringPtr(keys.back()), 0.0f, 0.0f});
       }
     }
-    query::ScoreTextQuery(*schema, parsed->root_predicate.get(), scorer,
-                          matched, query_ctx);
+    query::ScoreTextQuery(parsed->root_predicate.get(), matched, query_ctx);
     return indexes::text::rax_walks.Get() - before;
   };
   const long long one = walks_for(1);
@@ -2732,8 +2730,7 @@ TEST_F(ScoreTextQueryTestBase, TagValuesLookedUpOncePerQuery) {
       }
     }
     EXPECT_EQ(matched.size(), candidates / 2);
-    query::ScoreTextQuery(*schema, parsed->root_predicate.get(), scorer,
-                          matched, query_ctx);
+    query::ScoreTextQuery(parsed->root_predicate.get(), matched, query_ctx);
     return indexes::tag_value_lookups.Get() - before;
   };
   EXPECT_EQ(lookups_for(2), 2);  // red, green
@@ -2799,12 +2796,11 @@ TEST_F(ScoreTextQueryTestBase, MainThreadLockModesMatchBackground) {
       {
         vmsdk::ReaderMutexLock lock(&schema->GetTimeSlicedMutex());
         bg_match = bg_eval.Evaluate(*parsed->root_predicate, key);
-        query::ScoreTextQuery(*schema, parsed->root_predicate.get(), scorer,
-                              bg_cands, background);
+        query::ScoreTextQuery(parsed->root_predicate.get(), bg_cands,
+                              background);
       }
       main_match = main_eval.Evaluate(*parsed->root_predicate, key);
-      query::ScoreTextQuery(*schema, parsed->root_predicate.get(), scorer,
-                            main_cands, main);
+      query::ScoreTextQuery(parsed->root_predicate.get(), main_cands, main);
       EXPECT_EQ(main_match, bg_match) << filter << " " << k;
       EXPECT_FLOAT_EQ(main_cands[0].score, bg_cands[0].score)
           << filter << " " << k;
@@ -2822,7 +2818,7 @@ TEST_F(ScoreTextQueryTestBase, MatchAllLeavesCacheUntouched) {
   std::vector<indexes::BorrowedNeighbor> cands{
       {BorrowedInternedStringPtr(interned), 0.0f, 0.0f}};
   vmsdk::ReaderMutexLock lock(&schema->GetTimeSlicedMutex());
-  query::ScoreTextQuery(*schema, nullptr, scorer, cands, query_ctx);
+  query::ScoreTextQuery(nullptr, cands, query_ctx);
   EXPECT_GT(cands[0].score, 0.0f);
   EXPECT_EQ(query_ctx.Size(), 0);
 }

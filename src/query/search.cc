@@ -22,7 +22,6 @@
 #include <variant>
 #include <vector>
 
-#include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/container/inlined_vector.h"
@@ -991,11 +990,6 @@ struct ScoreContext {
     }
     return per_key.index;
   }
-  float ScoreLeaf(float idf, uint32_t tf, uint32_t doc_len,
-                  float weight) const {
-    return query_ctx.Scorer()->ScoreLeaf(
-        {idf, tf, doc_len, query_ctx.AvgDocLen(), weight});
-  }
 };
 
 std::optional<float> ScoreNode(const Predicate *predicate,
@@ -1034,16 +1028,15 @@ std::optional<float> ScoreNode(const Predicate *predicate,
     }
     case PredicateType::kText: {
       ResolvedLeaf &resolved = score_ctx.query_ctx.GetOrResolve(predicate);
-      // Expansion leaf: contribute exactly ONE matched term's BM25 (its own IDF
-      // + own F), never the sum. The field gate matters on both routes: without
-      // it a term the doc carries only in another field would supply the IDF
-      // and F. doc_len is co-located in the matched posting entry.
+      // Expansion leaf: ONE matched word's BM25, never the sum. The field gate
+      // matters on both routes: without it a word the doc carries only in
+      // another field would supply the idf and tf.
       if (auto *expansion = std::get_if<ExpansionLeaf>(&resolved)) {
         if (expansion->representative) {
           if (auto entry =
                   score_ctx.query_ctx.Probe(expansion->representative->term,
                                             key, expansion->field_mask)) {
-            return score_ctx.ScoreLeaf(
+            return score_ctx.query_ctx.ScoreLeaf(
                 expansion->representative->idf, entry->doc_stats.tf,
                 entry->doc_stats.doc_len, predicate->GetWeight());
           }
@@ -1056,25 +1049,17 @@ std::optional<float> ScoreNode(const Predicate *predicate,
             *expansion, *static_cast<const ExpansionPredicate *>(predicate),
             *per_key_index, score_ctx.per_key.key);
         if (!match) return std::nullopt;
-        return score_ctx.ScoreLeaf(match->idf, match->entry.doc_stats.tf,
-                                   match->entry.doc_stats.doc_len,
-                                   predicate->GetWeight());
+        return score_ctx.query_ctx.ScoreLeaf(
+            match->idf, match->entry.doc_stats.tf,
+            match->entry.doc_stats.doc_len, predicate->GetWeight());
       }
 
       const auto &leaf = std::get<TermLeaf>(resolved);
       if (leaf.groups.empty()) return std::nullopt;
 
-      // A stemmed term sums several independent BM25 leaves, each with its own
-      // IDF and its own F (term frequency summed across that group's postings).
-      // The document matches the leaf if any group contains its key in a field
-      // the group's mask admits (all TEXT fields share one posting tree, so
-      // presence alone is not occurrence in a queried field). doc_len is
-      // co-located in the posting entry (identical across postings for one
-      // key), so the same probe that yields tf yields it — no
-      // separate per-key scoring-map probe. avg_doc_len is corpus-wide
-      // (precomputed in ScoreContext); both length inputs are 0 for a
-      // length-agnostic scorer, which ScoreLeaf treats as a degenerate corpus
-      // and scores 0.
+      // Term leaf: one BM25 term per group, summed. The document matches if
+      // any group has it in a queried field. doc_len rides on the posting
+      // entry, so the probe that yields tf yields it too.
       float total = 0.0f;
       bool matched = false;
       uint32_t doc_len = 0;
@@ -1089,8 +1074,8 @@ std::optional<float> ScoreNode(const Predicate *predicate,
         }
         if (tf == 0) continue;
         matched = true;
-        total +=
-            score_ctx.ScoreLeaf(group.idf, tf, doc_len, predicate->GetWeight());
+        total += score_ctx.query_ctx.ScoreLeaf(group.idf, tf, doc_len,
+                                               predicate->GetWeight());
       }
       return matched ? std::optional<float>(total) : std::nullopt;
     }
@@ -1117,8 +1102,8 @@ std::optional<float> ScoreNode(const Predicate *predicate,
 
       const uint32_t doc_len = score_ctx.query_ctx.DocLen(key);
 
-      // Membership: the value's bag on the background path; on the main thread
-      // the record's own tags, since the index may not reflect the mutation.
+      // Membership from the bag in the background, from the fetched record's
+      // tags on the main thread (TagLeaf::Value).
       const absl::flat_hash_set<absl::string_view> *doc_tags = nullptr;
       if (score_ctx.record_tags != nullptr) {
         doc_tags = score_ctx.record_tags->Get(
@@ -1143,8 +1128,8 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       float sum = 0.0f;
       for (const auto &value : leaf.tag_values) {
         if (!carries(value)) continue;
-        sum += score_ctx.ScoreLeaf(value.idf, /*tf=*/1, doc_len,
-                                   predicate->GetWeight());
+        sum += score_ctx.query_ctx.ScoreLeaf(value.idf, /*tf=*/1, doc_len,
+                                             predicate->GetWeight());
       }
       // Each prefix contributes ONE matched value (the doc's first), never the
       // sum; a union still sums.
@@ -1152,8 +1137,9 @@ std::optional<float> ScoreNode(const Predicate *predicate,
         const size_t dt =
             score_ctx.query_ctx.TagPrefixDocCount(*tag_index, prefix, key);
         if (dt == 0) continue;
-        sum += score_ctx.ScoreLeaf(score_ctx.query_ctx.Idf(dt), /*tf=*/1,
-                                   doc_len, predicate->GetWeight());
+        sum +=
+            score_ctx.query_ctx.ScoreLeaf(score_ctx.query_ctx.Idf(dt), /*tf=*/1,
+                                          doc_len, predicate->GetWeight());
       }
       return sum;
     }
@@ -1168,26 +1154,33 @@ std::optional<float> ScoreNode(const Predicate *predicate,
   return 0.0f;
 }
 
-// kBackground callers hold the time-sliced mutex; see ScoreContext::DocLen.
 // Scores one admitted document: the ScoreNode walk composed with the document
 // score, sanitized. nullopt when ScoreNode re-derives a non-match; callers
 // score 0 rather than drop the document.
 std::optional<float> ScoreDocument(const Predicate *root_predicate,
                                    BorrowedInternedStringPtr key,
                                    ScoreContext &score_ctx) {
+  QueryContext &query_ctx = score_ctx.query_ctx;
   score_ctx.BeginDocument();
-  auto sum = ScoreNode(root_predicate, key, score_ctx);
+  std::optional<float> sum;
+  if (root_predicate != nullptr) {
+    sum = ScoreNode(root_predicate, key, score_ctx);
+  } else {
+    // Match-all (`*`): Redis scores the wildcard as a single BM25 leaf with a
+    // constant IDF (1.0) and term frequency (1), normalized by the document's
+    // text length. On a text-less index avg_doc_len is 0 and ScoreLeaf
+    // returns a well-defined 0.
+    sum = query_ctx.ScoreLeaf(/*idf=*/1.0f, /*tf=*/1, query_ctx.DocLen(key),
+                              /*weight=*/1.0f);
+  }
   if (!sum) return std::nullopt;
-  return SanitizeScore(score_ctx.query_ctx.Scorer()->ComposeDocumentScore(
-      *sum, score_ctx.query_ctx.DocScore(key)));
+  return SanitizeScore(
+      query_ctx.Scorer()->ComposeDocumentScore(*sum, query_ctx.DocScore(key)));
 }
 
-void ScoreTextQuery(const IndexSchema &index_schema,
-                    const Predicate *root_predicate,
-                    const indexes::scoring::Scorer *scorer,
+void ScoreTextQuery(const Predicate *root_predicate,
                     std::vector<indexes::BorrowedNeighbor> &candidates,
                     QueryContext &query_ctx) {
-  CHECK(scorer != nullptr);
   if (candidates.empty() || options::IsScoringDisabled()) return;
 
   // Candidates came from this index, so total_docs should be > 0; degrade to
@@ -1202,21 +1195,9 @@ void ScoreTextQuery(const IndexSchema &index_schema,
     // Non-owning view: scoring runs under the shared index lock, so the
     // InternedString outlives the loop and no ref-count churn is needed.
     const BorrowedInternedStringPtr &key = candidate.key;
-    float score;
-    if (root_predicate != nullptr) {
-      score = ScoreDocument(root_predicate, key, score_ctx).value_or(0.0f);
-    } else {
-      // Match-all (`*`): Redis scores the wildcard as a single BM25 leaf with a
-      // constant IDF (1.0) and term frequency (1), normalized by the document's
-      // text length. On a text-less index avg_doc_len is 0 and ScoreLeaf
-      // returns a well-defined 0.
-      score = SanitizeScore(scorer->ComposeDocumentScore(
-          score_ctx.ScoreLeaf(/*idf=*/1.0f, /*tf=*/1,
-                              score_ctx.query_ctx.DocLen(key),
-                              /*weight=*/1.0f),
-          score_ctx.query_ctx.DocScore(key)));
-    }
-    scored.push_back({candidate.key, 0.0f, score});
+    scored.push_back(
+        {candidate.key, 0.0f,
+         ScoreDocument(root_predicate, key, score_ctx).value_or(0.0f)});
   }
 
   candidates = std::move(scored);
@@ -1234,9 +1215,7 @@ static void ApplyRelevanceScore(const SearchParameters &parameters,
     borrowed.push_back(
         {BorrowedInternedStringPtr(neighbor.external_id), 0.0f, 0.0f});
   }
-  ScoreTextQuery(*parameters.index_schema,
-                 parameters.filter_parse_results.root_predicate.get(),
-                 indexes::scoring::GetScorer(parameters.scorer), borrowed,
+  ScoreTextQuery(parameters.filter_parse_results.root_predicate.get(), borrowed,
                  query_ctx);
   for (size_t i = 0; i < neighbors.size(); ++i) {
     neighbors[i].score = borrowed[i].score;
@@ -1274,8 +1253,7 @@ const absl::flat_hash_set<absl::string_view> *RecordTags::Get(
   return it->second ? &*it->second : nullptr;
 }
 
-std::optional<float> RecomputeDocumentScore(const IndexSchema &index_schema,
-                                            const Predicate *root_predicate,
+std::optional<float> RecomputeDocumentScore(const Predicate *root_predicate,
                                             const InternedStringPtr &key,
                                             QueryContext &query_ctx,
                                             RecordTags &record_tags) {
@@ -1313,19 +1291,23 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
                               !has_non_text_predicate && text_index_schema &&
                               text_index_schema->GetTrackedKeyCount() > 0 &&
                               !parameters.filter_parse_results.is_match_all;
+  // Cannot skip evaluation if the query contains unsolved composed operations.
+  const bool requires_prefilter_evaluation =
+      IsUnsolvedQuery(parameters.filter_parse_results.query_operations,
+                      parameters.filter_parse_results.is_match_all);
   // Shared by the prefilter walk and the extra-step scoring below, so a leaf
   // either phase resolves is a hash hit for the other. The drain-scored path
   // uses neither.
   std::optional<QueryContext> query_ctx;
-  if (!score_in_drain) {
+  if (requires_prefilter_evaluation || !score_in_drain) {
     query_ctx.emplace(index_schema, scorer);
   }
 
   std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
   size_t qualified_entries = 0;
   if (parameters.filter_parse_results.is_match_all) {
-    auto universal_fetcher = std::make_unique<indexes::UniversalSetFetcher>(
-        parameters.index_schema.get());
+    auto universal_fetcher =
+        std::make_unique<indexes::UniversalSetFetcher>(&index_schema);
     qualified_entries = universal_fetcher->Size();
     entries_fetchers.push(std::move(universal_fetcher));
   } else {
@@ -1354,10 +1336,6 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
                         .score = 0.0f});
     return true;
   };
-  // Cannot skip evaluation if the query contains unsolved composed operations.
-  const bool requires_prefilter_evaluation =
-      IsUnsolvedQuery(parameters.filter_parse_results.query_operations,
-                      parameters.filter_parse_results.is_match_all);
   // TODO: Unify code path to rely on de-dup and unsolved checking
   // in EvaluatePrefilteredKeys
   if (!requires_prefilter_evaluation) {
@@ -1445,8 +1423,7 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
   // (text + numeric/tag/negate) queries and match-all, which reaches
   // ScoreTextQuery's null-predicate wildcard branch.
   if (!borrowed.empty() && !score_in_drain) {
-    ScoreTextQuery(*parameters.index_schema,
-                   parameters.filter_parse_results.root_predicate.get(), scorer,
+    ScoreTextQuery(parameters.filter_parse_results.root_predicate.get(),
                    borrowed, *query_ctx);
   }
   return borrowed;

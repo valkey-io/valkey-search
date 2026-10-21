@@ -113,6 +113,11 @@ std::optional<indexes::text::PostingValue> QueryContext::Probe(
                       : get();
 }
 
+float QueryContext::ScoreLeaf(float idf, uint32_t tf, uint32_t doc_len,
+                              float weight) const {
+  return scorer_->ScoreLeaf({idf, tf, doc_len, avg_doc_len_, weight});
+}
+
 float QueryContext::Idf(size_t dt) const {
   return scorer_->PrecomputeIDF(
       {stats_.total_docs,

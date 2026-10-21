@@ -1448,9 +1448,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> DoSearchVector(
   VMSDK_ASSIGN_OR_RETURN(auto index, parameters.index_schema->GetIndex(
                                          parameters.attribute_alias));
   auto *vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
-  if (index->GetIndexerType() != indexes::IndexerType::kHNSW &&
-      index->GetIndexerType() != indexes::IndexerType::kFlat &&
-      index->GetIndexerType() != indexes::IndexerType::kSVS) {
+  if (!indexes::IsVectorIndex(index)) {
     return absl::InvalidArgumentError(
         absl::StrCat(parameters.attribute_alias, " is not a Vector index "));
   }
@@ -2114,9 +2112,7 @@ absl::Status query::SearchParameters::PreParseQueryString() {
         << "`. ";
     // Validate the index exists and is a vector index.
     VMSDK_ASSIGN_OR_RETURN(auto index, index_schema->GetIndex(attribute_alias));
-    if (index->GetIndexerType() != indexes::IndexerType::kHNSW &&
-        index->GetIndexerType() != indexes::IndexerType::kFlat &&
-        index->GetIndexerType() != indexes::IndexerType::kSVS) {
+    if (!indexes::IsVectorIndex(index)) {
       return absl::InvalidArgumentError(absl::StrCat(
           "Index field `", attribute_alias, "` is not a Vector index "));
     }
@@ -2164,9 +2160,7 @@ absl::Status query::SearchParameters::PreParseQueryString() {
             VMSDK_ASSIGN_OR_RETURN(
                 auto index, index_schema->GetIndex(vr_pred->GetAlias()),
                 _.SetPrepend() << "Vector range field validation failed: ");
-            if (index->GetIndexerType() != indexes::IndexerType::kHNSW &&
-                index->GetIndexerType() != indexes::IndexerType::kFlat &&
-                index->GetIndexerType() != indexes::IndexerType::kSVS) {
+            if (!indexes::IsVectorIndex(index)) {
               return absl::InvalidArgumentError(
                   absl::StrCat("'", vr_pred->GetAlias(),
                                "' is not indexed as a vector field"));

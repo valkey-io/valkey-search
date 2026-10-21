@@ -862,12 +862,6 @@ bool IndexSchema::ProcessAttributeMutation(ValkeyModuleCtx *ctx,
       ++Metrics::GetStats().time_slice_upserts;
       // Track field type counters
       switch (index->GetIndexerType()) {
-        case indexes::IndexerType::kVector:
-        case indexes::IndexerType::kHNSW:
-        case indexes::IndexerType::kFlat:
-        case indexes::IndexerType::kSVS:
-          Metrics::GetStats().ingest_field_vector++;
-          break;
         case indexes::IndexerType::kNumeric:
           Metrics::GetStats().ingest_field_numeric++;
           break;
@@ -878,6 +872,9 @@ bool IndexSchema::ProcessAttributeMutation(ValkeyModuleCtx *ctx,
           Metrics::GetStats().ingest_field_text++;
           break;
         default:
+          if (indexes::IsVectorIndex(index)) {
+            Metrics::GetStats().ingest_field_vector++;
+          }
           break;
       }
     }
@@ -1258,11 +1255,7 @@ int IndexSchema::GetNumericAttributeCount() const {
 int IndexSchema::GetVectorAttributeCount() const {
   return std::count_if(attributes_.begin(), attributes_.end(),
                        [](const auto &attr) {
-                         auto type = attr.second.GetIndex()->GetIndexerType();
-                         return type == indexes::IndexerType::kVector ||
-                                type == indexes::IndexerType::kHNSW ||
-                                type == indexes::IndexerType::kFlat ||
-                                type == indexes::IndexerType::kSVS;
+                         return indexes::IsVectorIndex(attr.second.GetIndex());
                        });
 }
 

@@ -17,6 +17,7 @@
 
 #include "absl/functional/function_ref.h"
 #include "absl/strings/string_view.h"
+#include "src/indexes/text/language.h"
 #include "src/indexes/text/text_iterator.h"
 #include "src/query/resolved_leaf.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -446,6 +447,9 @@ class FuzzyPredicate : public ExpansionPredicate {
   }
   absl::string_view GetTextString() const override { return term_; }
   uint32_t GetDistance() const { return distance_; }
+  // Unit for the edit distance, resolved from the index language when the
+  // predicate is built. See COMPATIBILITY.md.
+  indexes::text::LengthUnit GetLengthUnit() const { return length_unit_; }
   EvaluationResult Evaluate(Evaluator& evaluator) const override;
   void ForEachMatch(const valkey_search::indexes::text::TextIndex& text_index,
                     MatchSink sink) const override;
@@ -457,6 +461,7 @@ class FuzzyPredicate : public ExpansionPredicate {
   FieldMaskPredicate field_mask_;
   std::string term_;
   uint32_t distance_;
+  indexes::text::LengthUnit length_unit_;
 };
 
 enum class LogicalOperator { kAnd, kOr };

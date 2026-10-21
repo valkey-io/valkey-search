@@ -385,6 +385,9 @@ absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
                          vmsdk::ThreadPool *thread_pool,
                          SearchMode search_mode);
 
+// Test-only: returns an error if arm `arm_index` is forced to fail, else OK.
+absl::Status ForcedMultiArmFailure(size_t arm_index);
+
 absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
     absl::StatusOr<std::vector<indexes::Neighbor>> results,
     const SearchParameters &parameters);

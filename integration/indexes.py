@@ -2,7 +2,7 @@
 Create standardized indexes
 """
 
-from typing import Tuple, Union
+from typing import Optional, Tuple, Union
 
 # from pyparsing import abstractmethod
 import valkey
@@ -200,11 +200,13 @@ class Index:
         fields: list[Field],
         prefixes: list[str] = [],
         type: KeyDataType = KeyDataType.HASH,
+        language: Optional[str] = None,
     ):
         self.name = name
         self.fields = fields
         self.prefixes = prefixes
         self.type = type
+        self.language = language
 
     def create(self, client: valkey.client, wait_for_backfill = False):
         cmd = (
@@ -217,6 +219,7 @@ class Index:
                 str(len(self.prefixes)),
             ]
             + self.prefixes
+            + (["LANGUAGE", self.language] if self.language else [])
             + ["SCHEMA"]
         )
         for f in self.fields:

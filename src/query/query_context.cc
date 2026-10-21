@@ -221,7 +221,7 @@ ResolvedLeaf QueryContext::ResolveText(const TextPredicate *predicate) const {
   const uint64_t stem_field_mask =
       term_pred->GetFieldMask() & text_index_schema_->GetStemTextFieldMask();
   if (!term_pred->IsExact() && stem_field_mask != 0) {
-    const std::string stemmed = text_index_schema_->GetLexer().StemWord(word);
+    const std::string stemmed = text_index_schema_->StemWord(word);
     auto add_stem_groups = [&](const indexes::text::Rax &stem_tree) {
       // Group 2: the root, when it differs from the word.
       if (stemmed != word) {

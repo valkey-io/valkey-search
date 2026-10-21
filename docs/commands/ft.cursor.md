@@ -13,7 +13,7 @@ A cursor holds the rows of a query result that have not yet been returned to the
 
 Reading or deleting a cursor requires the same key permissions as querying its index: a user who could not run the query that created the cursor cannot read or delete it either.
 
-A cursor is destroyed when its last row has been read, when it is deleted with `FT.CURSOR DEL`, when it has not been read for longer than its `MAXIDLE` time, or when its index is removed (`FT.DROPINDEX`, `FLUSHDB`, `FLUSHALL`, or a replica synchronising with its primary). Reading a cursor restarts its idle time.
+A cursor is destroyed when its last row has been read, when it is deleted with `FT.CURSOR DEL`, when it has not been read for longer than its `MAXIDLE` time, or when its index is removed (`FT.DROPINDEX`, `FLUSHDB`, `FLUSHALL`, or a replica synchronizing with its primary). Reading a cursor restarts its idle time.
 
 `RESPONSE`
 

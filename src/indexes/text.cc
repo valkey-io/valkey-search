@@ -208,8 +208,7 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
 
   // Get stem variants if not exact term search
   if (!IsExact() && stem_field_mask != 0) {
-    const std::string stemmed =
-        GetTextIndexSchema()->GetLexer().StemWord(text_string);
+    const std::string stemmed = GetTextIndexSchema()->StemWord(text_string);
     // Stem root literal: its own BM25 leaf with its own dt (industry-standard
     // leaf 2).
     if (stemmed != text_string) {

@@ -115,7 +115,9 @@ For `SVS_VAMANA`, `capacity` is the `INITIAL_CAP` given to `FT.CREATE`, or 0 if 
 - `construction_window_size` (integer) The number of candidates examined when inserting a vector.
 - `search_window_size` (integer) The number of candidates examined during a query, unless the query sets `EF_RUNTIME`.
 - `alpha` (double) The pruning parameter the graph is built with: the `ALPHA` given to `FT.CREATE`, or the default for the distance metric (1.2 for `L2`, 0.95 for `IP` and `COSINE`).
-- `compression` (string) How SVS stores the vectors: `SVS_COMPRESSION_NONE` or `SVS_COMPRESSION_FP16`.
+- `compression` (string) How SVS stores the vectors: `SVS_COMPRESSION_NONE`, `SVS_COMPRESSION_FP16` or `SVS_COMPRESSION_SQ8`.
+- `training_threshold` (integer) The number of vectors the index holds uncompressed before it converts to `SQ8`. Only present for `SVS_COMPRESSION_SQ8`.
+- `compression_pending` (integer) `1` while the index is still uncompressed, `0` once it has converted. Only present for `SVS_COMPRESSION_SQ8`.
 
 ### Response when the PRIMARY option is specified.
 

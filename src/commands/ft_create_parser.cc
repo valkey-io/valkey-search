@@ -52,6 +52,7 @@ constexpr absl::string_view kConstructionWindowSizeParam{
     "CONSTRUCTION_WINDOW_SIZE"};
 constexpr absl::string_view kSearchWindowSizeParam{"SEARCH_WINDOW_SIZE"};
 constexpr absl::string_view kAlphaParam{"ALPHA"};
+constexpr absl::string_view kTrainingThresholdParam{"TRAINING_THRESHOLD"};
 constexpr absl::string_view kCompressionParam{"COMPRESSION"};
 
 const absl::NoDestructor<
@@ -419,6 +420,9 @@ vmsdk::KeyValueParser<SVSVamanaParameters> CreateSVSParser() {
       GENERATE_VALUE_PARSER(SVSVamanaParameters, search_window_size));
   parser.AddParamParser(kAlphaParam,
                         GENERATE_VALUE_PARSER(SVSVamanaParameters, alpha));
+  parser.AddParamParser(
+      kTrainingThresholdParam,
+      GENERATE_VALUE_PARSER(SVSVamanaParameters, training_threshold));
   parser.AddParamParser(kCompressionParam,
                         GENERATE_ENUM_PARSER(SVSVamanaParameters, compression,
                                              *kSVSCompressionByStr));
@@ -989,13 +993,20 @@ absl::Status SVSVamanaParameters::Verify() const {
         "ALGORITHM HNSW for BFLOAT16 storage, or COMPRESSION FP16 for "
         "compressed FP16 storage inside SVS.");
   }
-  // SQ8 calibrates its int8 range from the dataset it is built from. The
-  // first-add bootstrap builds from one vector, so later components outside
-  // that one's range saturate. Fenced until the calibration path lands.
-  if (compression == data_model::SVS_COMPRESSION_SQ8) {
-    return absl::InvalidArgumentError(
-        "COMPRESSION SQ8 is not supported for SVS_VAMANA in v1 pending "
-        "range calibration; use COMPRESSION NONE or FP16.");
+  // SQ8 calibrates its quantization range from the vectors it compresses, so
+  // the index stays uncompressed until it holds TRAINING_THRESHOLD vectors.
+  // The other compressions don't train.
+  if (training_threshold.has_value()) {
+    if (compression != data_model::SVS_COMPRESSION_SQ8) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          kTrainingThresholdParam, " only applies to COMPRESSION SQ8."));
+    }
+    VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(*training_threshold,
+                                             kMinSVSTrainingThreshold,
+                                             kMaxSVSTrainingThreshold))
+        << kTrainingThresholdParam << " must be an integer of at least "
+        << kMinSVSTrainingThreshold << " and cannot exceed "
+        << kMaxSVSTrainingThreshold << ".";
   }
   // ALPHA sentinel (-1.0) means "use SVS's metric-specific default".
   // Any user-supplied value must be finite and in SVS's range for the
@@ -1050,6 +1061,10 @@ std::unique_ptr<data_model::VectorIndex> SVSVamanaParameters::ToProto() const {
   svs_algorithm_proto->set_search_window_size(search_window_size);
   svs_algorithm_proto->set_alpha(alpha);
   svs_algorithm_proto->set_compression(compression);
+  if (compression == data_model::SVS_COMPRESSION_SQ8) {
+    svs_algorithm_proto->set_training_threshold(
+        training_threshold.value_or(kDefaultSVSTrainingThreshold));
+  }
   vector_index_proto->set_allocated_svs_vamana_algorithm(
       svs_algorithm_proto.release());
   return vector_index_proto;

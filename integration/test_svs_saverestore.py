@@ -58,6 +58,7 @@ def _create_svs_index(
     compression: str = "NONE",
     dim: int = DIM,
     search_window_size=None,
+    training_threshold=None,
 ):
     """FT.CREATE ALGORITHM SVS_VAMANA. Raw command rather than the Index/Vector
     helper: that helper has no SVS_VAMANA-specific COMPRESSION argument, same
@@ -69,6 +70,8 @@ def _create_svs_index(
         params += ["COMPRESSION", compression]
     if search_window_size is not None:
         params += ["SEARCH_WINDOW_SIZE", str(search_window_size)]
+    if training_threshold is not None:
+        params += ["TRAINING_THRESHOLD", str(training_threshold)]
     # The attribute's parameter count must equal len(params); deriving it keeps
     # the two from drifting when an optional parameter is added below.
     client.execute_command(
@@ -335,8 +338,7 @@ class TestSvsSaveRestoreWritesBetweenReloads(ValkeySearchTestCaseDebugMode):
 
 
 class TestSvsSaveRestoreCompression(ValkeySearchTestCaseDebugMode):
-    """Case 4: FP16 compression round-trip; SQ8 is rejected by FT.CREATE
-    until range calibration lands. `compression` is the one
+    """Case 4: FP16 compression round-trip. `compression` is the one
     build-config field in the header (docs/svs-rdb/design.md "Header") that
     genuinely has to match the payload, since the storage element type
     derives from it alone."""
@@ -391,6 +393,62 @@ class TestSvsSaveRestoreCompression(ValkeySearchTestCaseDebugMode):
             for (key1, score1), (key2, score2) in zip(r1, r2):
                 assert key1 == key2
                 assert score1 == pytest.approx(score2, abs=1e-4)
+
+
+class TestSvsSaveRestoreSq8(ValkeySearchTestCaseDebugMode):
+    """SQ8 saved before its conversion carries an uncompressed payload; it
+    must load as one, convert when it reaches TRAINING_THRESHOLD, and then
+    round-trip compressed."""
+
+    THRESHOLD = 64  # the minimum TRAINING_THRESHOLD
+
+    def _reload(self, how: str):
+        if how == "debug_reload":
+            self.client.execute_command("DEBUG", "RELOAD")
+        else:
+            _bgsave_and_restart(self)
+
+    def _assert_knn_preserved(self, pre, post):
+        for (k1, r1), (k2, r2) in zip(pre, post):
+            assert k1 == k2
+            assert [key for key, _ in r1] == [key for key, _ in r2]
+            for (_, score1), (_, score2) in zip(r1, r2):
+                assert score1 == pytest.approx(score2, abs=1e-4)
+
+    @pytest.mark.parametrize("how", ["debug_reload", "bgsave_restart"])
+    def test_reload_before_and_after_conversion(self, how):
+        client: Valkey = self.client
+        index = self.index_name = f"svs_sq8_{how}"
+        _create_svs_index(client, index, compression="SQ8",
+                          training_threshold=self.THRESHOLD)
+        half = self.THRESHOLD // 2
+
+        def wait_size(n):
+            waiters.wait_for_equal(
+                lambda: _v_index(client, index)["size"], n, timeout=30)
+
+        _populate(client, half)
+        wait_size(half)
+        pre = _collect_knn(client, index, half)
+        self._reload(how)
+        wait_size(half)
+        assert _v_index(client, index)["algorithm"]["compression_pending"] == 1
+        self._assert_knn_preserved(pre, _collect_knn(client, index, half))
+
+        # Reaching the threshold converts the index; it keeps answering.
+        _populate(client, self.THRESHOLD - half, start=half + 1)
+        wait_size(self.THRESHOLD)
+        pre = _collect_knn(client, index, self.THRESHOLD)
+        for k, result in pre:
+            assert len(result) == k
+        self._reload(how)
+        wait_size(self.THRESHOLD)
+        info = _v_index(client, index)
+        assert info["algorithm"]["compression"] == "SVS_COMPRESSION_SQ8"
+        assert info["algorithm"]["training_threshold"] == self.THRESHOLD
+        assert info["algorithm"]["compression_pending"] == 0
+        self._assert_knn_preserved(pre,
+                                   _collect_knn(client, index, self.THRESHOLD))
 
 
 class TestSvsSaveRestoreScale(ValkeySearchTestCaseDebugMode):

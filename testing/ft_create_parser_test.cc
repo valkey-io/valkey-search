@@ -1108,9 +1108,116 @@ INSTANTIATE_TEST_SUITE_P(
                           }}},
          },
          {
+             .test_name = "svs_sq8_l2_training_threshold_omitted",
+             .success = true,
+             .command_str = "idx1 SCHEMA embedding VECTOR SVS_VAMANA 8 "
+                            "TYPE FLOAT32 DIM 3 DISTANCE_METRIC L2 COMPRESSION SQ8",
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .attributes = {{
+                              .identifier = "embedding",
+                              .attribute_alias = "embedding",
+                              .indexer_type = indexes::IndexerType::kSVS,
+                          }}},
+         },
+         {
+             .test_name = "svs_sq8_cosine_training_threshold_omitted",
+             .success = true,
+             .command_str = "idx1 SCHEMA embedding VECTOR SVS_VAMANA 8 "
+                            "TYPE FLOAT32 DIM 3 DISTANCE_METRIC COSINE COMPRESSION SQ8",
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .attributes = {{
+                              .identifier = "embedding",
+                              .attribute_alias = "embedding",
+                              .indexer_type = indexes::IndexerType::kSVS,
+                          }}},
+         },
+         {
+             .test_name = "svs_sq8_l2_training_threshold_valid",
+             .success = true,
+             .command_str = "idx1 SCHEMA embedding VECTOR SVS_VAMANA 10 "
+                            "TYPE FLOAT32 DIM 3 DISTANCE_METRIC L2 COMPRESSION SQ8 "
+                            "TRAINING_THRESHOLD 100",
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .attributes = {{
+                              .identifier = "embedding",
+                              .attribute_alias = "embedding",
+                              .indexer_type = indexes::IndexerType::kSVS,
+                          }}},
+         },
+         {
+             .test_name = "svs_sq8_cosine_training_threshold_valid",
+             .success = true,
+             .command_str = "idx1 SCHEMA embedding VECTOR SVS_VAMANA 10 "
+                            "TYPE FLOAT32 DIM 3 DISTANCE_METRIC COSINE COMPRESSION SQ8 "
+                            "TRAINING_THRESHOLD 100",
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .attributes = {{
+                              .identifier = "embedding",
+                              .attribute_alias = "embedding",
+                              .indexer_type = indexes::IndexerType::kSVS,
+                          }}},
+         },
+         {
+             .test_name = "svs_sq8_training_threshold_zero",
+             .success = false,
+             .command_str = "idx1 SCHEMA embedding VECTOR SVS_VAMANA 10 "
+                            "TYPE FLOAT32 DIM 3 DISTANCE_METRIC COSINE COMPRESSION SQ8 "
+                            "TRAINING_THRESHOLD 0",
+             .expected_error_message =
+                 "Invalid field type for field `embedding`: Invalid range: "
+                 "Value below minimum; TRAINING_THRESHOLD must be an integer "
+                 "of at least 64 and cannot exceed 1000000.",
+         },
+         {
+             .test_name = "svs_sq8_training_threshold_below_min",
+             .success = false,
+             .command_str = "idx1 SCHEMA embedding VECTOR SVS_VAMANA 10 "
+                            "TYPE FLOAT32 DIM 3 DISTANCE_METRIC L2 COMPRESSION SQ8 "
+                            "TRAINING_THRESHOLD 63",
+             .expected_error_message =
+                 "Invalid field type for field `embedding`: Invalid range: "
+                 "Value below minimum; TRAINING_THRESHOLD must be an integer "
+                 "of at least 64 and cannot exceed 1000000.",
+         },
+         {
+             .test_name = "svs_sq8_training_threshold_above_max",
+             .success = false,
+             .command_str = "idx1 SCHEMA embedding VECTOR SVS_VAMANA 10 "
+                            "TYPE FLOAT32 DIM 3 DISTANCE_METRIC L2 COMPRESSION SQ8 "
+                            "TRAINING_THRESHOLD 1000001",
+             .expected_error_message =
+                 "Invalid field type for field `embedding`: Invalid range: "
+                 "Value above maximum; TRAINING_THRESHOLD must be an integer "
+                 "of at least 64 and cannot exceed 1000000.",
+         },
+         {
+             .test_name = "svs_training_threshold_with_compression_none",
+             .success = false,
+             .command_str = "idx1 SCHEMA embedding VECTOR SVS_VAMANA 10 "
+                            "TYPE FLOAT32 DIM 3 DISTANCE_METRIC L2 COMPRESSION NONE "
+                            "TRAINING_THRESHOLD 100",
+             .expected_error_message =
+                 "Invalid field type for field `embedding`: "
+                 "TRAINING_THRESHOLD only applies to COMPRESSION SQ8.",
+         },
+         {
+             .test_name = "svs_training_threshold_with_compression_fp16",
+             .success = false,
+             .command_str = "idx1 SCHEMA embedding VECTOR SVS_VAMANA 10 "
+                            "TYPE FLOAT32 DIM 3 DISTANCE_METRIC COSINE COMPRESSION FP16 "
+                            "TRAINING_THRESHOLD 100",
+             .expected_error_message =
+                 "Invalid field type for field `embedding`: "
+                 "TRAINING_THRESHOLD only applies to COMPRESSION SQ8.",
+         },
+         {
              .test_name = "invalid_m_negative",
              .success = false,
-             .command_str = "idx1 SChema hash_field1 as "
+             .command_str = "idx1 SCHEMA hash_field1 as "
                             "hash_field11 vector hnsw 8 TYPE  FLOAT32 DIM 3 "
                             "DISTANCE_METRIC IP M -10",
              .expected_error_message =

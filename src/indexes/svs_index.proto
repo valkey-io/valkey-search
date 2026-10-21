@@ -27,4 +27,10 @@ message SVSIndexHeader {
   // Echo of the SVS build configuration. Mismatch (especially in compression)
   // with expectations triggers InvalidArgumentError on load.
   SVSVamanaAlgorithm build_config = 6;
+
+  // True when the payload is still uncompressed: a compression that trains on
+  // the data (SQ8) converts the index once it holds training_threshold
+  // vectors. The payload then uses the uncompressed storage for the element
+  // type, not build_config.compression.
+  bool compression_pending = 7;
 }

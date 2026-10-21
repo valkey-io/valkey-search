@@ -1,6 +1,7 @@
 """FT.CREATE + HSET + FT.SEARCH for every accepted SVS_VAMANA TYPE x
-COMPRESSION x DISTANCE_METRIC. BFLOAT16 and SQ8 are rejected at FT.CREATE
-(test_svs_smoke.py)."""
+COMPRESSION x DISTANCE_METRIC. BFLOAT16 is rejected at FT.CREATE
+(test_svs_smoke.py). SQ8 holds one doc here, below its training threshold,
+so its index is still uncompressed."""
 
 import struct
 import time
@@ -28,7 +29,7 @@ def _fp16(values):
 
 
 ENCODERS = {"FLOAT32": _fp32, "FLOAT16": _fp16}
-COMPRESSIONS = ["NONE", "FP16"]
+COMPRESSIONS = ["NONE", "FP16", "SQ8"]
 METRICS = ["L2", "IP", "COSINE"]
 COMBOS = [(t, c, m) for t in ENCODERS for c in COMPRESSIONS for m in METRICS]
 

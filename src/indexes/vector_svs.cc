@@ -79,6 +79,7 @@ void FillSvsVamanaProto(const SVSBuildConfig& config,
   proto->set_search_window_size(config.search_window_size);
   proto->set_alpha(config.alpha);
   proto->set_compression(config.compression);
+  proto->set_training_threshold(config.training_threshold);
 }
 }  // namespace
 
@@ -624,6 +625,14 @@ absl::StatusOr<std::shared_ptr<VectorSVS<T>>> VectorSVS<T>::Create(
   instance->build_config_.initial_cap = vector_index_proto.initial_cap();
   instance->build_config_.blocksize_bytes =
       SvsBlockSizeBytes(instance->build_config_, instance->dimensions_);
+  // SQ8 calibrates its range once, from the vectors it compresses, so the
+  // index starts uncompressed and converts at the training threshold.
+  if (svs_proto.compression() == data_model::SVS_COMPRESSION_SQ8) {
+    instance->build_config_.training_threshold = svs_proto.training_threshold();
+    instance->compression_pending_.store(
+        instance->build_config_.training_threshold > 0,
+        std::memory_order_relaxed);
+  }
   // svs_index_ stays null until the first HSET bootstraps it via
   // svs_index_build_dynamic. The SVS C API requires num_vectors > 0 at
   // build time and offers no create-empty entry point.
@@ -710,17 +719,25 @@ absl::StatusOr<std::shared_ptr<VectorSVS<T>>> VectorSVS<T>::LoadFromRDB(
       return instance;
     }
 
+    if (header.compression_pending() &&
+        instance->build_config_.training_threshold == 0) {
+      return absl::InvalidArgumentError(
+          "SVS_VAMANA RDB header has compression_pending for an index "
+          "without a training threshold");
+    }
+    instance->compression_pending_.store(header.compression_pending(),
+                                         std::memory_order_relaxed);
+    const SVSBuildConfig storage_config = instance->StorageConfig();
     SvsRdbInputStream adapter(input);
     svs_stream_interface iface = adapter.AsInterface();
     ScopedSvsError err;
-    auto builder = AssembleIndexBuilder(instance->build_config_,
+    auto builder = AssembleIndexBuilder(storage_config,
                                         vector_index_proto.distance_metric(),
                                         instance->dimensions_, err.get());
     if (!builder.ok()) return builder.status();
 
     svs_index_h index = svs_index_load_stream_dynamic(
-        builder->get(), &iface, instance->build_config_.blocksize_bytes,
-        err.get());
+        builder->get(), &iface, storage_config.blocksize_bytes, err.get());
     if (index == nullptr) {
       if (!adapter.status().ok()) return adapter.status();
       return SvsErrorToStatus(err.get(), "index_load_stream_dynamic");
@@ -947,12 +964,15 @@ absl::Status VectorSVS<T>::AddRecordImpl(uint64_t internal_id,
   // Test hook: the map holds the id, SVS does not yet. No lock is held here.
   BACKGROUND_PAUSEPOINT("svs_add_after_map_reserve");
   absl::Status status = InsertVector(internal_id, fp32);
-  absl::MutexLock map_lock(&label_mutex_);
-  if (!status.ok()) {
-    label_to_record_.erase(internal_id);
-    return status;
+  {
+    absl::MutexLock map_lock(&label_mutex_);
+    if (!status.ok()) {
+      label_to_record_.erase(internal_id);
+      return status;
+    }
+    label_to_record_[internal_id] = std::move(vector_record);
   }
-  label_to_record_[internal_id] = std::move(vector_record);
+  MaybeConvert();
   return absl::OkStatus();
 #else
   (void)internal_id;
@@ -1086,7 +1106,7 @@ absl::Status VectorSVS<T>::InsertVector(uint64_t internal_id,
   if (svs_index_ != nullptr) {
     return AddPoint(internal_id, fp32);
   }
-  auto result = BootstrapIndex(build_config_, this->distance_metric_,
+  auto result = BootstrapIndex(StorageConfig(), this->distance_metric_,
                                dimensions_, internal_id, fp32);
   if (!result.ok()) return result.status();
   svs_index_ = *result;
@@ -1128,6 +1148,63 @@ void VectorSVS<T>::MaybeConsolidate() {
 }
 
 template <typename T>
+SVSBuildConfig VectorSVS<T>::StorageConfig() const {
+  if (!compression_pending_.load(std::memory_order_acquire)) {
+    return build_config_;
+  }
+  SVSBuildConfig config = build_config_;
+  config.compression = data_model::SVS_COMPRESSION_NONE;
+  config.blocksize_bytes = SvsBlockSizeBytes(config, dimensions_);
+  return config;
+}
+
+template <typename T>
+void VectorSVS<T>::MaybeConvert() {
+  // The label map also holds adds still in flight, so it only says a
+  // conversion may be due; SVS's own count decides, under the lock.
+  if (!compression_pending_.load(std::memory_order_acquire) ||
+      GetLabelCount() < build_config_.training_threshold) {
+    return;
+  }
+  // Conversion copies the index, so it excludes writers; searches are already
+  // excluded by the mutation phase.
+  absl::WriterMutexLock lock(&resize_mutex_);
+  if (svs_index_ == nullptr ||
+      !compression_pending_.load(std::memory_order_relaxed)) {
+    return;
+  }
+  ScopedSvsError err;
+  size_t in_svs = 0;
+  if (!svs_index_get_size(svs_index_, &in_svs, err.get()) ||
+      in_svs < build_config_.training_threshold) {
+    return;
+  }
+  auto builder = AssembleIndexBuilder(build_config_, this->distance_metric_,
+                                      dimensions_, err.get());
+  svs_index_h converted = nullptr;
+  if (builder.ok()) {
+    svs_dynamic_index_params_t params = SVS_INIT_DYNAMIC_INDEX_PARAMS();
+    params.blocksize_bytes = build_config_.blocksize_bytes;
+    params.sync_kind = kSvsSyncKind;
+    converted = svs_index_convert_dynamic_ex(builder->get(), svs_index_,
+                                             &params, err.get());
+  }
+  if (converted == nullptr) {
+    ++Metrics::GetStats().svs_create_exceptions_cnt;
+    VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 10)
+        << "SVS_VAMANA compression failed; the index stays uncompressed: "
+        << (builder.ok() ? SvsErrorToStatus(err.get(), "index_convert_dynamic")
+                         : builder.status());
+    return;
+  }
+  svs_index_free(svs_index_);
+  svs_index_ = converted;
+  compression_pending_.store(false, std::memory_order_release);
+  // The converted index is built with kSvsSyncKind, even after an RDB load.
+  mutations_exclusive_.store(false, std::memory_order_release);
+}
+
+template <typename T>
 absl::Status VectorSVS<T>::AddPoint(uint64_t internal_id, const float* fp32) {
   ScopedSvsError err;
   size_t added = 0;
@@ -1152,7 +1229,8 @@ template <typename T>
 int VectorSVS<T>::RespondWithInfoImpl(ValkeyModuleCtx* ctx) const {
   EmitDataTypeInfo(ctx);
   ValkeyModule_ReplyWithSimpleString(ctx, "algorithm");
-  ValkeyModule_ReplyWithArray(ctx, 12);
+  const bool trained = build_config_.training_threshold > 0;
+  ValkeyModule_ReplyWithArray(ctx, trained ? 16 : 12);
   ValkeyModule_ReplyWithSimpleString(ctx, "name");
   ValkeyModule_ReplyWithSimpleString(
       ctx, std::string(
@@ -1173,6 +1251,13 @@ int VectorSVS<T>::RespondWithInfoImpl(ValkeyModuleCtx* ctx) const {
   ValkeyModule_ReplyWithSimpleString(
       ctx,
       data_model::SVSCompressionType_Name(build_config_.compression).c_str());
+  if (trained) {
+    ValkeyModule_ReplyWithSimpleString(ctx, "training_threshold");
+    ValkeyModule_ReplyWithLongLong(ctx, build_config_.training_threshold);
+    ValkeyModule_ReplyWithSimpleString(ctx, "compression_pending");
+    ValkeyModule_ReplyWithLongLong(
+        ctx, compression_pending_.load(std::memory_order_acquire) ? 1 : 0);
+  }
   return 4;
 }
 
@@ -1203,6 +1288,8 @@ absl::Status VectorSVS<T>::SaveIndexImpl(
   header.set_format_version(kSvsHeaderFormatVersion);
   header.set_svs_version(svs_get_version());
   header.set_has_index(has_index);
+  header.set_compression_pending(
+      has_index && compression_pending_.load(std::memory_order_relaxed));
   header.set_element_type(GetVectorDataType());
   header.set_dimensionality(static_cast<uint32_t>(dimensions_));
   FillSvsVamanaProto(build_config_, header.mutable_build_config());
@@ -1290,6 +1377,7 @@ std::optional<hnswlib::tableint> VectorSVS<T>::GetAlgoIdLockFree(
 template <typename T>
 absl::Status VectorSVS<T>::OnTrackedKeysLoaded() {
 #if defined(__linux__) && defined(__x86_64__)
+  absl::Cleanup convert = [this]() { MaybeConvert(); };
   if (!rebuild_from_keyspace_) {
     return absl::OkStatus();
   }

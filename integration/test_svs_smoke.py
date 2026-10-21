@@ -829,6 +829,34 @@ class TestSVSVamanaDebugMode(ValkeySearchTestCaseDebugMode):
             lambda: _v_index(client, index)["size"], 1, timeout=5)
         search()
 
+    @pytest.mark.parametrize("metric", ["L2", "COSINE"])
+    def test_ft_info_reports_memory_bytes(self, metric):
+        """FT.INFO memory_bytes is 0 before the first add and grows as the
+        index does. A small INITIAL_CAP keeps SVS's allocation blocks at
+        64 KiB, so 1,000 more vectors cross a block."""
+        client: Valkey = self.server.get_new_client()
+        index = f"mem_{metric.lower()}"
+        prefix = f"{index}:"
+        client.execute_command(
+            "FT.CREATE", index, "PREFIX", "1", prefix,
+            "SCHEMA", "v", "VECTOR", "SVS_VAMANA",
+            "8", "TYPE", "FLOAT32", "DIM", str(DIM),
+            "DISTANCE_METRIC", metric, "INITIAL_CAP", "16",
+        )
+        assert _v_index(client, index)["algorithm"]["memory_bytes"] == 0
+
+        def add(start, n):
+            for i in range(start, start + n):
+                client.hset(f"{prefix}{i}",
+                            mapping={"v": _fp32([float(i + 1), 1.0, 0.0, 0.0])})
+            waiters.wait_for_equal(
+                lambda: _v_index(client, index)["size"], start + n, timeout=30)
+            return _v_index(client, index)["algorithm"]["memory_bytes"]
+
+        small = add(0, 10)
+        assert small > 0
+        assert add(10, 1000) > small
+
     def test_info_counts_svs_vector_field(self):
         """An SVS_VAMANA field is counted in number_of_vector_attributes and
         its ingests in ingest_field_vector."""

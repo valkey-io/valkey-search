@@ -139,7 +139,7 @@ LOCAL: An array of key value pairs.
         - **m** (integer) The count of maximum permitted outgoing edges for each node in the graph in each layer. The maximum number of outgoing edges is 2\*M for layer 0\. The Default is 16\. The maximum is 512\.
         - **ef_construction** (integer) The count of vectors in the index. The default is 200, and the max is 4096\. Higher values increase the time needed to create indexes, but improve the recall ratio.
         - **ef_runtime** (integer) The count of vectors to be examined during a query operation. The default is 10, and the max is 4096\.
-        - For SVS_VAMANA, **graph_max_degree**, **construction_window_size**, **search_window_size**, **alpha** (the effective value, including the per-metric default) and **compression** (`SVS_COMPRESSION_NONE`, `SVS_COMPRESSION_FP16` or `SVS_COMPRESSION_SQ8`), plus **training_threshold** and **compression_pending** (1 until the index converts) for SQ8, instead. See [FT.INFO](docs/commands/ft.info.md).
+        - For SVS_VAMANA, **graph_max_degree**, **construction_window_size**, **search_window_size**, **alpha** (the effective value, including the per-metric default) and **compression** (`SVS_COMPRESSION_NONE`, `SVS_COMPRESSION_FP16` or `SVS_COMPRESSION_SQ8`), plus **training_threshold** and **compression_pending** (1 until the index converts) for SQ8, and **memory_bytes** (bytes SVS holds for the field), instead. See [FT.INFO](docs/commands/ft.info.md).
 
 ## FT.\_LIST
 

@@ -118,6 +118,7 @@ For `SVS_VAMANA`, `capacity` is the `INITIAL_CAP` given to `FT.CREATE`, or 0 if 
 - `compression` (string) How SVS stores the vectors: `SVS_COMPRESSION_NONE`, `SVS_COMPRESSION_FP16` or `SVS_COMPRESSION_SQ8`.
 - `training_threshold` (integer) The number of vectors the index holds uncompressed before it converts to `SQ8`. Only present for `SVS_COMPRESSION_SQ8`.
 - `compression_pending` (integer) `1` while the index is still uncompressed, `0` once it has converted. Only present for `SVS_COMPRESSION_SQ8`.
+- `memory_bytes` (integer) Bytes SVS holds for this field's graph, vector data and metadata. `0` before the first vector is added. SVS allocates in blocks sized by `INITIAL_CAP`, so the value grows in steps.
 
 ### Response when the PRIMARY option is specified.
 

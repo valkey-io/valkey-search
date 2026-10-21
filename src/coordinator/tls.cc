@@ -5,7 +5,7 @@
  *
  */
 
-#include "src/coordinator/tls.h"
+#include "tls.h"
 
 #include <fstream>
 #include <memory>

@@ -801,21 +801,33 @@ class TestSVSVamanaDebugMode(ValkeySearchTestCaseDebugMode):
         )
         assert failures() == before
 
-    def test_nan_query_rejected_on_empty_index(self):
+    @pytest.mark.parametrize("metric", ["L2", "COSINE"])
+    def test_nan_query_rejected_on_empty_index(self, metric):
         """A non-finite query is an error even before the index holds any
-        vectors, as it is once it does."""
+        vectors, as it is once it does. COSINE normalizes the query first."""
         client: Valkey = self.server.get_new_client()
+        index = f"nanq_{metric.lower()}"
+        prefix = f"{index}:"
         client.execute_command(
-            "FT.CREATE", "nanq_idx", "PREFIX", "1", "nq:",
+            "FT.CREATE", index, "PREFIX", "1", prefix,
             "SCHEMA", "v", "VECTOR", "SVS_VAMANA",
-            "6", "TYPE", "FLOAT32", "DIM", str(DIM), "DISTANCE_METRIC", "L2",
+            "6", "TYPE", "FLOAT32", "DIM", str(DIM),
+            "DISTANCE_METRIC", metric,
         )
         nan_query = struct.pack("<I", 0x7FC00000) + _fp32([0.0, 0.0, 0.0])
-        with pytest.raises(Exception, match="non-finite"):
-            client.execute_command(
-                "FT.SEARCH", "nanq_idx", "*=>[KNN 2 @v $q]",
-                "PARAMS", "2", "q", nan_query, "DIALECT", "2",
-            )
+
+        def search():
+            with pytest.raises(Exception, match="non-finite"):
+                client.execute_command(
+                    "FT.SEARCH", index, "*=>[KNN 2 @v $q]",
+                    "PARAMS", "2", "q", nan_query, "DIALECT", "2",
+                )
+
+        search()
+        client.hset(f"{prefix}1", mapping={"v": _fp32([1.0, 0.0, 0.0, 0.0])})
+        waiters.wait_for_equal(
+            lambda: _v_index(client, index)["size"], 1, timeout=5)
+        search()
 
     def test_info_counts_svs_vector_field(self):
         """An SVS_VAMANA field is counted in number_of_vector_attributes and

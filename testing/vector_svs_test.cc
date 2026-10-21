@@ -1994,11 +1994,17 @@ INSTANTIATE_TEST_SUITE_P(
 
 // -- Query validation and exception counters ---------------------------------
 
+// Every case runs for L2 and COSINE: COSINE normalizes vectors before they
+// reach SVS, a separate path through PrepareSvsInput.
+class VectorSVSL2CosineTest
+    : public VectorSVSTest,
+      public testing::WithParamInterface<data_model::DistanceMetric> {};
+
 // A non-finite query is rejected before any early return: on an index with no
 // vectors, and on a range query whose fetch cap is 0.
-TEST_F(VectorSVSTest, NonFiniteQueryRejectedOnEveryPath) {
+TEST_P(VectorSVSL2CosineTest, NonFiniteQueryRejectedOnEveryPath) {
   auto index = VectorSVS<float>::Create(
-      CreateSVSVectorIndexProto(kDimensions, data_model::DISTANCE_METRIC_L2,
+      CreateSVSVectorIndexProto(kDimensions, GetParam(),
                                 data_model::SVS_COMPRESSION_NONE),
       attribute_identifier, attribute_data_type, 0);
   VMSDK_EXPECT_OK(index);
@@ -2031,9 +2037,9 @@ TEST_F(VectorSVSTest, NonFiniteQueryRejectedOnEveryPath) {
 // A failed SVS add counts in svs_add_exceptions_count; forced with an id SVS
 // already holds. (SVS reports no error for deleting an id it doesn't hold, so
 // remove, modify and search failures can't be forced from a test.)
-TEST_F(VectorSVSTest, FailedSvsAddIncrementsItsCounter) {
+TEST_P(VectorSVSL2CosineTest, FailedSvsAddIncrementsItsCounter) {
   auto index = VectorSVS<float>::Create(
-      CreateSVSVectorIndexProto(kDimensions, data_model::DISTANCE_METRIC_L2,
+      CreateSVSVectorIndexProto(kDimensions, GetParam(),
                                 data_model::SVS_COMPRESSION_NONE),
       attribute_identifier, attribute_data_type, 0);
   VMSDK_EXPECT_OK(index);
@@ -2050,10 +2056,9 @@ TEST_F(VectorSVSTest, FailedSvsAddIncrementsItsCounter) {
 }
 
 // LoadFromRDB failures count toward create, as for HNSW.
-TEST_F(VectorSVSTest, FailedLoadCountsAsCreateException) {
-  auto proto =
-      CreateSVSVectorIndexProto(kDimensions, data_model::DISTANCE_METRIC_L2,
-                                data_model::SVS_COMPRESSION_NONE);
+TEST_P(VectorSVSL2CosineTest, FailedLoadCountsAsCreateException) {
+  auto proto = CreateSVSVectorIndexProto(kDimensions, GetParam(),
+                                         data_model::SVS_COMPRESSION_NONE);
   FakeSafeRDB rdb;
   {
     RDBChunkOutputStream out(&rdb);
@@ -2071,14 +2076,14 @@ TEST_F(VectorSVSTest, FailedLoadCountsAsCreateException) {
 // SQ8 conversions have their own counters. A failure is forced with a
 // graph_max_degree that differs from the source index, which SVS rejects; the
 // index stays uncompressed and keeps answering.
-TEST_F(VectorSVSTest, Sq8ConversionsAreCounted) {
+TEST_P(VectorSVSL2CosineTest, Sq8ConversionsAreCounted) {
   auto &stats = Metrics::GetStats();
   constexpr uint32_t kThreshold = 10;
   auto vectors = RandomVectors(kThreshold, kDimensions);
   auto make_index = [&]() {
-    auto index = VectorSVS<float>::Create(
-        Sq8Proto(kDimensions, data_model::DISTANCE_METRIC_L2, kThreshold),
-        attribute_identifier, attribute_data_type, 0);
+    auto index =
+        VectorSVS<float>::Create(Sq8Proto(kDimensions, GetParam(), kThreshold),
+                                 attribute_identifier, attribute_data_type, 0);
     CHECK(index.ok()) << index.status();
     return *index;
   };
@@ -2111,6 +2116,14 @@ TEST_F(VectorSVSTest, Sq8ConversionsAreCounted) {
   ASSERT_EQ(result->size(), 1u);
   EXPECT_EQ((*result)[0].external_id, IndexToKey(0));
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    Metrics, VectorSVSL2CosineTest,
+    testing::Values(data_model::DISTANCE_METRIC_L2,
+                    data_model::DISTANCE_METRIC_COSINE),
+    [](const testing::TestParamInfo<data_model::DistanceMetric> &info) {
+      return data_model::DistanceMetric_Name(info.param);
+    });
 
 }  // namespace
 }  // namespace valkey_search::indexes

@@ -1798,6 +1798,15 @@ SORTKEY_PREFIX_DATA_SET = "sortkey prefix"
 # Absent-sort-key cases: nsk3 lacks p; the 'solo' tag isolates one document.
 SORTKEY_NIL_DATA_SET = "sortkey nil"
 
+# SORTBY on an alias that differs from its field (issue #1440).
+SORTKEY_ALIAS_DATA_SET = "sortkey alias"
+
+# Alias b of field a is also the field behind attribute c (issue #1440).
+SORTKEY_COLLISION_DATA_SET = "sortkey collision"
+
+SORTKEY_DATA_SETS = (SORTKEY_PREFIX_DATA_SET, SORTKEY_NIL_DATA_SET,
+                     SORTKEY_ALIAS_DATA_SET, SORTKEY_COLLISION_DATA_SET)
+
 
 def compute_sortkey_data_sets():
     schema = ("m TAG z TEXT SORTABLE t TAG n NUMERIC f NUMERIC "
@@ -1828,6 +1837,39 @@ def compute_sortkey_data_sets():
                 "FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: SCHEMA "
                 "m TAG p NUMERIC SORTABLE "
                 "vec VECTOR FLAT 6 TYPE FLOAT32 DIM 2 DISTANCE_METRIC L2"
+            ],
+        },
+        SORTKEY_ALIAS_DATA_SET: {
+            SETS_KEY("hash"): [
+                ("hash:ska1", {"a": "7", "n": "1", "vec": b"AAAAAAAA"}),
+                ("hash:ska2", {"a": "5", "n": "1", "vec": b"BBBBBBBB"}),
+                ("hash:ska3", {"a": "6", "n": "1", "vec": b"CCCCCCCC"}),
+            ],
+            CREATES_KEY("hash"): [
+                "FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: SCHEMA "
+                "a AS s NUMERIC n NUMERIC "
+                "vec VECTOR FLAT 6 TYPE FLOAT32 DIM 2 DISTANCE_METRIC L2"
+            ],
+            SETS_KEY("json"): [
+                ("json:ska1", {"a": 7, "n": 1, "vec": [1.0, 0.0]}),
+                ("json:ska2", {"a": 5, "n": 1, "vec": [2.0, 0.0]}),
+                ("json:ska3", {"a": 6, "n": 1, "vec": [3.0, 0.0]}),
+            ],
+            CREATES_KEY("json"): [
+                "FT.CREATE json_idx1 ON JSON PREFIX 1 json: SCHEMA "
+                "$.a AS s NUMERIC $.n AS n NUMERIC "
+                "$.vec AS vec VECTOR FLAT 6 TYPE FLOAT32 DIM 2 DISTANCE_METRIC L2"
+            ],
+        },
+        SORTKEY_COLLISION_DATA_SET: {
+            SETS_KEY("hash"): [
+                ("hash:skc1", {"a": "7", "b": "500"}),
+                ("hash:skc2", {"a": "5", "b": "900"}),
+                ("hash:skc3", {"a": "6", "b": "100"}),
+            ],
+            CREATES_KEY("hash"): [
+                "FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: SCHEMA "
+                "a AS b NUMERIC b AS c NUMERIC"
             ],
         },
     }
@@ -1898,7 +1940,7 @@ def load_data(client, data_set, key_type, data_source=None, schema_type="default
             data_source = "text"
         elif data_set in FILTER_DATASETS:
             data_source = "filter"
-        elif data_set in (SORTKEY_PREFIX_DATA_SET, SORTKEY_NIL_DATA_SET):
+        elif data_set in SORTKEY_DATA_SETS:
             data_source = "sortkey"
         elif data_set == RETURN_CLAUSE_DATA_SET:
             data_source = "return"
@@ -1971,7 +2013,7 @@ def load_data_cluster(cluster_client, test_case, data_set, key_type, data_source
             data_source = "text"
         elif data_set in FILTER_DATASETS:
             data_source = "filter"
-        elif data_set == SORTKEY_PREFIX_DATA_SET:
+        elif data_set in SORTKEY_DATA_SETS:
             data_source = "sortkey"
         elif data_set == RETURN_CLAUSE_DATA_SET:
             data_source = "return"

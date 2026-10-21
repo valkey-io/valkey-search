@@ -57,6 +57,30 @@ struct SortByParameter {
   SortOrder order{SortOrder::kAscending};
 };
 
+// Stores both original hash field and alias names for target field specified by
+// SORTBY
+struct SortByKey {
+  SortByKey(const IndexSchema &schema, absl::string_view sortby_alias);
+  // Build a key using the query name for pre-1.3 behavior.
+  static SortByKey Legacy(absl::string_view sortby_alias);
+
+  std::string identifier;
+  std::string alias;
+  bool is_json{false};
+
+  RecordsMap::const_iterator Find(const RecordsMap &contents) const {
+    auto it = contents.find(identifier);
+    // Older cluster nodes may return JSON content under either name (#1597).
+    if (it == contents.end() && is_json) {
+      it = contents.find(alias);
+    }
+    return it;
+  }
+
+ private:
+  SortByKey() = default;
+};
+
 constexpr int64_t kTimeoutMS{50000};
 constexpr size_t kMaxTimeoutMs{60000};
 constexpr absl::string_view kOOMMsg{

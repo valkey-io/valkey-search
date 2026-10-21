@@ -1422,6 +1422,50 @@ class TestSortByAliasGate(ValkeySearchTestCaseDebugMode):
                     assert sort_keys == want, (idx, query, order, result)
 
 
+class TestSortByResponseLimits(ValkeySearchTestCaseBase):
+    """
+        Issue #1440 review. The SORTBY value a filter + RETURN query carries
+        for the sort is internal, so it must not count toward the two limits
+        that bound what the client receives.
+    """
+
+    def test_internal_sortby_entries_do_not_count(self):
+        client: Valkey = self.server.get_new_client()
+        assert client.execute_command(
+            "FT.CREATE", "srl_idx", "ON", "HASH", "PREFIX", "1", "srl:",
+            "SCHEMA", "price_v2", "AS", "price", "NUMERIC", "title", "TAG",
+            "note", "TAG") == b"OK"
+        title = "x" * 95
+        for key, price in (("srl:1", 700), ("srl:2", 500), ("srl:3", 900)):
+            assert client.execute_command(
+                "HSET", key, "price_v2", price, "title", title, "note",
+                "n") == 3
+        IndexingTestHelper.wait_for_indexing_complete_on_node(client, "srl_idx")
+
+        # RETURN 2 title note: 2 fields, 5 + 95 + 4 + 1 = 105 bytes per row.
+        fields_config = "search.max-search-result-fields-count"
+        size_config = "search.max-search-result-record-size"
+        saved = {c: client.config_get(c)[c] for c in (fields_config, size_config)}
+        row = [b"title", title.encode(), b"note", b"n"]
+        sorted_rows = [3, b"srl:2", b"#500", row, b"srl:1", b"#700", row,
+                       b"srl:3", b"#900", row]
+        try:
+            for fields, size, expected in ((2, 10 * 1024 * 1024, sorted_rows),
+                                           (10, 105, sorted_rows),
+                                           (1, 10 * 1024 * 1024, [0]),
+                                           (10, 104, [0])):
+                assert client.config_set(fields_config, fields)
+                assert client.config_set(size_config, size)
+                result = client.execute_command(
+                    "FT.SEARCH", "srl_idx", "@price:[0 1000]", "SORTBY",
+                    "price", "ASC", "WITHSORTKEYS", "RETURN", "2", "title",
+                    "note", "DIALECT", "2")
+                assert result == expected, (fields, size, result)
+        finally:
+            for config, value in saved.items():
+                client.config_set(config, value)
+
+
 class TestAggregateReducerAlias(ValkeySearchTestCaseDebugMode):
     """
         A REDUCE with no AS clause auto-generates its output name, and which form

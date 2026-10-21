@@ -403,12 +403,21 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
   return return_content;
 }
 
+// The SORTBY value of a filter + RETURN row. GetContent hands it back instead
+// of filing it, so the caller can file it after the response limits are checked
+// against the RETURN entries alone.
+struct SortByContent {
+  std::string identifier;
+  vmsdk::UniqueValkeyString value;
+};
+
 absl::StatusOr<RecordsMap> GetContent(
     ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
     const query::SearchParameters &parameters,
     const indexes::Neighbor &neighbor,
     const std::optional<std::string> &vector_identifier,
     std::unique_ptr<query::SingleDocumentScorer> &document_scorer,
+    std::optional<SortByContent> &out_sortby_content,
     std::optional<float> *out_recomputed_score = nullptr) {
   auto key = neighbor.external_id->Str();
   if (attribute_data_type.ToProto() ==
@@ -489,27 +498,34 @@ absl::StatusOr<RecordsMap> GetContent(
             vmsdk::RetainUniqueValkeyString(itr->second.value.get())));
   }
 
-  // Keep both names for mixed-version coordinators; the extra entries are
-  // internal.
   if (parameters.sortby_parameter.has_value()) {
     auto itr = content.find(sortby_identifier);
     if (itr != content.end()) {
-      ValkeyModuleString *value = itr->second.value.get();
-      auto owned_identifier = vmsdk::MakeUniqueValkeyString(sortby_identifier);
-      auto identifier_view = vmsdk::ToStringView(owned_identifier.get());
-      return_content.emplace(
-          identifier_view,
-          RecordsMapValue(std::move(owned_identifier),
-                          vmsdk::RetainUniqueValkeyString(value)));
-      return_content.emplace(
-          parameters.sortby_parameter->field,
-          RecordsMapValue(
-              vmsdk::MakeUniqueValkeyString(parameters.sortby_parameter->field),
-              vmsdk::RetainUniqueValkeyString(value)));
+      out_sortby_content.emplace(SortByContent{
+          .identifier = std::move(sortby_identifier),
+          .value = vmsdk::RetainUniqueValkeyString(itr->second.value.get())});
     }
   }
 
   return return_content;
+}
+
+// Files the SORTBY value under both names: the sort reads the identifier, a
+// coordinator on an older release reads the alias. Runs after the response
+// limits are checked because neither entry reaches the client.
+void FileSortByContent(RecordsMap &content, SortByContent sortby_content,
+                       absl::string_view alias) {
+  auto owned_identifier =
+      vmsdk::MakeUniqueValkeyString(sortby_content.identifier);
+  auto identifier_view = vmsdk::ToStringView(owned_identifier.get());
+  content.emplace(identifier_view,
+                  RecordsMapValue(std::move(owned_identifier),
+                                  vmsdk::RetainUniqueValkeyString(
+                                      sortby_content.value.get())));
+  auto owned_alias = vmsdk::MakeUniqueValkeyString(alias);
+  auto alias_view = vmsdk::ToStringView(owned_alias.get());
+  content.emplace(alias_view, RecordsMapValue(std::move(owned_alias),
+                                              std::move(sortby_content.value)));
 }
 
 // The vector bytes this document holds now, or nullopt if they cannot be read.
@@ -616,9 +632,10 @@ void ProcessNeighborsForReply(
       continue;
     }
     std::optional<float> recomputed_score;
-    auto content =
-        GetContent(ctx, attribute_data_type, parameters, neighbor,
-                   vector_identifier, document_scorer, &recomputed_score);
+    std::optional<SortByContent> sortby_content;
+    auto content = GetContent(ctx, attribute_data_type, parameters, neighbor,
+                              vector_identifier, document_scorer,
+                              sortby_content, &recomputed_score);
     if (!content.ok()) {
       continue;
     }
@@ -693,6 +710,10 @@ void ProcessNeighborsForReply(
 
     // Only assign content if it's within size limit
     if (!size_exceeded) {
+      if (sortby_content.has_value()) {
+        FileSortByContent(content.value(), *std::move(sortby_content),
+                          parameters.sortby_parameter->field);
+      }
       neighbor.attribute_contents = std::move(content.value());
     }
   }

@@ -577,6 +577,18 @@ static vmsdk::info_field::Integer svs_duplicate_label_on_load_count(
       return Metrics::GetStats().svs_duplicate_label_on_load_cnt;
     }));
 
+static vmsdk::info_field::Integer svs_conversions_count(
+    "svs", "svs_conversions_count",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      return Metrics::GetStats().svs_conversions_cnt;
+    }));
+
+static vmsdk::info_field::Integer svs_conversion_failures_count(
+    "svs", "svs_conversion_failures_count",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      return Metrics::GetStats().svs_conversion_failures_cnt;
+    }));
+
 static vmsdk::info_field::Integer string_interning_store_size(
     "string_interning", "string_interning_store_size",
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {

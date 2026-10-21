@@ -87,6 +87,8 @@ class Metrics {
     std::atomic<uint64_t> svs_search_exceptions_cnt{0};
     std::atomic<uint64_t> svs_create_exceptions_cnt{0};
     std::atomic<uint64_t> svs_duplicate_label_on_load_cnt{0};
+    std::atomic<uint64_t> svs_conversions_cnt{0};
+    std::atomic<uint64_t> svs_conversion_failures_cnt{0};
     std::atomic<uint64_t> coordinator_server_get_global_metadata_success_cnt{0};
     std::atomic<uint64_t> coordinator_server_get_global_metadata_failure_cnt{0};
     std::atomic<uint64_t> coordinator_server_search_index_partition_success_cnt{

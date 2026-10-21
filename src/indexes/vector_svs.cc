@@ -771,6 +771,9 @@ absl::StatusOr<std::shared_ptr<VectorSVS<T>>> VectorSVS<T>::LoadFromRDB(
   auto result = load();
   while (!input.AtEnd() && input.LoadChunk().ok()) {
   }
+  if (!result.ok()) {
+    ++Metrics::GetStats().svs_create_exceptions_cnt;
+  }
   return result;
 #else
   (void)attribute_data_type;
@@ -813,6 +816,15 @@ VectorSVS<T>::SearchKnn(absl::string_view query, uint64_t count,
                      dimensions_ * GetDataTypeSize(), ")."));
   }
 
+  // Validated before the early returns, so a non-finite query is rejected
+  // whether or not the index holds vectors.
+  const T* raw = reinterpret_cast<const T*>(query.data());
+  std::vector<float> scratch;
+  VMSDK_ASSIGN_OR_RETURN(
+      const float* fp32_query,
+      PrepareSvsInput<T>(raw, static_cast<size_t>(dimensions_), normalize_,
+                         scratch));
+
   absl::ReaderMutexLock lock(&resize_mutex_);
   if (svs_index_ == nullptr) {
     return knn;
@@ -827,19 +839,13 @@ VectorSVS<T>::SearchKnn(absl::string_view query, uint64_t count,
     return knn;
   }
 
-  const T* raw = reinterpret_cast<const T*>(query.data());
-  std::vector<float> scratch;
-  VMSDK_ASSIGN_OR_RETURN(
-      const float* fp32_query,
-      PrepareSvsInput<T>(raw, static_cast<size_t>(dimensions_), normalize_,
-                         scratch));
-
   ScopedSvsError err;
   const size_t effective_window = std::max<size_t>(
       k, ef_runtime.value_or(build_config_.search_window_size));
   SearchParamsPtr search_params(
       svs_search_params_create_vamana(effective_window, err.get()));
   if (!search_params) {
+    ++Metrics::GetStats().svs_search_exceptions_cnt;
     return SvsErrorToStatus(err.get(), "search_params_create_vamana");
   }
 
@@ -853,6 +859,7 @@ VectorSVS<T>::SearchKnn(absl::string_view query, uint64_t count,
   if (!svs_index_search_topk(svs_index_, fp32_query, /*num_queries=*/1, k,
                              &results, search_params.get(), filter_arg,
                              err.get())) {
+    ++Metrics::GetStats().svs_search_exceptions_cnt;
     return SvsErrorToStatus(err.get(), "index_search_topk");
   }
 
@@ -1001,6 +1008,7 @@ absl::Status VectorSVS<T>::RemoveRecordImpl(uint64_t internal_id) {
       if (!svs_index_dynamic_delete_points(svs_index_, &internal_id,
                                            /*num_vectors=*/1, &deleted,
                                            err.get())) {
+        ++Metrics::GetStats().svs_remove_exceptions_cnt;
         svs_status = SvsErrorToStatus(err.get(), "index_dynamic_delete_points");
       }
       deleted_since_consolidate_.fetch_add(deleted, std::memory_order_relaxed);
@@ -1050,6 +1058,7 @@ absl::Status VectorSVS<T>::ModifyRecordImpl(uint64_t internal_id,
       if (!svs_index_dynamic_delete_points(svs_index_, &internal_id,
                                            /*num_vectors=*/1, &deleted,
                                            err.get())) {
+        ++Metrics::GetStats().svs_modify_exceptions_cnt;
         return SvsErrorToStatus(err.get(),
                                 "modify: index_dynamic_delete_points");
       }
@@ -1062,6 +1071,7 @@ absl::Status VectorSVS<T>::ModifyRecordImpl(uint64_t internal_id,
         // the stale map entry so the two views agree — the base class's
         // RemoveRecordDueToError path will then NotFoundError out
         // cleanly instead of hitting a phantom.
+        ++Metrics::GetStats().svs_modify_exceptions_cnt;
         absl::MutexLock map_lock(&label_mutex_);
         label_to_record_.erase(internal_id);
         return SvsErrorToStatus(err.get(), "modify: index_dynamic_add_points");
@@ -1190,7 +1200,7 @@ void VectorSVS<T>::MaybeConvert() {
                                              &params, err.get());
   }
   if (converted == nullptr) {
-    ++Metrics::GetStats().svs_create_exceptions_cnt;
+    ++Metrics::GetStats().svs_conversion_failures_cnt;
     VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 10)
         << "SVS_VAMANA compression failed; the index stays uncompressed: "
         << (builder.ok() ? SvsErrorToStatus(err.get(), "index_convert_dynamic")
@@ -1199,6 +1209,7 @@ void VectorSVS<T>::MaybeConvert() {
   }
   svs_index_free(svs_index_);
   svs_index_ = converted;
+  ++Metrics::GetStats().svs_conversions_cnt;
   compression_pending_.store(false, std::memory_order_release);
   // The converted index is built with kSvsSyncKind, even after an RDB load.
   mutations_exclusive_.store(false, std::memory_order_release);
@@ -1210,6 +1221,7 @@ absl::Status VectorSVS<T>::AddPoint(uint64_t internal_id, const float* fp32) {
   size_t added = 0;
   if (!svs_index_dynamic_add_points(svs_index_, fp32, &internal_id,
                                     /*num_vectors=*/1, &added, err.get())) {
+    ++Metrics::GetStats().svs_add_exceptions_cnt;
     return SvsErrorToStatus(err.get(), "index_dynamic_add_points");
   }
   return absl::OkStatus();

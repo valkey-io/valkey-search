@@ -356,6 +356,8 @@ class TestSVSVamanaSmoke(ValkeySearchTestCaseBase):
             client.hset(f"s:{i}", mapping={"v": _fp32(values)})
         assert _v_index(client, "sq8")["algorithm"]["compression_pending"] \
             == 1
+        conversions_before = int(client.info("SEARCH").get(
+            "search_svs_conversions_count", 0))
         uncompressed = scores("sq8", len(docs) - 1)
         assert uncompressed == pytest.approx(scores("flat", len(docs) - 1),
                                        abs=1e-5)
@@ -364,6 +366,8 @@ class TestSVSVamanaSmoke(ValkeySearchTestCaseBase):
         built = scores("sq8", len(docs))
         assert _v_index(client, "sq8")["algorithm"]["compression_pending"] \
             == 0
+        assert int(client.info("SEARCH")["search_svs_conversions_count"]) \
+            == conversions_before + 1
         exact = scores("flat", len(docs))
         for i, values in enumerate(docs):
             key = f"s:{i}".encode()
@@ -796,6 +800,22 @@ class TestSVSVamanaDebugMode(ValkeySearchTestCaseDebugMode):
             lambda: _v_index(client, "nan_idx")["size"], 2, timeout=5,
         )
         assert failures() == before
+
+    def test_nan_query_rejected_on_empty_index(self):
+        """A non-finite query is an error even before the index holds any
+        vectors, as it is once it does."""
+        client: Valkey = self.server.get_new_client()
+        client.execute_command(
+            "FT.CREATE", "nanq_idx", "PREFIX", "1", "nq:",
+            "SCHEMA", "v", "VECTOR", "SVS_VAMANA",
+            "6", "TYPE", "FLOAT32", "DIM", str(DIM), "DISTANCE_METRIC", "L2",
+        )
+        nan_query = struct.pack("<I", 0x7FC00000) + _fp32([0.0, 0.0, 0.0])
+        with pytest.raises(Exception, match="non-finite"):
+            client.execute_command(
+                "FT.SEARCH", "nanq_idx", "*=>[KNN 2 @v $q]",
+                "PARAMS", "2", "q", nan_query, "DIALECT", "2",
+            )
 
     def test_info_counts_svs_vector_field(self):
         """An SVS_VAMANA field is counted in number_of_vector_attributes and

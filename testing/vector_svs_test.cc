@@ -18,6 +18,7 @@
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <numeric>
 #include <optional>
@@ -79,6 +80,15 @@ class VectorSVSTestPeer {
   }
   static bool CompressionPending(const VectorSVS<float> &index) {
     return index.compression_pending_.load();
+  }
+  static absl::Status AddPoint(VectorSVS<float> &index, uint64_t id,
+                               const float *fp32)
+      ABSL_NO_THREAD_SAFETY_ANALYSIS {
+    absl::ReaderMutexLock lock(&index.resize_mutex_);
+    return index.AddPoint(id, fp32);
+  }
+  static SVSBuildConfig &BuildConfig(VectorSVS<float> &index) {
+    return index.build_config_;
   }
 };
 
@@ -1981,6 +1991,126 @@ INSTANTIATE_TEST_SUITE_P(
     [](const testing::TestParamInfo<MetricCase> &info) {
       return info.param.name;
     });
+
+// -- Query validation and exception counters ---------------------------------
+
+// A non-finite query is rejected before any early return: on an index with no
+// vectors, and on a range query whose fetch cap is 0.
+TEST_F(VectorSVSTest, NonFiniteQueryRejectedOnEveryPath) {
+  auto index = VectorSVS<float>::Create(
+      CreateSVSVectorIndexProto(kDimensions, data_model::DISTANCE_METRIC_L2,
+                                data_model::SVS_COMPRESSION_NONE),
+      attribute_identifier, attribute_data_type, 0);
+  VMSDK_EXPECT_OK(index);
+  std::vector<float> nan_query(kDimensions, 0.0f);
+  nan_query[0] = std::numeric_limits<float>::quiet_NaN();
+  const auto query = VectorToStr(nan_query);
+
+  EXPECT_TRUE(absl::IsInvalidArgument(
+      (*index)->Search(query, 3, CancelNever()).status()));
+  EXPECT_TRUE(absl::IsInvalidArgument(
+      (*index)->SearchRange(query, 1.0f, CancelNever()).status()));
+
+  auto vectors = RandomVectors(5, kDimensions);
+  for (size_t i = 0; i < vectors.size(); ++i) {
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(**index, IndexToKey(i),
+                                                   VectorToStr(vectors[i])));
+  }
+  EXPECT_TRUE(absl::IsInvalidArgument(
+      (*index)->Search(query, 3, CancelNever()).status()));
+  auto &fetch_cap = options::GetMaxNonVectorSearchResultsFetched();
+  const auto saved_cap = fetch_cap.GetValue();
+  absl::Cleanup restore = [&] {
+    VMSDK_EXPECT_OK(fetch_cap.SetValue(saved_cap));
+  };
+  VMSDK_EXPECT_OK(fetch_cap.SetValue(0));
+  EXPECT_TRUE(absl::IsInvalidArgument(
+      (*index)->SearchRange(query, 1.0f, CancelNever()).status()));
+}
+
+// A failed SVS add counts in svs_add_exceptions_count; forced with an id SVS
+// already holds. (SVS reports no error for deleting an id it doesn't hold, so
+// remove, modify and search failures can't be forced from a test.)
+TEST_F(VectorSVSTest, FailedSvsAddIncrementsItsCounter) {
+  auto index = VectorSVS<float>::Create(
+      CreateSVSVectorIndexProto(kDimensions, data_model::DISTANCE_METRIC_L2,
+                                data_model::SVS_COMPRESSION_NONE),
+      attribute_identifier, attribute_data_type, 0);
+  VMSDK_EXPECT_OK(index);
+  auto vectors = RandomVectors(2, kDimensions);
+  VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(**index, IndexToKey(0),
+                                                 VectorToStr(vectors[0])));
+  // A fresh index assigns internal id 0 to its first key.
+  auto key = AsBase(*index)->GetKeyDuringSearch(0);
+  ASSERT_TRUE(key.ok() && *key == IndexToKey(0));
+
+  const uint64_t before = Metrics::GetStats().svs_add_exceptions_cnt;
+  EXPECT_FALSE(VectorSVSTestPeer::AddPoint(**index, 0, vectors[1].data()).ok());
+  EXPECT_EQ(Metrics::GetStats().svs_add_exceptions_cnt, before + 1);
+}
+
+// LoadFromRDB failures count toward create, as for HNSW.
+TEST_F(VectorSVSTest, FailedLoadCountsAsCreateException) {
+  auto proto =
+      CreateSVSVectorIndexProto(kDimensions, data_model::DISTANCE_METRIC_L2,
+                                data_model::SVS_COMPRESSION_NONE);
+  FakeSafeRDB rdb;
+  {
+    RDBChunkOutputStream out(&rdb);
+    VMSDK_EXPECT_OK(out.SaveString("not an SVS index header"));
+    VMSDK_EXPECT_OK(out.Close());
+  }
+  const uint64_t before = Metrics::GetStats().svs_create_exceptions_cnt;
+  auto loaded = VectorSVS<float>::LoadFromRDB(
+      &fake_ctx_, &hash_attribute_data_type_, proto, attribute_identifier,
+      SupplementalContentChunkIter(&rdb), 0);
+  EXPECT_FALSE(loaded.ok());
+  EXPECT_EQ(Metrics::GetStats().svs_create_exceptions_cnt, before + 1);
+}
+
+// SQ8 conversions have their own counters. A failure is forced with a
+// graph_max_degree that differs from the source index, which SVS rejects; the
+// index stays uncompressed and keeps answering.
+TEST_F(VectorSVSTest, Sq8ConversionsAreCounted) {
+  auto &stats = Metrics::GetStats();
+  constexpr uint32_t kThreshold = 10;
+  auto vectors = RandomVectors(kThreshold, kDimensions);
+  auto make_index = [&]() {
+    auto index = VectorSVS<float>::Create(
+        Sq8Proto(kDimensions, data_model::DISTANCE_METRIC_L2, kThreshold),
+        attribute_identifier, attribute_data_type, 0);
+    CHECK(index.ok()) << index.status();
+    return *index;
+  };
+  auto fill = [&](VectorSVS<float> &index, size_t from, size_t to) {
+    for (size_t i = from; i < to; ++i) {
+      VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(index, IndexToKey(i),
+                                                     VectorToStr(vectors[i])));
+    }
+  };
+
+  const uint64_t done_before = stats.svs_conversions_cnt;
+  const uint64_t failed_before = stats.svs_conversion_failures_cnt;
+  const uint64_t create_before = stats.svs_create_exceptions_cnt;
+  auto converts = make_index();
+  fill(*converts, 0, kThreshold);
+  EXPECT_FALSE(VectorSVSTestPeer::CompressionPending(*converts));
+  EXPECT_EQ(stats.svs_conversions_cnt, done_before + 1);
+  EXPECT_EQ(stats.svs_conversion_failures_cnt, failed_before);
+
+  auto fails = make_index();
+  fill(*fails, 0, kThreshold - 1);
+  VectorSVSTestPeer::BuildConfig(*fails).graph_max_degree += 1;
+  fill(*fails, kThreshold - 1, kThreshold);
+  EXPECT_TRUE(VectorSVSTestPeer::CompressionPending(*fails));
+  EXPECT_EQ(stats.svs_conversion_failures_cnt, failed_before + 1);
+  EXPECT_EQ(stats.svs_conversions_cnt, done_before + 1);
+  EXPECT_EQ(stats.svs_create_exceptions_cnt, create_before);
+  auto result = fails->Search(VectorToStr(vectors[0]), 1, CancelNever());
+  VMSDK_EXPECT_OK(result);
+  ASSERT_EQ(result->size(), 1u);
+  EXPECT_EQ((*result)[0].external_id, IndexToKey(0));
+}
 
 }  // namespace
 }  // namespace valkey_search::indexes

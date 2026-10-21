@@ -17,6 +17,7 @@
 #include "src/index_schema.h"
 #include "src/indexes/index_base.h"
 #include "src/metrics.h"
+#include "src/valkey_search_options.h"
 
 namespace valkey_search {
 namespace aggregate {
@@ -205,6 +206,18 @@ absl::Status AggregateParameters::ParseCommand(vmsdk::ArgsIterator &itr) {
     return absl::InvalidArgumentError(
         absl::StrCat("Unexpected parameter at position ", (itr.Position() + 1),
                      ":", vmsdk::ToStringView(itr.Get().value())));
+  }
+  // The filter tree above was built before VERBATIM / INORDER / SLOP were read.
+  if (verbatim || inorder || slop.has_value()) {
+    VMSDK_RETURN_IF_ERROR(VALKEY_SEARCH_COMPATIBILITY_FIX(
+        1, 3, 0, "ft_aggregate_text_flags", [&] { return ParseFilter(); },
+        [&] {
+          // Keep the fields in step with the tree the flags never reached.
+          verbatim = false;
+          inorder = false;
+          slop.reset();
+          return absl::OkStatus();
+        }));
   }
 
   if (dialect < 2 || dialect > 4) {

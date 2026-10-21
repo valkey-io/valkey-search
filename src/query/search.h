@@ -259,6 +259,8 @@ struct SearchParameters {
     // VectorSearchParameters on the mainthread. They get cleared
     // at the end of the parse to ensure no dangling pointers.
     absl::string_view query_string;
+    // The filter (non-vector) portion of query_string.
+    absl::string_view filter_expression;
     absl::string_view score_as_string;
     absl::string_view query_vector_string;
     absl::string_view k_string;
@@ -274,6 +276,7 @@ struct SearchParameters {
         params;
     void ClearAtEndOfParse() {
       query_string = absl::string_view();
+      filter_expression = absl::string_view();
       score_as_string = absl::string_view();
       query_vector_string = absl::string_view();
       k_string = absl::string_view();
@@ -306,6 +309,9 @@ struct SearchParameters {
   }
 
   virtual absl::Status PreParseQueryString();
+  // Parses filter_expression into filter_parse_results; may run again once a
+  // command has read VERBATIM / INORDER / SLOP.
+  absl::Status ParseFilter();
   virtual absl::Status PostParseQueryString();
   // Virtual so specialized parameter types (e.g. FT.HYBRID's fused-result
   // resolver) can force a particular content-processing mode.

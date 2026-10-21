@@ -200,6 +200,28 @@ OR), a weighted group on its own, and `$weight: 1.0` all agree.
 `scoring_query_builder.py` never weights a group whose operator matches its
 parent's, so the `weight` shape does not compare this case.
 
+### 1.8 English stemming: Snowball version skew
+
+valkey-search vendors Snowball 3.0.1 (`third_party/snowball`); Redis's English
+stemmer is older and maps some ordinary words to different roots. Valkey stems
+from the vendored library; Redis stems from `FT.EXPLAIN` on `redis:latest`
+(8.10.1):
+
+```
+word           valkey-search   Redis
+university     universiti      univers
+organize       organiz         organ
+organization   organiz         organ
+organic        organic         organ
+```
+
+So `organic` matches `organize` on Redis but not on valkey-search, and a
+stemmed term's root and inflection leaves (and their dt) differ wherever the
+roots differ. This affects both recall and scoring on a stemmed English field.
+The scoring `default` variant avoids it by keeping only words that stem the
+same in both engines (`STEMMING_SCORING_EXTRA_WORDS` in `data_sets.py`), so no
+generator compares it.
+
 ## 2. Where the two reference engines disagree
 
 These are not valkey-search defects. They are places where `redis:latest` and

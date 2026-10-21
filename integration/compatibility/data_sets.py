@@ -244,7 +244,8 @@ TEXT_DATASETS = {
 #
 # Divergences handled at the vocab level:
 #
-# 1. Snowball 3.0.1 vs 2.1.0 (Dutch only)
+# 1. Snowball 3.0.1 vs 2.1.0 (Dutch here; English differs too, see
+#    known_differences.md 1.8)
 #    Valkey uses Kraaij-Pohlmann which strips ge-/be-/ver- prefixes. RediSearch
 #    is observed to use Porter-style stemming which does not strip these.
 #    Excluded specific Dutch terms whose K-P stems collide with other dataset
@@ -706,8 +707,8 @@ SCORING_SCHEMA_FLAGS = {
 }
 
 # Index-level attributes per scoring schema variant. JSON requires the JSONPath
-# form of SCORE_FIELD; the bare attribute name is accepted and silently ignored,
-# leaving every document on the index-level SCORE.
+# form of SCORE_FIELD: the reference engine accepts the bare attribute name and
+# silently ignores it, leaving every document on the index-level SCORE.
 SCHEMA_INDEX_ATTRS = {
     "nostem": {"hash": "", "json": ""},
     "docscore": {"hash": "SCORE 0.5 SCORE_FIELD boost",

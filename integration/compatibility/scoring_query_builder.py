@@ -49,7 +49,8 @@ TEXT_KINDS = ["single_term", "and", "or", "mixed", "weight"]
 OR_LEG_MAX_DT = 250
 
 # --- weights ---
-# Positive (valkey-search rejects <= 0) and float32-exact, so rounding cannot differ.
+# Positive (valkey-search rejects < 0; 0 zeroes the score) and float32-exact,
+# so rounding cannot differ.
 WEIGHTS = [0.125, 0.25, 0.5, 1.5, 2.0, 3.0, 4.0, 6.0]
 # chance a group in a weighted tree also takes a weight
 GROUP_WEIGHT_RATE = 0.3

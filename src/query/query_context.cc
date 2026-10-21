@@ -37,17 +37,17 @@ uint64_t ScoringFieldMask(uint64_t field_mask, uint8_t num_fields) {
   return (field_mask & all_fields) == all_fields ? ~0ULL : field_mask;
 }
 
-// Corpus-wide scoring inputs. kBackground requires the time-sliced mutex held
-// in read mode; kMainThread takes the short locks each field's writer takes.
+// Corpus-wide scoring inputs, under the locks `mode` requires. The analyzer
+// cannot see the caller's read phase through the runtime branch.
 CorpusStats ReadCorpusStats(const IndexSchema &index_schema,
                             LockMode mode) ABSL_NO_THREAD_SAFETY_ANALYSIS {
   const auto text = index_schema.GetTextIndexSchema();
   return {
       .total_docs =
-          static_cast<uint32_t>(mode == LockMode::kBackground
-                                    ? index_schema.GetIndexKeyInfoSize()
-                                    : index_schema.GetIndexKeyInfoSizeLocked()),
-      // Atomic, so readable from the main thread without the time-sliced mutex.
+          static_cast<uint32_t>(mode == LockMode::kShortLocks
+                                    ? index_schema.GetIndexKeyInfoSizeLocked()
+                                    : index_schema.GetIndexKeyInfoSize()),
+      // Atomic, so readable without the time-sliced mutex.
       .total_doc_len = text ? text->GetMetadata().total_doc_len.load() : 0,
       .has_score_field = index_schema.HasScoreField(),
       .default_document_score = index_schema.GetScore(),
@@ -73,35 +73,32 @@ QueryContext::QueryContext(const IndexSchema &index_schema,
 const indexes::text::TextIndex *QueryContext::PerKeyTextIndex(
     const InternedStringPtr &key) const {
   if (text_index_schema_ == nullptr) return nullptr;
-  // On the main thread the map lock guards the find; the tree itself is stable
+  // Under kShortLocks the map lock guards the find; the tree itself is stable
   // because the revalidated key has no in-flight mutation.
-  return text_index_schema_->GetPerKeyTextIndex(key, MainThread());
+  return text_index_schema_->GetPerKeyTextIndex(key, ShortLocks());
 }
 
-// The LockMode records what the caller holds: a background caller holds the
-// time-sliced mutex, which the analyzer cannot see through the runtime branch.
-uint32_t QueryContext::DocLen(BorrowedInternedStringPtr key) const
-    ABSL_NO_THREAD_SAFETY_ANALYSIS {
+uint32_t QueryContext::DocLen(BorrowedInternedStringPtr key) const {
   if (!needs_doc_len_ || text_index_schema_ == nullptr) return 0;
-  return text_index_schema_->GetKeyDocLen(key, MainThread());
+  return text_index_schema_->GetKeyDocLen(key, ShortLocks());
 }
 
 float QueryContext::DocScore(BorrowedInternedStringPtr key) const
     ABSL_NO_THREAD_SAFETY_ANALYSIS {
   if (!stats_.has_score_field) return stats_.default_document_score;
-  return MainThread() ? index_schema_.GetDocumentScoreLocked(key)
+  return ShortLocks() ? index_schema_.GetDocumentScoreLocked(key)
                       : index_schema_.GetDocumentScore(key);
 }
 
 size_t QueryContext::TagPrefixDocCount(const indexes::Tag &index,
                                        absl::string_view prefix,
                                        BorrowedInternedStringPtr key) const {
-  return index.GetPrefixMatchDocCount(prefix, key, MainThread());
+  return index.GetPrefixMatchDocCount(prefix, key, ShortLocks());
 }
 
 size_t QueryContext::KeyCount(const WordPostings &word) const {
   auto get = [&] { return word.postings->GetKeyCount(); };
-  return MainThread() ? text_index_schema_->WithWordLock(*word.word, get)
+  return ShortLocks() ? text_index_schema_->WithWordLock(*word.word, get)
                       : get();
 }
 
@@ -109,13 +106,13 @@ std::optional<indexes::text::PostingValue> QueryContext::Probe(
     const WordPostings &word, BorrowedInternedStringPtr key,
     uint64_t field_mask) const {
   auto get = [&] { return word.postings->GetPostingValue(key, field_mask); };
-  return MainThread() ? text_index_schema_->WithWordLock(*word.word, get)
+  return ShortLocks() ? text_index_schema_->WithWordLock(*word.word, get)
                       : get();
 }
 
-float QueryContext::ScoreLeaf(float idf, uint32_t tf, uint32_t doc_len,
-                              float weight) const {
-  return scorer_->ScoreLeaf({idf, tf, doc_len, avg_doc_len_, weight});
+float QueryContext::ScoreLeaf(indexes::scoring::LeafScoreInput input) const {
+  input.avg_doc_len = avg_doc_len_;
+  return scorer_->ScoreLeaf(input);
 }
 
 float QueryContext::Idf(size_t dt) const {
@@ -126,7 +123,7 @@ float QueryContext::Idf(size_t dt) const {
 
 std::optional<std::string> QueryContext::LockWord(
     absl::string_view word) const {
-  if (MainThread()) return std::string(word);
+  if (ShortLocks()) return std::string(word);
   return std::nullopt;
 }
 
@@ -134,7 +131,7 @@ WordPostings QueryContext::Lookup(absl::string_view word) const {
   auto find = [&](const indexes::text::TextIndex &index) {
     return index.GetPrefix().FindPostingsTarget(word);
   };
-  return {LockWord(word), MainThread()
+  return {LockWord(word), ShortLocks()
                               ? text_index_schema_->WithTextIndexLock(find)
                               : find(*text_index_schema_->GetTextIndex())};
 }
@@ -176,7 +173,7 @@ std::optional<ExpansionMatch> QueryContext::FindExpansionMatch(
                            postings->GetKeyCount()};
         };
         auto [entry, df] =
-            MainThread() ? text_index_schema_->WithWordLock(word, get) : get();
+            ShortLocks() ? text_index_schema_->WithWordLock(word, get) : get();
         if (!entry) return true;
         const float idf = Idf(df);
         if (!leaf.representative || leaf.representative->df < df) {
@@ -250,7 +247,7 @@ ResolvedLeaf QueryContext::ResolveText(const TextPredicate *predicate) const {
         leaf.groups.push_back(std::move(stem));
       }
     };
-    MainThread() ? text_index_schema_->WithStemTreeLock(add_stem_groups)
+    ShortLocks() ? text_index_schema_->WithStemTreeLock(add_stem_groups)
                  : add_stem_groups(text_index_schema_->GetStemTree());
   }
   return leaf;
@@ -270,9 +267,9 @@ ResolvedLeaf QueryContext::ResolveTag(const TagPredicate *tag_pred) const {
     }
     TagLeaf::Value resolved{value};
     size_t dt = 0;
-    // The main thread takes the index mutex only to read dt; see
+    // kShortLocks takes the index mutex only to read dt; see
     // TagLeaf::Value.
-    if (MainThread()) {
+    if (ShortLocks()) {
       dt = tag_index->GetTagValueDocCount(value, /*lock=*/true);
     } else {
       resolved.bag = tag_index->LookupValue(value);
@@ -285,7 +282,7 @@ ResolvedLeaf QueryContext::ResolveTag(const TagPredicate *tag_pred) const {
   return leaf;
 }
 
-EvaluationResult EvaluateText(
+EvaluationResult EvaluateTextLeaf(
     QueryContext &query_ctx, const TextPredicate &predicate,
     const InternedStringPtr &key, bool require_positions,
     absl::FunctionRef<const indexes::text::TextIndex *()> per_key_index) {
@@ -297,7 +294,7 @@ EvaluationResult EvaluateText(
   const auto *index = per_key_index();
   if (index == nullptr) return EvaluationResult(false);
   return static_cast<const ExpansionPredicate &>(predicate).Evaluate(
-      *index, key, require_positions, query_ctx.MainThread());
+      *index, key, require_positions, query_ctx.ShortLocks());
 }
 
 }  // namespace valkey_search::query

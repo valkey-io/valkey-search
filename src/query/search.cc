@@ -968,8 +968,8 @@ float SanitizeScore(float score) {
 // Per-document scoring state around the query-scoped context.
 struct ScoreContext {
   QueryContext &query_ctx;
-  // Main thread only: the document's tags from the fetched record.
-  RecordTags *record_tags = nullptr;
+  // Main thread only: the fetched record, which supplies tag membership.
+  const RecordsMap *records = nullptr;
 
   // The current document's own tree, fetched on the first expansion leaf that
   // misses its representative and reused by the rest of that document's walk.
@@ -1037,8 +1037,10 @@ std::optional<float> ScoreNode(const Predicate *predicate,
                   score_ctx.query_ctx.Probe(expansion->representative->term,
                                             key, expansion->field_mask)) {
             return score_ctx.query_ctx.ScoreLeaf(
-                expansion->representative->idf, entry->doc_stats.tf,
-                entry->doc_stats.doc_len, predicate->GetWeight());
+                {.idf = expansion->representative->idf,
+                 .term_frequency = entry->doc_stats.tf,
+                 .doc_len = entry->doc_stats.doc_len,
+                 .leaf_weight = predicate->GetWeight()});
           }
         }
         // The document passed the filter, so it carries some other matched
@@ -1050,8 +1052,10 @@ std::optional<float> ScoreNode(const Predicate *predicate,
             *per_key_index, score_ctx.per_key.key);
         if (!match) return std::nullopt;
         return score_ctx.query_ctx.ScoreLeaf(
-            match->idf, match->entry.doc_stats.tf,
-            match->entry.doc_stats.doc_len, predicate->GetWeight());
+            {.idf = match->idf,
+             .term_frequency = match->entry.doc_stats.tf,
+             .doc_len = match->entry.doc_stats.doc_len,
+             .leaf_weight = predicate->GetWeight()});
       }
 
       const auto &leaf = std::get<TermLeaf>(resolved);
@@ -1074,8 +1078,11 @@ std::optional<float> ScoreNode(const Predicate *predicate,
         }
         if (tf == 0) continue;
         matched = true;
-        total += score_ctx.query_ctx.ScoreLeaf(group.idf, tf, doc_len,
-                                               predicate->GetWeight());
+        total += score_ctx.query_ctx.ScoreLeaf(
+            {.idf = group.idf,
+             .term_frequency = tf,
+             .doc_len = doc_len,
+             .leaf_weight = predicate->GetWeight()});
       }
       return matched ? std::optional<float>(total) : std::nullopt;
     }
@@ -1102,18 +1109,16 @@ std::optional<float> ScoreNode(const Predicate *predicate,
 
       const uint32_t doc_len = score_ctx.query_ctx.DocLen(key);
 
-      // Membership from the bag in the background, from the fetched record's
+      // Membership from the bag in the read phase, from the fetched record's
       // tags on the main thread (TagLeaf::Value).
-      const absl::flat_hash_set<absl::string_view> *doc_tags = nullptr;
-      if (score_ctx.record_tags != nullptr) {
-        doc_tags = score_ctx.record_tags->Get(
-            vmsdk::ToStringView(tag_pred->GetRetainedIdentifier().get()),
-            tag_index->GetSeparator());
-        if (doc_tags == nullptr) return 0.0f;
+      std::optional<absl::flat_hash_set<absl::string_view>> doc_tags;
+      if (score_ctx.records != nullptr) {
+        doc_tags = ReadRecordTags(*score_ctx.records, *tag_pred);
+        if (!doc_tags) return 0.0f;
       }
       const bool case_sensitive = tag_index->IsCaseSensitive();
       auto carries = [&](const TagLeaf::Value &value) {
-        if (doc_tags == nullptr) return value.bag->contains(key);
+        if (!doc_tags) return value.bag->contains(key);
         for (absl::string_view tag : *doc_tags) {
           if (case_sensitive ? tag == value.value
                              : absl::EqualsIgnoreCase(tag, value.value)) {
@@ -1128,8 +1133,11 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       float sum = 0.0f;
       for (const auto &value : leaf.tag_values) {
         if (!carries(value)) continue;
-        sum += score_ctx.query_ctx.ScoreLeaf(value.idf, /*tf=*/1, doc_len,
-                                             predicate->GetWeight());
+        sum += score_ctx.query_ctx.ScoreLeaf(
+            {.idf = value.idf,
+             .term_frequency = 1,
+             .doc_len = doc_len,
+             .leaf_weight = predicate->GetWeight()});
       }
       // Each prefix contributes ONE matched value (the doc's first), never the
       // sum; a union still sums.
@@ -1137,9 +1145,11 @@ std::optional<float> ScoreNode(const Predicate *predicate,
         const size_t dt =
             score_ctx.query_ctx.TagPrefixDocCount(*tag_index, prefix, key);
         if (dt == 0) continue;
-        sum +=
-            score_ctx.query_ctx.ScoreLeaf(score_ctx.query_ctx.Idf(dt), /*tf=*/1,
-                                          doc_len, predicate->GetWeight());
+        sum += score_ctx.query_ctx.ScoreLeaf(
+            {.idf = score_ctx.query_ctx.Idf(dt),
+             .term_frequency = 1,
+             .doc_len = doc_len,
+             .leaf_weight = predicate->GetWeight()});
       }
       return sum;
     }
@@ -1170,8 +1180,10 @@ std::optional<float> ScoreDocument(const Predicate *root_predicate,
     // constant IDF (1.0) and term frequency (1), normalized by the document's
     // text length. On a text-less index avg_doc_len is 0 and ScoreLeaf
     // returns a well-defined 0.
-    sum = query_ctx.ScoreLeaf(/*idf=*/1.0f, /*tf=*/1, query_ctx.DocLen(key),
-                              /*weight=*/1.0f);
+    sum = query_ctx.ScoreLeaf({.idf = 1.0f,
+                               .term_frequency = 1,
+                               .doc_len = query_ctx.DocLen(key),
+                               .leaf_weight = 1.0f});
   }
   if (!sum) return std::nullopt;
   return SanitizeScore(
@@ -1238,30 +1250,27 @@ void ApplyHybridTextScore(const SearchParameters &parameters,
   ApplyRelevanceScore(parameters, neighbors, query_ctx);
 }
 
-const absl::flat_hash_set<absl::string_view> *RecordTags::Get(
-    absl::string_view identifier, char separator) {
-  auto [it, inserted] = parsed_.try_emplace(identifier);
-  if (inserted) {
-    if (auto record = records_.find(identifier); record != records_.end()) {
-      // Record data, so the schema's separator applies rather than query
-      // syntax.
-      auto tags = indexes::Tag::ParseSearchTags(
-          vmsdk::ToStringView(record->second.value.get()), separator);
-      if (tags.ok()) it->second = std::move(tags).value();
-    }
-  }
-  return it->second ? &*it->second : nullptr;
+std::optional<absl::flat_hash_set<absl::string_view>> ReadRecordTags(
+    const RecordsMap &records, const TagPredicate &predicate) {
+  auto record = records.find(
+      vmsdk::ToStringView(predicate.GetRetainedIdentifier().get()));
+  if (record == records.end()) return std::nullopt;
+  // Tokenized as the index tokenizes stored values, so membership agrees with
+  // the index's.
+  return indexes::Tag::ParseRecordTags(
+      vmsdk::ToStringView(record->second.value.get()),
+      predicate.GetIndex()->GetSeparator());
 }
 
 std::optional<float> RecomputeDocumentScore(const Predicate *root_predicate,
                                             const InternedStringPtr &key,
                                             QueryContext &query_ctx,
-                                            RecordTags &record_tags) {
-  CHECK(query_ctx.MainThread());
+                                            const RecordsMap &records) {
+  CHECK(query_ctx.ShortLocks());
   if (options::IsScoringDisabled() || query_ctx.Stats().total_docs == 0) {
     return std::nullopt;
   }
-  ScoreContext score_ctx{query_ctx, &record_tags};
+  ScoreContext score_ctx{query_ctx, &records};
   return ScoreDocument(root_predicate, BorrowedInternedStringPtr(key),
                        score_ctx);
 }

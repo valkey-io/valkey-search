@@ -1717,17 +1717,16 @@ class ScoreTextQueryTestBase : public ValkeySearchTest {
     EXPECT_TRUE(parsed.ok()) << parsed.status();
     const auto *scorer =
         indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std);
-    query::QueryContext query_ctx(schema, scorer, query::LockMode::kMainThread);
+    query::QueryContext query_ctx(schema, scorer, query::LockMode::kShortLocks);
     RecordsMap records;
     for (const auto &[field, value] : record_tags) {
       records.emplace(field,
                       RecordsMapValue(vmsdk::MakeUniqueValkeyString(field),
                                       vmsdk::MakeUniqueValkeyString(value)));
     }
-    query::RecordTags tags(records);
     return query::RecomputeDocumentScore(parsed.value().root_predicate.get(),
                                          StringInternStore::Intern(key),
-                                         query_ctx, tags);
+                                         query_ctx, records);
   }
 
   // Score `key` for `filter` through the IN-ITERATOR path
@@ -2749,9 +2748,6 @@ TEST_F(ScoreTextQueryTestBase, MainThreadLockModesMatchBackground) {
           {"d4", "the cat ran fast", ""},
       },
       /*no_stem=*/false);
-  const auto *scorer =
-      indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std);
-  auto *text_schema = schema->GetTextIndexSchema().get();
   // Tag leaves are excluded: main-thread tag membership comes from the fetched
   // record, exercised through VerifyFilter. The numeric index holds no records,
   // so the negated range is what lets the verdict be true. INORDER and SLOP
@@ -2778,32 +2774,38 @@ TEST_F(ScoreTextQueryTestBase, MainThreadLockModesMatchBackground) {
       {"-@rating:[500 600] @text:(%cat% fast)", slop2},
       {"-@rating:[500 600] @text:(running | ran)", inorder},
   };
-  for (const auto &[filter, options] : filters) {
-    auto parsed = FilterParser(*schema, filter, options).Parse();
-    ASSERT_TRUE(parsed.ok()) << parsed.status();
-    query::QueryContext background(*schema, scorer);
-    query::QueryContext main(*schema, scorer, query::LockMode::kMainThread);
-    indexes::PrefilterEvaluator bg_eval(background, parsed->query_operations,
-                                        *schema);
-    indexes::PrefilterEvaluator main_eval(main, parsed->query_operations,
+  // Every selectable scorer, so a per-document input a new scorer reads is
+  // checked on both paths too.
+  for (const auto &[name, type] : *indexes::scoring::kScorerByStr) {
+    SCOPED_TRACE(name);
+    const auto *scorer = indexes::scoring::GetScorer(type);
+    for (const auto &[filter, options] : filters) {
+      auto parsed = FilterParser(*schema, filter, options).Parse();
+      ASSERT_TRUE(parsed.ok()) << parsed.status();
+      query::QueryContext background(*schema, scorer);
+      query::QueryContext main(*schema, scorer, query::LockMode::kShortLocks);
+      indexes::PrefilterEvaluator bg_eval(background, parsed->query_operations,
                                           *schema);
-    for (const auto &k : {"d1", "d2", "d3", "d4"}) {
-      auto key = StringInternStore::Intern(k);
-      std::vector<indexes::BorrowedNeighbor> bg_cands{
-          {BorrowedInternedStringPtr(key), 0.0f, 0.0f}};
-      auto main_cands = bg_cands;
-      bool bg_match, main_match;
-      {
-        vmsdk::ReaderMutexLock lock(&schema->GetTimeSlicedMutex());
-        bg_match = bg_eval.Evaluate(*parsed->root_predicate, key);
-        query::ScoreTextQuery(parsed->root_predicate.get(), bg_cands,
-                              background);
+      indexes::PrefilterEvaluator main_eval(main, parsed->query_operations,
+                                            *schema);
+      for (const auto &k : {"d1", "d2", "d3", "d4"}) {
+        auto key = StringInternStore::Intern(k);
+        std::vector<indexes::BorrowedNeighbor> bg_cands{
+            {BorrowedInternedStringPtr(key), 0.0f, 0.0f}};
+        auto main_cands = bg_cands;
+        bool bg_match, main_match;
+        {
+          vmsdk::ReaderMutexLock lock(&schema->GetTimeSlicedMutex());
+          bg_match = bg_eval.Evaluate(*parsed->root_predicate, key);
+          query::ScoreTextQuery(parsed->root_predicate.get(), bg_cands,
+                                background);
+        }
+        main_match = main_eval.Evaluate(*parsed->root_predicate, key);
+        query::ScoreTextQuery(parsed->root_predicate.get(), main_cands, main);
+        EXPECT_EQ(main_match, bg_match) << filter << " " << k;
+        EXPECT_FLOAT_EQ(main_cands[0].score, bg_cands[0].score)
+            << filter << " " << k;
       }
-      main_match = main_eval.Evaluate(*parsed->root_predicate, key);
-      query::ScoreTextQuery(parsed->root_predicate.get(), main_cands, main);
-      EXPECT_EQ(main_match, bg_match) << filter << " " << k;
-      EXPECT_FLOAT_EQ(main_cands[0].score, bg_cands[0].score)
-          << filter << " " << k;
     }
   }
 }

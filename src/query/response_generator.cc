@@ -87,13 +87,11 @@ namespace valkey_search::query {
 // goes through a main-thread QueryContext and never the time-sliced mutex.
 class PredicateEvaluator : public query::Evaluator {
  public:
-  PredicateEvaluator(const RecordsMap &records, RecordTags &tags,
-                     InternedStringPtr target_key, QueryContext &query_ctx,
-                     QueryOperations query_operations,
+  PredicateEvaluator(const RecordsMap &records, InternedStringPtr target_key,
+                     QueryContext &query_ctx, QueryOperations query_operations,
                      const IndexSchema &index_schema)
       : Evaluator(query_operations),
         records_(records),
-        tags_(tags),
         target_key_(std::move(target_key)),
         query_ctx_(query_ctx),
         index_schema_(index_schema) {}
@@ -101,11 +99,9 @@ class PredicateEvaluator : public query::Evaluator {
   const InternedStringPtr &GetTargetKey() const override { return target_key_; }
 
   EvaluationResult EvaluateTags(const query::TagPredicate &predicate) override {
-    auto index = predicate.GetIndex();
-    const auto *tags =
-        tags_.Get(vmsdk::ToStringView(predicate.GetRetainedIdentifier().get()),
-                  index->GetSeparator());
-    return predicate.Evaluate(tags, index->IsCaseSensitive());
+    auto tags = ReadRecordTags(records_, predicate);
+    return predicate.Evaluate(tags ? &*tags : nullptr,
+                              predicate.GetIndex()->IsCaseSensitive());
   }
 
   EvaluationResult EvaluateNumeric(
@@ -125,7 +121,7 @@ class PredicateEvaluator : public query::Evaluator {
 
   EvaluationResult EvaluateText(const query::TextPredicate &predicate,
                                 bool require_positions) override {
-    return query::EvaluateText(
+    return query::EvaluateTextLeaf(
         query_ctx_, predicate, target_key_, require_positions,
         [this] { return query_ctx_.PerKeyTextIndex(target_key_); });
   }
@@ -168,7 +164,6 @@ class PredicateEvaluator : public query::Evaluator {
 
  private:
   const RecordsMap &records_;
-  RecordTags &tags_;
   InternedStringPtr target_key_;
   QueryContext &query_ctx_;
   const IndexSchema &index_schema_;
@@ -213,10 +208,9 @@ FilterVerification VerifyFilter(const query::SearchParameters &parameters,
   if (!query_ctx) {
     query_ctx = std::make_unique<QueryContext>(
         index_schema, indexes::scoring::GetScorer(parameters.scorer),
-        LockMode::kMainThread);
+        LockMode::kShortLocks);
   }
-  RecordTags record_tags(records);
-  PredicateEvaluator evaluator(records, record_tags, n.external_id, *query_ctx,
+  PredicateEvaluator evaluator(records, n.external_id, *query_ctx,
                                parameters.filter_parse_results.query_operations,
                                index_schema);
   EvaluationResult result = predicate->Evaluate(evaluator);
@@ -234,7 +228,7 @@ FilterVerification VerifyFilter(const query::SearchParameters &parameters,
   // nullopt (empty corpus / non-match) degrades to 0 rather than dropping the
   // already-admitted document.
   result.score =
-      RecomputeDocumentScore(predicate, n.external_id, *query_ctx, record_tags)
+      RecomputeDocumentScore(predicate, n.external_id, *query_ctx, records)
           .value_or(0.0f);
   return {true, result.score};
 }

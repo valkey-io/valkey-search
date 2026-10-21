@@ -453,33 +453,21 @@ void ScoreTextQuery(const Predicate *root_predicate,
                     std::vector<indexes::BorrowedNeighbor> &candidates,
                     QueryContext &query_ctx);
 
-// A revalidated document's own tags, parsed from the fetched record on first
-// use per field. The index may not reflect the mutation yet, so main-thread
-// membership is read from here rather than from the index, for filtering and
-// scoring alike.
-class RecordTags {
- public:
-  explicit RecordTags(const RecordsMap &records) : records_(records) {}
-  // nullptr when the record has no such field or it does not parse.
-  const absl::flat_hash_set<absl::string_view> *Get(
-      absl::string_view identifier, char separator);
-
- private:
-  const RecordsMap &records_;
-  absl::flat_hash_map<absl::string_view,
-                      std::optional<absl::flat_hash_set<absl::string_view>>>
-      parsed_;
-};
+// A revalidated document's tags for the predicate's field, read from the
+// fetched record rather than the index, which may not reflect the mutation yet.
+// nullopt when the record has no such field.
+std::optional<absl::flat_hash_set<absl::string_view>> ReadRecordTags(
+    const RecordsMap &records, const TagPredicate &predicate);
 
 // Main-thread rescoring of one revalidated document, through the same ScoreNode
 // walk ScoreTextQuery runs so the result is on the shard-side scale.
-// `query_ctx` must be in a main-thread LockMode: this runs outside any
-// time-sliced read phase and never acquires that mutex. nullopt when ScoreNode
-// re-derives a non-match; callers score 0 rather than drop the document.
+// `query_ctx` must be in kShortLocks: this runs outside any time-sliced read
+// phase and never acquires that mutex. nullopt when ScoreNode re-derives a
+// non-match; callers score 0 rather than drop the document.
 std::optional<float> RecomputeDocumentScore(const Predicate *root_predicate,
                                             const InternedStringPtr &key,
                                             QueryContext &query_ctx,
-                                            RecordTags &record_tags);
+                                            const RecordsMap &records);
 
 }  // namespace valkey_search::query
 #endif  // VALKEYSEARCH_SRC_QUERY_SEARCH_H_

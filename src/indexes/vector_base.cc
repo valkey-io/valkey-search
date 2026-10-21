@@ -192,8 +192,9 @@ query::EvaluationResult PrefilterEvaluator::EvaluateNumeric(
 query::EvaluationResult PrefilterEvaluator::EvaluateText(
     const query::TextPredicate &predicate, bool require_positions) {
   CHECK(key_);
-  return query::EvaluateText(query_ctx_, predicate, *key_, require_positions,
-                             [this] { return PerKeyTextIndex(); });
+  return query::EvaluateTextLeaf(query_ctx_, predicate, *key_,
+                                 require_positions,
+                                 [this] { return PerKeyTextIndex(); });
 }
 
 query::EvaluationResult PrefilterEvaluator::EvaluateVectorRange(

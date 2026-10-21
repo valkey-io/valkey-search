@@ -16,6 +16,7 @@
 #include "absl/container/node_hash_map.h"
 #include "absl/functional/function_ref.h"
 #include "absl/strings/string_view.h"
+#include "src/indexes/scoring/scorer.h"
 #include "src/indexes/text/posting.h"
 #include "src/indexes/text/text_index.h"
 #include "src/query/predicate.h"
@@ -26,20 +27,18 @@ namespace valkey_search {
 class IndexSchema;
 namespace indexes {
 class Tag;
-namespace scoring {
-class Scorer;
 }
-}  // namespace indexes
 }  // namespace valkey_search
 
 namespace valkey_search::query {
 
-// Which locks the context and its probes take. The main thread never waits on
-// the time-sliced mutex (a reader arriving during a write phase would stall for
-// the whole phase); it takes the short locks each writer takes instead.
+// Which locks the context and its probes take. A caller that holds the
+// time-sliced mutex in read mode needs none. The main-thread reply path must
+// not wait on that mutex (a reader arriving during a write phase would stall
+// for the whole phase), so it takes the short locks each writer takes instead.
 enum class LockMode {
-  kBackground,  // Caller holds the time-sliced mutex in read mode.
-  kMainThread,  // Tree lock, word bucket and tag mutex, each held briefly.
+  kReadPhase,   // Caller holds the time-sliced mutex in read mode.
+  kShortLocks,  // Tree lock, word bucket and tag mutex, each held briefly.
 };
 
 // Corpus-wide scoring inputs, read once per query.
@@ -66,7 +65,7 @@ class QueryContext {
   // Reads the corpus stats up front under `mode`'s locks.
   QueryContext(const IndexSchema &index_schema,
                const indexes::scoring::Scorer *scorer,
-               LockMode mode = LockMode::kBackground);
+               LockMode mode = LockMode::kReadPhase);
   QueryContext(const QueryContext &) = delete;
   QueryContext &operator=(const QueryContext &) = delete;
 
@@ -76,7 +75,7 @@ class QueryContext {
   ResolvedLeaf &GetOrResolve(const Predicate *predicate);
 
   // The key's entry in the word's postings, under the word's bucket in
-  // kMainThread.
+  // kShortLocks.
   std::optional<indexes::text::PostingValue> Probe(
       const WordPostings &word, BorrowedInternedStringPtr key,
       uint64_t field_mask) const;
@@ -93,11 +92,13 @@ class QueryContext {
   // IDF for a term carried by `dt` documents, clamped to the corpus size since
   // the two counts come from independently locked counters.
   float Idf(size_t dt) const;
-  // One BM25 term for one document.
-  float ScoreLeaf(float idf, uint32_t tf, uint32_t doc_len, float weight) const;
+  // One BM25 term for one document. Fills the query-wide fields; callers set
+  // the per-leaf ones they have.
+  float ScoreLeaf(indexes::scoring::LeafScoreInput input) const;
 
-  // Per-document index reads, each under the locks `mode` requires. Every
-  // lock choice by mode lives in this class.
+  // Per-document scoring inputs, each read under the locks `mode` requires.
+  // Every lock choice by mode lives in this class; add new inputs here rather
+  // than reading the index from the scorer.
   const indexes::text::TextIndex *PerKeyTextIndex(
       const InternedStringPtr &key) const;
   // 0 when the scorer does not use document length.
@@ -106,7 +107,7 @@ class QueryContext {
   size_t TagPrefixDocCount(const indexes::Tag &index, absl::string_view prefix,
                            BorrowedInternedStringPtr key) const;
 
-  bool MainThread() const { return mode_ == LockMode::kMainThread; }
+  bool ShortLocks() const { return mode_ == LockMode::kShortLocks; }
 
   const indexes::scoring::Scorer *Scorer() const { return scorer_; }
   const CorpusStats &Stats() const { return stats_; }
@@ -118,7 +119,7 @@ class QueryContext {
   ResolvedLeaf ResolveTag(const TagPredicate *predicate) const;
   WordPostings Lookup(absl::string_view word) const;
   size_t KeyCount(const WordPostings &word) const;
-  // The word only when probes will lock on it (main thread).
+  // The word only when probes will lock on it (kShortLocks).
   std::optional<std::string> LockWord(absl::string_view word) const;
 
   const IndexSchema &index_schema_;
@@ -135,7 +136,7 @@ class QueryContext {
 // The text dispatch both evaluators share: a term leaf is evaluated from the
 // context, anything else walks the document's own tree, which `per_key_index`
 // fetches only when reached.
-EvaluationResult EvaluateText(
+EvaluationResult EvaluateTextLeaf(
     QueryContext &query_ctx, const TextPredicate &predicate,
     const InternedStringPtr &key, bool require_positions,
     absl::FunctionRef<const indexes::text::TextIndex *()> per_key_index);

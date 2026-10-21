@@ -1307,12 +1307,14 @@ int VectorSVS<T>::RespondWithInfoImpl(ValkeyModuleCtx* ctx) const {
   // Bytes SVS holds for the index's graph, data and metadata; 0 before the
   // first add.
   size_t memory_bytes = 0;
+#if defined(__linux__) && defined(__x86_64__)
   {
     absl::ReaderMutexLock lock(&resize_mutex_);
     if (svs_index_ != nullptr) {
       svs_index_get_memory_usage(svs_index_, &memory_bytes, nullptr);
     }
   }
+#endif
   ValkeyModule_ReplyWithSimpleString(ctx, "memory_bytes");
   ValkeyModule_ReplyWithLongLong(ctx, static_cast<long long>(memory_bytes));
   return 4;

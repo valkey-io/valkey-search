@@ -2117,6 +2117,75 @@ TEST_P(VectorSVSL2CosineTest, Sq8ConversionsAreCounted) {
   EXPECT_EQ((*result)[0].external_id, IndexToKey(0));
 }
 
+// SVS's error codes carry through: an ALPHA SVS rejects (only reachable with a
+// hand-built proto; FT.CREATE checks it) is invalid input, while a duplicate
+// id is an internal error.
+TEST_P(VectorSVSL2CosineTest, SvsErrorsKeepTheirCode) {
+  auto proto = CreateSVSVectorIndexProto(kDimensions, GetParam(),
+                                         data_model::SVS_COMPRESSION_NONE);
+  proto.mutable_svs_vamana_algorithm()->set_alpha(
+      GetParam() == data_model::DISTANCE_METRIC_L2 ? 0.5f : 1.5f);
+  auto bad_alpha = VectorSVS<float>::Create(proto, attribute_identifier,
+                                            attribute_data_type, 0);
+  VMSDK_EXPECT_OK(bad_alpha);
+  auto vectors = RandomVectors(2, kDimensions);
+  const uint64_t create_before = Metrics::GetStats().svs_create_exceptions_cnt;
+  auto added = testing_infra::AddVectorRecord(**bad_alpha, IndexToKey(0),
+                                              VectorToStr(vectors[0]));
+  EXPECT_TRUE(absl::IsInvalidArgument(added.status())) << added.status();
+  EXPECT_EQ(Metrics::GetStats().svs_create_exceptions_cnt, create_before + 1);
+
+  auto index = VectorSVS<float>::Create(
+      CreateSVSVectorIndexProto(kDimensions, GetParam(),
+                                data_model::SVS_COMPRESSION_NONE),
+      attribute_identifier, attribute_data_type, 0);
+  VMSDK_EXPECT_OK(index);
+  VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(**index, IndexToKey(0),
+                                                 VectorToStr(vectors[0])));
+  auto duplicate = VectorSVSTestPeer::AddPoint(**index, 0, vectors[1].data());
+  EXPECT_TRUE(absl::IsInternal(duplicate)) << duplicate;
+}
+
+// A load logs one NOTICE with the vector count, compression and time; an
+// empty index reports 0 vectors.
+TEST_P(VectorSVSL2CosineTest, LoadFromRdbLogsNotice) {
+  constexpr size_t kNumVectors = 5;
+  auto proto = CreateSVSVectorIndexProto(kDimensions, GetParam(),
+                                         data_model::SVS_COMPRESSION_NONE);
+  auto vectors = RandomVectors(kNumVectors, kDimensions);
+  auto saved = [&](size_t n) {
+    auto index = VectorSVS<float>::Create(proto, attribute_identifier,
+                                          attribute_data_type, 0);
+    CHECK(index.ok()) << index.status();
+    for (size_t i = 0; i < n; ++i) {
+      CHECK(testing_infra::AddVectorRecord(**index, IndexToKey(i),
+                                           VectorToStr(vectors[i]))
+                .ok());
+    }
+    auto rdb = std::make_unique<FakeSafeRDB>();
+    CHECK((*index)->SaveIndex(RDBChunkOutputStream(rdb.get())).ok());
+    return rdb;
+  };
+  EXPECT_CALL(*kMockValkeyModule, Log(testing::_, testing::_, testing::_))
+      .Times(testing::AnyNumber());
+  for (size_t n : {kNumVectors, size_t{0}}) {
+    EXPECT_CALL(*kMockValkeyModule,
+                Log(testing::_, testing::_,
+                    testing::HasSubstr(absl::StrCat(
+                        "SVS index loaded: attribute=attribute_identifier_2, "
+                        "num_elements=",
+                        n, ", compression=SVS_COMPRESSION_NONE, load_ms="))))
+        .Times(1);
+  }
+  for (size_t n : {kNumVectors, size_t{0}}) {
+    auto rdb = saved(n);
+    auto loaded = VectorSVS<float>::LoadFromRDB(
+        &fake_ctx_, &hash_attribute_data_type_, proto, "attribute_identifier_2",
+        SupplementalContentChunkIter(rdb.get()), 0);
+    VMSDK_EXPECT_OK(loaded);
+  }
+}
+
 INSTANTIATE_TEST_SUITE_P(
     Metrics, VectorSVSL2CosineTest,
     testing::Values(data_model::DISTANCE_METRIC_L2,

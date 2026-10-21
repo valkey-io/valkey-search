@@ -395,6 +395,29 @@ class TestSvsSaveRestoreCompression(ValkeySearchTestCaseDebugMode):
                 assert score1 == pytest.approx(score2, abs=1e-4)
 
 
+class TestSvsSaveRestoreNotice(ValkeySearchTestCaseDebugMode):
+    """Loading an SVS index from RDB logs one NOTICE with its vector count
+    and compression."""
+
+    @pytest.mark.parametrize("metric,num_vectors", [("L2", 30), ("COSINE", 31)])
+    def test_debug_reload_logs_load_notice(self, metric, num_vectors):
+        client: Valkey = self.client
+        index = f"svs_notice_{metric.lower()}"
+        client.execute_command(
+            "FT.CREATE", index, "SCHEMA", "v", "VECTOR", "SVS_VAMANA", "6",
+            "TYPE", "FLOAT32", "DIM", str(DIM), "DISTANCE_METRIC", metric,
+        )
+        _populate(client, num_vectors)
+        waiters.wait_for_equal(
+            lambda: _v_index(client, index)["size"], num_vectors, timeout=30)
+        notice = (f"SVS index loaded: attribute=v, "
+                  f"num_elements={num_vectors}, "
+                  f"compression=SVS_COMPRESSION_NONE")
+        assert not self.rg.primary.does_logfile_contains(notice)
+        client.execute_command("DEBUG", "RELOAD")
+        assert self.rg.primary.does_logfile_contains(notice)
+
+
 class TestSvsSaveRestoreSq8(ValkeySearchTestCaseDebugMode):
     """SQ8 saved before its conversion carries an uncompressed payload; it
     must load as one, convert when it reaches TRAINING_THRESHOLD, and then

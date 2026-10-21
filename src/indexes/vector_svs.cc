@@ -15,6 +15,7 @@
 #include <memory>
 #include <optional>
 #include <queue>
+#include <string>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -25,6 +26,8 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
+#include "absl/time/clock.h"
+#include "absl/time/time.h"
 #include "src/attribute_data_type.h"
 #include "src/indexes/bfloat16.h"
 #include "src/indexes/fp16.h"
@@ -306,8 +309,19 @@ class ScopedSvsError {
 
 absl::Status SvsErrorToStatus(svs_error_h err, absl::string_view phase) {
   const char* msg = svs_error_get_message(err);
-  return absl::InternalError(
-      absl::StrCat("SVS ", phase, ": ", msg ? msg : "<no message>"));
+  const std::string text =
+      absl::StrCat("SVS ", phase, ": ", msg ? msg : "<no message>");
+  switch (svs_error_get_code(err)) {
+    case SVS_ERROR_INVALID_ARGUMENT:
+      return absl::InvalidArgumentError(text);
+    case SVS_ERROR_OUT_OF_MEMORY:
+      return absl::ResourceExhaustedError(text);
+    case SVS_ERROR_NOT_IMPLEMENTED:
+    case SVS_ERROR_UNSUPPORTED_HW:
+      return absl::UnimplementedError(text);
+    default:
+      return absl::InternalError(text);
+  }
 }
 
 // Storage handle owned via a small RAII wrapper so early-return paths
@@ -653,6 +667,7 @@ absl::StatusOr<std::shared_ptr<VectorSVS<T>>> VectorSVS<T>::LoadFromRDB(
     absl::string_view attribute_identifier, SupplementalContentChunkIter&& iter,
     int db_num) {
 #if defined(__linux__) && defined(__x86_64__)
+  const absl::Time load_start = absl::Now();
   RDBChunkInputStream input(std::move(iter));
   // On success the terminator invariant already leaves input drained; on
   // any early return below it is not, which aborts the destructor's DCHECK
@@ -773,6 +788,25 @@ absl::StatusOr<std::shared_ptr<VectorSVS<T>>> VectorSVS<T>::LoadFromRDB(
   }
   if (!result.ok()) {
     ++Metrics::GetStats().svs_create_exceptions_cnt;
+    return result;
+  }
+  // A skipped payload is reported when the index is rebuilt instead. The C
+  // API reports no load-validation warnings or index-growth events (SVS grows
+  // by allocating blocks), so neither is logged.
+  if (!(*result)->rebuild_from_keyspace_) {
+    size_t num_elements = 0;
+    {
+      absl::ReaderMutexLock lock(&(*result)->resize_mutex_);
+      if ((*result)->svs_index_ != nullptr) {
+        svs_index_get_size((*result)->svs_index_, &num_elements, nullptr);
+      }
+    }
+    VMSDK_LOG(NOTICE, nullptr)
+        << "SVS index loaded: attribute=" << attribute_identifier
+        << ", num_elements=" << num_elements << ", compression="
+        << data_model::SVSCompressionType_Name(
+               (*result)->build_config_.compression)
+        << ", load_ms=" << absl::ToInt64Milliseconds(absl::Now() - load_start);
   }
   return result;
 #else
@@ -1242,7 +1276,7 @@ int VectorSVS<T>::RespondWithInfoImpl(ValkeyModuleCtx* ctx) const {
   EmitDataTypeInfo(ctx);
   ValkeyModule_ReplyWithSimpleString(ctx, "algorithm");
   const bool trained = build_config_.training_threshold > 0;
-  ValkeyModule_ReplyWithArray(ctx, trained ? 16 : 12);
+  ValkeyModule_ReplyWithArray(ctx, trained ? 18 : 14);
   ValkeyModule_ReplyWithSimpleString(ctx, "name");
   ValkeyModule_ReplyWithSimpleString(
       ctx, std::string(
@@ -1270,6 +1304,17 @@ int VectorSVS<T>::RespondWithInfoImpl(ValkeyModuleCtx* ctx) const {
     ValkeyModule_ReplyWithLongLong(
         ctx, compression_pending_.load(std::memory_order_acquire) ? 1 : 0);
   }
+  // Bytes SVS holds for the index's graph, data and metadata; 0 before the
+  // first add.
+  size_t memory_bytes = 0;
+  {
+    absl::ReaderMutexLock lock(&resize_mutex_);
+    if (svs_index_ != nullptr) {
+      svs_index_get_memory_usage(svs_index_, &memory_bytes, nullptr);
+    }
+  }
+  ValkeyModule_ReplyWithSimpleString(ctx, "memory_bytes");
+  ValkeyModule_ReplyWithLongLong(ctx, static_cast<long long>(memory_bytes));
   return 4;
 }
 

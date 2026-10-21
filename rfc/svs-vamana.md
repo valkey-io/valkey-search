@@ -11,7 +11,7 @@ This RFC proposes integrating [Intel Scalable Vector Search (SVS)](https://githu
 
 The RFC specifies the linking architecture using a **static submodule integration** model: SVS is compiled directly into `libsearch.so` as a git submodule (Apache-2.0), supporting FP32, FP16, and SQ8 compression. LVQ and LeanVec proprietary compression backends are out of scope for this RFC; distribution options for proprietary compression are captured in the Future Considerations section as a follow-on discussion item.
 
-The implementation is in draft PR [#1577](https://github.com/valkey-io/valkey-search/pull/1577). v1 is the open-source set: FP32, FP16 and SQ8 storage (SQ8 as a follow-up commit), with L2, IP and COSINE metrics. Two topics from the review are proposed as their own RFCs: background index rebuild, which takes over deferred compression ([#1585](https://github.com/valkey-io/valkey-search/pull/1585)), and serving vectors from the index ([#1586](https://github.com/valkey-io/valkey-search/pull/1586)).
+The implementation is in draft PR [#1577](https://github.com/valkey-io/valkey-search/pull/1577). v1 is the open-source set: FP32, FP16 and SQ8 storage, with L2, IP and COSINE metrics. Two topics from the review are proposed as their own RFCs: background index rebuild, which takes over background deferred compression ([#1585](https://github.com/valkey-io/valkey-search/pull/1585)), and serving vectors from the index ([#1586](https://github.com/valkey-io/valkey-search/pull/1586)).
 
 ## Motivation
 
@@ -84,9 +84,11 @@ Properties of this model:
 
 ### Deferred Compression
 
-> Not in v1: every v1 index is built directly with its configured compression. Rebuilding or converting an index in the background is now proposed for all vector index types in [#1585](https://github.com/valkey-io/valkey-search/pull/1585); this section remains as the SVS-specific input to that RFC.
+> In v1, SQ8 uses deferred compression synchronously: the index starts uncompressed and is converted in place at `TRAINING_THRESHOLD` (below). Rebuilding or converting an index in the background is proposed for all vector index types in [#1585](https://github.com/valkey-io/valkey-search/pull/1585); the transition mechanics in this section remain as the SVS-specific input to that RFC.
 
-Deferred compression applies **only to LeanVec** compression types. For all other types the index is ready immediately.
+Deferred compression applies to the compression types that train on the data: SQ8, whose quantization range comes from the vectors it compresses, and LeanVec. For the other types the index is built with its configured compression from the first vector.
+
+**SQ8 in v1.** The index is an ordinary uncompressed SVS index until it holds `TRAINING_THRESHOLD` vectors (64 to 1,000,000, default 1024). The add that reaches the threshold converts it with the SVS C API's `svs_index_convert_dynamic_ex` ([intel/ScalableVectorSearch#392](https://github.com/intel/ScalableVectorSearch/pull/392)): the graph, ID translator and deletions are kept, and SQ8 is calibrated on every vector in the index. The conversion runs under the index's writer lock, pausing writes and searches on that index (about 0.4 s for 1,000,000 128-dimension vectors); the threshold's maximum bounds that pause. An index saved before its conversion keeps its uncompressed payload and converts after loading.
 
 In-scope (open-source submodule):
 
@@ -94,16 +96,16 @@ In-scope (open-source submodule):
 |-------------|-----------|---------------------|
 | NONE | Immediate -- index ready at creation | Always `ready` |
 | FP16 | Immediate -- index built with FP16 storage at creation | Always `ready` |
-| SQ8 | Immediate -- index built with SQ8 storage at creation | Always `ready` |
+| SQ8 | Deferred -- uncompressed until `TRAINING_THRESHOLD`, then converted synchronously | Always `ready` (FT.INFO `compression_pending` shows the conversion) |
 
 Future proprietary build (out of scope for this RFC; `FT.CREATE` currently rejects these types):
 
 | Compression | Activation (when supported) | `state` in FT.INFO |
 |-------------|-----------------------------|---------------------|
 | LVQ4 / LVQ8 / LVQ4X4 / LVQ4X8 | Immediate -- index built with LVQ storage at creation | Always `ready` |
-| LEANVEC4X4 / LEANVEC4X8 / LEANVEC8X8 | Deferred -- accumulates vectors until `LEANVEC_TRAINING_THRESHOLD`, then trains projection and builds compressed index | `training` below threshold; `ready` after |
+| LEANVEC4X4 / LEANVEC4X8 / LEANVEC8X8 | Deferred -- accumulates vectors until `TRAINING_THRESHOLD`, then trains projection and builds compressed index | `training` below threshold; `ready` after |
 
-For LeanVec types, SVS requires a minimum corpus to train the projection matrices. Until `LEANVEC_TRAINING_THRESHOLD` vectors have been buffered, the index is in `state: training`, search returns an error, and modifications are queued. Once the threshold is crossed, valkey-search trains the LeanVec matrices on the buffered corpus, builds the compressed index, and transitions to `state: ready`.
+For LeanVec types, SVS requires a minimum corpus to train the projection matrices. Until `TRAINING_THRESHOLD` vectors have been buffered, the index is in `state: training`, search returns an error, and modifications are queued. Once the threshold is crossed, valkey-search trains the LeanVec matrices on the buffered corpus, builds the compressed index, and transitions to `state: ready`.
 
 The graph structure, ID translator, and entry point are preserved across the transition -- only the data storage layer changes.
 
@@ -111,7 +113,7 @@ The graph structure, ID translator, and entry point are preserved across the tra
 
 The compression transition uses **copy semantics** to avoid blocking concurrent searches:
 
-1. Threshold crossed -- valkey-search detects the live vector count reaches `LEANVEC_TRAINING_THRESHOLD`.
+1. Threshold crossed -- valkey-search detects the live vector count reaches `TRAINING_THRESHOLD`.
 2. Capability check -- valkey-search verifies the target compression type is built in:
    - FP16/SQ8: always available in the open-source submodule build (this RFC)
    - LVQ/LeanVec: require proprietary backends outside the scope of this RFC; `FT.CREATE` with these types returns an error unless a future proprietary build is loaded
@@ -161,7 +163,7 @@ FT.CREATE <index> ... SCHEMA <field> VECTOR SVS_VAMANA <num_params>
     [ALPHA <value>]
     [COMPRESSION NONE|FP16|SQ8|LVQ4|LVQ8|LVQ4X4|LVQ4X8|LEANVEC4X4|LEANVEC4X8|LEANVEC8X8]
     [LEANVEC_DIMS <dims>]
-    [LEANVEC_TRAINING_THRESHOLD <count>]
+    [TRAINING_THRESHOLD <count>]
     [RAW_VECTOR_STORAGE KEEP|DROP]
 ```
 
@@ -170,7 +172,7 @@ FT.CREATE <index> ... SCHEMA <field> VECTOR SVS_VAMANA <num_params>
 - **`TYPE`** is the on-the-wire element format of the raw vector bytes coming into `FT.CREATE`/`HSET`. It applies uniformly across FLAT, HNSW, and SVS_VAMANA (see valkey-search PR #1001). `FLOAT16` and `BFLOAT16` halve the raw-payload size at some precision cost.
 - **`COMPRESSION`** is the SVS-internal storage kind: how SVS represents each node inside its own graph. `COMPRESSION FP16` is orthogonal to `TYPE FLOAT16`; it selects an SVS storage kind independent of the raw byte format the caller supplied.
 
-In v1, `FT.CREATE` accepts `TYPE FLOAT32 | FLOAT16` and `COMPRESSION NONE | FP16 | SQ8`. It rejects `BFLOAT16` until SVS supports BF16 storage, the LVQ and LeanVec types and their parameters (proprietary, future), and `RAW_VECTOR_STORAGE` (see [#1586](https://github.com/valkey-io/valkey-search/pull/1586)).
+In v1, `FT.CREATE` accepts `TYPE FLOAT32 | FLOAT16`, `COMPRESSION NONE | FP16 | SQ8` and, with SQ8, `TRAINING_THRESHOLD`. It rejects `BFLOAT16` until SVS supports BF16 storage, the LVQ and LeanVec types and their parameters (proprietary, future), and `RAW_VECTOR_STORAGE` (see [#1586](https://github.com/valkey-io/valkey-search/pull/1586)).
 
 #### Parameter Reference
 
@@ -186,7 +188,7 @@ In v1, `FT.CREATE` accepts `TYPE FLOAT32 | FLOAT16` and `COMPRESSION NONE | FP16
 | ALPHA | float | 1.2 (L2); 0.95 (IP/COSINE) | L2: `>= 1.0`; IP/COSINE: `0 < ALPHA <= 1.0` | Graph pruning parameter controlling edge diversity. For L2, alpha > 1.0 biases the pruner to retain more diverse edges (1.2 is the SVS-recommended default). For IP/COSINE, alpha must not exceed 1.0 because the metric is a similarity (larger = closer) rather than a distance; 0.95 is the SVS-recommended default. `FT.CREATE` rejects out-of-range values per metric at parse time. |
 | COMPRESSION | enum | NONE | See compression table | Storage backend for vector data |
 | LEANVEC_DIMS | int | -- | >0 and <DIM | Target dimensionality after LeanVec projection. Required for LEANVEC variants. |
-| LEANVEC_TRAINING_THRESHOLD | int | 10000 | >=1 | Number of vectors to buffer before training the LeanVec projection |
+| TRAINING_THRESHOLD | int | 1024 | 64 to 1,000,000; SQ8 only in v1 | Vectors the index holds uncompressed before it converts. Rejected for the compressions that don't train. LeanVec will need its own bounds (at least `LEANVEC_DIMS`). |
 | RAW_VECTOR_STORAGE | enum | KEEP | KEEP, DROP | **Deferred** to [#1586](https://github.com/valkey-io/valkey-search/pull/1586), which proposes this for all vector index types. Whether SVS retains the original FP32 vectors alongside its compressed representation. **KEEP**: exact FP32 bytes preserved inside the SVS index; supports a future user-visible vector reconstruction API without a source-key round-trip. **DROP**: only the compressed representation is stored; lower memory footprint; reconstruction uses SVS's approximate decompressed value (lossy for FP16/SQ8/LVQ/LeanVec). Note: the `VectorRegistry` (PR #1316) holds exact raw bytes for every live Valkey key holding a tracked vector; on RDB load, valkey-search re-opens each key and re-populates the registry via `LoadTrackedKeys` -> `VectorRegistry::Instance().Track` (`vector_base.cc:449-464`), so raw bytes are available after restart for as long as the source key exists in Valkey. `RAW_VECTOR_STORAGE=KEEP` therefore duplicates registry bytes for the live-key case; its primary value is scenarios where the source key is deleted but the SVS entry has not yet been evicted, and future APIs that need in-index reconstruction. |
 
 #### Compression Types
@@ -220,7 +222,7 @@ FT.CREATE my_index SCHEMA vec VECTOR SVS_VAMANA 16
     COMPRESSION SQ8
 ```
 
-This creates an index with SQ8 scalar quantization. The index is ready immediately with no training phase required. LVQ and LeanVec compression types are available via a future proprietary build; see Future Considerations.
+This creates an index with SQ8 scalar quantization. It is searchable immediately, stays uncompressed until it holds `TRAINING_THRESHOLD` vectors (default 1024), then converts to SQ8. LVQ and LeanVec compression types are available via a future proprietary build; see Future Considerations.
 
 ### FT.INFO Response
 
@@ -232,9 +234,9 @@ For SVS indexes, `FT.INFO` returns in the vector field's algorithm section:
 - `search_window_size`: integer
 - `alpha`: float
 - `compression`: string (NONE, FP16, SQ8, LVQ4, LVQ8, LVQ4X4, LVQ4X8, LEANVEC4X4, LEANVEC4X8, LEANVEC8X8)
+- for SQ8: `training_threshold` (integer) and `compression_pending` (1 until the index converts, 0 after)
 Deferred with the features they describe: `state` (`ready` / `training`), `raw_vector_storage`, and for LeanVec types:
 - `leanvec_dims`: integer
-- `leanvec_training_threshold`: integer
 - `training_progress`: string `"<buffered>/<threshold>"` (e.g., `"7500/10000"`)
 
 ### FT.SEARCH Behavior
@@ -405,9 +407,9 @@ The submodule is compiled from source as part of valkey-search's CMake build. AV
 
 > All SVS integration work is being contributed to the valkey-search project by Intel. This does not imply any obligation from the broader valkey open-source community.
 
-**Implemented** in draft [#1577](https://github.com/valkey-io/valkey-search/pull/1577): the SVS submodule (always on for x86_64 Linux), index operations and filtered KNN, L2 / IP / COSINE, NONE and FP16 storage, range / hybrid / aggregate queries, RDB persistence, the module threadpool with concurrent writers, memory accounting, and FT.INFO / INFO reporting.
+**Implemented** in [#1577](https://github.com/valkey-io/valkey-search/pull/1577): the SVS submodule (always on for x86_64 Linux), index operations and filtered KNN, L2 / IP / COSINE, NONE, FP16 and SQ8 storage (SQ8 with synchronous deferred compression), range / hybrid / aggregate queries, RDB persistence, the module threadpool with concurrent writers, memory accounting, and FT.INFO / INFO reporting.
 
-**Next in v1:** SQ8 (follow-up commit). Remaining work before #1577 is ready for review is tracked in its description.
+Remaining open items are tracked in the #1577 description.
 
 **Deferred:**
 

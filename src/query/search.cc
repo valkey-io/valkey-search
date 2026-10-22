@@ -1243,8 +1243,7 @@ static void ApplyRelevanceScore(const SearchParameters &parameters,
 void ApplyHybridTextScore(const SearchParameters &parameters,
                           std::vector<indexes::Neighbor> &neighbors,
                           QueryContext &query_ctx) {
-  if (parameters.vector_score_only || !QueryHasScoredPredicate(parameters) ||
-      neighbors.empty()) {
+  if (!parameters.ScoreIsRelevance() || neighbors.empty()) {
     return;
   }
   ApplyRelevanceScore(parameters, neighbors, query_ctx);
@@ -1573,9 +1572,7 @@ void SearchResult::TrimResults(std::vector<T> &vec,
     } else {
       std::sort(vec.begin(), vec.end(), cmp);
     }
-  } else if (parameters.IsNonVectorQuery() ||
-             (QueryHasScoredPredicate(parameters) &&
-              !parameters.vector_score_only)) {
+  } else if (parameters.ScoreIsRelevance()) {
     // Three cases sort by score descending here:
     //   - Cluster-merge non-vector path: the merged Neighbor vector is drained
     //     from the fanout heap ascending and never sorted.
@@ -1779,6 +1776,11 @@ absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
     return absl::UnavailableError(kShuttingDownMsg);
   }
   return absl::OkStatus();
+}
+
+bool SearchParameters::ScoreIsRelevance() const {
+  return IsNonVectorQuery() ||
+         (!vector_score_only && QueryHasScoredPredicate(*this));
 }
 
 bool QueryHasScoredPredicate(const SearchParameters &parameters) {

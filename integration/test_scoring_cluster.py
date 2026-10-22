@@ -24,7 +24,8 @@ from valkeytestframework.util import waiters
 from utils import IndexingTestHelper, run_in_thread
 
 from test_scoring import (
-    IDX_MAIN, IDX_DOC_SCORE, TEXT_DOCS, MULTI_FIELD_DOCS, SCORE_ABS_TOL, _vec,
+    IDX_MAIN, IDX_DOC_SCORE, TEXT_DOCS, MULTI_FIELD_DOCS, TAG_VEC_DOCS,
+    SCORE_ABS_TOL, _vec,
 )
 
 
@@ -285,6 +286,30 @@ class TestScoringCluster(ValkeySearchClusterTestCase):
         assert keys == ["hv:{SB}1", "hv:{SA}1"]
         assert scores == pytest.approx({"hv:{SB}1": 0.486847,
                                         "hv:{SA}1": 0.167868},
+                                       abs=SCORE_ABS_TOL)
+
+    # Group 14: a hybrid tag=>[KNN] merge keeps the k nearest across shards, then
+    # ranks them by shard-local tag score. TAG_VEC_DOCS lands as shard0
+    # {1,4,5}, shard1 {2}, shard2 {3}.
+    def test_hybrid_tag_vector(self):
+        _load(self, IDX_MAIN, TAG_VEC_DOCS)
+        params = ("PARAMS", "2", "q", _vec(0.0, 0.0), "DIALECT", "2")
+        expected = {"doc:2": 0.287682, "doc:3": 0.287682, "doc:1": 0.187114,
+                    "doc:4": 0.123432, "doc:5": 0.110856}
+
+        # doc:2 and doc:3 are each alone on a shard, so they tie and fall back
+        # to key order.
+        keys, scores = self._search(IDX_MAIN, "@cat:{a}=>[KNN 5 @vec $q]",
+                                    *params)
+        assert keys == ["doc:2", "doc:3", "doc:1", "doc:4", "doc:5"]
+        assert scores == pytest.approx(expected, abs=SCORE_ABS_TOL)
+
+        # The 3 nearest are doc:5, doc:4, doc:3; ranking every match by score
+        # first would return doc:2, doc:3, doc:1 instead.
+        keys, scores = self._search(IDX_MAIN, "@cat:{a}=>[KNN 3 @vec $q]",
+                                    *params)
+        assert keys == ["doc:3", "doc:4", "doc:5"]
+        assert scores == pytest.approx({k: expected[k] for k in keys},
                                        abs=SCORE_ABS_TOL)
 
     # Group 15: LIMIT trims the merged global ranking, not each shard's page.

@@ -59,9 +59,9 @@ struct FilterVerification {
 // mutex.
 //
 // `recompute_score_override` decides whether a changed document is rescored.
-// Left unset it follows the query's own shape, rescoring only a non-vector
-// query. FT.HYBRID sets it per arm, because an arm's score is a raw distance
-// only when that arm is a pure vector search.
+// Left unset it follows the query's own shape, rescoring unless the score is a
+// KNN distance. FT.HYBRID sets it per arm, because an arm's score is a raw
+// distance only when that arm is a pure vector search.
 FilterVerification VerifyFilter(
     const query::SearchParameters &parameters, const RecordsMap &records,
     const indexes::Neighbor &n, std::unique_ptr<query::QueryContext> &query_ctx,

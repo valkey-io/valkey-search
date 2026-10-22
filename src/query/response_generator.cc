@@ -218,10 +218,11 @@ FilterVerification VerifyFilter(const query::SearchParameters &parameters,
   // The document changed between shard-side scoring and this content fetch, so
   // its carried Neighbor.score is stale; recompute it through the same Scorer
   // seam ScoreTextQuery uses. A query whose Neighbor.score is a KNN distance
-  // rather than a relevance score is skipped: by default that means any vector
-  // query, and FT.HYBRID overrides the choice per arm.
+  // rather than a relevance score is skipped: by default that means a vector
+  // query without a scored predicate (or with vector_score_only), and FT.HYBRID
+  // overrides the choice per arm.
   const bool recompute_score =
-      recompute_score_override.value_or(parameters.IsNonVectorQuery());
+      recompute_score_override.value_or(parameters.ScoreIsRelevance());
   if (!result.matches || !recompute_score) {
     return {result.matches, std::nullopt};
   }
@@ -496,7 +497,7 @@ void ProcessNeighborsForReply(
   // Set when a neighbor's score was recomputed on the main thread because its
   // document mutated between shard-side scoring and this content fetch. Any
   // such recompute means the carried scores are no longer globally ordered, so
-  // the survivors must be re-ranked below (non-vector queries only).
+  // the survivors must be re-ranked below.
   bool any_score_recomputed = false;
   // The same for a vector query, whose Neighbor.score is a KNN distance rather
   // than a relevance score and so is refreshed against the document's current
@@ -510,9 +511,7 @@ void ProcessNeighborsForReply(
   // exactly what vector_score_only says and what ApplyHybridTextScore and
   // TrimResults already read. This mirrors the coordinator's own
   // per_arm_score_is_distance in ft_hybrid_parser.cc.
-  const bool ranks_on_distance =
-      !parameters.IsNonVectorQuery() &&
-      (parameters.vector_score_only || !QueryHasScoredPredicate(parameters));
+  const bool ranks_on_distance = !parameters.ScoreIsRelevance();
   indexes::VectorBase *vector_index = nullptr;
   if (!parameters.IsNonVectorQuery() && vector_identifier.has_value() &&
       parameters.index_schema != nullptr) {
@@ -544,8 +543,8 @@ void ProcessNeighborsForReply(
     if (!content.ok()) {
       continue;
     }
-    // Apply the fresh, scale-consistent score (non-vector only; VerifyFilter
-    // never recomputes for vector queries, whose score is a KNN distance).
+    // Apply the fresh, scale-consistent score (only set when Neighbor.score is
+    // a relevance, never when it is a KNN distance).
     if (recomputed_score.has_value()) {
       neighbor.score = *recomputed_score;
       any_score_recomputed = true;
@@ -634,13 +633,10 @@ void ProcessNeighborsForReply(
   // relative to the stale ones. The general ordering of merged cluster results
   // is handled earlier in SearchResult::TrimResults; this block only handles
   // post-recompute reordering, which happens after that sort.
-  // Only for non-vector queries: for KNN, Neighbor.score holds the distance
-  // (lower is better) and results already arrive ascending, so a descending
-  // re-sort would reverse the correct order, and VerifyFilter never recomputes
-  // for vector queries. Skipped when SORTBY is present (explicit ordering
-  // wins).
-  if (any_score_recomputed && !neighbors.empty() &&
-      parameters.IsNonVectorQuery() &&
+  // Not for queries ranked on distance: there Neighbor.score holds the distance
+  // (lower is better) and is re-ranked by the block below instead. Skipped
+  // when SORTBY is present (explicit ordering wins).
+  if (any_score_recomputed && !neighbors.empty() && !ranks_on_distance &&
       !parameters.sortby_parameter.has_value()) {
     std::stable_sort(
         neighbors.begin(), neighbors.end(),

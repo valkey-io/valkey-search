@@ -141,7 +141,7 @@ finalize_test_flags(vector_index_test)
 
 # SVS stream adapter test - only where the SVS C API is built (see
 # src/indexes/CMakeLists.txt's svs_c_api_static guard).
-if(UNIX AND NOT APPLE
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux"
    AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
     add_executable(svs_stream_adapter_test
         ${CMAKE_CURRENT_LIST_DIR}/svs_stream_adapter_test.cc)

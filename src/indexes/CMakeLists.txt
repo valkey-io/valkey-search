@@ -136,7 +136,7 @@ target_link_libraries(vector_svs PUBLIC valkey_module)
 #
 # Built without OpenMP: threading comes from the module through the C API's
 # threadpool vtable, so libgomp must not enter DT_NEEDED (ci/check_svs_link.sh).
-if(UNIX AND NOT APPLE
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux"
    AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
     set(SVS_C_API_DIR "${CMAKE_SOURCE_DIR}/third_party/svs/bindings/c")
     set(SRCS_SVS_C_API

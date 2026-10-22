@@ -209,29 +209,14 @@ class IndexSchema : public KeyspaceEventSubscription,
     }
     return itr->second.document_score;
   }
-
-  uint32_t GetDocumentLength(BorrowedInternedStringPtr key) const
-      ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
-    if (!text_index_schema_) {
-      return 0;
-    }
-    return text_index_schema_->GetKeyDocLen(key, false);
-  }
-
-  uint32_t GetDocumentNorm(const Key &key) const
-      ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
-    if (!text_index_schema_) {
-      return 0;
-    }
-    return text_index_schema_->GetKeyNorm(key);
-  }
-
-  uint64_t GetTotalDocumentLength() const
-      ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
-    if (!text_index_schema_) {
-      return 0;
-    }
-    return text_index_schema_->GetMetadata().total_doc_len.load();
+  // Main-thread read, which must not wait on the time-sliced mutex: every
+  // writer of index_key_info_ takes mutated_records_mutex_, so a short hold of
+  // it suffices.
+  float GetDocumentScoreLocked(BorrowedInternedStringPtr key) const
+      ABSL_LOCKS_EXCLUDED(mutated_records_mutex_) {
+    absl::MutexLock lock(&mutated_records_mutex_);
+    auto itr = index_key_info_.find(key);
+    return itr == index_key_info_.end() ? score_ : itr->second.document_score;
   }
 
   void CreateTextIndexSchema() {
@@ -395,6 +380,15 @@ class IndexSchema : public KeyspaceEventSubscription,
   // REQUIRES: time_sliced_mutex_ held in read phase
   size_t GetIndexKeyInfoSize() const
       ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
+    return index_key_info_.size();
+  }
+
+  // Main-thread read, which must not wait on the time-sliced mutex: every
+  // writer of index_key_info_ takes mutated_records_mutex_, so a short hold of
+  // it suffices.
+  size_t GetIndexKeyInfoSizeLocked() const
+      ABSL_LOCKS_EXCLUDED(mutated_records_mutex_) {
+    absl::MutexLock lock(&mutated_records_mutex_);
     return index_key_info_.size();
   }
 

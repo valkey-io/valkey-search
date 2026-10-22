@@ -72,6 +72,9 @@ struct SVSBuildConfig {
   uint32_t training_threshold{0};
 };
 
+// Routes SVS's default logger to the Valkey log. Call once at module load.
+void InitSvsLogging();
+
 template <typename T>
 class VectorSVS : public VectorType<T> {
  protected:

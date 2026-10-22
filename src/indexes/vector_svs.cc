@@ -359,6 +359,29 @@ using SearchParamsPtr =
     std::unique_ptr<std::remove_pointer_t<svs_search_params_h>,
                     SearchParamsDeleter>;
 
+// Forwards SVS log messages to the Valkey log. `self` is the NUL-terminated
+// tag of the owning index (its attribute identifier), or a fixed tag for the
+// global default logger. May run on SVS worker threads; the sink is
+// thread_local and a null ctx is valid for ValkeyModule_Log.
+void SvsLogCallback(void* self, svs_log_level_t level, const char* msg) {
+  const LogLevel valkey_level = level <= SVS_LOG_LEVEL_DEBUG  ? DEBUG
+                                : level == SVS_LOG_LEVEL_INFO ? VERBOSE
+                                                              : WARNING;
+  VMSDK_LOG(valkey_level, nullptr)
+      << "SVS[" << static_cast<const char*>(self) << "] " << msg;
+}
+
+svs_logging_ops_t kSvsLogOps = SVS_INIT_LOGGING_OPS(SvsLogCallback);
+
+// Best-effort: returns null on failure. The logger runs at TRACE so that
+// VMSDK_LOG alone filters by the engine log level (including runtime changes).
+svs_logger_h MakeSvsLogger(const char* tag) {
+  svs_logging_t iface{&kSvsLogOps, const_cast<char*>(tag)};
+  svs_logger_h l = svs_logger_create_custom(&iface, nullptr);
+  if (l) svs_logger_set_level(l, SVS_LOG_LEVEL_TRACE, nullptr);
+  return l;
+}
+
 // Bridges the base-class filter predicate through the SVS C ABI.
 // `self` carries the predicate object; is_member forwards each SVS
 // candidate id through operator(); filter_rate hints selectivity to
@@ -480,11 +503,12 @@ size_t SvsBlockSizeBytes(const SVSBuildConfig& config, int dimensions) {
                     kSvsBlockSizeBytes);
 }
 
-// Algorithm/storage/builder trio shared by first-insert bootstrap and RDB
-// load, so a loaded index is structurally identical to a freshly built one.
+// Algorithm/storage/builder trio shared by first-insert bootstrap, RDB load
+// and SQ8 conversion, so a loaded index is structurally identical to a freshly
+// built one. `log_tag` must outlive every index made with the builder.
 absl::StatusOr<BuilderPtr> AssembleIndexBuilder(
     const SVSBuildConfig& config, data_model::DistanceMetric distance_metric,
-    int dimensions, svs_error_h err) {
+    int dimensions, const char* log_tag, svs_error_h err) {
   auto metric = ToSvsDistanceMetric(distance_metric);
   if (!metric.has_value()) {
     return absl::InvalidArgumentError(
@@ -540,6 +564,10 @@ absl::StatusOr<BuilderPtr> AssembleIndexBuilder(
       return SvsErrorToStatus(err, "index_builder_set_allocator");
     }
   }
+  if (svs_logger_h l = MakeSvsLogger(log_tag)) {
+    svs_index_builder_set_logger(builder.get(), l, nullptr);
+    svs_logger_free(l);  // the builder keeps its own reference
+  }
   return builder;
 }
 
@@ -547,10 +575,11 @@ absl::StatusOr<BuilderPtr> AssembleIndexBuilder(
 // svs_index_ null. svs_index_build_dynamic requires num_vectors > 0.
 absl::StatusOr<svs_index_h> BootstrapIndexImpl(
     const SVSBuildConfig& config, data_model::DistanceMetric distance_metric,
-    int dimensions, uint64_t label, const float* fp32_vector) {
+    int dimensions, uint64_t label, const float* fp32_vector,
+    const char* log_tag) {
   ScopedSvsError err;
-  auto builder =
-      AssembleIndexBuilder(config, distance_metric, dimensions, err.get());
+  auto builder = AssembleIndexBuilder(config, distance_metric, dimensions,
+                                      log_tag, err.get());
   if (!builder.ok()) return builder.status();
 
   svs_dynamic_index_params_t params = SVS_INIT_DYNAMIC_INDEX_PARAMS();
@@ -568,9 +597,10 @@ absl::StatusOr<svs_index_h> BootstrapIndexImpl(
 // Counts every failure once in svs_create_exceptions_cnt (INFO).
 absl::StatusOr<svs_index_h> BootstrapIndex(
     const SVSBuildConfig& config, data_model::DistanceMetric distance_metric,
-    int dimensions, uint64_t label, const float* fp32_vector) {
+    int dimensions, uint64_t label, const float* fp32_vector,
+    const char* log_tag) {
   auto result = BootstrapIndexImpl(config, distance_metric, dimensions, label,
-                                   fp32_vector);
+                                   fp32_vector, log_tag);
   if (!result.ok()) {
     ++Metrics::GetStats().svs_create_exceptions_cnt;
   }
@@ -590,6 +620,16 @@ bool BuildConfigMatches(const SVSBuildConfig& expected,
 }  // namespace
 
 #endif  // __linux__ && __x86_64__
+
+void InitSvsLogging() {
+#if defined(__linux__) && defined(__x86_64__)
+  // Covers SVS work without a per-index logger, such as stream loads.
+  if (svs_logger_h l = MakeSvsLogger("global")) {
+    svs_set_default_logger(l, nullptr);
+    svs_logger_free(l);
+  }
+#endif
+}
 
 template <typename T>
 VectorSVS<T>::VectorSVS(int dimensions, absl::string_view attribute_identifier,
@@ -746,9 +786,10 @@ absl::StatusOr<std::shared_ptr<VectorSVS<T>>> VectorSVS<T>::LoadFromRDB(
     SvsRdbInputStream adapter(input);
     svs_stream_interface iface = adapter.AsInterface();
     ScopedSvsError err;
-    auto builder = AssembleIndexBuilder(storage_config,
-                                        vector_index_proto.distance_metric(),
-                                        instance->dimensions_, err.get());
+    auto builder = AssembleIndexBuilder(
+        storage_config, vector_index_proto.distance_metric(),
+        instance->dimensions_, instance->attribute_identifier_.c_str(),
+        err.get());
     if (!builder.ok()) return builder.status();
 
     svs_index_h index = svs_index_load_stream_dynamic(
@@ -1150,8 +1191,9 @@ absl::Status VectorSVS<T>::InsertVector(uint64_t internal_id,
   if (svs_index_ != nullptr) {
     return AddPoint(internal_id, fp32);
   }
-  auto result = BootstrapIndex(StorageConfig(), this->distance_metric_,
-                               dimensions_, internal_id, fp32);
+  auto result =
+      BootstrapIndex(StorageConfig(), this->distance_metric_, dimensions_,
+                     internal_id, fp32, this->attribute_identifier_.c_str());
   if (!result.ok()) return result.status();
   svs_index_ = *result;
   return absl::OkStatus();
@@ -1223,8 +1265,9 @@ void VectorSVS<T>::MaybeConvert() {
       in_svs < build_config_.training_threshold) {
     return;
   }
-  auto builder = AssembleIndexBuilder(build_config_, this->distance_metric_,
-                                      dimensions_, err.get());
+  auto builder =
+      AssembleIndexBuilder(build_config_, this->distance_metric_, dimensions_,
+                           this->attribute_identifier_.c_str(), err.get());
   svs_index_h converted = nullptr;
   if (builder.ok()) {
     svs_dynamic_index_params_t params = SVS_INIT_DYNAMIC_INDEX_PARAMS();

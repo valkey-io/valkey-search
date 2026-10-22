@@ -25,6 +25,7 @@
 #include <random>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 #include "absl/algorithm/container.h"
@@ -33,10 +34,12 @@
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/match.h"
 #include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "absl/strings/strip.h"
+#include "absl/synchronization/mutex.h"
 #include "absl/synchronization/notification.h"
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
@@ -57,6 +60,7 @@
 #include "svs/c/svs_c.h"
 #include "testing/common.h"
 #include "vmsdk/src/debug.h"
+#include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
@@ -2184,6 +2188,125 @@ TEST_P(VectorSVSL2CosineTest, LoadFromRdbLogsNotice) {
         SupplementalContentChunkIter(rdb.get()), 0);
     VMSDK_EXPECT_OK(loaded);
   }
+}
+
+// -- Logging -----------------------------------------------------------------
+
+// Collects the SVS lines forwarded to the Valkey log. SVS may log from its
+// worker threads.
+class SvsLogLines {
+ public:
+  SvsLogLines() {
+    EXPECT_CALL(*kMockValkeyModule, Log(testing::_, testing::_, testing::_))
+        .WillRepeatedly(
+            [this](ValkeyModuleCtx *, const char *, const char *msg) {
+              absl::MutexLock lock(&mutex_);
+              if (absl::StrContains(msg, "SVS[")) lines_.emplace_back(msg);
+            });
+  }
+  void Clear() {
+    absl::MutexLock lock(&mutex_);
+    lines_.clear();
+  }
+  // Lines tagged with `tag`; fails if any SVS line carries another tag.
+  size_t CountTagged(absl::string_view tag) {
+    absl::MutexLock lock(&mutex_);
+    const std::string prefix = absl::StrCat("SVS[", tag, "] ");
+    size_t tagged = 0;
+    for (const auto &line : lines_) {
+      if (absl::StrContains(line, prefix)) {
+        ++tagged;
+      } else {
+        ADD_FAILURE() << "untagged SVS line: " << line;
+      }
+    }
+    return tagged;
+  }
+
+ private:
+  absl::Mutex mutex_;
+  std::vector<std::string> lines_;
+};
+
+class VectorSVSLoggingTest
+    : public VectorSVSTest,
+      public testing::WithParamInterface<std::tuple<
+          data_model::DistanceMetric, data_model::SVSCompressionType>> {};
+
+// Every index logs with its attribute identifier. SQ8 starts uncompressed and
+// converts at the training threshold; the converted index keeps the tag.
+TEST_P(VectorSVSLoggingTest, BuildLogsThroughValkeyLog) {
+  const auto [metric, compression] = GetParam();
+  VMSDK_EXPECT_OK(vmsdk::InitLogging(nullptr, "debug"));
+  absl::Cleanup restore_level = [] {
+    VMSDK_EXPECT_OK(vmsdk::InitLogging(nullptr, "notice"));
+  };
+  SvsLogLines logs;
+  constexpr uint32_t kThreshold = 10;
+  const bool sq8 = compression == data_model::SVS_COMPRESSION_SQ8;
+  auto index = VectorSVS<float>::Create(
+      sq8 ? Sq8Proto(kDimensions, metric, kThreshold)
+          : CreateSVSVectorIndexProto(kDimensions, metric, compression),
+      attribute_identifier, attribute_data_type, 0);
+  VMSDK_EXPECT_OK(index);
+  auto vectors = RandomVectors(kThreshold + 1, kDimensions);
+  const size_t initial = sq8 ? kThreshold : 1;
+  for (size_t i = 0; i < initial; ++i) {
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(**index, IndexToKey(i),
+                                                   VectorToStr(vectors[i])));
+  }
+  ASSERT_FALSE(VectorSVSTestPeer::CompressionPending(**index));
+  EXPECT_GE(logs.CountTagged(attribute_identifier), 1u);
+
+  // Lines from the index as it is now (converted, for SQ8).
+  logs.Clear();
+  VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(
+      **index, IndexToKey(kThreshold), VectorToStr(vectors[kThreshold])));
+  EXPECT_GE(logs.CountTagged(attribute_identifier), 1u);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    MetricsAndCompressions, VectorSVSLoggingTest,
+    testing::Combine(testing::Values(data_model::DISTANCE_METRIC_L2,
+                                     data_model::DISTANCE_METRIC_COSINE),
+                     testing::Values(data_model::SVS_COMPRESSION_NONE,
+                                     data_model::SVS_COMPRESSION_FP16,
+                                     data_model::SVS_COMPRESSION_SQ8)),
+    [](const testing::TestParamInfo<VectorSVSLoggingTest::ParamType> &info) {
+      return absl::StrCat(
+          data_model::DistanceMetric_Name(std::get<0>(info.param)), "_",
+          data_model::SVSCompressionType_Name(std::get<1>(info.param)));
+    });
+
+// A restored index logs through the global default logger: SVS v0.5.0 stream
+// loads ignore the builder's logger (changes once SVS honors it on load).
+TEST_P(VectorSVSL2CosineTest, RestoredIndexLogsAsGlobal) {
+  VMSDK_EXPECT_OK(vmsdk::InitLogging(nullptr, "debug"));
+  absl::Cleanup restore_level = [] {
+    VMSDK_EXPECT_OK(vmsdk::InitLogging(nullptr, "notice"));
+  };
+  InitSvsLogging();
+  SvsLogLines logs;
+  auto proto = CreateSVSVectorIndexProto(kDimensions, GetParam(),
+                                         data_model::SVS_COMPRESSION_NONE);
+  auto index = VectorSVS<float>::Create(proto, attribute_identifier,
+                                        attribute_data_type, 0);
+  VMSDK_EXPECT_OK(index);
+  auto vectors = RandomVectors(3, kDimensions);
+  for (size_t i = 0; i < 2; ++i) {
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(**index, IndexToKey(i),
+                                                   VectorToStr(vectors[i])));
+  }
+  FakeSafeRDB rdb;
+  VMSDK_EXPECT_OK((*index)->SaveIndex(RDBChunkOutputStream(&rdb)));
+  auto loaded = VectorSVS<float>::LoadFromRDB(
+      &fake_ctx_, &hash_attribute_data_type_, proto, "attribute_identifier_2",
+      SupplementalContentChunkIter(&rdb), 0);
+  VMSDK_EXPECT_OK(loaded);
+
+  logs.Clear();
+  VMSDK_EXPECT_OK(VectorSVSTestPeer::AddPoint(**loaded, 2, vectors[2].data()));
+  EXPECT_GE(logs.CountTagged("global"), 1u);
 }
 
 INSTANTIATE_TEST_SUITE_P(

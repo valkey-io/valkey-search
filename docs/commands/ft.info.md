@@ -108,7 +108,7 @@ The following field is always present:
 
 #### SVS_VAMANA VECTOR Field Type Extension.
 
-For `SVS_VAMANA`, `capacity` is the `INITIAL_CAP` given to `FT.CREATE`, or 0 if none was given; the index grows as needed.
+For `SVS_VAMANA`, `capacity` is the field's `INITIAL_CAP` (10240 unless `FT.CREATE` set it); the index grows as needed.
 
 - `name` (string) `SVS_VAMANA`.
 - `graph_max_degree` (integer) The maximum number of outgoing edges for each node in the graph.

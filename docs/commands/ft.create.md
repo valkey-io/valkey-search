@@ -104,7 +104,7 @@ See [Numeric Field Format](../topics/search-data-formats.md#numeric-fields) for 
   - `DIM <number>` (required): Specifies the number of dimensions in a vector.
   - `TYPE [FLOAT32 | FLOAT16]` (required): Element data type. `BFLOAT16` is not supported.
   - `DISTANCE_METRIC [L2 | IP | COSINE]` (required): Specifies the distance algorithm.
-  - `INITIAL_CAP <size>` (optional): Expected number of vectors. It sizes the blocks SVS allocates its data and graph in, from 64 KiB up to 16 MiB, so a small index doesn't reserve a full block. Without it, blocks are 16 MiB. The index grows past this size as needed.
+  - `INITIAL_CAP <size>` (optional): Expected number of vectors; the default is 10240. It sizes the blocks SVS allocates its data and graph in: the next power of two at or above `INITIAL_CAP` × `DIM` × the stored element size, from 64 KiB up to 16 MiB, so a small index doesn't reserve a large block. The index grows past this size as needed.
   - `GRAPH_MAX_DEGREE <number>` (optional): Maximum number of outgoing edges for each node in the graph. Higher values improve recall at the cost of memory and indexing time. The default is 64 and the minimum is 2.
   - `CONSTRUCTION_WINDOW_SIZE <number>` (optional): Number of candidates examined when inserting a vector. Higher values improve recall at the cost of indexing time. The default is 128. It must be at least `GRAPH_MAX_DEGREE`.
   - `SEARCH_WINDOW_SIZE <number>` (optional): Number of candidates examined during a query. The default is 10. A query can override it with `EF_RUNTIME`. Higher values increase query times, but improve query recall.

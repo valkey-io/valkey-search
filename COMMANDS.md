@@ -68,7 +68,7 @@ FT.CREATE <index-name>
   - **DIM \<number\>** (required): Specifies the number of dimensions in a vector.
   - **TYPE [FLOAT32 | FLOAT16]** (required): Element data type. BFLOAT16 is not supported.
   - **DISTANCE_METRIC \[L2 | IP | COSINE\]** (required): Specifies the distance algorithm
-  - **INITIAL_CAP \<size\>** (optional): Expected number of vectors; sizes SVS's allocation blocks, from 64 KiB up to 16 MiB (16 MiB without it).
+  - **INITIAL_CAP \<size\>** (optional): Expected number of vectors, 10240 by default; sizes SVS's allocation blocks, from 64 KiB up to 16 MiB.
   - **GRAPH_MAX_DEGREE \<number\>** (optional): Maximum number of outgoing edges for each node in the graph. The default is 64, the minimum 2, and the maximum is set by `search.max-vector-m`.
   - **CONSTRUCTION_WINDOW_SIZE \<number\>** (optional): Number of candidates examined when inserting a vector. The default is 128; it must be at least GRAPH_MAX_DEGREE, and the maximum is set by `search.max-vector-ef-construction`.
   - **SEARCH_WINDOW_SIZE \<number\>** (optional): Number of candidates examined during a query. The default is 10, and the maximum is set by `search.max-vector-ef-runtime`. A query can override it with EF_RUNTIME.

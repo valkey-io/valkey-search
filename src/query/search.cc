@@ -1779,14 +1779,11 @@ absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
 }
 
 bool SearchParameters::ScoreIsRelevance() const {
-  return IsNonVectorQuery() ||
-         (!vector_score_only && QueryHasScoredPredicate(*this));
-}
-
-bool QueryHasScoredPredicate(const SearchParameters &parameters) {
   // Tag leaves are relevance-scored too, so tag=>[KNN] must rank by them.
-  return parameters.filter_parse_results.query_operations &
-         (QueryOperations::kContainsText | QueryOperations::kContainsTag);
+  return IsNonVectorQuery() ||
+         (!vector_score_only &&
+          (filter_parse_results.query_operations &
+           (QueryOperations::kContainsText | QueryOperations::kContainsTag)));
 }
 
 // Increment query operation metrics based on query operations flags.

@@ -421,8 +421,6 @@ CalcBestMatchingPrefilteredKeys(
     indexes::VectorBase *vector_index, size_t qualified_entries,
     QueryContext &query_ctx);
 
-bool QueryHasScoredPredicate(const SearchParameters &parameters);
-
 // Returns the distance score field name for the single VR predicate in the
 // query: the $yield_distance_as (or AS) name if set, otherwise "" (empty).
 // Redisearch parity: a VECTOR_RANGE distance is surfaced ONLY under an explicit

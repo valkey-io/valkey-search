@@ -523,7 +523,7 @@ TEST_F(ResponseGeneratorTest, VectorScoreOnlyArmRefreshesScoreWithDistance) {
   parameters.filter_parse_results.query_operations =
       QueryOperations::kContainsText;
   parameters.vector_score_only = true;
-  ASSERT_TRUE(query::QueryHasScoredPredicate(parameters));
+  ASSERT_FALSE(parameters.ScoreIsRelevance());
 
   auto vector_index = indexes::VectorFlat<float>::Create(
       CreateFlatVectorIndexProto(4, data_model::DISTANCE_METRIC_L2, 10, 10),
@@ -642,7 +642,8 @@ void RunTextReplyPath(ValkeyModuleCtx *fake_ctx,
   auto parsed = parser.Parse();
   ASSERT_TRUE(parsed.ok()) << parsed.status();
   parameters.filter_parse_results = std::move(parsed).value();
-  ASSERT_TRUE(query::QueryHasScoredPredicate(parameters));
+  ASSERT_TRUE(parameters.filter_parse_results.query_operations &
+              QueryOperations::kContainsText);
 
   neighbors.push_back(indexes::Neighbor(interned, initial_neighbor_score));
   neighbors.back().sequence_number = 0;

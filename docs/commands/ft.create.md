@@ -142,6 +142,7 @@ This table shows the actual computation that Search uses when computing the dist
 - **Building:** the index is built when the first vector is added, so an empty `SVS_VAMANA` field allocates no SVS memory. With `COMPRESSION SQ8` it starts uncompressed and converts to `SQ8` once it holds `TRAINING_THRESHOLD` vectors. An index saved before its conversion loads uncompressed and converts later.
 - **Filtered queries:** SVS applies a filter to batches of candidates after each graph traversal, rather than at every node it visits. A query with a filter can therefore return fewer than `K` results when few vectors match. For very selective filters the query planner evaluates the filter first and computes exact distances instead (see `HYBRID_POLICY` in [Search - query language](../topics/search-query.md)).
 - **Persistence:** the index is saved in the RDB file. If the file was written by a different version of the SVS library, the index is rebuilt from the keyspace when it loads.
+- **Logging:** SVS's own messages go to the Valkey log as `SVS[<field>] <message>`: SVS trace and debug messages at `debug`, info at `verbose`, and warnings and errors at `warning`, so at the default `notice` level only SVS warnings appear. An index loaded from RDB logs as `SVS[global]`, because SVS's RDB load doesn't take a per-index logger; an SQ8 index gets its tag back when it converts. Each load from RDB also logs `SVS index loaded: attribute=<field>, num_elements=<n>, compression=<kind>, load_ms=<t>` at `notice`.
 
 ### Field options
 

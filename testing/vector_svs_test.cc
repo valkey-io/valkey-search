@@ -2294,6 +2294,48 @@ TEST_P(VectorSVSL2CosineTest, RestoredIndexLogsAsGlobal) {
   VMSDK_EXPECT_OK(VectorSVSTestPeer::AddPoint(**loaded, 2, vectors[2].data()));
 }
 
+// A token whose deadline has passed but whose periodic poll hasn't noticed
+// yet: IsCancelledNow sees the deadline and latches it, as TokenImpl does.
+class ExpiredDeadlineToken : public cancel::Base {
+ public:
+  bool IsCancelled() override { return cancelled_; }
+  bool IsCancelledNow() override { return cancelled_ = true; }
+  void Cancel() override { cancelled_ = true; }
+
+ private:
+  bool cancelled_ = false;
+};
+
+// A range search that finishes after its deadline marks the token, so the
+// caller reports the timeout when partial results are disabled, and keeps the
+// in-range candidates SVS found for when they're enabled. With a fetch cap of
+// 1 the exhaustive scan would otherwise run.
+TEST_P(VectorSVSL2CosineTest, SearchRangeChecksDeadlineAfterSvs) {
+  auto index = VectorSVS<float>::Create(
+      CreateSVSVectorIndexProto(kDimensions, GetParam(),
+                                data_model::SVS_COMPRESSION_NONE),
+      attribute_identifier, attribute_data_type, 0);
+  VMSDK_EXPECT_OK(index);
+  auto vectors = RandomVectors(10, kDimensions);
+  for (size_t i = 0; i < vectors.size(); ++i) {
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(**index, IndexToKey(i),
+                                                   VectorToStr(vectors[i])));
+  }
+  auto &fetch_cap = options::GetMaxNonVectorSearchResultsFetched();
+  const auto saved_cap = fetch_cap.GetValue();
+  absl::Cleanup restore = [&] {
+    VMSDK_EXPECT_OK(fetch_cap.SetValue(saved_cap));
+  };
+  VMSDK_EXPECT_OK(fetch_cap.SetValue(1));
+
+  cancel::Token token = std::make_shared<ExpiredDeadlineToken>();
+  auto result = (*index)->SearchRange(VectorToStr(vectors[0]), 0.001f, token);
+  VMSDK_EXPECT_OK(result);
+  EXPECT_TRUE(token->IsCancelled());
+  ASSERT_EQ(result->size(), 1u);
+  EXPECT_EQ((*result)[0].external_id, IndexToKey(0));
+}
+
 INSTANTIATE_TEST_SUITE_P(
     Metrics, VectorSVSL2CosineTest,
     testing::Values(data_model::DISTANCE_METRIC_L2,

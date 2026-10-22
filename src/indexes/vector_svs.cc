@@ -987,9 +987,13 @@ absl::StatusOr<std::vector<Neighbor>> VectorSVS<T>::SearchRange(
       options::GetMaxNonVectorSearchResultsFetched().GetValue());
   VMSDK_ASSIGN_OR_RETURN(
       auto knn, SearchKnn(query, max_candidates, filter.get(), std::nullopt));
+  // As in Search: check the deadline now that SVS has returned. A timed-out
+  // query keeps the candidates SVS found and skips the exhaustive scan; the
+  // caller reports the timeout unless partial results are enabled.
+  const bool timed_out = cancellation_token->IsCancelledNow();
 
   const bool fetch_full = knn.size() >= max_candidates;
-  if (fetch_full &&
+  if (!timed_out && fetch_full &&
       (knn.empty() || this->ClampCosineDistance(knn.top().first) <= radius)) {
     query::RecordNonVectorResultsFetchedLimited();
     return this->SearchRangeExhaustive(query, radius, cancellation_token,
@@ -999,7 +1003,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorSVS<T>::SearchRange(
   std::vector<Neighbor> neighbors;
   neighbors.reserve(knn.size());
   for (; !knn.empty(); knn.pop()) {
-    if (cancellation_token->IsCancelled()) {
+    if (!timed_out && cancellation_token->IsCancelled()) {
       break;
     }
     const auto [distance, label] = knn.top();

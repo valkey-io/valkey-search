@@ -118,7 +118,7 @@ endif()
 # linkage there under the same condition. Sanitizer builds are skipped: they
 # don't link with --exclude-libs (above), so archive symbols, svs_* included,
 # are exported there by design.
-if(UNIX AND NOT APPLE AND NOT SAN_BUILD
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT SAN_BUILD
    AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
   add_custom_command(
     TARGET libsearch

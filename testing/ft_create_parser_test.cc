@@ -81,6 +81,9 @@ struct FTCreateParserTestCase {
   int text_field_count{0};
   std::vector<HNSWParameters> hnsw_parameters;
   std::vector<FlatParameters> flat_parameters;
+  // For SQ8, training_threshold is the value the proto should hold (1024
+  // when TRAINING_THRESHOLD is omitted); unset means 0.
+  std::vector<SVSVamanaParameters> svs_parameters;
   std::vector<FTCreateTagParameters> tag_parameters;
   std::vector<PerFieldTextParams> text_parameters;
   FTCreateParameters expected;
@@ -194,6 +197,7 @@ TEST_P(FTCreateParserTest, ParseParams) {
 
     auto hnsw_index = 0;
     auto flat_index = 0;
+    size_t svs_index = 0;
     auto tag_index = 0;
     auto text_index = 0;
     for (auto i = 0; i < index_schema_proto->attributes().size(); ++i) {
@@ -240,6 +244,25 @@ TEST_P(FTCreateParserTest, ParseParams) {
                   test_case.hnsw_parameters[hnsw_index].ef_runtime);
         EXPECT_EQ(hnsw_proto.m(), test_case.hnsw_parameters[hnsw_index].m);
         ++hnsw_index;
+      } else if (test_case.expected.attributes[i].indexer_type ==
+                 indexes::IndexerType::kSVS) {
+        const auto &vector_proto =
+            index_schema_proto->attributes(i).index().vector_index();
+        EXPECT_TRUE(vector_proto.has_svs_vamana_algorithm());
+        ASSERT_LT(svs_index, test_case.svs_parameters.size());
+        const auto &expected_svs = test_case.svs_parameters[svs_index];
+        VerifyVectorParams(vector_proto, &expected_svs);
+        const auto &svs_proto = vector_proto.svs_vamana_algorithm();
+        EXPECT_EQ(svs_proto.graph_max_degree(), expected_svs.graph_max_degree);
+        EXPECT_EQ(svs_proto.construction_window_size(),
+                  expected_svs.construction_window_size);
+        EXPECT_EQ(svs_proto.search_window_size(),
+                  expected_svs.search_window_size);
+        EXPECT_FLOAT_EQ(svs_proto.alpha(), expected_svs.alpha);
+        EXPECT_EQ(svs_proto.compression(), expected_svs.compression);
+        EXPECT_EQ(svs_proto.training_threshold(),
+                  expected_svs.training_threshold.value_or(0));
+        ++svs_index;
       } else if (test_case.expected.attributes[i].indexer_type ==
                  indexes::IndexerType::kNumeric) {
         EXPECT_TRUE(
@@ -1033,6 +1056,20 @@ INSTANTIATE_TEST_SUITE_P(
              .success = true,
              .command_str = "idx1 SChema hash_field1 vector SVS_VAMANA 8 "
                             "TYPE FLOAT32 DIM 3 DISTANCE_METRIC L2 ALPHA 1.2",
+             .svs_parameters = {{
+                 {
+                     .dimensions = 3,
+                     .distance_metric = data_model::DISTANCE_METRIC_L2,
+                     .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
+                 },
+                 /* .graph_max_degree =*/kDefaultSVSGraphMaxDegree,
+                 /* .construction_window_size =*/
+                 kDefaultSVSConstructionWindowSize,
+                 /* .search_window_size =*/kDefaultSVSSearchWindowSize,
+                 /* .alpha =*/1.2f,
+                 /* .compression =*/data_model::SVS_COMPRESSION_NONE,
+                 /* .training_threshold =*/std::nullopt,
+             }},
              .expected = {.index_schema_name = "idx1",
                           .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
                           .attributes = {{
@@ -1046,6 +1083,20 @@ INSTANTIATE_TEST_SUITE_P(
              .success = true,
              .command_str = "idx1 SChema hash_field1 vector SVS_VAMANA 8 "
                             "TYPE FLOAT32 DIM 3 DISTANCE_METRIC IP ALPHA 0.95",
+             .svs_parameters = {{
+                 {
+                     .dimensions = 3,
+                     .distance_metric = data_model::DISTANCE_METRIC_IP,
+                     .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
+                 },
+                 /* .graph_max_degree =*/kDefaultSVSGraphMaxDegree,
+                 /* .construction_window_size =*/
+                 kDefaultSVSConstructionWindowSize,
+                 /* .search_window_size =*/kDefaultSVSSearchWindowSize,
+                 /* .alpha =*/0.95f,
+                 /* .compression =*/data_model::SVS_COMPRESSION_NONE,
+                 /* .training_threshold =*/std::nullopt,
+             }},
              .expected = {.index_schema_name = "idx1",
                           .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
                           .attributes = {{
@@ -1059,6 +1110,20 @@ INSTANTIATE_TEST_SUITE_P(
              .success = true,
              .command_str = "idx1 SChema hash_field1 vector SVS_VAMANA 6 "
                             "TYPE FLOAT32 DIM 3 DISTANCE_METRIC COSINE",
+             .svs_parameters = {{
+                 {
+                     .dimensions = 3,
+                     .distance_metric = data_model::DISTANCE_METRIC_COSINE,
+                     .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
+                 },
+                 /* .graph_max_degree =*/kDefaultSVSGraphMaxDegree,
+                 /* .construction_window_size =*/
+                 kDefaultSVSConstructionWindowSize,
+                 /* .search_window_size =*/kDefaultSVSSearchWindowSize,
+                 /* .alpha =*/kDefaultSVSAlphaSentinel,
+                 /* .compression =*/data_model::SVS_COMPRESSION_NONE,
+                 /* .training_threshold =*/std::nullopt,
+             }},
              .expected = {.index_schema_name = "idx1",
                           .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
                           .attributes = {{
@@ -1099,6 +1164,20 @@ INSTANTIATE_TEST_SUITE_P(
              .success = true,
              .command_str = "idx1 SChema hash_field1 vector SVS_VAMANA 6 "
                             "TYPE FLOAT32 DIM 3 DISTANCE_METRIC L2",
+             .svs_parameters = {{
+                 {
+                     .dimensions = 3,
+                     .distance_metric = data_model::DISTANCE_METRIC_L2,
+                     .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
+                 },
+                 /* .graph_max_degree =*/kDefaultSVSGraphMaxDegree,
+                 /* .construction_window_size =*/
+                 kDefaultSVSConstructionWindowSize,
+                 /* .search_window_size =*/kDefaultSVSSearchWindowSize,
+                 /* .alpha =*/kDefaultSVSAlphaSentinel,
+                 /* .compression =*/data_model::SVS_COMPRESSION_NONE,
+                 /* .training_threshold =*/std::nullopt,
+             }},
              .expected = {.index_schema_name = "idx1",
                           .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
                           .attributes = {{
@@ -1112,6 +1191,20 @@ INSTANTIATE_TEST_SUITE_P(
              .success = true,
              .command_str = "idx1 SCHEMA embedding VECTOR SVS_VAMANA 8 "
                             "TYPE FLOAT32 DIM 3 DISTANCE_METRIC L2 COMPRESSION SQ8",
+             .svs_parameters = {{
+                 {
+                     .dimensions = 3,
+                     .distance_metric = data_model::DISTANCE_METRIC_L2,
+                     .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
+                 },
+                 /* .graph_max_degree =*/kDefaultSVSGraphMaxDegree,
+                 /* .construction_window_size =*/
+                 kDefaultSVSConstructionWindowSize,
+                 /* .search_window_size =*/kDefaultSVSSearchWindowSize,
+                 /* .alpha =*/kDefaultSVSAlphaSentinel,
+                 /* .compression =*/data_model::SVS_COMPRESSION_SQ8,
+                 /* .training_threshold =*/1024,
+             }},
              .expected = {.index_schema_name = "idx1",
                           .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
                           .attributes = {{
@@ -1125,6 +1218,20 @@ INSTANTIATE_TEST_SUITE_P(
              .success = true,
              .command_str = "idx1 SCHEMA embedding VECTOR SVS_VAMANA 8 "
                             "TYPE FLOAT32 DIM 3 DISTANCE_METRIC COSINE COMPRESSION SQ8",
+             .svs_parameters = {{
+                 {
+                     .dimensions = 3,
+                     .distance_metric = data_model::DISTANCE_METRIC_COSINE,
+                     .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
+                 },
+                 /* .graph_max_degree =*/kDefaultSVSGraphMaxDegree,
+                 /* .construction_window_size =*/
+                 kDefaultSVSConstructionWindowSize,
+                 /* .search_window_size =*/kDefaultSVSSearchWindowSize,
+                 /* .alpha =*/kDefaultSVSAlphaSentinel,
+                 /* .compression =*/data_model::SVS_COMPRESSION_SQ8,
+                 /* .training_threshold =*/1024,
+             }},
              .expected = {.index_schema_name = "idx1",
                           .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
                           .attributes = {{
@@ -1139,6 +1246,20 @@ INSTANTIATE_TEST_SUITE_P(
              .command_str = "idx1 SCHEMA embedding VECTOR SVS_VAMANA 10 "
                             "TYPE FLOAT32 DIM 3 DISTANCE_METRIC L2 COMPRESSION SQ8 "
                             "TRAINING_THRESHOLD 100",
+             .svs_parameters = {{
+                 {
+                     .dimensions = 3,
+                     .distance_metric = data_model::DISTANCE_METRIC_L2,
+                     .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
+                 },
+                 /* .graph_max_degree =*/kDefaultSVSGraphMaxDegree,
+                 /* .construction_window_size =*/
+                 kDefaultSVSConstructionWindowSize,
+                 /* .search_window_size =*/kDefaultSVSSearchWindowSize,
+                 /* .alpha =*/kDefaultSVSAlphaSentinel,
+                 /* .compression =*/data_model::SVS_COMPRESSION_SQ8,
+                 /* .training_threshold =*/100,
+             }},
              .expected = {.index_schema_name = "idx1",
                           .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
                           .attributes = {{
@@ -1153,6 +1274,20 @@ INSTANTIATE_TEST_SUITE_P(
              .command_str = "idx1 SCHEMA embedding VECTOR SVS_VAMANA 10 "
                             "TYPE FLOAT32 DIM 3 DISTANCE_METRIC COSINE COMPRESSION SQ8 "
                             "TRAINING_THRESHOLD 100",
+             .svs_parameters = {{
+                 {
+                     .dimensions = 3,
+                     .distance_metric = data_model::DISTANCE_METRIC_COSINE,
+                     .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
+                 },
+                 /* .graph_max_degree =*/kDefaultSVSGraphMaxDegree,
+                 /* .construction_window_size =*/
+                 kDefaultSVSConstructionWindowSize,
+                 /* .search_window_size =*/kDefaultSVSSearchWindowSize,
+                 /* .alpha =*/kDefaultSVSAlphaSentinel,
+                 /* .compression =*/data_model::SVS_COMPRESSION_SQ8,
+                 /* .training_threshold =*/100,
+             }},
              .expected = {.index_schema_name = "idx1",
                           .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
                           .attributes = {{

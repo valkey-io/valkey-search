@@ -141,6 +141,8 @@ class TestAppMetrics(ValkeySearchTestCaseDebugMode):
             "hnsw_remove_exceptions_count",
             "hnsw_search_exceptions_count",
             "svs_add_exceptions_count",
+            "svs_conversion_failures_count",
+            "svs_conversions_count",
             "svs_create_exceptions_count",
             "svs_duplicate_label_on_load_count",
             "svs_modify_exceptions_count",

@@ -53,7 +53,7 @@ def _wait_for_aliaslist_on_all_nodes(nodes, expected):
     def check():
         return all(node.execute_command("FT.ALIASLIST") == expected
                    for node in nodes)
-    waiters.wait_for_true(check, timeout=30)
+    waiters.wait_for_true(check)
 
 
 def _add_aliases_raising_version(node, index_name, count):
@@ -345,7 +345,7 @@ class TestFTAliasClusterPropagation(ValkeySearchClusterTestCase):
             return True
 
         from valkeytestframework.util import waiters as _waiters
-        _waiters.wait_for_true(_alias_search_ready, timeout=15)
+        _waiters.wait_for_true(_alias_search_ready)
 
         for node in self._all_primaries():
             result = node.execute_command(
@@ -420,7 +420,7 @@ class TestFTAliasSearchCluster(ValkeySearchClusterTestCase):
                     return False
             return True
 
-        waiters.wait_for_true(_aggregate_ready, timeout=15)
+        waiters.wait_for_true(_aggregate_ready)
 
         for node in self._all_primaries():
             result = node.execute_command(
@@ -847,7 +847,6 @@ class TestFTAliasRDBPersistenceCluster(ValkeySearchClusterTestCaseDebugMode):
             for rg in self.replication_groups:
                 waiters.wait_for_true(
                     lambda rg=rg: _node_responsive(rg.primary),
-                    timeout=30,
                 )
         finally:
             os.environ.pop("SKIPLOGCLEAN", None)
@@ -862,7 +861,6 @@ class TestFTAliasRDBPersistenceCluster(ValkeySearchClusterTestCaseDebugMode):
             rg.primary.server.restart(remove_rdb=False)
             waiters.wait_for_true(
                 lambda: _node_responsive(rg.primary),
-                timeout=30,
             )
         finally:
             os.environ.pop("SKIPLOGCLEAN", None)
@@ -995,7 +993,7 @@ class TestFTAliasRDBPersistenceCluster(ValkeySearchClusterTestCaseDebugMode):
                     return False
             return True
 
-        waiters.wait_for_true(_search_ready, timeout=15)
+        waiters.wait_for_true(_search_ready)
 
     def test_aliasupdate_to_lower_version_index_survives_restart(self):
         """An alias moved to an index with a lower metadata version stays put
@@ -1094,7 +1092,6 @@ class TestFTAliasFingerprintStability(ValkeySearchClusterTestCase):
                 IndexingTestHelper.is_indexing_complete_on_node(n, "fp_idx")
                 for n in self._all_primaries()
             ),
-            timeout=15,
         )
 
         result_before = cluster_client.execute_command(

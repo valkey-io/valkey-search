@@ -412,6 +412,15 @@ void SchemaManager::NormalizeIndexSchemaProtoDefaults(
   if (proto.subscribed_key_prefixes().empty()) {
     proto.add_subscribed_key_prefixes("");
   }
+  // Vector indexes derive `normalize` from the metric and ToProto() reports
+  // it; FT.CREATE never sets it.
+  for (auto &attribute : *proto.mutable_attributes()) {
+    if (attribute.index().has_vector_index()) {
+      auto *vector_index = attribute.mutable_index()->mutable_vector_index();
+      vector_index->set_normalize(vector_index->distance_metric() ==
+                                  data_model::DISTANCE_METRIC_COSINE);
+    }
+  }
   // Sort attributes by alias to match ToProto() output order.
   std::sort(proto.mutable_attributes()->begin(),
             proto.mutable_attributes()->end(),

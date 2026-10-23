@@ -22,6 +22,7 @@
 #include "google/protobuf/text_format.h"
 #include "google/protobuf/util/message_differencer.h"
 #include "gtest/gtest.h"
+#include "src/commands/ft_create_parser.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/coordinator/metadata_manager.h"
 #include "src/index_schema.pb.h"
@@ -29,6 +30,7 @@
 #include "testing/common.h"
 #include "testing/coordinator/common.h"
 #include "vmsdk/src/testing_infra/module.h"
+#include "vmsdk/src/testing_infra/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
@@ -1913,6 +1915,60 @@ TEST_F(CrossIndexAliasConflictTest, ShadowingIndexIsValidAliasTarget) {
     auto resolved = SchemaManager::Instance().GetIndexSchema(kDbNum, alias);
     ASSERT_TRUE(resolved.ok()) << alias;
     EXPECT_EQ(resolved.value(), shadowing.value()) << alias;
+  }
+}
+
+// The alias commands write through MutateIndexProtoInMetadata. If its
+// normalization missed a field, OnMetadataCallback would see a structural
+// change and rebuild the index. Schemas come from the FT.CREATE parser so the
+// stored proto matches what production stores.
+TEST_F(CrossIndexAliasConflictTest, AliasCommandsDoNotRebuildIndexes) {
+  for (const char *schema : {
+           "VECTOR HNSW 6 TYPE FLOAT32 DIM 4 DISTANCE_METRIC COSINE",
+           "VECTOR FLAT 6 TYPE FLOAT32 DIM 4 DISTANCE_METRIC L2",
+           "VECTOR HNSW 6 TYPE FLOAT32 DIM 4 DISTANCE_METRIC IP",
+           "TAG SEPARATOR | CASESENSITIVE",
+           "NUMERIC",
+           "TEXT NOSTEM",
+       }) {
+    SCOPED_TRACE(schema);
+    InitManagers(/*coordinator_enabled=*/true);
+    for (const char *name : {"idx_a", "idx_b"}) {
+      auto args = vmsdk::ToValkeyStringVector(
+          absl::StrCat("FT.CREATE ", name, " ON HASH PREFIX 1 ", name,
+                       ": SCHEMA field ", schema));
+      auto proto = ParseFTCreateArgs(nullptr, args.data() + 1, args.size() - 1);
+      for (auto *arg : args) {
+        TestValkeyModule_FreeString(nullptr, arg);
+      }
+      ASSERT_TRUE(proto.ok()) << proto.status();
+      // FT.CREATE stamps the selected db before storing the proto.
+      proto->set_db_num(kDbNum);
+      VMSDK_EXPECT_OK(
+          SchemaManager::Instance().CreateIndexSchema(&fake_ctx_, *proto));
+    }
+    auto *idx_a =
+        SchemaManager::Instance().GetIndexSchema(kDbNum, "idx_a")->get();
+    auto *idx_b =
+        SchemaManager::Instance().GetIndexSchema(kDbNum, "idx_b")->get();
+    auto expect_same_indexes = [&](absl::string_view step) {
+      EXPECT_EQ(
+          SchemaManager::Instance().GetIndexSchema(kDbNum, "idx_a")->get(),
+          idx_a)
+          << step;
+      EXPECT_EQ(
+          SchemaManager::Instance().GetIndexSchema(kDbNum, "idx_b")->get(),
+          idx_b)
+          << step;
+    };
+
+    VMSDK_EXPECT_OK(SchemaManager::Instance().AddAlias(kDbNum, "p1", "idx_a"));
+    expect_same_indexes("add");
+    VMSDK_EXPECT_OK(
+        SchemaManager::Instance().UpdateAlias(kDbNum, "p1", "idx_b"));
+    expect_same_indexes("update");
+    VMSDK_EXPECT_OK(SchemaManager::Instance().RemoveAlias(kDbNum, "p1"));
+    expect_same_indexes("remove");
   }
 }
 

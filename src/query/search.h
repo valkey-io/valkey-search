@@ -291,6 +291,9 @@ struct SearchParameters {
   bool vector_score_only{false};
   bool IsNonVectorQuery() const { return attribute_alias.empty(); }
   bool IsVectorQuery() const { return !IsNonVectorQuery(); }
+  // True when Neighbor.score is a relevance score, false when it is a KNN
+  // distance.
+  bool ScoreIsRelevance() const;
   // Indicates whether the search requires complete results (neighbors/keys) to
   // be able to return correct results. An example of this is when sorting on a
   // particular field is needed on the results. This should be overridden in
@@ -417,8 +420,6 @@ CalcBestMatchingPrefilteredKeys(
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
     indexes::VectorBase *vector_index, size_t qualified_entries,
     QueryContext &query_ctx);
-
-bool QueryHasTextPredicate(const SearchParameters &parameters);
 
 // Returns the distance score field name for the single VR predicate in the
 // query: the $yield_distance_as (or AS) name if set, otherwise "" (empty).

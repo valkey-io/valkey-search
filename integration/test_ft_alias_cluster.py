@@ -1022,6 +1022,35 @@ class TestFTAliasRDBPersistenceCluster(ValkeySearchClusterTestCaseDebugMode):
         self._wait_for_index_on_all_nodes(INDEX_NAME_2)
         _wait_for_aliaslist_on_all_nodes(self._all_primaries(), expected)
 
+    def test_node_restarted_from_stale_rdb_catches_up(self):
+        """A node restarted from an RDB saved before the alias moved converges
+        to the cluster's current target instead of its stale one."""
+        node0 = self.new_client_for_primary(0)
+        assert node0.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        assert node0.execute_command(*CREATE_TAG_INDEX_2) == b"OK"
+        self._wait_for_index_on_all_nodes(INDEX_NAME)
+        self._wait_for_index_on_all_nodes(INDEX_NAME_2)
+        assert node0.execute_command(
+            "FT.ALIASADD", ALIAS_NAME, INDEX_NAME) == b"OK"
+
+        rg = self.replication_groups[1]
+        rg.primary.client.execute_command("SAVE")
+        os.environ["SKIPLOGCLEAN"] = "1"
+        try:
+            rg.primary.server.exit(False)
+            # node1 is down, so the consistency check cannot finish; the move
+            # is still committed on the remaining primaries.
+            with pytest.raises(ResponseError):
+                node0.execute_command(
+                    "FT.ALIASUPDATE", ALIAS_NAME, INDEX_NAME_2)
+            rg.primary.server.start()
+            waiters.wait_for_true(lambda: _node_responsive(rg.primary))
+        finally:
+            os.environ.pop("SKIPLOGCLEAN", None)
+
+        _wait_for_aliaslist_on_all_nodes(
+            self._all_primaries(), [ALIAS_NAME.encode(), INDEX_NAME_2.encode()])
+
 
 def _node_responsive(node):
     """Return True if a node responds to PING."""
@@ -1118,3 +1147,37 @@ class TestFTAliasHashtagValidationCluster(ValkeySearchClusterTestCase):
             "FT.ALIASADD", "alias{slot1}", "idx{slot1}") == b"OK"
         _wait_for_aliaslist_on_all_nodes(
             nodes, [b"alias{slot1}", b"idx{slot1}"])
+
+
+class TestFTAliasReplicaCluster(ValkeySearchClusterTestCase):
+    """Alias changes reach replicas, and replicas reject alias writes."""
+
+    @pytest.mark.parametrize(
+        "setup_test", [{"replica_count": 1}], indirect=True
+    )
+    def test_alias_changes_reach_replica(self):
+        rg = self.get_replication_group(0)
+        primary = rg.get_primary_connection()
+        replica = rg.get_replica_connection(0)
+        assert primary.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        assert primary.execute_command(*CREATE_TAG_INDEX_2) == b"OK"
+
+        assert primary.execute_command(
+            "FT.ALIASADD", ALIAS_NAME, INDEX_NAME) == b"OK"
+        _wait_for_aliaslist_on_all_nodes(
+            [replica], [ALIAS_NAME.encode(), INDEX_NAME.encode()])
+
+        for args in (("FT.ALIASADD", "other", INDEX_NAME),
+                     ("FT.ALIASUPDATE", ALIAS_NAME, INDEX_NAME_2),
+                     ("FT.ALIASDEL", ALIAS_NAME)):
+            with pytest.raises(ResponseError) as exc_info:
+                replica.execute_command(*args)
+            assert "read only replica" in str(exc_info.value)
+
+        assert primary.execute_command(
+            "FT.ALIASUPDATE", ALIAS_NAME, INDEX_NAME_2) == b"OK"
+        _wait_for_aliaslist_on_all_nodes(
+            [replica], [ALIAS_NAME.encode(), INDEX_NAME_2.encode()])
+
+        assert primary.execute_command("FT.ALIASDEL", ALIAS_NAME) == b"OK"
+        _wait_for_aliaslist_on_all_nodes([replica], [])

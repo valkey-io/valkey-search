@@ -62,6 +62,7 @@ set(SRCS_HYPERLOGLOG ${CMAKE_CURRENT_LIST_DIR}/hyperloglog.c
 
 valkey_search_add_static_library(hyperloglog "${SRCS_HYPERLOGLOG}")
 target_include_directories(hyperloglog PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_compile_options(hyperloglog PRIVATE -fno-fast-math)
 
 set(SRCS_HYPERLOGLOG_COUNTER
     ${CMAKE_CURRENT_LIST_DIR}/hyperloglog_counter.cc

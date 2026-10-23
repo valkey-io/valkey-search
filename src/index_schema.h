@@ -324,6 +324,13 @@ class IndexSchema : public KeyspaceEventSubscription,
       std::unique_ptr<query::SearchParameters> &&params)
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
 
+  // Blocks until the in-flight mutations of `neighbors` are indexed, or
+  // `deadline` passes (false). For queries that reply synchronously and so
+  // cannot be parked in the mutation queue by PerformKeyContentionCheck.
+  bool WaitForContendedKeys(const std::vector<indexes::Neighbor> &neighbors,
+                            absl::Time deadline)
+      ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
+
   static absl::Status TextInfoCmd(ValkeyModuleCtx *ctx,
                                   vmsdk::ArgsIterator &itr);
   struct DbKeyInfo {

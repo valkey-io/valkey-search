@@ -267,6 +267,17 @@ absl::Status QueryCommand::ExecuteSyncLocal(ValkeyModuleCtx *ctx,
     ++Metrics::GetStats().query_failed_requests_cnt;
     return absl::OkStatus();
   }
+  // SendReply revalidates text predicates against a key's index unlocked,
+  // which is only correct and safe once its in-flight mutation is applied.
+  // EXEC/Lua cannot park this query, so block here, bounded by its timeout.
+  if (cmd->GetContentProcessing() == query::kContentionCheckRequired &&
+      !cmd->index_schema->WaitForContendedKeys(
+          cmd->search_result.neighbors,
+          absl::Now() + absl::Milliseconds(cmd->timeout_ms))) {
+    ValkeyModule_ReplyWithError(ctx, query::kTimeoutMsg.data());
+    ++Metrics::GetStats().query_failed_requests_cnt;
+    return absl::OkStatus();
+  }
   cmd->SendReply(ctx, cmd->search_result);
   if (cmd->adopted_by_cursor) {
     cmd.release();  // Now owned by the cursor table.

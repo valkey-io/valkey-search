@@ -2110,6 +2110,48 @@ bool IndexSchema::PerformKeyContentionCheck(
   return false;
 }
 
+bool IndexSchema::WaitForContendedKeys(
+    const std::vector<indexes::Neighbor> &neighbors, absl::Time deadline) {
+  const auto &dbkeyinfo_map = db_key_info_.Get();
+  std::vector<Key> contended;
+  for (const auto &neighbor : neighbors) {
+    auto db_itr = dbkeyinfo_map.find(neighbor.external_id);
+    if (db_itr != dbkeyinfo_map.end() &&
+        db_itr->second.mutation_sequence_number_ != neighbor.sequence_number) {
+      contended.push_back(neighbor.external_id);
+    }
+  }
+  if (contended.empty()) {
+    return true;
+  }
+  if (ABSL_PREDICT_FALSE(mutations_thread_pool_->IsSuspended())) {
+    // Fork in flight: workers resume only after this command, so apply here
+    // like ProcessMultiQueue does.
+    for (const auto &key : contended) {
+      {
+        absl::MutexLock lock(&stats_.mutex_);
+        ++stats_.mutation_queue_size_;
+      }
+      ProcessSingleMutationAsync(detached_ctx_.get(), /*from_backfill=*/false,
+                                 key, /*delay_capturer=*/nullptr);
+    }
+    return true;
+  }
+  absl::MutexLock lock(&mutated_records_mutex_);
+  // A record is erased only after its mutation is applied.
+  auto applied = [&]() ABSL_NO_THREAD_SAFETY_ANALYSIS {
+    return std::ranges::none_of(contended, [&](const Key &key) {
+      return tracked_mutated_records_.contains(key);
+    });
+  };
+  if (applied()) {
+    return true;
+  }
+  ++Metrics::GetStats().text_query_blocked_cnt;
+  return mutated_records_mutex_.AwaitWithDeadline(absl::Condition(&applied),
+                                                  deadline);
+}
+
 bool IndexSchema::IsKeyTracked(const Key &key) const {
   if (db_key_info_.Get().contains(key)) {
     return true;

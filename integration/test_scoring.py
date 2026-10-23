@@ -183,6 +183,7 @@ TAG_VEC_DOCS = {
     f"doc:{i}": {
         "body": " ".join("one two three four five".split()[:i]),
         "cat": "a",
+        "rank": str(i),
         "vec": _vec(round(0.6 - 0.1 * i, 1), 0.0),
     }
     for i in range(1, 6)
@@ -908,12 +909,6 @@ class TestScoring(ValkeySearchTestCaseBase):
     # Group 15: a hybrid tag=>[KNN] query ranks by tag score, not by distance.
     # The reference (Redis 8.10.1 / search 81000) scores a tag-only prefilter
     # exactly as it scores the same tag query without the KNN clause.
-    @pytest.mark.skip(reason=(
-        "https://github.com/valkey-io/valkey-search/issues/1414"
-        " -- a tag=>[KNN] prefilter returns score 0 for every document and"
-        " keeps distance order, where the reference scores the tag predicate"
-        " exactly as it does without the KNN clause. The test is written to"
-        " fail against that defect; unskip it when the issue is fixed."))
     def test_hybrid_tag_vector(self):
         client = self.server.get_new_client()
         load(client, IDX_MAIN, TAG_VEC_DOCS)
@@ -933,6 +928,40 @@ class TestScoring(ValkeySearchTestCaseBase):
                               *params)
         assert hybrid == pytest.approx(tag_only, abs=SCORE_ABS_TOL)
         assert keys == ["doc:1", "doc:2", "doc:3", "doc:4", "doc:5"]
+
+        # K below the match count: KNN keeps the 3 nearest, then ranks them by
+        # tag score. Sorting every match first would return doc:1-3 instead.
+        keys, hybrid = search(client, IDX_MAIN, "@cat:{a}=>[KNN 3 @vec $q]",
+                              *params)
+        assert keys == ["doc:3", "doc:4", "doc:5"]
+        assert hybrid == pytest.approx(
+            {k: tag_only[k] for k in keys}, abs=SCORE_ABS_TOL)
+
+        # The numeric clause drops the nearest doc before KNN and adds 0.
+        keys, hybrid = search(client, IDX_MAIN,
+                              "(@cat:{a} @rank:[1 4])=>[KNN 3 @vec $q]", *params)
+        assert keys == ["doc:2", "doc:3", "doc:4"]
+        assert hybrid == pytest.approx(
+            {k: tag_only[k] for k in keys}, abs=SCORE_ABS_TOL)
+
+        # A negated tag only filters: every score is 0, so the 3 nearest come
+        # back in key order, as in the reference.
+        keys, hybrid = search(client, IDX_MAIN,
+                              "(-@cat:{b})=>[KNN 3 @vec $q]", *params)
+        assert keys == ["doc:3", "doc:4", "doc:5"]
+        assert hybrid == pytest.approx({k: 0.0 for k in keys},
+                                       abs=SCORE_ABS_TOL)
+
+        # Equal doc lengths tie every tag score, which falls back to key order
+        # rather than distance order.
+        for key in TAG_VEC_DOCS:
+            client.hset(key, "body", "one two three")
+        wait_indexed(client, IDX_MAIN, len(TAG_VEC_DOCS))
+        keys, hybrid = search(client, IDX_MAIN, "@cat:{a}=>[KNN 3 @vec $q]",
+                              *params)
+        assert keys == ["doc:3", "doc:4", "doc:5"]
+        assert hybrid == pytest.approx({k: tag_only["doc:3"] for k in keys},
+                                       abs=SCORE_ABS_TOL)
 
     # Group 16: the two hybrid strategies score alike. ADHOC_BF drains the
     # filter's fetchers (a pure text filter is trusted from the iterator) and

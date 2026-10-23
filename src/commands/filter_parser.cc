@@ -36,24 +36,19 @@
 
 namespace valkey_search {
 
-// Precomputes bitmasks and identifier sets for INFIELDS-restricted queries.
-// Two masks are maintained:
-//   - infields_field_mask: covers all TEXT fields named in INFIELDS.
-//   - infields_suffix_field_mask: subset of the above that support suffix
-//     trie queries (e.g., *foo). Suffix queries must only target fields with
-//     WithSuffixTrie() == true; the separate mask avoids suffix-matching
-//     against fields that lack the trie.
+// Precomputes the bitmask and identifier set for INFIELDS-restricted
+// queries: infields_field_mask covers all TEXT fields named in INFIELDS.
+// Suffix-trie restriction is handled separately by IndexSchema's own
+// suffix field mask/identifiers, which this mask/set is ANDed/intersected
+// against at use time (see SetupTextFieldConfiguration).
 absl::Status TextParsingOptions::PrecomputeInfieldsMasks(
     const IndexSchema& index_schema) {
   infields_identifiers.clear();
-  infields_suffix_identifiers.clear();
   infields_field_mask = ~FieldMaskPredicate{0};
-  infields_suffix_field_mask = ~FieldMaskPredicate{0};
   if (!infields || infields->empty()) {
     return absl::OkStatus();
   }
   FieldMaskPredicate mask = 0ULL;
-  FieldMaskPredicate suffix_mask = 0ULL;
   const auto& attributes = index_schema.GetAttributes();
   for (const auto& field : *infields) {
     auto itr = attributes.find(field);
@@ -76,13 +71,8 @@ absl::Status TextParsingOptions::PrecomputeInfieldsMasks(
     const auto& identifier = itr->second.GetIdentifier();
     mask |= 1ULL << text_index->GetTextFieldNumber();
     infields_identifiers.insert(identifier);
-    if (text_index->WithSuffixTrie()) {
-      suffix_mask |= 1ULL << text_index->GetTextFieldNumber();
-      infields_suffix_identifiers.insert(identifier);
-    }
   }
   infields_field_mask = mask;
-  infields_suffix_field_mask = suffix_mask;
   return absl::OkStatus();
 }
 
@@ -1147,7 +1137,8 @@ absl::Status FilterParser::SetupTextFieldConfiguration(
     // Set identifiers to include all text fields in the index schema,
     // then AND with the precomputed INFIELDS mask.  When INFIELDS is absent
     // the mask is ~0 and the AND is a no-op.
-    auto text_identifiers = index_schema_.GetAllTextIdentifiers(with_suffix);
+    const auto& text_identifiers =
+        index_schema_.GetAllTextIdentifiers(with_suffix);
     field_mask = index_schema_.GetAllTextFieldMask(with_suffix);
     if (text_identifiers.empty() || field_mask == 0ULL) {
       if (with_suffix) {
@@ -1155,10 +1146,7 @@ absl::Status FilterParser::SetupTextFieldConfiguration(
       }
       return absl::InvalidArgumentError("Index does not have any text field");
     }
-    FieldMaskPredicate infields_mask = with_suffix
-                                           ? options_.infields_suffix_field_mask
-                                           : options_.infields_field_mask;
-    field_mask &= infields_mask;
+    field_mask &= options_.infields_field_mask;
     // INFIELDS only lists valid TEXT fields, so an empty intersection means
     // none of them supports suffix search.
     if (field_mask == 0ULL) {
@@ -1167,13 +1155,13 @@ absl::Status FilterParser::SetupTextFieldConfiguration(
     }
     // Use precomputed INFIELDS identifiers if available, otherwise all.
     if (options_.infields && !options_.infields->empty()) {
-      const auto& precomputed_identifiers =
-          with_suffix ? options_.infields_suffix_identifiers
-                      : options_.infields_identifiers;
-      filter_identifiers_.reserve(filter_identifiers_.size() +
-                                  precomputed_identifiers.size());
-      filter_identifiers_.insert(precomputed_identifiers.begin(),
-                                 precomputed_identifiers.end());
+      // Intersect with text_identifiers so a suffix-restricted call only
+      // picks up INFIELDS identifiers that are also suffix-capable.
+      for (const auto& identifier : options_.infields_identifiers) {
+        if (text_identifiers.contains(identifier)) {
+          filter_identifiers_.insert(identifier);
+        }
+      }
     } else {
       filter_identifiers_.reserve(filter_identifiers_.size() +
                                   text_identifiers.size());

@@ -30,13 +30,14 @@ struct TextParsingOptions {
   bool inorder = false;
   std::optional<uint32_t> slop = std::nullopt;
   const absl::flat_hash_set<std::string>* infields = nullptr;
-  // When INFIELDS is specified, these masks restrict which text fields
-  // participate in unscoped term matching.  When INFIELDS is absent,
-  // masks default to ~0 (all bits set) so ANDing them is a no-op.
+  // When INFIELDS is specified, this mask restricts which text fields
+  // participate in unscoped term matching. ANDed with IndexSchema's own
+  // all-fields/suffix-fields mask, which already narrows to suffix-capable
+  // fields when needed, so no separate suffix-specific INFIELDS mask is
+  // required. When INFIELDS is absent, defaults to ~0 (all bits set) so the
+  // AND is a no-op.
   FieldMaskPredicate infields_field_mask = ~FieldMaskPredicate{0};
-  FieldMaskPredicate infields_suffix_field_mask = ~FieldMaskPredicate{0};
   absl::flat_hash_set<std::string> infields_identifiers;
-  absl::flat_hash_set<std::string> infields_suffix_identifiers;
 
   // Must be called after setting `infields` and before passing to
   // FilterParser. Returns an error if any INFIELDS field is not a valid

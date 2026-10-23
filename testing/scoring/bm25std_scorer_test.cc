@@ -152,6 +152,15 @@ TEST_F(Bm25StdScorerTest, ComposeInfinityShortCircuits) {
   EXPECT_EQ(scorer.ComposeDocumentScore(0.5f, kNegInf), kNegInf);
 }
 
+// A zero sum (e.g. only `$weight: 0` clauses) scores 0, even for an infinite
+// document score.
+TEST_F(Bm25StdScorerTest, ComposeZeroSumIsZero) {
+  Bm25StdScorer scorer;
+  EXPECT_EQ(scorer.ComposeDocumentScore(0.0f, MakeInf()), 0.0f);
+  EXPECT_EQ(scorer.ComposeDocumentScore(0.0f, MakeNegInf()), 0.0f);
+  EXPECT_EQ(scorer.ComposeDocumentScore(0.0f, 0.7f), 0.0f);
+}
+
 // The mirror of the case above. An infinite sum_of_terms times a zero document
 // score is the other way to reach 0 * inf -> NaN, and a NaN score is worse than
 // wrong: SearchResult::TrimResults sorts on it, and NaN compares false against

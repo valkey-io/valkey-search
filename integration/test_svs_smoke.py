@@ -713,8 +713,7 @@ class TestSVSVamanaSmoke(ValkeySearchTestCaseBase):
 
     @pytest.mark.parametrize("compression", ["NONE", "FP16", "SQ8"])
     def test_ft_create_supports_each_open_compression(self, compression):
-        """NONE / FP16 / SQ8 are the v1 open compression kinds; LVQ /
-        LEANVEC are proprietary and rejected at parse."""
+        """NONE / FP16 / SQ8 are the supported compression kinds."""
         client: Valkey = self.server.get_new_client()
         idx = f"comp_{compression.lower()}_idx"
         client.execute_command(

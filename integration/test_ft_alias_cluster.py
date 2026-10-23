@@ -1798,14 +1798,11 @@ class TestFTAliasCollisionWithPausepoints(ValkeySearchClusterTestCaseDebugMode):
 
 
 class TestFTAliasHashtagValidationCluster(ValkeySearchClusterTestCase):
-    """Cluster tests for hashtag validation on aliases targeting single-slot indexes."""
+    """A single-slot index only accepts aliases with its hashtag, so the
+    alias routes to the same slot. The rule's cases are covered by
+    HashtagAliasValidationTest; this checks it end to end in a cluster."""
 
-    def _all_primaries(self):
-        return [self.new_client_for_primary(i)
-                for i in range(self.CLUSTER_SIZE)]
-
-    def test_aliasadd_matching_hashtag_succeeds_cluster(self):
-        """ALIASADD with matching hashtag succeeds and propagates in cluster."""
+    def test_alias_hashtag_must_match_single_slot_index(self):
         node0 = self.new_client_for_primary(0)
         assert node0.execute_command(
             "FT.CREATE", "idx{slot1}",
@@ -1813,108 +1810,18 @@ class TestFTAliasHashtagValidationCluster(ValkeySearchClusterTestCase):
             "PREFIX", "1", "doc:{slot1}",
             "SCHEMA", "category", "TAG",
         ) == b"OK"
-        nodes = self._all_primaries()
+        nodes = [self.new_client_for_primary(i)
+                 for i in range(self.CLUSTER_SIZE)]
         IndexingTestHelper.wait_for_indexing_complete_on_all_nodes(
             nodes, "idx{slot1}")
 
-        assert node0.execute_command(
-            "FT.ALIASADD", "alias{slot1}", "idx{slot1}"
-        ) == b"OK"
-        _wait_for_alias_on_all_nodes(nodes, "alias{slot1}", expect_present=True)
-
-        # Verify alias resolves on all nodes.
-        for node in nodes:
-            info = list(node.execute_command("FT.INFO", "alias{slot1}"))
-            idx = next(
-                (i for i, v in enumerate(info) if v == b"index_name"), None)
-            assert idx is not None
-            assert info[idx + 1] == b"idx{slot1}"
-
-    def test_aliasadd_different_hashtag_rejected_cluster(self):
-        """ALIASADD with different hashtag is rejected in cluster."""
-        node0 = self.new_client_for_primary(0)
-        assert node0.execute_command(
-            "FT.CREATE", "idx{slot1}",
-            "ON", "HASH",
-            "PREFIX", "1", "doc:{slot1}",
-            "SCHEMA", "category", "TAG",
-        ) == b"OK"
-        nodes = self._all_primaries()
-        IndexingTestHelper.wait_for_indexing_complete_on_all_nodes(
-            nodes, "idx{slot1}")
-
-        with pytest.raises(ResponseError) as exc_info:
-            node0.execute_command(
-                "FT.ALIASADD", "alias{slot2}", "idx{slot1}"
-            )
-        assert "hashtag does not match" in str(exc_info.value)
-
-    def test_aliasadd_no_hashtag_in_alias_rejected_cluster(self):
-        """ALIASADD without hashtag targeting single-slot index rejected in cluster."""
-        node0 = self.new_client_for_primary(0)
-        assert node0.execute_command(
-            "FT.CREATE", "idx{slot1}",
-            "ON", "HASH",
-            "PREFIX", "1", "doc:{slot1}",
-            "SCHEMA", "category", "TAG",
-        ) == b"OK"
-        nodes = self._all_primaries()
-        IndexingTestHelper.wait_for_indexing_complete_on_all_nodes(
-            nodes, "idx{slot1}")
-
-        with pytest.raises(ResponseError) as exc_info:
-            node0.execute_command(
-                "FT.ALIASADD", "plain_alias", "idx{slot1}"
-            )
-        assert "hashtag does not match" in str(exc_info.value)
-
-    def test_aliasupdate_matching_hashtag_succeeds_cluster(self):
-        """ALIASUPDATE with matching hashtag succeeds in cluster."""
-        node0 = self.new_client_for_primary(0)
-        assert node0.execute_command(
-            "FT.CREATE", "idx{slot1}",
-            "ON", "HASH",
-            "PREFIX", "1", "doc:{slot1}",
-            "SCHEMA", "category", "TAG",
-        ) == b"OK"
-        nodes = self._all_primaries()
-        IndexingTestHelper.wait_for_indexing_complete_on_all_nodes(
-            nodes, "idx{slot1}")
+        for cmd in ("FT.ALIASADD", "FT.ALIASUPDATE"):
+            for alias in ("alias{slot2}", "plain_alias"):
+                with pytest.raises(ResponseError) as exc_info:
+                    node0.execute_command(cmd, alias, "idx{slot1}")
+                assert "hashtag does not match" in str(exc_info.value)
 
         assert node0.execute_command(
-            "FT.ALIASUPDATE", "alias{slot1}", "idx{slot1}"
-        ) == b"OK"
-        _wait_for_alias_on_all_nodes(nodes, "alias{slot1}", expect_present=True)
-
-    def test_aliasupdate_different_hashtag_rejected_cluster(self):
-        """ALIASUPDATE with different hashtag is rejected in cluster."""
-        node0 = self.new_client_for_primary(0)
-        assert node0.execute_command(
-            "FT.CREATE", "idx{slot1}",
-            "ON", "HASH",
-            "PREFIX", "1", "doc:{slot1}",
-            "SCHEMA", "category", "TAG",
-        ) == b"OK"
-        nodes = self._all_primaries()
-        IndexingTestHelper.wait_for_indexing_complete_on_all_nodes(
-            nodes, "idx{slot1}")
-
-        with pytest.raises(ResponseError) as exc_info:
-            node0.execute_command(
-                "FT.ALIASUPDATE", "alias{slot2}", "idx{slot1}"
-            )
-        assert "hashtag does not match" in str(exc_info.value)
-
-    def test_aliasadd_non_hashtag_index_allows_any_alias_cluster(self):
-        """Non-hashtag indexes accept any alias name in cluster."""
-        node0 = self.new_client_for_primary(0)
-        assert node0.execute_command(*CREATE_TAG_INDEX) == b"OK"
-        nodes = self._all_primaries()
-        IndexingTestHelper.wait_for_indexing_complete_on_all_nodes(
-            nodes, INDEX_NAME)
-
-        assert node0.execute_command(
-            "FT.ALIASADD", "alias{anything}", INDEX_NAME
-        ) == b"OK"
-        _wait_for_alias_on_all_nodes(
-            nodes, "alias{anything}", expect_present=True)
+            "FT.ALIASADD", "alias{slot1}", "idx{slot1}") == b"OK"
+        _wait_for_aliaslist_on_all_nodes(
+            nodes, [b"alias{slot1}", b"idx{slot1}"])

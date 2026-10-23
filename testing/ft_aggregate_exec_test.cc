@@ -705,8 +705,7 @@ TEST_F(AggregateExecTest, CountDistinctishSingleValue) {
   auto record = records.pop_front();
   EXPECT_TRUE(record->fields_.at(2).IsDouble());
   double estimate = *(record->fields_.at(2).AsDouble());
-  EXPECT_GE(estimate, 1);
-  EXPECT_LE(estimate, 1);
+  EXPECT_EQ(estimate, 1);
 }
 
 // Every group holds one sketch, so its 12 KB dense registers must be

@@ -8,7 +8,6 @@ import random
 from valkey.cluster import ValkeyCluster
 from valkey_search_test_case import ValkeySearchClusterTestCase
 import time
-import pytest
 from utils import IndexingTestHelper
 from valkeytestframework.util import waiters
 
@@ -1028,13 +1027,17 @@ def validate_aggregate_count_distinctish(client: Valkey):
     )
     assert result_exact[0] == 2
     assert result_approx[0] == 2
+    exact_by_category = {}
     for i in range(1, len(result_exact)):
         row_exact = dict(zip(result_exact[i][::2], result_exact[i][1::2]))
+        exact_by_category[row_exact[b'category']] = float(row_exact[b'exact'])
+    for i in range(1, len(result_approx)):
         row_approx = dict(zip(result_approx[i][::2], result_approx[i][1::2]))
-        exact_val = float(row_exact[b'exact'])
+        category = row_approx[b'category']
+        exact_val = exact_by_category[category]
         approx_val = float(row_approx[b'approx'])
         # No register collisions: equals COUNT_DISTINCT
-        assert approx_val == exact_val, f"exact={exact_val}, approx={approx_val}"
+        assert approx_val == exact_val, f"{category}: exact={exact_val}, approx={approx_val}"
 
 
 
@@ -1072,6 +1075,7 @@ class TestNonVector(ValkeySearchTestCaseBase):
         # Test RANDOM_SAMPLE functionality
         validate_random_sample_queries(client, aggregate_complex_hash_docs)
         validate_random_sample_error_queries(client)
+        validate_aggregate_count_distinctish(client)
 
     def test_aggregate_count_distinctish(self):
         client: Valkey = self.server.get_new_client()
@@ -1323,6 +1327,7 @@ class TestNonVectorCluster(ValkeySearchClusterTestCase):
         # Test RANDOM_SAMPLE functionality in cluster mode
         validate_random_sample_queries(cluster_client, aggregate_complex_hash_docs)
         validate_random_sample_error_queries(cluster_client)
+        validate_aggregate_count_distinctish(cluster_client)
     
     def test_max_search_keys_fetch_limited(self):
         """

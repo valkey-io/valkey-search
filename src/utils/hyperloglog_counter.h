@@ -28,8 +28,8 @@ class HyperLogLog {
 
   HyperLogLog(const HyperLogLog&) = delete;
   HyperLogLog& operator=(const HyperLogLog&) = delete;
-  HyperLogLog(HyperLogLog&&) = delete;
-  HyperLogLog& operator=(HyperLogLog&&) = delete;
+  HyperLogLog(HyperLogLog&&) = default;
+  HyperLogLog& operator=(HyperLogLog&&) = default;
 
   // Add a value to the counter. Nil values are ignored.
   void Add(const expr::Value& value);

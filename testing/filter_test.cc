@@ -2376,11 +2376,11 @@ TEST_P(InfieldsFilterTest, ParseParams) {
   if (test_case.evaluate_success.has_value()) {
     auto interned_key = StringInternStore::Intern(test_case.key);
     if (index_schema->GetTextIndexSchema()) {
-      auto text_index = index_schema->GetTextIndexSchema()->GetPerKeyTextIndex(
-          interned_key, false);
+      query::QueryContext query_ctx(
+          *index_schema,
+          indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std));
       indexes::PrefilterEvaluator evaluator(
-          text_index, parse_results.value().query_operations,
-          index_schema.get());
+          query_ctx, parse_results.value().query_operations, *index_schema);
       EXPECT_EQ(test_case.evaluate_success.value(),
                 evaluator.Evaluate(*parse_results.value().root_predicate,
                                    interned_key));
@@ -2614,10 +2614,12 @@ TEST_F(InfieldsFilterBoundaryTest, SixtyFourthTextFieldInInfields) {
   auto parse_results = parser.Parse();
   ASSERT_TRUE(parse_results.ok()) << parse_results.status();
 
-  auto text_index = text_index_schema->GetPerKeyTextIndex(key, false);
   {
+    query::QueryContext query_ctx(
+        *index_schema,
+        indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std));
     indexes::PrefilterEvaluator evaluator(
-        text_index, parse_results.value().query_operations, index_schema.get());
+        query_ctx, parse_results.value().query_operations, *index_schema);
     EXPECT_TRUE(evaluator.Evaluate(*parse_results.value().root_predicate, key));
   }
 
@@ -2630,9 +2632,12 @@ TEST_F(InfieldsFilterBoundaryTest, SixtyFourthTextFieldInInfields) {
   auto other_parse_results = other_parser.Parse();
   ASSERT_TRUE(other_parse_results.ok()) << other_parse_results.status();
   {
+    query::QueryContext other_query_ctx(
+        *index_schema,
+        indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std));
     indexes::PrefilterEvaluator evaluator(
-        text_index, other_parse_results.value().query_operations,
-        index_schema.get());
+        other_query_ctx, other_parse_results.value().query_operations,
+        *index_schema);
     EXPECT_FALSE(
         evaluator.Evaluate(*other_parse_results.value().root_predicate, key));
   }

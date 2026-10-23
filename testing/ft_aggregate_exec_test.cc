@@ -1668,6 +1668,33 @@ TEST_F(AggregateExecTest, CompressBoundedSampleCount) {
   std::cerr << "CompressBoundedSampleCount passed, median=" << result << "\n";
 }
 
+// Regression test: Compress() must keep the sample count bounded relative to
+// inserts, not merely produce a correct answer.
+TEST_F(AggregateExecTest, QuantileCompressBoundsSampleMemory) {
+  const size_t kN = 100000;
+  QuantileStats *stats = nullptr;
+  auto reducer = MakeQuantileReducer(0.5, stats);
+  ASSERT_NE(stats, nullptr);
+  auto instance = reducer->MakeInstance();
+
+  ArgVector args(1);
+  for (size_t i = 0; i < kN; ++i) {
+    args[0] = expr::Value(static_cast<double>(i));
+    instance->ProcessRecord(args);
+  }
+  // Force a final flush+compress so samples_merged reflects the whole input.
+  instance->GetResult();
+
+  EXPECT_EQ(stats->insert_count, kN);
+  // insert_count - samples_merged is the live sample count left after
+  // compression; the GK bound for EPSILON=0.01 keeps this well under 1500,
+  // whereas a no-op Compress() leaves samples_merged at 0 (live count ==
+  // insert_count), failing this bound.
+  EXPECT_LT(stats->insert_count - stats->samples_merged, 1500)
+      << "insert_count=" << stats->insert_count
+      << " samples_merged=" << stats->samples_merged;
+}
+
 // Distance from rank ceil(q * n) to the ranks `value` occupies in `sorted`.
 static double QuantileRankError(const std::vector<double> &sorted, double value,
                                 double q) {

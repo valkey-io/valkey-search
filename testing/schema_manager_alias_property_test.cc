@@ -68,41 +68,18 @@ std::vector<std::string> RandomAliases(std::mt19937 &rng, int max_count = 5) {
   return aliases;
 }
 
-// Base fixture that keeps a VectorRegistry alive around the tests. IndexSchema
-// teardown calls VectorRegistry::Instance(), which segfaults if the singleton
-// is null. Vector sharing is disabled so Init() does not need the module API.
+// Shared fixture: installs the module mocks MetadataManager needs, builds a
+// SchemaManager (coordinator-enabled unless CoordinatorEnabled() says
+// otherwise) and keeps a VectorRegistry alive. IndexSchema teardown calls
+// VectorRegistry::Instance(), which segfaults if the singleton is null. Vector
+// sharing is disabled so Init() does not need the module API.
 class AliasPropertyTestBase : public vmsdk::ValkeyTest {
  protected:
-  // Call at the end of a derived SetUp(), after module mocks are installed.
-  void SetUpVectorRegistry(ValkeyModuleCtx *ctx) {
-    auto &enable_sharing =
-        const_cast<vmsdk::config::Boolean &>(options::GetEnableVectorSharing());
-    VMSDK_EXPECT_OK(enable_sharing.SetValue(false));
-    VectorRegistry::Construct(ctx);
-  }
-
-  // Call at the start of a derived TearDown(), before singletons are torn down.
-  void TearDownVectorRegistry() {
-    VectorRegistry::Destruct();
-    auto &enable_sharing =
-        const_cast<vmsdk::config::Boolean &>(options::GetEnableVectorSharing());
-    VMSDK_EXPECT_OK(enable_sharing.SetValue(true));
-  }
-};
-
-// Alias-only proto change does not trigger index rebuild.
-//
-// When OnMetadataCallback receives a proto where only `aliases` and/or `stats`
-// changed, it calls RebuildAliasMapsForIndex instead of tearing down and
-// recreating the index, preserving the in-memory IndexSchema identity.
-class AliasOnlyChangeNoRebuildTest : public AliasPropertyTestBase {
- public:
   void SetUp() override {
     vmsdk::ValkeyTest::SetUp();
     ValkeySearch::InitInstance(std::make_unique<TestableValkeySearch>());
     KeyspaceEventManager::InitInstance(
         std::make_unique<TestableKeyspaceEventManager>());
-
     mock_client_pool_ = std::make_unique<coordinator::MockClientPool>();
 
     ON_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx_))
@@ -111,7 +88,7 @@ class AliasOnlyChangeNoRebuildTest : public AliasPropertyTestBase {
         .WillByDefault(testing::Return(&fake_ctx_));
     ON_CALL(*kMockValkeyModule, FreeThreadSafeContext(testing::_))
         .WillByDefault(testing::Return());
-    ON_CALL(*kMockValkeyModule, SelectDb(testing::_, kDbNum))
+    ON_CALL(*kMockValkeyModule, SelectDb(testing::_, testing::_))
         .WillByDefault(testing::Return(VALKEYMODULE_OK));
     ON_CALL(*kMockValkeyModule,
             SendClusterMessage(testing::_, testing::_, testing::_, testing::_,
@@ -119,8 +96,7 @@ class AliasOnlyChangeNoRebuildTest : public AliasPropertyTestBase {
         .WillByDefault(testing::Return(VALKEYMODULE_OK));
     ON_CALL(*kMockValkeyModule, Replicate(testing::_, testing::_, testing::_))
         .WillByDefault(testing::Return(VALKEYMODULE_OK));
-
-    // Mock cluster operations to prevent abort in MetadataManager.
+    // Cluster mocks keep MetadataManager from aborting.
     ON_CALL(*kMockValkeyModule,
             Call(testing::_, testing::StrEq("CLUSTER"), testing::StrEq("c"),
                  testing::StrEq("SLOTS")))
@@ -136,7 +112,12 @@ class AliasOnlyChangeNoRebuildTest : public AliasPropertyTestBase {
         .WillByDefault(testing::Return(0));
     ON_CALL(*kMockValkeyModule, GetMyClusterID())
         .WillByDefault(testing::Return("fake_node_id"));
-    SetUpVectorRegistry(&fake_ctx_);
+
+    InitManagers(CoordinatorEnabled());
+    auto &enable_sharing =
+        const_cast<vmsdk::config::Boolean &>(options::GetEnableVectorSharing());
+    VMSDK_EXPECT_OK(enable_sharing.SetValue(false));
+    VectorRegistry::Construct(&fake_ctx_);
   }
 
   void TearDown() override {
@@ -144,8 +125,27 @@ class AliasOnlyChangeNoRebuildTest : public AliasPropertyTestBase {
     coordinator::MetadataManager::InitInstance(nullptr);
     KeyspaceEventManager::InitInstance(nullptr);
     ValkeySearch::InitInstance(nullptr);
-    TearDownVectorRegistry();
+    VectorRegistry::Destruct();
+    auto &enable_sharing =
+        const_cast<vmsdk::config::Boolean &>(options::GetEnableVectorSharing());
+    VMSDK_EXPECT_OK(enable_sharing.SetValue(true));
     vmsdk::ValkeyTest::TearDown();
+  }
+
+  virtual bool CoordinatorEnabled() const { return true; }
+
+  // Replaces the SchemaManager (and MetadataManager, in coordinator mode) with
+  // fresh instances.
+  void InitManagers(bool coordinator_enabled) {
+    SchemaManager::InitInstance(nullptr);
+    coordinator::MetadataManager::InitInstance(nullptr);
+    if (coordinator_enabled) {
+      coordinator::MetadataManager::InitInstance(
+          std::make_unique<coordinator::MetadataManager>(&fake_ctx_,
+                                                         *mock_client_pool_));
+    }
+    SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
+        &fake_ctx_, []() {}, nullptr, coordinator_enabled));
   }
 
   static constexpr int kDbNum = 0;
@@ -153,20 +153,19 @@ class AliasOnlyChangeNoRebuildTest : public AliasPropertyTestBase {
   std::unique_ptr<coordinator::MockClientPool> mock_client_pool_;
 };
 
+// Alias-only proto change does not trigger index rebuild.
+//
+// When OnMetadataCallback receives a proto where only `aliases` and/or `stats`
+// changed, it calls RebuildAliasMapsForIndex instead of tearing down and
+// recreating the index, preserving the in-memory IndexSchema identity.
+class AliasOnlyChangeNoRebuildTest : public AliasPropertyTestBase {};
+
 TEST_F(AliasOnlyChangeNoRebuildTest, PropertyAliasOnlyChangePreservesIndex) {
   // Run 100 iterations with different random seeds for coverage.
   constexpr int kIterations = 100;
 
   for (int iteration = 0; iteration < kIterations; ++iteration) {
-    // Fresh singleton state per iteration.
-    coordinator::MetadataManager::InitInstance(nullptr);
-    SchemaManager::InitInstance(nullptr);
-
-    coordinator::MetadataManager::InitInstance(
-        std::make_unique<coordinator::MetadataManager>(&fake_ctx_,
-                                                       *mock_client_pool_));
-    SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
-        &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/true));
+    InitManagers(/*coordinator_enabled=*/true);
 
     std::mt19937 rng(42 + iteration);
     std::string index_name = "idx_" + std::to_string(iteration);
@@ -280,14 +279,7 @@ TEST_F(AliasOnlyChangeNoRebuildTest,
   constexpr int kMaxAliases = 20;
   constexpr uint64_t kSeed = 7919;  // Fixed seed for reproducibility.
 
-  // Fresh singleton state.
-  coordinator::MetadataManager::InitInstance(nullptr);
-  SchemaManager::InitInstance(nullptr);
-  coordinator::MetadataManager::InitInstance(
-      std::make_unique<coordinator::MetadataManager>(&fake_ctx_,
-                                                     *mock_client_pool_));
-  SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
-      &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/true));
+  InitManagers(/*coordinator_enabled=*/true);
 
   const std::string index_name = "prop3_index";
 
@@ -690,67 +682,7 @@ struct StructuralChangeTestCase {
   }
 };
 
-class StructuralProtoChangeRebuildTest : public AliasPropertyTestBase {
- public:
-  void SetUp() override {
-    vmsdk::ValkeyTest::SetUp();
-    ValkeySearch::InitInstance(std::make_unique<TestableValkeySearch>());
-    KeyspaceEventManager::InitInstance(
-        std::make_unique<TestableKeyspaceEventManager>());
-
-    mock_client_pool_ = std::make_unique<coordinator::MockClientPool>();
-
-    ON_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx_))
-        .WillByDefault(testing::Return(kDbNum));
-    ON_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
-        .WillByDefault(testing::Return(&fake_ctx_));
-    ON_CALL(*kMockValkeyModule, FreeThreadSafeContext(testing::_))
-        .WillByDefault(testing::Return());
-    ON_CALL(*kMockValkeyModule, SelectDb(testing::_, kDbNum))
-        .WillByDefault(testing::Return(VALKEYMODULE_OK));
-    ON_CALL(*kMockValkeyModule,
-            SendClusterMessage(testing::_, testing::_, testing::_, testing::_,
-                               testing::_))
-        .WillByDefault(testing::Return(VALKEYMODULE_OK));
-    ON_CALL(*kMockValkeyModule, Replicate(testing::_, testing::_, testing::_))
-        .WillByDefault(testing::Return(VALKEYMODULE_OK));
-    ON_CALL(*kMockValkeyModule,
-            Call(testing::_, testing::StrEq("CLUSTER"), testing::StrEq("c"),
-                 testing::StrEq("SLOTS")))
-        .WillByDefault(testing::Return(
-            reinterpret_cast<ValkeyModuleCallReply *>(0xDEADBEEF)));
-    ON_CALL(
-        *kMockValkeyModule,
-        CallReplyType(reinterpret_cast<ValkeyModuleCallReply *>(0xDEADBEEF)))
-        .WillByDefault(testing::Return(VALKEYMODULE_REPLY_ARRAY));
-    ON_CALL(
-        *kMockValkeyModule,
-        CallReplyLength(reinterpret_cast<ValkeyModuleCallReply *>(0xDEADBEEF)))
-        .WillByDefault(testing::Return(0));
-    ON_CALL(*kMockValkeyModule, GetMyClusterID())
-        .WillByDefault(testing::Return("fake_node_id"));
-
-    coordinator::MetadataManager::InitInstance(
-        std::make_unique<coordinator::MetadataManager>(&fake_ctx_,
-                                                       *mock_client_pool_));
-    SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
-        &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/true));
-    SetUpVectorRegistry(&fake_ctx_);
-  }
-
-  void TearDown() override {
-    SchemaManager::InitInstance(nullptr);
-    coordinator::MetadataManager::InitInstance(nullptr);
-    KeyspaceEventManager::InitInstance(nullptr);
-    ValkeySearch::InitInstance(nullptr);
-    TearDownVectorRegistry();
-    vmsdk::ValkeyTest::TearDown();
-  }
-
-  static constexpr int kDbNum = 0;
-  ValkeyModuleCtx fake_ctx_;
-  std::unique_ptr<coordinator::MockClientPool> mock_client_pool_;
-};
+class StructuralProtoChangeRebuildTest : public AliasPropertyTestBase {};
 
 // Generate test cases covering all structural mutation types (one per type).
 std::vector<StructuralChangeTestCase> GenerateStructuralTestCases() {
@@ -785,15 +717,7 @@ TEST_F(StructuralProtoChangeRebuildTest,
   for (int i = 0; i < loop_count; ++i) {
     const auto &tc = test_cases[i];
 
-    // Fresh singleton state per iteration.
-    coordinator::MetadataManager::InitInstance(nullptr);
-    SchemaManager::InitInstance(nullptr);
-
-    coordinator::MetadataManager::InitInstance(
-        std::make_unique<coordinator::MetadataManager>(&fake_ctx_,
-                                                       *mock_client_pool_));
-    SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
-        &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/true));
+    InitManagers(/*coordinator_enabled=*/true);
 
     std::string index_name = absl::StrCat("idx_", i);
 
@@ -886,39 +810,7 @@ TEST_F(StructuralProtoChangeRebuildTest,
 // is always in lexicographic ascending order.
 class AliasListDeterminismTest : public AliasPropertyTestBase {
  public:
-  void SetUp() override {
-    vmsdk::ValkeyTest::SetUp();
-    ValkeySearch::InitInstance(std::make_unique<TestableValkeySearch>());
-    KeyspaceEventManager::InitInstance(
-        std::make_unique<TestableKeyspaceEventManager>());
-
-    ON_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx_))
-        .WillByDefault(testing::Return(kDbNum));
-    ON_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
-        .WillByDefault(testing::Return(&fake_ctx_));
-    ON_CALL(*kMockValkeyModule, FreeThreadSafeContext(testing::_))
-        .WillByDefault(testing::Return());
-    ON_CALL(*kMockValkeyModule, SelectDb(testing::_, kDbNum))
-        .WillByDefault(testing::Return(VALKEYMODULE_OK));
-    ON_CALL(*kMockValkeyModule, Replicate(testing::_, testing::_, testing::_))
-        .WillByDefault(testing::Return(VALKEYMODULE_OK));
-
-    // Standalone mode: no coordinator, no MetadataManager needed.
-    SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
-        &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/false));
-    SetUpVectorRegistry(&fake_ctx_);
-  }
-
-  void TearDown() override {
-    SchemaManager::InitInstance(nullptr);
-    KeyspaceEventManager::InitInstance(nullptr);
-    ValkeySearch::InitInstance(nullptr);
-    TearDownVectorRegistry();
-    vmsdk::ValkeyTest::TearDown();
-  }
-
-  static constexpr int kDbNum = 0;
-  ValkeyModuleCtx fake_ctx_;
+  bool CoordinatorEnabled() const override { return false; }
 };
 
 TEST_F(AliasListDeterminismTest, PropertyAliasListAlwaysSorted) {
@@ -1034,38 +926,7 @@ TEST_F(AliasListDeterminismTest, PropertyAliasListAlwaysSorted) {
 // (single lock scope), so the alias is never absent from both indexes.
 class AliasUpdateReachabilityTest : public AliasPropertyTestBase {
  public:
-  void SetUp() override {
-    vmsdk::ValkeyTest::SetUp();
-    ValkeySearch::InitInstance(std::make_unique<TestableValkeySearch>());
-    KeyspaceEventManager::InitInstance(
-        std::make_unique<TestableKeyspaceEventManager>());
-
-    ON_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx_))
-        .WillByDefault(testing::Return(kDbNum));
-    ON_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
-        .WillByDefault(testing::Return(&fake_ctx_));
-    ON_CALL(*kMockValkeyModule, FreeThreadSafeContext(testing::_))
-        .WillByDefault(testing::Return());
-    ON_CALL(*kMockValkeyModule, SelectDb(testing::_, kDbNum))
-        .WillByDefault(testing::Return(VALKEYMODULE_OK));
-    ON_CALL(*kMockValkeyModule, Replicate(testing::_, testing::_, testing::_))
-        .WillByDefault(testing::Return(VALKEYMODULE_OK));
-
-    SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
-        &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/false));
-    SetUpVectorRegistry(&fake_ctx_);
-  }
-
-  void TearDown() override {
-    SchemaManager::InitInstance(nullptr);
-    KeyspaceEventManager::InitInstance(nullptr);
-    ValkeySearch::InitInstance(nullptr);
-    TearDownVectorRegistry();
-    vmsdk::ValkeyTest::TearDown();
-  }
-
-  static constexpr int kDbNum = 0;
-  ValkeyModuleCtx fake_ctx_;
+  bool CoordinatorEnabled() const override { return false; }
 };
 
 TEST_F(AliasUpdateReachabilityTest,
@@ -1077,9 +938,7 @@ TEST_F(AliasUpdateReachabilityTest,
 
   for (int iter = 0; iter < kIterations; ++iter) {
     // Fresh singleton state per iteration so indexes don't accumulate.
-    SchemaManager::InitInstance(nullptr);
-    SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
-        &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/false));
+    InitManagers(/*coordinator_enabled=*/false);
 
     // Generate random index names for X and Y (ensure they differ).
     std::string index_x = "idx_x_" + RandomString(rng, 8);
@@ -1221,39 +1080,7 @@ TEST_F(AliasUpdateReachabilityTest,
 // Null-byte alias acceptance: aliases with embedded null bytes are valid.
 class NullByteAliasAcceptanceTest : public AliasPropertyTestBase {
  public:
-  void SetUp() override {
-    vmsdk::ValkeyTest::SetUp();
-    ValkeySearch::InitInstance(std::make_unique<TestableValkeySearch>());
-    KeyspaceEventManager::InitInstance(
-        std::make_unique<TestableKeyspaceEventManager>());
-
-    ON_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx_))
-        .WillByDefault(testing::Return(kDbNum));
-    ON_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
-        .WillByDefault(testing::Return(&fake_ctx_));
-    ON_CALL(*kMockValkeyModule, FreeThreadSafeContext(testing::_))
-        .WillByDefault(testing::Return());
-    ON_CALL(*kMockValkeyModule, SelectDb(testing::_, kDbNum))
-        .WillByDefault(testing::Return(VALKEYMODULE_OK));
-    ON_CALL(*kMockValkeyModule, Replicate(testing::_, testing::_, testing::_))
-        .WillByDefault(testing::Return(VALKEYMODULE_OK));
-
-    // Standalone mode: no coordinator needed for this validation test.
-    SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
-        &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/false));
-    SetUpVectorRegistry(&fake_ctx_);
-  }
-
-  void TearDown() override {
-    SchemaManager::InitInstance(nullptr);
-    KeyspaceEventManager::InitInstance(nullptr);
-    ValkeySearch::InitInstance(nullptr);
-    TearDownVectorRegistry();
-    vmsdk::ValkeyTest::TearDown();
-  }
-
-  static constexpr int kDbNum = 0;
-  ValkeyModuleCtx fake_ctx_;
+  bool CoordinatorEnabled() const override { return false; }
 };
 
 TEST_F(NullByteAliasAcceptanceTest, PropertyNullByteAliasesAccepted) {
@@ -1315,39 +1142,7 @@ TEST_F(NullByteAliasAcceptanceTest, PropertyNullByteAliasesAccepted) {
 // Hashtag validation for single-slot indexes.
 class HashtagAliasValidationTest : public AliasPropertyTestBase {
  public:
-  void SetUp() override {
-    vmsdk::ValkeyTest::SetUp();
-    ValkeySearch::InitInstance(std::make_unique<TestableValkeySearch>());
-    KeyspaceEventManager::InitInstance(
-        std::make_unique<TestableKeyspaceEventManager>());
-
-    ON_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx_))
-        .WillByDefault(testing::Return(kDbNum));
-    ON_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
-        .WillByDefault(testing::Return(&fake_ctx_));
-    ON_CALL(*kMockValkeyModule, FreeThreadSafeContext(testing::_))
-        .WillByDefault(testing::Return());
-    ON_CALL(*kMockValkeyModule, SelectDb(testing::_, kDbNum))
-        .WillByDefault(testing::Return(VALKEYMODULE_OK));
-    ON_CALL(*kMockValkeyModule, Replicate(testing::_, testing::_, testing::_))
-        .WillByDefault(testing::Return(VALKEYMODULE_OK));
-
-    // Standalone mode: no coordinator needed for this validation test.
-    SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
-        &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/false));
-    SetUpVectorRegistry(&fake_ctx_);
-  }
-
-  void TearDown() override {
-    SchemaManager::InitInstance(nullptr);
-    KeyspaceEventManager::InitInstance(nullptr);
-    ValkeySearch::InitInstance(nullptr);
-    TearDownVectorRegistry();
-    vmsdk::ValkeyTest::TearDown();
-  }
-
-  static constexpr int kDbNum = 0;
-  ValkeyModuleCtx fake_ctx_;
+  bool CoordinatorEnabled() const override { return false; }
 };
 
 TEST_F(HashtagAliasValidationTest, AliasWithMatchingHashtagSucceeds) {
@@ -1463,69 +1258,7 @@ TEST_F(HashtagAliasValidationTest, NonHashtagIndexAllowsAnyAlias) {
 // Calling AddAlias twice with the same alias returns AlreadyExists on the
 // second call. The alias appears exactly once in the stored proto and
 // GetAllAliases count does not increase on retry.
-class DuplicateAliasAddTest : public AliasPropertyTestBase {
- public:
-  void SetUp() override {
-    vmsdk::ValkeyTest::SetUp();
-    ValkeySearch::InitInstance(std::make_unique<TestableValkeySearch>());
-    KeyspaceEventManager::InitInstance(
-        std::make_unique<TestableKeyspaceEventManager>());
-
-    mock_client_pool_ = std::make_unique<coordinator::MockClientPool>();
-
-    ON_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx_))
-        .WillByDefault(testing::Return(kDbNum));
-    ON_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
-        .WillByDefault(testing::Return(&fake_ctx_));
-    ON_CALL(*kMockValkeyModule, FreeThreadSafeContext(testing::_))
-        .WillByDefault(testing::Return());
-    ON_CALL(*kMockValkeyModule, SelectDb(testing::_, kDbNum))
-        .WillByDefault(testing::Return(VALKEYMODULE_OK));
-    ON_CALL(*kMockValkeyModule,
-            SendClusterMessage(testing::_, testing::_, testing::_, testing::_,
-                               testing::_))
-        .WillByDefault(testing::Return(VALKEYMODULE_OK));
-    ON_CALL(*kMockValkeyModule, Replicate(testing::_, testing::_, testing::_))
-        .WillByDefault(testing::Return(VALKEYMODULE_OK));
-
-    // Mock cluster operations for MetadataManager.
-    ON_CALL(*kMockValkeyModule,
-            Call(testing::_, testing::StrEq("CLUSTER"), testing::StrEq("c"),
-                 testing::StrEq("SLOTS")))
-        .WillByDefault(testing::Return(
-            reinterpret_cast<ValkeyModuleCallReply *>(0xDEADBEEF)));
-    ON_CALL(
-        *kMockValkeyModule,
-        CallReplyType(reinterpret_cast<ValkeyModuleCallReply *>(0xDEADBEEF)))
-        .WillByDefault(testing::Return(VALKEYMODULE_REPLY_ARRAY));
-    ON_CALL(
-        *kMockValkeyModule,
-        CallReplyLength(reinterpret_cast<ValkeyModuleCallReply *>(0xDEADBEEF)))
-        .WillByDefault(testing::Return(0));
-    ON_CALL(*kMockValkeyModule, GetMyClusterID())
-        .WillByDefault(testing::Return("fake_node_id"));
-
-    coordinator::MetadataManager::InitInstance(
-        std::make_unique<coordinator::MetadataManager>(&fake_ctx_,
-                                                       *mock_client_pool_));
-    SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
-        &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/true));
-    SetUpVectorRegistry(&fake_ctx_);
-  }
-
-  void TearDown() override {
-    SchemaManager::InitInstance(nullptr);
-    coordinator::MetadataManager::InitInstance(nullptr);
-    KeyspaceEventManager::InitInstance(nullptr);
-    ValkeySearch::InitInstance(nullptr);
-    TearDownVectorRegistry();
-    vmsdk::ValkeyTest::TearDown();
-  }
-
-  static constexpr int kDbNum = 0;
-  ValkeyModuleCtx fake_ctx_;
-  std::unique_ptr<coordinator::MockClientPool> mock_client_pool_;
-};
+class DuplicateAliasAddTest : public AliasPropertyTestBase {};
 
 TEST_F(DuplicateAliasAddTest, PropertyDuplicateAddReturnsAlreadyExists) {
   constexpr int kIterations = 120;
@@ -1625,39 +1358,7 @@ TEST_F(DuplicateAliasAddTest, PropertyDuplicateAddReturnsAlreadyExists) {
 // aliases are removed from the forward alias map with no dangling entries.
 class IndexDropAliasAtomicityTest : public AliasPropertyTestBase {
  public:
-  void SetUp() override {
-    vmsdk::ValkeyTest::SetUp();
-    ValkeySearch::InitInstance(std::make_unique<TestableValkeySearch>());
-    KeyspaceEventManager::InitInstance(
-        std::make_unique<TestableKeyspaceEventManager>());
-
-    ON_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx_))
-        .WillByDefault(testing::Return(kDbNum));
-    ON_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
-        .WillByDefault(testing::Return(&fake_ctx_));
-    ON_CALL(*kMockValkeyModule, FreeThreadSafeContext(testing::_))
-        .WillByDefault(testing::Return());
-    ON_CALL(*kMockValkeyModule, SelectDb(testing::_, kDbNum))
-        .WillByDefault(testing::Return(VALKEYMODULE_OK));
-    ON_CALL(*kMockValkeyModule, Replicate(testing::_, testing::_, testing::_))
-        .WillByDefault(testing::Return(VALKEYMODULE_OK));
-
-    // Standalone mode: no coordinator, no MetadataManager needed.
-    SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
-        &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/false));
-    SetUpVectorRegistry(&fake_ctx_);
-  }
-
-  void TearDown() override {
-    SchemaManager::InitInstance(nullptr);
-    KeyspaceEventManager::InitInstance(nullptr);
-    ValkeySearch::InitInstance(nullptr);
-    TearDownVectorRegistry();
-    vmsdk::ValkeyTest::TearDown();
-  }
-
-  static constexpr int kDbNum = 0;
-  ValkeyModuleCtx fake_ctx_;
+  bool CoordinatorEnabled() const override { return false; }
 };
 
 TEST_F(IndexDropAliasAtomicityTest, PropertyIndexDropRemovesAllAliases) {
@@ -1668,9 +1369,7 @@ TEST_F(IndexDropAliasAtomicityTest, PropertyIndexDropRemovesAllAliases) {
 
   for (int iter = 0; iter < kIterations; ++iter) {
     // Fresh singleton state per iteration so indexes don't accumulate.
-    SchemaManager::InitInstance(nullptr);
-    SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
-        &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/false));
+    InitManagers(/*coordinator_enabled=*/false);
 
     // Generate a random index name.
     std::string index_name = "idx_drop_" + RandomString(rng, 8);
@@ -1750,40 +1449,9 @@ TEST_F(IndexDropAliasAtomicityTest, PropertyIndexDropRemovesAllAliases) {
 // after the swap equal db 1's aliases before the swap, and vice versa.
 class SwapDBAliasAtomicityTest : public AliasPropertyTestBase {
  public:
-  void SetUp() override {
-    vmsdk::ValkeyTest::SetUp();
-    ValkeySearch::InitInstance(std::make_unique<TestableValkeySearch>());
-    KeyspaceEventManager::InitInstance(
-        std::make_unique<TestableKeyspaceEventManager>());
-
-    ON_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx_))
-        .WillByDefault(testing::Return(kDbNum0));
-    ON_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
-        .WillByDefault(testing::Return(&fake_ctx_));
-    ON_CALL(*kMockValkeyModule, FreeThreadSafeContext(testing::_))
-        .WillByDefault(testing::Return());
-    ON_CALL(*kMockValkeyModule, SelectDb(testing::_, testing::_))
-        .WillByDefault(testing::Return(VALKEYMODULE_OK));
-    ON_CALL(*kMockValkeyModule, Replicate(testing::_, testing::_, testing::_))
-        .WillByDefault(testing::Return(VALKEYMODULE_OK));
-
-    // Standalone mode: no coordinator, no MetadataManager needed.
-    SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
-        &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/false));
-    SetUpVectorRegistry(&fake_ctx_);
-  }
-
-  void TearDown() override {
-    SchemaManager::InitInstance(nullptr);
-    KeyspaceEventManager::InitInstance(nullptr);
-    ValkeySearch::InitInstance(nullptr);
-    TearDownVectorRegistry();
-    vmsdk::ValkeyTest::TearDown();
-  }
-
+  bool CoordinatorEnabled() const override { return false; }
   static constexpr int kDbNum0 = 0;
   static constexpr int kDbNum1 = 1;
-  ValkeyModuleCtx fake_ctx_;
 };
 
 TEST_F(SwapDBAliasAtomicityTest, PropertySwapDBSwapsAliasMaps) {
@@ -1794,9 +1462,7 @@ TEST_F(SwapDBAliasAtomicityTest, PropertySwapDBSwapsAliasMaps) {
 
   for (int iter = 0; iter < kIterations; ++iter) {
     // Fresh singleton state per iteration.
-    SchemaManager::InitInstance(nullptr);
-    SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
-        &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/false));
+    InitManagers(/*coordinator_enabled=*/false);
 
     // --- Create an index in db 0 with random aliases ---
     std::string index_name_0 = "idx_db0_" + RandomString(rng, 6);
@@ -1983,65 +1649,7 @@ TEST(AliasFingerprint, ComputeFingerprintDistinguishesStructuralChanges) {
 }
 
 // Stored proto round-trips correctly through MetadataManager.
-class StoredProtoRoundTripTest : public AliasPropertyTestBase {
- public:
-  void SetUp() override {
-    vmsdk::ValkeyTest::SetUp();
-    ValkeySearch::InitInstance(std::make_unique<TestableValkeySearch>());
-    KeyspaceEventManager::InitInstance(
-        std::make_unique<TestableKeyspaceEventManager>());
-    mock_client_pool_ = std::make_unique<coordinator::MockClientPool>();
-
-    ON_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx_))
-        .WillByDefault(testing::Return(0));
-    ON_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
-        .WillByDefault(testing::Return(&fake_ctx_));
-    ON_CALL(*kMockValkeyModule, FreeThreadSafeContext(testing::_))
-        .WillByDefault(testing::Return());
-    ON_CALL(*kMockValkeyModule, SelectDb(testing::_, 0))
-        .WillByDefault(testing::Return(VALKEYMODULE_OK));
-    ON_CALL(*kMockValkeyModule,
-            SendClusterMessage(testing::_, testing::_, testing::_, testing::_,
-                               testing::_))
-        .WillByDefault(testing::Return(VALKEYMODULE_OK));
-    ON_CALL(*kMockValkeyModule, Replicate(testing::_, testing::_, testing::_))
-        .WillByDefault(testing::Return(VALKEYMODULE_OK));
-    ON_CALL(*kMockValkeyModule,
-            Call(testing::_, testing::StrEq("CLUSTER"), testing::StrEq("c"),
-                 testing::StrEq("SLOTS")))
-        .WillByDefault(testing::Return(
-            reinterpret_cast<ValkeyModuleCallReply *>(0xDEADBEEF)));
-    ON_CALL(
-        *kMockValkeyModule,
-        CallReplyType(reinterpret_cast<ValkeyModuleCallReply *>(0xDEADBEEF)))
-        .WillByDefault(testing::Return(VALKEYMODULE_REPLY_ARRAY));
-    ON_CALL(
-        *kMockValkeyModule,
-        CallReplyLength(reinterpret_cast<ValkeyModuleCallReply *>(0xDEADBEEF)))
-        .WillByDefault(testing::Return(0));
-    ON_CALL(*kMockValkeyModule, GetMyClusterID())
-        .WillByDefault(testing::Return("fake_node_id"));
-
-    coordinator::MetadataManager::InitInstance(
-        std::make_unique<coordinator::MetadataManager>(&fake_ctx_,
-                                                       *mock_client_pool_));
-    SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
-        &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/true));
-    SetUpVectorRegistry(&fake_ctx_);
-  }
-
-  void TearDown() override {
-    SchemaManager::InitInstance(nullptr);
-    coordinator::MetadataManager::InitInstance(nullptr);
-    KeyspaceEventManager::InitInstance(nullptr);
-    ValkeySearch::InitInstance(nullptr);
-    TearDownVectorRegistry();
-    vmsdk::ValkeyTest::TearDown();
-  }
-
-  ValkeyModuleCtx fake_ctx_;
-  std::unique_ptr<coordinator::MockClientPool> mock_client_pool_;
-};
+class StoredProtoRoundTripTest : public AliasPropertyTestBase {};
 
 TEST_F(StoredProtoRoundTripTest, StoredProtoMatchesToProto) {
   data_model::IndexSchema base_proto;
@@ -2073,60 +1681,6 @@ TEST_F(StoredProtoRoundTripTest, StoredProtoMatchesToProto) {
 // play no part.
 class CrossIndexAliasConflictTest : public AliasPropertyTestBase {
  public:
-  void SetUp() override {
-    vmsdk::ValkeyTest::SetUp();
-    ValkeySearch::InitInstance(std::make_unique<TestableValkeySearch>());
-    KeyspaceEventManager::InitInstance(
-        std::make_unique<TestableKeyspaceEventManager>());
-    mock_client_pool_ = std::make_unique<coordinator::MockClientPool>();
-
-    ON_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx_))
-        .WillByDefault(testing::Return(kDbNum));
-    ON_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
-        .WillByDefault(testing::Return(&fake_ctx_));
-    ON_CALL(*kMockValkeyModule, FreeThreadSafeContext(testing::_))
-        .WillByDefault(testing::Return());
-    ON_CALL(*kMockValkeyModule, SelectDb(testing::_, kDbNum))
-        .WillByDefault(testing::Return(VALKEYMODULE_OK));
-    ON_CALL(*kMockValkeyModule,
-            SendClusterMessage(testing::_, testing::_, testing::_, testing::_,
-                               testing::_))
-        .WillByDefault(testing::Return(VALKEYMODULE_OK));
-    ON_CALL(*kMockValkeyModule, Replicate(testing::_, testing::_, testing::_))
-        .WillByDefault(testing::Return(VALKEYMODULE_OK));
-    ON_CALL(*kMockValkeyModule,
-            Call(testing::_, testing::StrEq("CLUSTER"), testing::StrEq("c"),
-                 testing::StrEq("SLOTS")))
-        .WillByDefault(testing::Return(
-            reinterpret_cast<ValkeyModuleCallReply *>(0xDEADBEEF)));
-    ON_CALL(
-        *kMockValkeyModule,
-        CallReplyType(reinterpret_cast<ValkeyModuleCallReply *>(0xDEADBEEF)))
-        .WillByDefault(testing::Return(VALKEYMODULE_REPLY_ARRAY));
-    ON_CALL(
-        *kMockValkeyModule,
-        CallReplyLength(reinterpret_cast<ValkeyModuleCallReply *>(0xDEADBEEF)))
-        .WillByDefault(testing::Return(0));
-    ON_CALL(*kMockValkeyModule, GetMyClusterID())
-        .WillByDefault(testing::Return("fake_node_id"));
-
-    coordinator::MetadataManager::InitInstance(
-        std::make_unique<coordinator::MetadataManager>(&fake_ctx_,
-                                                       *mock_client_pool_));
-    SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
-        &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/true));
-    SetUpVectorRegistry(&fake_ctx_);
-  }
-
-  void TearDown() override {
-    SchemaManager::InitInstance(nullptr);
-    coordinator::MetadataManager::InitInstance(nullptr);
-    KeyspaceEventManager::InitInstance(nullptr);
-    ValkeySearch::InitInstance(nullptr);
-    TearDownVectorRegistry();
-    vmsdk::ValkeyTest::TearDown();
-  }
-
   void CreateIndex(const std::string &name) {
     data_model::IndexSchema proto;
     proto.set_name(name);
@@ -2176,10 +1730,6 @@ class CrossIndexAliasConflictTest : public AliasPropertyTestBase {
         coordinator::ObjName(kDbNum, index_name), std::move(packed));
     ASSERT_TRUE(entry_result.ok()) << entry_result.status();
   }
-
-  static constexpr int kDbNum = 0;
-  ValkeyModuleCtx fake_ctx_;
-  std::unique_ptr<coordinator::MockClientPool> mock_client_pool_;
 };
 
 TEST_F(CrossIndexAliasConflictTest, HigherEpochWins) {
@@ -2395,13 +1945,7 @@ class AliasConvergenceTest : public CrossIndexAliasConflictTest {
 
   void ResetNode() {
     kMockValkeyModule->RunPendingOneShots();
-    SchemaManager::InitInstance(nullptr);
-    coordinator::MetadataManager::InitInstance(nullptr);
-    coordinator::MetadataManager::InitInstance(
-        std::make_unique<coordinator::MetadataManager>(&fake_ctx_,
-                                                       *mock_client_pool_));
-    SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
-        &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/true));
+    InitManagers(/*coordinator_enabled=*/true);
   }
 
   // Appends every entry whose version is not yet in `history`.

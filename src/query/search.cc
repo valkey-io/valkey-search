@@ -1234,12 +1234,12 @@ static void ApplyRelevanceScore(const SearchParameters &parameters,
   }
 }
 
-// Applies text relevance scoring to KNN neighbors when the vector query also
-// carries a text predicate (a hybrid `text=>[KNN]` query). Neighbor.distance is
-// left untouched (still reported via the score_as field); only Neighbor.score
-// is set to the text relevance, mirroring Redis WITHSCORES. Pure vector queries
-// and vector queries filtered only by numeric/tag predicates keep the KNN
-// distance as their score.
+// Applies relevance scoring to KNN neighbors when the vector query also carries
+// a text or tag predicate (a hybrid `text=>[KNN]` or `tag=>[KNN]` query).
+// Neighbor.distance is left untouched (still reported via the score_as field);
+// only Neighbor.score is set to the relevance, mirroring Redis WITHSCORES. Pure
+// vector queries and vector queries filtered only by numeric predicates keep
+// the KNN distance as their score.
 void ApplyHybridTextScore(const SearchParameters &parameters,
                           std::vector<indexes::Neighbor> &neighbors,
                           QueryContext &query_ctx) {
@@ -1577,17 +1577,18 @@ void SearchResult::TrimResults(std::vector<T> &vec,
     //   - Cluster-merge non-vector path: the merged Neighbor vector is drained
     //     from the fanout heap ascending and never sorted.
     //   - VECTOR_RANGE queries: scored like any other non-vector query.
-    //   - Hybrid `text=>[KNN]`: KNN produces neighbors ordered by distance, but
-    //     the query score is the text relevance (set by ApplyHybridTextScore),
-    //     so re-rank by it to match Redis. The vector distance is preserved on
-    //     Neighbor.distance and still reported via the score_as field.
+    //   - Hybrid `text=>[KNN]` / `tag=>[KNN]`: KNN produces neighbors ordered
+    //     by distance, but the query score is the relevance (set by
+    //     ApplyHybridTextScore), so re-rank by it to match Redis. The vector
+    //     distance is preserved on Neighbor.distance and still reported via
+    //     the score_as field.
     //
     // A VSIM arm carrying a text pre-filter is excluded. Its score is the
     // distance, not a relevance, so sorting by score descending would return
     // the FARTHEST matches -- which is exactly what it did before this guard.
     // Content resolution later drops some neighbors, but drops preserve
     // relative order, so this ordering survives. Pure vector queries (no text
-    // predicate) fall through and keep their distance-ascending order.
+    // or tag predicate) fall through and keep their distance-ascending order.
     std::stable_sort(
         vec.begin(), vec.end(),
         [](const indexes::Neighbor &a, const indexes::Neighbor &b) {

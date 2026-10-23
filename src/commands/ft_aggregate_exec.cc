@@ -1188,10 +1188,17 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> FirstValueReducerParser(
 
 struct QuantileReducer : GroupBy::Reducer {
   double quantile_{0.0};
+  // Raw source text of the quantile argument, printed verbatim by DumpArgs.
+  std::string quantile_text_;
   QuantileStats stats_;  // Outlives all ReducerInstances created below.
 
   std::unique_ptr<GroupBy::ReducerInstance> MakeInstance() override {
     return std::make_unique<Quantile>(quantile_, &stats_);
+  }
+
+  void DumpArgs(std::ostream &os) const override {
+    Reducer::DumpArgs(os);
+    os << ',' << quantile_text_;
   }
 };
 
@@ -1234,6 +1241,7 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> QuantileReducerParser(
         "QUANTILE: quantile value must be between 0.0 and 1.0");
   }
   r->quantile_ = quantile_val;
+  r->quantile_text_ = std::string(vmsdk::ToStringView(quantile_tok));
 
   if (itr.PopIfNextIgnoreCase(valkey_search::aggregate::kAsParam)) {
     VMSDK_ASSIGN_OR_RETURN(auto alias, itr.PopNext(),

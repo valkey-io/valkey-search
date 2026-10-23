@@ -361,15 +361,15 @@ static std::vector<TestStage> TestStages{
      "arguments (1) to reducer QUANTILE"},
     {"GROUPBY 1 @n1 REDUCE QUANTILE 2 @n2", nullptr},
     {"GROUPBY 1 @n1 REDUCE QUANTILE 2 @n2 0.5",
-     "GROUPBY @n1 QUANTILE(@n2) => QUANTILE(@n2,0.5)"},
+     "GROUPBY @n1 QUANTILE(@n2,0.5) => QUANTILE(@n2,0.5)"},
     {"GROUPBY 1 @n1 REDUCE QUANTILE 2 @n2 0.5 AS median",
-     "GROUPBY @n1 QUANTILE(@n2) => median"},
+     "GROUPBY @n1 QUANTILE(@n2,0.5) => median"},
     {"GROUPBY 1 @n1 REDUCE QUANTILE 2 @n2 0.0 AS min",
-     "GROUPBY @n1 QUANTILE(@n2) => min"},
+     "GROUPBY @n1 QUANTILE(@n2,0.0) => min"},
     {"GROUPBY 1 @n1 REDUCE QUANTILE 2 @n2 1.0 AS max",
-     "GROUPBY @n1 QUANTILE(@n2) => max"},
+     "GROUPBY @n1 QUANTILE(@n2,1.0) => max"},
     {"GROUPBY 1 @n1 REDUCE QUANTILE 2 @n2 0.99 AS p99",
-     "GROUPBY @n1 QUANTILE(@n2) => p99"},
+     "GROUPBY @n1 QUANTILE(@n2,0.99) => p99"},
     {"GROUPBY 1 @n1 REDUCE QUANTILE 3 @n2 0.5 extra", nullptr,
      "Error parsing value for the parameter `GROUPBY` - incorrect number of "
      "arguments (3) to reducer QUANTILE"},
@@ -473,12 +473,16 @@ TEST_F(AggregateTest, DefaultReducerAliasFollowsEmulateRelease) {
   VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue({1, 2, 0}));
   EXPECT_EQ(dump("GROUPBY 1 @n1 REDUCE MIN 1 @n2"),
             "GROUPBY @n1 MIN(@n2) => MIN(@n2)");
+  EXPECT_EQ(dump("GROUPBY 1 @n1 REDUCE QUANTILE 2 @n2 0.5"),
+            "GROUPBY @n1 QUANTILE(@n2,0.5) => QUANTILE(@n2,0.5)");
 
   VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue({1, 3, 0}));
   EXPECT_EQ(dump("GROUPBY 1 @n1 REDUCE COUNT 0"),
             "GROUPBY @n1 COUNT() => __generated_aliascount");
   EXPECT_EQ(dump("GROUPBY 1 @n1 REDUCE MAX 1 @N3"),
             "GROUPBY @n1 MAX(@N3) => __generated_aliasmaxn3");
+  EXPECT_EQ(dump("GROUPBY 1 @n1 REDUCE QUANTILE 2 @N3 0.5"),
+            "GROUPBY @n1 QUANTILE(@N3,0.5) => __generated_aliasquantilen3,0.5");
   VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue(saved));
 }
 

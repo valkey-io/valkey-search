@@ -1919,6 +1919,29 @@ TEST_F(CrossIndexAliasConflictTest, ShadowingIndexIsValidAliasTarget) {
   }
 }
 
+// Dropping an index that shadows an alias of the same name uncovers the alias.
+TEST_F(CrossIndexAliasConflictTest, DropShadowingIndexUncoversAlias) {
+  CreateIndex("idx_a");
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDbNum, "shared_name", "idx_a"));
+  CreateIndex("shared_name");
+  auto shadowing =
+      SchemaManager::Instance().GetIndexSchema(kDbNum, "shared_name");
+  ASSERT_TRUE(shadowing.ok());
+  EXPECT_EQ(shadowing.value()->GetName(), "shared_name");
+
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().RemoveIndexSchema(kDbNum, "shared_name"));
+
+  auto resolved =
+      SchemaManager::Instance().GetIndexSchema(kDbNum, "shared_name");
+  ASSERT_TRUE(resolved.ok()) << resolved.status();
+  EXPECT_EQ(resolved.value()->GetName(), "idx_a");
+  EXPECT_EQ(SchemaManager::Instance().GetAllAliases(kDbNum),
+            (std::vector<std::pair<std::string, std::string>>{
+                {"shared_name", "idx_a"}}));
+}
+
 // The alias commands write through MutateIndexProtoInMetadata. If its
 // normalization missed a field, OnMetadataCallback would see a structural
 // change and rebuild the index. Schemas come from the FT.CREATE parser so the
@@ -1971,6 +1994,35 @@ TEST_F(CrossIndexAliasConflictTest, AliasCommandsDoNotRebuildIndexes) {
     VMSDK_EXPECT_OK(SchemaManager::Instance().RemoveAlias(kDbNum, "p1"));
     expect_same_indexes("remove");
   }
+}
+
+TEST_F(CrossIndexAliasConflictTest, UpdateToCurrentTargetWritesNothing) {
+  CreateIndex("idx_a");
+  VMSDK_EXPECT_OK(SchemaManager::Instance().AddAlias(kDbNum, "p1", "idx_a"));
+  auto version = SchemaManager::Instance()
+                     .GetIndexSchema(kDbNum, "idx_a")
+                     .value()
+                     ->GetVersion();
+
+  VMSDK_EXPECT_OK(SchemaManager::Instance().UpdateAlias(kDbNum, "p1", "idx_a"));
+
+  EXPECT_EQ(SchemaManager::Instance()
+                .GetIndexSchema(kDbNum, "idx_a")
+                .value()
+                ->GetVersion(),
+            version);
+  EXPECT_EQ(
+      SchemaManager::Instance().GetAllAliases(kDbNum),
+      (std::vector<std::pair<std::string, std::string>>{{"p1", "idx_a"}}));
+}
+
+TEST_F(CrossIndexAliasConflictTest, AddAndUpdateToMissingIndexReturnNotFound) {
+  EXPECT_EQ(SchemaManager::Instance().AddAlias(kDbNum, "p1", "missing").code(),
+            absl::StatusCode::kNotFound);
+  EXPECT_EQ(
+      SchemaManager::Instance().UpdateAlias(kDbNum, "p1", "missing").code(),
+      absl::StatusCode::kNotFound);
+  EXPECT_TRUE(SchemaManager::Instance().GetAllAliases(kDbNum).empty());
 }
 
 // Fails index metadata writes: lets `skip` through, then fails `fail`.
@@ -2250,7 +2302,8 @@ TEST_F(AliasConvergenceTest, ConcurrentUpdatesConverge) {
   auto reference = SchemaManager::Instance().GetAllAliases(kDbNum);
   ASSERT_EQ(reference.size(), 1);
   EXPECT_EQ(reference[0].first, "p1");
-  EXPECT_THAT(reference[0].second, testing::AnyOf("idx2", "idx3"));
+  // Both updates claim epoch 2; the greater index name wins the tie.
+  EXPECT_EQ(reference[0].second, "idx3");
   ExpectPeersConverge(merged, reference);
 }
 

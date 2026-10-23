@@ -868,9 +868,8 @@ class Quantile : public GroupBy::ReducerInstance {
   QuantileStats *stats_{nullptr};
 
  public:
-  void SetQuantile(double q) { quantile_ = q; }
-  void SetStats(QuantileStats *stats) { stats_ = stats; }
-  const QuantileStats &GetStats() const { return *stats_; }
+  Quantile(double quantile, QuantileStats *stats)
+      : quantile_(quantile), stats_(stats) {}
 
  private:
   // Calculate maximum allowed error for a given rank
@@ -1192,10 +1191,7 @@ struct QuantileReducer : GroupBy::Reducer {
   QuantileStats stats_;  // Outlives all ReducerInstances created below.
 
   std::unique_ptr<GroupBy::ReducerInstance> MakeInstance() override {
-    auto instance = std::make_unique<Quantile>();
-    instance->SetQuantile(quantile_);
-    instance->SetStats(&stats_);
-    return instance;
+    return std::make_unique<Quantile>(quantile_, &stats_);
   }
 };
 

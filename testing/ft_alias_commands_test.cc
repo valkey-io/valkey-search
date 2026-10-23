@@ -13,6 +13,8 @@
 #include <vector>
 
 #include "absl/status/status.h"
+#include "absl/strings/str_cat.h"
+#include "gmock/gmock.h"
 #include "google/protobuf/text_format.h"
 #include "gtest/gtest.h"
 #include "src/commands/commands.h"
@@ -667,6 +669,33 @@ TEST_F(FTAliasUpdateTest, SelfReferentialAliasSucceeds) {
   EXPECT_EQ(aliases[0].first, "test_idx");
   EXPECT_EQ(aliases[0].second, "test_idx");
 
+  for (auto* arg : argv) {
+    TestValkeyModule_FreeString(&fake_ctx_, arg);
+  }
+}
+
+// FT.INFO must reply with aliases as bulk strings: a simple string stops at a
+// null byte and cannot carry CR/LF.
+class FTInfoAliasesTest : public ValkeySearchTest {};
+
+TEST_F(FTInfoAliasesTest, RepliesAliasesAsBulkStrings) {
+  SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
+      &fake_ctx_, []() {}, nullptr, false));
+  data_model::IndexSchema index_schema_proto;
+  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
+      std::string(kTestIndexSchemaPbtxt), &index_schema_proto));
+  VMSDK_EXPECT_OK(SchemaManager::Instance().CreateIndexSchema(
+      &fake_ctx_, index_schema_proto));
+  const std::string alias("a\0b\r\n", 5);
+  VMSDK_EXPECT_OK(SchemaManager::Instance().AddAlias(0, alias, "test_idx"));
+
+  ValkeyModuleString* argv[2];
+  argv[0] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.INFO");
+  argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_idx");
+  VMSDK_EXPECT_OK(FTInfoCmd(&fake_ctx_, argv, 2));
+  EXPECT_THAT(fake_ctx_.reply_capture.GetReply(),
+              testing::HasSubstr(
+                  absl::StrCat("+aliases\r\n*1\r\n$5\r\n", alias, "\r\n")));
   for (auto* arg : argv) {
     TestValkeyModule_FreeString(&fake_ctx_, arg);
   }

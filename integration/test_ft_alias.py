@@ -240,6 +240,18 @@ class TestFTInfoAliases(ValkeySearchTestCaseBase):
         aliases = _get_aliases_from_info(client, INDEX_NAME)
         assert aliases == []
 
+    def test_info_aliases_preserves_null_byte(self):
+        client = self.client
+        assert client.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        null_alias = b"alias_with\x00null_byte"
+        assert client.execute_command("FT.ALIASADD", null_alias, INDEX_NAME) == b"OK"
+
+        info = list(client.execute_command("FT.INFO", INDEX_NAME))
+        idx = next((i for i, v in enumerate(info) if v == b"aliases"), None)
+        assert idx is not None
+        aliases = list(info[idx + 1])
+        assert null_alias in aliases
+
     def test_info_multiple_aliases_sorted(self):
         """FT.INFO reports multiple aliases in sorted order."""
         client = self.client

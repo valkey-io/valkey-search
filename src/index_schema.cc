@@ -1316,7 +1316,7 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx,
   std::sort(aliases.begin(), aliases.end());
   ValkeyModule_ReplyWithArray(ctx, aliases.size());
   for (const auto &alias : aliases) {
-    ValkeyModule_ReplyWithSimpleString(ctx, alias.c_str());
+    ValkeyModule_ReplyWithStringBuffer(ctx, alias.data(), alias.size());
   }
 
   ValkeyModule_ReplyWithSimpleString(ctx, "index_definition");

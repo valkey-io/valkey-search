@@ -1125,14 +1125,15 @@ absl::Status FilterParser::SetupTextFieldConfiguration(
     // explicit field and INFIELDS as the effective scope — if the field is not
     // in INFIELDS the term silently matches nothing. We error instead to
     // surface the likely mistake.
-    if (options_.infields && !options_.infields->empty() &&
-        !options_.infields->contains(*field_name)) {
+    FieldMaskPredicate explicit_field_mask =
+        1ULL << text_index->GetTextFieldNumber();
+    if ((explicit_field_mask & options_.infields_field_mask) == 0ULL) {
       return absl::InvalidArgumentError(
           absl::StrCat("Field '", *field_name, "' is not in INFIELDS list"));
     }
     auto identifier = index_schema_.GetIdentifier(*field_name).value();
     filter_identifiers_.insert(identifier);
-    field_mask = 1ULL << text_index->GetTextFieldNumber();
+    field_mask = explicit_field_mask;
   } else {
     // Set identifiers to include all text fields in the index schema,
     // then AND with the precomputed INFIELDS mask.  When INFIELDS is absent

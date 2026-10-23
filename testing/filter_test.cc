@@ -2488,5 +2488,69 @@ INSTANTIATE_TEST_SUITE_P(
       return info.param.test_name;
     });
 
+class InfieldsFilterBoundaryTest : public ValkeySearchTest {};
+
+// Boundary test: INFIELDS naming the 64th text field (field_index 63,
+// mask bit 1ULL<<63) must correctly restrict matching to that field, and
+// only that field's data must be visible to the resulting query.
+TEST_F(InfieldsFilterBoundaryTest, SixtyFourthTextFieldInInfields) {
+  auto index_schema = CreateIndexSchema("boundary_index_schema").value();
+  index_schema->CreateTextIndexSchema();
+  auto text_index_schema = index_schema->GetTextIndexSchema();
+
+  constexpr int kNumTextFields = 64;
+  std::vector<std::shared_ptr<indexes::Text>> text_indexes;
+  text_indexes.reserve(kNumTextFields);
+  for (int i = 0; i < kNumTextFields; ++i) {
+    data_model::TextIndex text_index_proto = CreateTextIndexProto(
+        /*with_suffix_trie=*/false, /*no_stem=*/false, 1.0);
+    auto text_index =
+        std::make_shared<indexes::Text>(text_index_proto, text_index_schema);
+    std::string field_name = "text_field_" + std::to_string(i);
+    VMSDK_EXPECT_OK(index_schema->AddIndex(field_name, field_name, text_index));
+    text_indexes.push_back(text_index);
+  }
+  // The 64th field (index 63) is the only one allocated bit 1ULL<<63.
+  ASSERT_EQ(text_indexes.back()->GetTextFieldNumber(), 63u);
+
+  auto key = StringInternStore::Intern("key1");
+  // Only the 64th field contains "hello"; all others contain unrelated text.
+  for (int i = 0; i < kNumTextFields; ++i) {
+    std::string content = (i == kNumTextFields - 1) ? "hello" : "other";
+    VMSDK_EXPECT_OK(text_indexes[i]->AddRecord(
+        key, AttributeData(vmsdk::MakeUniqueValkeyString(content))));
+  }
+  text_index_schema->CommitKeyData(key);
+
+  absl::flat_hash_set<std::string> infields = {"text_field_63"};
+  TextParsingOptions options{.infields = &infields};
+  FilterParser parser(*index_schema, "hello", options);
+  auto parse_results = parser.Parse();
+  ASSERT_TRUE(parse_results.ok()) << parse_results.status();
+
+  auto text_index = text_index_schema->GetPerKeyTextIndex(key, false);
+  {
+    indexes::PrefilterEvaluator evaluator(
+        text_index, parse_results.value().query_operations, index_schema.get());
+    EXPECT_TRUE(evaluator.Evaluate(*parse_results.value().root_predicate, key));
+  }
+
+  // Naming a different single field (e.g. field 0, which does not contain
+  // "hello") must exclude the match, proving the mask bit for field 63 is
+  // distinct from the others.
+  absl::flat_hash_set<std::string> other_infields = {"text_field_0"};
+  TextParsingOptions other_options{.infields = &other_infields};
+  FilterParser other_parser(*index_schema, "hello", other_options);
+  auto other_parse_results = other_parser.Parse();
+  ASSERT_TRUE(other_parse_results.ok()) << other_parse_results.status();
+  {
+    indexes::PrefilterEvaluator evaluator(
+        text_index, other_parse_results.value().query_operations,
+        index_schema.get());
+    EXPECT_FALSE(
+        evaluator.Evaluate(*other_parse_results.value().root_predicate, key));
+  }
+}
+
 }  // namespace
 }  // namespace valkey_search

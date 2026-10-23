@@ -15,9 +15,11 @@
 #include <utility>
 #include <vector>
 
+#include "absl/functional/function_ref.h"
 #include "absl/strings/string_view.h"
 #include "src/indexes/text/language.h"
 #include "src/indexes/text/text_iterator.h"
+#include "src/query/resolved_leaf.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/type_conversions.h"
 
@@ -66,7 +68,7 @@ struct EvaluationResult {
   // (see response_generator.cc VerifyFilter). Only meaningful when
   // matches == true and the caller requested a recompute; it is filled with a
   // value produced through the same Scorer seam as the shard-side
-  // ScoreTextQuery (search.cc SingleDocumentScorer), so it is on the same
+  // ScoreTextQuery (search.cc RecomputeDocumentScore), so it is on the same
   // scale. Left at 0.0f on the membership-only fast path.
   float score{0.0f};
   std::unique_ptr<valkey_search::indexes::text::TextIterator> filter_iterator;
@@ -195,6 +197,13 @@ class TagPredicate : public Predicate {
   // Evaluate against tags (string_view set from indexed data or parsed query)
   EvaluationResult Evaluate(const absl::flat_hash_set<absl::string_view>* tags,
                             bool case_sensitive) const;
+  // One bag probe per exact value; only if none hits and the predicate carries
+  // a prefix value does it fall back to the document's own tags. Same verdict
+  // as Evaluate(GetValue(key)): rax keys are stored with the ASCII folding
+  // EqualsIgnoreCase applies, both sides are whitespace-stripped, and query
+  // values are already unescaped.
+  EvaluationResult Evaluate(const TagLeaf& leaf,
+                            const InternedStringPtr& target_key) const;
   const indexes::Tag* GetIndex() const { return index_; }
   absl::string_view GetAlias() const { return alias_; }
   absl::string_view GetIdentifier() const {
@@ -277,13 +286,10 @@ class TextPredicate : public Predicate {
  public:
   TextPredicate() : Predicate(PredicateType::kText) {}
   ~TextPredicate() override = default;
-  // Evaluate against per-key TextIndex
-  virtual EvaluationResult Evaluate(
-      const valkey_search::indexes::text::TextIndex& text_index,
-      const InternedStringPtr& target_key, bool require_positions) const = 0;
   virtual std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema()
       const = 0;
   virtual const FieldMaskPredicate GetFieldMask() const = 0;
+  virtual absl::string_view GetTextString() const = 0;
   // Enclosing OR group weights, folded in here because an OR is a sum: it
   // distributes onto the leaf exactly, unlike an AND with slop.
   virtual std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
@@ -305,6 +311,33 @@ class TextPredicate : public Predicate {
   mutable const indexes::scoring::Scorer* scorer_ = nullptr;
 };
 
+// A text leaf whose matching words are only known per corpus (prefix, suffix,
+// fuzzy): evaluation walks the document's own tree rather than a resolved word
+// list. `lock` is for the main thread, which runs outside the time-sliced read
+// phase and probes each matched word's shared Postings under its bucket.
+class ExpansionPredicate : public TextPredicate {
+ public:
+  using MatchSink = absl::FunctionRef<bool(
+      absl::string_view word,
+      const indexes::text::InvasivePtr<indexes::text::Postings>& postings)>;
+  // The one walk per kind: calls `sink` for each of the predicate's matching
+  // words in `text_index`, in tree order, until the sink returns false or
+  // max expansions is reached. Words without postings are skipped.
+  virtual void ForEachMatch(
+      const valkey_search::indexes::text::TextIndex& text_index,
+      MatchSink sink) const = 0;
+  EvaluationResult Evaluate(
+      const valkey_search::indexes::text::TextIndex& text_index,
+      const InternedStringPtr& target_key, bool require_positions,
+      bool lock) const;
+  // One KeyIterator per matched word of the global tree; the scored iterator
+  // contributes one term's BM25, never the sum.
+  std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
+      const std::shared_ptr<indexes::text::TextIndex>& text_index,
+      FieldMaskPredicate field_mask, bool require_positions,
+      float or_weight_multiplier) const override;
+};
+
 class TermPredicate : public TextPredicate {
  public:
   TermPredicate(
@@ -314,13 +347,14 @@ class TermPredicate : public TextPredicate {
       const override {
     return text_index_schema_;
   }
-  absl::string_view GetTextString() const { return term_; }
+  absl::string_view GetTextString() const override { return term_; }
   EvaluationResult Evaluate(Evaluator& evaluator) const override;
-  // Evaluate against per-key TextIndex
-  EvaluationResult Evaluate(
-      const valkey_search::indexes::text::TextIndex& text_index,
-      const InternedStringPtr& target_key,
-      bool require_positions) const override;
+  // Probes each of the leaf's words for `target_key`, locking per word when
+  // the leaf carries words (main thread). Under `require_positions` the result
+  // carries the iterator an enclosing AND/OR needs for its proximity check.
+  EvaluationResult Evaluate(const TermLeaf& leaf,
+                            const InternedStringPtr& target_key,
+                            bool require_positions) const;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const std::shared_ptr<indexes::text::TextIndex>& text_index,
       FieldMaskPredicate field_mask, bool require_positions,
@@ -336,7 +370,7 @@ class TermPredicate : public TextPredicate {
   bool exact_;
 };
 
-class PrefixPredicate : public TextPredicate {
+class PrefixPredicate : public ExpansionPredicate {
  public:
   PrefixPredicate(
       std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
@@ -345,17 +379,10 @@ class PrefixPredicate : public TextPredicate {
       const override {
     return text_index_schema_;
   }
-  absl::string_view GetTextString() const { return term_; }
+  absl::string_view GetTextString() const override { return term_; }
   EvaluationResult Evaluate(Evaluator& evaluator) const override;
-  // Evaluate against per-key TextIndex
-  EvaluationResult Evaluate(
-      const valkey_search::indexes::text::TextIndex& text_index,
-      const InternedStringPtr& target_key,
-      bool require_positions) const override;
-  std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
-      const std::shared_ptr<indexes::text::TextIndex>& text_index,
-      FieldMaskPredicate field_mask, bool require_positions,
-      float or_weight_multiplier) const override;
+  void ForEachMatch(const valkey_search::indexes::text::TextIndex& text_index,
+                    MatchSink sink) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
   size_t EstimateSize(bool is_vec_query) const override;
 
@@ -365,7 +392,7 @@ class PrefixPredicate : public TextPredicate {
   std::string term_;
 };
 
-class SuffixPredicate : public TextPredicate {
+class SuffixPredicate : public ExpansionPredicate {
  public:
   SuffixPredicate(
       std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
@@ -374,17 +401,10 @@ class SuffixPredicate : public TextPredicate {
       const override {
     return text_index_schema_;
   }
-  absl::string_view GetTextString() const { return term_; }
+  absl::string_view GetTextString() const override { return term_; }
   EvaluationResult Evaluate(Evaluator& evaluator) const override;
-  // Evaluate against per-key TextIndex
-  EvaluationResult Evaluate(
-      const valkey_search::indexes::text::TextIndex& text_index,
-      const InternedStringPtr& target_key,
-      bool require_positions) const override;
-  std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
-      const std::shared_ptr<indexes::text::TextIndex>& text_index,
-      FieldMaskPredicate field_mask, bool require_positions,
-      float or_weight_multiplier) const override;
+  void ForEachMatch(const valkey_search::indexes::text::TextIndex& text_index,
+                    MatchSink sink) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
   size_t EstimateSize(bool is_vec_query) const override;
 
@@ -394,7 +414,7 @@ class SuffixPredicate : public TextPredicate {
   std::string term_;
 };
 
-class InfixPredicate : public TextPredicate {
+class InfixPredicate : public ExpansionPredicate {
  public:
   InfixPredicate(
       std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
@@ -403,17 +423,10 @@ class InfixPredicate : public TextPredicate {
       const override {
     return text_index_schema_;
   }
-  absl::string_view GetTextString() const { return term_; }
+  absl::string_view GetTextString() const override { return term_; }
   EvaluationResult Evaluate(Evaluator& evaluator) const override;
-  // Evaluate against per-key TextIndex
-  EvaluationResult Evaluate(
-      const valkey_search::indexes::text::TextIndex& text_index,
-      const InternedStringPtr& target_key,
-      bool require_positions) const override;
-  std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
-      const std::shared_ptr<indexes::text::TextIndex>& text_index,
-      FieldMaskPredicate field_mask, bool require_positions,
-      float or_weight_multiplier) const override;
+  void ForEachMatch(const valkey_search::indexes::text::TextIndex& text_index,
+                    MatchSink sink) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
   size_t EstimateSize(bool is_vec_query) const override;
 
@@ -423,7 +436,7 @@ class InfixPredicate : public TextPredicate {
   std::string term_;
 };
 
-class FuzzyPredicate : public TextPredicate {
+class FuzzyPredicate : public ExpansionPredicate {
  public:
   FuzzyPredicate(
       std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
@@ -432,21 +445,14 @@ class FuzzyPredicate : public TextPredicate {
       const override {
     return text_index_schema_;
   }
-  absl::string_view GetTextString() const { return term_; }
+  absl::string_view GetTextString() const override { return term_; }
   uint32_t GetDistance() const { return distance_; }
   // Unit for the edit distance, resolved from the index language when the
   // predicate is built. See COMPATIBILITY.md.
   indexes::text::LengthUnit GetLengthUnit() const { return length_unit_; }
   EvaluationResult Evaluate(Evaluator& evaluator) const override;
-  // Evaluate against per-key TextIndex
-  EvaluationResult Evaluate(
-      const valkey_search::indexes::text::TextIndex& text_index,
-      const InternedStringPtr& target_key,
-      bool require_positions) const override;
-  std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
-      const std::shared_ptr<indexes::text::TextIndex>& text_index,
-      FieldMaskPredicate field_mask, bool require_positions,
-      float or_weight_multiplier) const override;
+  void ForEachMatch(const valkey_search::indexes::text::TextIndex& text_index,
+                    MatchSink sink) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
   size_t EstimateSize(bool is_vec_query) const override;
 

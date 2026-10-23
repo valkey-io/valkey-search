@@ -102,12 +102,13 @@ void RecordSearchMetrics(bool failure,
 
 namespace {
 // Whether `value` is exactly representable as a float. Only FLOAT64 indexes
-// produce values that do not. Infinity and NaN are detected by their bits,
-// because -ffast-math makes comparisons with them unreliable.
+// produce finite values that do not. Infinity and NaN are detected by their
+// bits and sent as doubles: under -ffast-math, comparing them is unreliable and
+// casting them to float is undefined behavior.
 bool IsRepresentableAsFloat(double value) {
   constexpr uint64_t kExponentMask = 0x7ff0000000000000ULL;
   if ((std::bit_cast<uint64_t>(value) & kExponentMask) == kExponentMask) {
-    return true;
+    return false;
   }
   // Converting a finite value beyond the float range is undefined behavior.
   if (std::abs(value) > std::numeric_limits<float>::max()) {

@@ -33,8 +33,8 @@
 #include "src/coordinator/coordinator.pb.h"
 #include "src/coordinator/search_converter.h"
 #include "src/coordinator/util.h"
-#include "src/indexes/scoring/scorer.h"
 #include "src/indexes/vector_base.h"
+#include "src/indexes/vector_type.h"
 #include "src/query/multi_search.h"
 #include "src/query/search.h"
 #include "src/utils/string_interning.h"
@@ -174,8 +174,7 @@ struct SearchPartitionResultsTracker {
       // -inf is a VR distance and is kept. Compare the bits: -ffast-math makes
       // float comparisons with infinity unreliable.
       neighbor.has_vr_distance = std::bit_cast<uint64_t>(neighbor.distance) !=
-                                 std::bit_cast<uint64_t>(static_cast<double>(
-                                     indexes::scoring::PositiveInf()));
+                                 indexes::FloatBits<double>::kExponentMask;
       neighbor.score = neighbor_entry->has_score_fp64()
                            ? neighbor_entry->score_fp64()
                            : neighbor_entry->score();

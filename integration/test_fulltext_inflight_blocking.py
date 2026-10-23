@@ -210,15 +210,7 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
             assert time.monotonic() - t0 >= 0.4
             assert blocked() == before + 2
 
-        # Released inside the deadline: the writer is unpaused by the same
-        # EXEC, so the search blocks until the mutation is applied and then
-        # revalidates against it.
-        before = blocked()
-        pipe = client.pipeline(transaction=True)
-        pipe.execute_command("FT._DEBUG", "PAUSEPOINT", "RESET", "mutation_processing")
-        pipe.execute_command("FT.SEARCH", "idx", "@content:hello", "TIMEOUT", "5000")
-        assert pipe.execute()[1] == [0]
-        assert blocked() == before + 1
+        client.execute_command("FT._DEBUG PAUSEPOINT RESET mutation_processing")
         hset_thread.join()
         assert hset_err[0] is None
         IndexingTestHelper.wait_for_indexing_complete_on_node(client, "idx")

@@ -28,6 +28,7 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/strings/strip.h"
+#include "absl/synchronization/notification.h"
 #include "absl/types/optional.h"
 #include "gmock/gmock.h"
 #include "google/protobuf/any.pb.h"
@@ -2325,6 +2326,46 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   WaitWorkerTasksAreCompleted(mutations_thread_pool);
   EXPECT_EQ(mutations_thread_pool.QueueSize(), 0);
   EXPECT_EQ(index_schema->stats_.mutation_queue_size_, 0u);
+}
+
+TEST_F(IndexSchemaFriendTest, WaitForContendedKeysUntilApplied)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  auto vectors = DeterministicallyGenerateVectors(2, dimensions, 2);
+  auto mutate = [&](size_t i) {
+    IndexSchema::MutatedAttributes mutated;
+    mutated[attribute_identifier] = testing_infra::MakeAttributeData(
+        *hnsw_index, key,
+        absl::string_view(reinterpret_cast<const char *>(vectors[i].data()),
+                          dimensions * sizeof(float)));
+    index_schema->ProcessMutation(&fake_ctx, mutated, key, false, false);
+  };
+  mutate(0);
+  WaitWorkerTasksAreCompleted(mutations_thread_pool);
+  std::vector<indexes::Neighbor> neighbors(1);
+  neighbors[0].external_id = key;
+  neighbors[0].sequence_number = index_schema->GetDbMutationSequenceNumber(key);
+
+  // The writer cannot apply while a reader slice is held; it is let through
+  // only once this thread is observed blocking on the key.
+  const auto blocked_before = Metrics::GetStats().text_query_blocked_cnt.load();
+  absl::Notification reader_held;
+  std::thread release([&] {
+    {
+      vmsdk::ReaderMutexLock lock(&index_schema->GetTimeSlicedMutex());
+      reader_held.Notify();
+      while (Metrics::GetStats().text_query_blocked_cnt.load() ==
+             blocked_before) {
+        std::this_thread::yield();
+      }
+    }
+  });
+  reader_held.WaitForNotification();
+  mutate(1);
+  EXPECT_TRUE(
+      index_schema->WaitForContendedKeys(neighbors, absl::InfiniteFuture()));
+  release.join();
+  EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 0u);
+  WaitWorkerTasksAreCompleted(mutations_thread_pool);
 }
 
 void IndexSchemaFriendTest::VerifyVectorIndexConsistency(

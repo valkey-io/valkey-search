@@ -141,11 +141,12 @@ static uint64_t MurmurHash64A(const void *key, int len, unsigned int seed) {
 /* Given a string element, returns the length of the pattern 000..1 of
  * the element hash. As a side effect 'regp' is set to the register
  * index this element hashes to. */
-static int hllPatLen(const unsigned char *ele, size_t elesize, long *regp) {
+static int hllPatLen(const unsigned char *ele, size_t elesize, uint64_t seed,
+                      long *regp) {
   uint64_t hash, index;
   int count;
 
-  hash = MurmurHash64A(ele, (int)elesize, 0xadc83b19ULL);
+  hash = MurmurHash64A(ele, (int)elesize, seed);
   index = hash & HLL_P_MASK;
   hash >>= HLL_P;
   hash |= ((uint64_t)1 << HLL_Q);
@@ -281,8 +282,8 @@ uint64_t hll_count_histogram(const int *reghisto) {
 
 void hll_init(struct HLL *hll) { memset(hll, 0, sizeof(*hll)); }
 
-int hll_pat_len(const void *buf, size_t len, long *index) {
-  return hllPatLen((const unsigned char *)buf, len, index);
+int hll_pat_len(const void *buf, size_t len, uint64_t seed, long *index) {
+  return hllPatLen((const unsigned char *)buf, len, seed, index);
 }
 
 void hll_set(struct HLL *hll, long index, int count) {

@@ -61,6 +61,9 @@ extern "C" {
 /* Dense size: 6 bits * 16384 registers = 12288 bytes. */
 #define HLL_DENSE_SIZE (((HLL_REGISTERS * HLL_BITS) + 7) / 8)
 
+/* Default hash seed, matching the original Valkey/Redis HyperLogLog. */
+#define HLL_DEFAULT_SEED 0xadc83b19ULL
+
 struct HLL {
   uint8_t registers[HLL_DENSE_SIZE + 1]; /* +1 for safe macro access. */
 };
@@ -68,9 +71,10 @@ struct HLL {
 /* Initialize an HLL to the empty state. */
 void hll_init(struct HLL *hll);
 
-/* Hash a raw buffer with MurmurHash64A. Returns the register value it
- * yields (1..HLL_Q+1) and stores the register index in *index. */
-int hll_pat_len(const void *buf, size_t len, long *index);
+/* Hash a raw buffer with MurmurHash64A, seeded with 'seed'. Returns the
+ * register value it yields (1..HLL_Q+1) and stores the register index in
+ * *index. */
+int hll_pat_len(const void *buf, size_t len, uint64_t seed, long *index);
 
 /* Raise register 'index' to 'count' if it is smaller. */
 void hll_set(struct HLL *hll, long index, int count);

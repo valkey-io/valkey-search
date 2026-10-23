@@ -815,6 +815,27 @@ TEST_F(AggregateExecTest, CountDistinctishZeroAndNanCanonicalization) {
   EXPECT_EQ(*(nan_records.pop_front()->fields_.at(2).AsDouble()), 1);
 }
 
+// Values that render identically as text must not collide: array [1,2] vs
+// string "[1,2]", and bool true vs string "1".
+TEST_F(AggregateExecTest, CountDistinctishMixedTypesDoNotCollide) {
+  auto param = MakeStages("groupby 1 @n2 reduce count_distinctish 1 @n1");
+  using expr::Value;
+  RecordSet array_vs_string(nullptr);
+  array_vs_string.emplace_back(
+      RecordWithValue(Value({Value(1.0), Value(2.0)}), 1));
+  array_vs_string.emplace_back(RecordWithValue(Value("[1,2]"), 1));
+  EXPECT_TRUE((param->stages_[0]->Execute(array_vs_string)).ok());
+  EXPECT_EQ(array_vs_string.size(), 1);
+  EXPECT_EQ(*(array_vs_string.pop_front()->fields_.at(2).AsDouble()), 2);
+
+  RecordSet bool_vs_string(nullptr);
+  bool_vs_string.emplace_back(RecordWithValue(Value(true), 1));
+  bool_vs_string.emplace_back(RecordWithValue(Value("1"), 1));
+  EXPECT_TRUE((param->stages_[0]->Execute(bool_vs_string)).ok());
+  EXPECT_EQ(bool_vs_string.size(), 1);
+  EXPECT_EQ(*(bool_vs_string.pop_front()->fields_.at(2).AsDouble()), 2);
+}
+
 /*
 TEST_F(AggregateExecTest, testHash) {
   GroupKey key1({expr::Value(1.0), expr::Value(2.0)});

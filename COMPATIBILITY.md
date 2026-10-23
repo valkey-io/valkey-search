@@ -64,7 +64,7 @@ Floating-point arithmetic is inherently imprecise, and the observable result of 
 
 ### A note on `COUNT_DISTINCTISH`
 
-`COUNT_DISTINCTISH` returns an estimate, and Valkey Search estimates differently from Redisearch. Valkey Search uses the HyperLogLog of Valkey's `PFCOUNT` (2^14 registers, a 64-bit MurmurHash of the value's text, standard error about 0.81%); Redisearch uses 2^8 registers and a 32-bit hash of the value (standard error about 6.5%). Valkey Search trades more memory per group for the lower error. Both results are deterministic, but for the same data they generally differ. These differences are **not** considered compatibility bugs. Applications that need an exact count should use `COUNT_DISTINCT`.
+`COUNT_DISTINCTISH` returns an estimate, and Valkey Search estimates differently from Redisearch. Valkey Search uses the HyperLogLog of Valkey's `PFCOUNT` (2^14 registers, a 64-bit MurmurHash of the value's bytes, canonicalized bits for numbers, seeded per type, standard error about 0.81%); Redisearch uses 2^8 registers and a 32-bit hash of the value (standard error about 6.5%). Valkey Search trades more memory per group for the lower error. Both results are deterministic, but for the same data they generally differ. These differences are **not** considered compatibility bugs. Applications that need an exact count should use `COUNT_DISTINCT`.
 
 ## Intentional Incompatibilities
 

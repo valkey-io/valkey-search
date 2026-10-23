@@ -38,7 +38,7 @@ class HyperLogLog {
   uint64_t Estimate() const;
 
  private:
-  void AddBuffer(const void* buf, size_t len);
+  void AddBuffer(const void* buf, size_t len, uint64_t seed);
 
   // The dense registers take 12 KB and most GROUPBY groups see few values,
   // so the non-zero registers are kept in sparse_, sorted as

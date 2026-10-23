@@ -62,7 +62,6 @@ extern "C" {
 #define HLL_DENSE_SIZE (((HLL_REGISTERS * HLL_BITS) + 7) / 8)
 
 struct HLL {
-  uint64_t cached_card; /* Cached cardinality; UINT64_MAX = invalid. */
   uint8_t registers[HLL_DENSE_SIZE + 1]; /* +1 for safe macro access. */
 };
 
@@ -76,7 +75,7 @@ int hll_pat_len(const void *buf, size_t len, long *index);
 /* Raise register 'index' to 'count' if it is smaller. */
 void hll_set(struct HLL *hll, long index, int count);
 
-/* Estimate the cardinality. Result is cached until next set. */
+/* Estimate the cardinality. */
 uint64_t hll_count(const struct HLL *hll);
 
 /* Estimate the cardinality from a histogram of the register values, where

@@ -46,9 +46,6 @@
 #include <math.h>
 #include <string.h>
 
-#define HLL_INVALIDATE_CACHE(h) ((h)->cached_card = UINT64_MAX)
-#define HLL_VALID_CACHE(h) ((h)->cached_card != UINT64_MAX)
-
 /* ========================= Dense register macros ========================= */
 
 /* Store the value of the register at position 'regnum' into variable
@@ -282,28 +279,18 @@ uint64_t hll_count_histogram(const int *reghisto) {
 
 /* ========================= Public API ==================================== */
 
-void hll_init(struct HLL *hll) {
-  memset(hll, 0, sizeof(*hll));
-  HLL_INVALIDATE_CACHE(hll);
-}
+void hll_init(struct HLL *hll) { memset(hll, 0, sizeof(*hll)); }
 
 int hll_pat_len(const void *buf, size_t len, long *index) {
   return hllPatLen((const unsigned char *)buf, len, index);
 }
 
 void hll_set(struct HLL *hll, long index, int count) {
-  if (hllDenseSet(hll->registers, index, (uint8_t)count)) {
-    HLL_INVALIDATE_CACHE(hll);
-  }
+  hllDenseSet(hll->registers, index, (uint8_t)count);
 }
 
 uint64_t hll_count(const struct HLL *hll) {
-  if (HLL_VALID_CACHE(hll)) {
-    return hll->cached_card;
-  }
   int reghisto[64] = {0};
   hllDenseRegHisto(((struct HLL *)hll)->registers, reghisto);
-  uint64_t card = hll_count_histogram(reghisto);
-  ((struct HLL *)hll)->cached_card = card;
-  return card;
+  return hll_count_histogram(reghisto);
 }

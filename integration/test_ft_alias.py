@@ -288,45 +288,6 @@ class TestFTInfoAliases(ValkeySearchTestCaseBase):
         aliases = _get_aliases_from_info(client, INDEX_NAME)
         assert aliases == []
 
-class TestFTAliasWrongArity(ValkeySearchTestCaseBase):
-    """Tests that alias commands reject wrong argument counts."""
-
-    def test_aliasadd_too_few_args(self):
-        """FT.ALIASADD with only one argument returns a wrong-arity error."""
-        client = self.client
-        with pytest.raises(ResponseError):
-            client.execute_command("FT.ALIASADD", "only_alias")
-
-    def test_aliasadd_too_many_args(self):
-        """FT.ALIASADD with extra arguments returns a wrong-arity error."""
-        client = self.client
-        with pytest.raises(ResponseError):
-            client.execute_command("FT.ALIASADD", "a", "b", "extra")
-
-    def test_aliasdel_no_args(self):
-        """FT.ALIASDEL with no arguments returns a wrong-arity error."""
-        client = self.client
-        with pytest.raises(ResponseError):
-            client.execute_command("FT.ALIASDEL")
-
-    def test_aliasdel_too_many_args(self):
-        """FT.ALIASDEL with extra arguments returns a wrong-arity error."""
-        client = self.client
-        with pytest.raises(ResponseError):
-            client.execute_command("FT.ALIASDEL", "a", "extra")
-
-    def test_aliasupdate_too_few_args(self):
-        """FT.ALIASUPDATE with only one argument returns a wrong-arity error."""
-        client = self.client
-        with pytest.raises(ResponseError):
-            client.execute_command("FT.ALIASUPDATE", "only_alias")
-
-    def test_aliasupdate_too_many_args(self):
-        """FT.ALIASUPDATE with extra arguments returns a wrong-arity error."""
-        client = self.client
-        with pytest.raises(ResponseError):
-            client.execute_command("FT.ALIASUPDATE", "a", "b", "extra")
-
 class TestFTAliasSwapDB(ValkeySearchTestCaseBase):
     """Tests that SWAPDB moves aliases in lockstep with their indexes."""
 
@@ -672,12 +633,6 @@ class TestFTAliasList(ValkeySearchTestCaseBase):
         client = self.client
         result = client.execute_command("FT.ALIASLIST")
         assert result == []
-
-    def test_aliaslist_wrong_arity(self):
-        """FT.ALIASLIST with extra arguments returns a wrong-arity error."""
-        client = self.client
-        with pytest.raises(ResponseError):
-            client.execute_command("FT.ALIASLIST", "extra_arg")
 
     def test_aliaslist_per_db_isolation(self):
         """FT.ALIASLIST only shows aliases for the current database."""

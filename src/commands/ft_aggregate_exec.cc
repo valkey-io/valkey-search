@@ -1232,7 +1232,8 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> QuantileReducerParser(
     return absl::InvalidArgumentError(
         "QUANTILE: quantile value must be a numeric literal");
   }
-  if (expr::IsNan(quantile_val) || quantile_val < 0.0 || quantile_val > 1.0) {
+  if (expr::IsNan(quantile_val) || expr::IsInf(quantile_val) ||
+      quantile_val < 0.0 || quantile_val > 1.0) {
     return absl::InvalidArgumentError(
         "QUANTILE: quantile value must be between 0.0 and 1.0");
   }

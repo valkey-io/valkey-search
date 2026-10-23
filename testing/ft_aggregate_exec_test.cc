@@ -1540,9 +1540,9 @@ TEST_F(AggregateExecTest, NumericPrecisionConsistencyProperty) {
 
     // Verify the result is a valid double (not NaN or infinity for normal
     // inputs)
-    EXPECT_FALSE(std::isnan(result))
+    EXPECT_FALSE(expr::IsNan(result))
         << "Iteration " << iteration << ": Result should not be NaN";
-    EXPECT_FALSE(std::isinf(result))
+    EXPECT_FALSE(expr::IsInf(result))
         << "Iteration " << iteration
         << ": Result should not be infinity for normal inputs";
   }

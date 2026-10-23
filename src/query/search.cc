@@ -1735,6 +1735,18 @@ absl::Status ForcedMultiArmFailure(size_t arm_index) {
   return absl::InternalError("Forced multi-arm failure");
 }
 
+namespace {
+// Remote partition searches account their CPU time, on both the worker and the
+// main thread, to the coordinator server partition CPU time metric.
+vmsdk::ShardedAtomic<uint64_t> *RemoteCPUTimeAccumulator(
+    SearchMode search_mode) {
+  return search_mode == SearchMode::kRemote
+             ? &Metrics::GetStats()
+                    .coordinator_server_search_index_partition_cpu_time_usec
+             : nullptr;
+}
+}  // namespace
+
 absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
                          vmsdk::ThreadPool *thread_pool,
                          SearchMode search_mode) {
@@ -1750,22 +1762,21 @@ absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
   const bool scheduled = thread_pool->Schedule(
       [holder, search_mode]() mutable {
         std::unique_ptr<SearchParameters> parameters = std::move(*holder);
-        {
-          vmsdk::ScopedThreadCPUMonitor remote_cpu_monitor(
-              search_mode == SearchMode::kRemote
-                  ? &Metrics::GetStats()
-                         .coordinator_server_search_index_partition_cpu_time_usec
-                  : nullptr);
-          auto res = Search(*parameters, search_mode);
-          BACKGROUND_PAUSEPOINT("background_search_completing");
-          parameters->search_result.status = res;
-        }
+        // Covers the background completion too: for a remote search it
+        // serializes the reply on this thread.
+        vmsdk::ScopedThreadCPUMonitor remote_cpu_monitor(
+            RemoteCPUTimeAccumulator(search_mode));
+        auto res = Search(*parameters, search_mode);
+        BACKGROUND_PAUSEPOINT("background_search_completing");
+        parameters->search_result.status = res;
         switch (parameters->GetContentProcessing()) {
           case ContentProcessing::kNoContent:
             parameters->QueryCompleteBackground(std::move(parameters));
             break;
           case ContentProcessing::kContentRequired:
           case ContentProcessing::kContentionCheckRequired:
+            parameters->content_resolution_cpu_time_usec =
+                RemoteCPUTimeAccumulator(search_mode);
             vmsdk::RunByMain([parameters = std::move(parameters)]() mutable {
               ResolveContent(std::move(parameters));
             });

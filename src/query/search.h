@@ -36,6 +36,7 @@
 #include "src/valkey_search_options.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/sharded_atomic.h"
 #include "vmsdk/src/thread_pool.h"
 
 namespace valkey_search::query {
@@ -256,6 +257,10 @@ struct SearchParameters {
   coordinator::IndexFingerprintVersion index_fingerprint_version;
   uint64_t slot_fingerprint;
   SearchResult search_result;
+  // Accumulates the main-thread CPU time of content resolution, including
+  // re-runs after a key contention wait. Set by SearchAsync for remote
+  // searches; null otherwise.
+  vmsdk::ShardedAtomic<uint64_t> *content_resolution_cpu_time_usec{nullptr};
   struct ParseTimeVariables {
     // Members of this struct are only valid during the parsing of
     // VectorSearchParameters on the mainthread. They get cleared

@@ -6,24 +6,24 @@
  */
 #pragma once
 
-#include <atomic>
 #include <cstdint>
 #include <optional>
 
+#include "vmsdk/src/sharded_atomic.h"
 #include "vmsdk/src/thread_monitoring.h"
 
 namespace vmsdk {
 
 class ScopedThreadCPUMonitor {
  public:
-  explicit ScopedThreadCPUMonitor(std::atomic<uint64_t> *accumulator);
+  explicit ScopedThreadCPUMonitor(ShardedAtomic<uint64_t> *accumulator);
   ~ScopedThreadCPUMonitor();
 
   ScopedThreadCPUMonitor(const ScopedThreadCPUMonitor &) = delete;
   ScopedThreadCPUMonitor &operator=(const ScopedThreadCPUMonitor &) = delete;
 
  private:
-  std::atomic<uint64_t> *accumulator_;
+  ShardedAtomic<uint64_t> *accumulator_;
   std::optional<ThreadMonitor> thread_monitor_;
   std::optional<uint64_t> start_cpu_time_usec_;
 };

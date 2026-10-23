@@ -13,6 +13,7 @@
 
 #include "absl/time/time.h"
 #include "vmsdk/src/latency_sampler.h"
+#include "vmsdk/src/sharded_atomic.h"
 
 // 2 is the value used by Valkey and correlates to ~40KiB and ~1% precision.
 #define LATENCY_PRECISION 2
@@ -84,8 +85,8 @@ class Metrics {
         0};
     std::atomic<uint64_t> coordinator_server_search_index_partition_failure_cnt{
         0};
-    std::atomic<uint64_t>
-        coordinator_server_search_index_partition_cpu_time_usec{0};
+    vmsdk::ShardedAtomic<uint64_t>
+        coordinator_server_search_index_partition_cpu_time_usec;
     std::atomic<uint64_t> coordinator_client_get_global_metadata_success_cnt{0};
     std::atomic<uint64_t> coordinator_client_get_global_metadata_failure_cnt{0};
     std::atomic<uint64_t> coordinator_client_search_index_partition_success_cnt{

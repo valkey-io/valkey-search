@@ -12,7 +12,7 @@
 namespace vmsdk {
 
 ScopedThreadCPUMonitor::ScopedThreadCPUMonitor(
-    std::atomic<uint64_t> *accumulator)
+    ShardedAtomic<uint64_t> *accumulator)
     : accumulator_(accumulator) {
   if (accumulator_ == nullptr) {
     return;
@@ -31,8 +31,7 @@ ScopedThreadCPUMonitor::~ScopedThreadCPUMonitor() {
   }
   auto end_cpu_time = thread_monitor_->GetCPUTime();
   if (end_cpu_time.ok() && end_cpu_time.value() >= *start_cpu_time_usec_) {
-    accumulator_->fetch_add(end_cpu_time.value() - *start_cpu_time_usec_,
-                            std::memory_order_relaxed);
+    accumulator_->Add(end_cpu_time.value() - *start_cpu_time_usec_);
   }
 }
 

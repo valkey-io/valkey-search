@@ -584,7 +584,8 @@ static vmsdk::info_field::Integer
             .Units(vmsdk::info_field::Units::kMicroSeconds)
             .Computed([]() -> long long {
               return Metrics::GetStats()
-                  .coordinator_server_search_index_partition_cpu_time_usec;
+                  .coordinator_server_search_index_partition_cpu_time_usec
+                  .GetTotal();
             })
             .VisibleIf([]() -> bool {
               return ValkeySearch::Instance().UsingCoordinator();

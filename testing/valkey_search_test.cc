@@ -481,7 +481,8 @@ TEST_F(ValkeySearchTest, Info) {
   stats.coordinator_server_get_global_metadata_success_cnt = 26;
   stats.coordinator_server_search_index_partition_failure_cnt = 27;
   stats.coordinator_server_search_index_partition_success_cnt = 28;
-  stats.coordinator_server_search_index_partition_cpu_time_usec = 29000;
+  stats.coordinator_server_search_index_partition_cpu_time_usec.Reset();
+  stats.coordinator_server_search_index_partition_cpu_time_usec.Add(29000);
   stats.coordinator_bytes_out = 1000;
   stats.coordinator_bytes_in = 2000;
   auto interned_key_1 = StringInternStore::Intern("key1");

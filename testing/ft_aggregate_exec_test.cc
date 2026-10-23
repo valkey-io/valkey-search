@@ -6,6 +6,7 @@
 
 #include "src/commands/ft_aggregate_exec.h"
 
+#include <bit>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
@@ -786,6 +787,32 @@ TEST_F(AggregateExecTest, CountDistinctishArrayValues) {
   auto record = records.pop_front();
   EXPECT_TRUE(record->fields_.at(2).IsDouble());
   EXPECT_EQ(*(record->fields_.at(2).AsDouble()), 3);
+}
+
+// -0.0 and +0.0 are the same double value and must count as one distinct
+// value; two different NaN bit patterns must also collapse to one distinct
+// value (NaN has no canonical textual form, so only the bit-pattern
+// canonicalization makes this deterministic).
+TEST_F(AggregateExecTest, CountDistinctishZeroAndNanCanonicalization) {
+  auto param = MakeStages("groupby 1 @n2 reduce count_distinctish 1 @n1");
+  using expr::Value;
+  RecordSet records(nullptr);
+  records.emplace_back(RecordWithValue(Value(0.0), 1));
+  records.emplace_back(RecordWithValue(Value(-0.0), 1));
+  EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+  EXPECT_EQ(records.size(), 1);
+  EXPECT_EQ(*(records.pop_front()->fields_.at(2).AsDouble()), 1);
+
+  uint64_t nan_bits_a = 0x7FF8000000000001ull;
+  uint64_t nan_bits_b = 0x7FFFFFFFFFFFFFFFull;
+  RecordSet nan_records(nullptr);
+  nan_records.emplace_back(
+      RecordWithValue(Value(std::bit_cast<double>(nan_bits_a)), 1));
+  nan_records.emplace_back(
+      RecordWithValue(Value(std::bit_cast<double>(nan_bits_b)), 1));
+  EXPECT_TRUE((param->stages_[0]->Execute(nan_records)).ok());
+  EXPECT_EQ(nan_records.size(), 1);
+  EXPECT_EQ(*(nan_records.pop_front()->fields_.at(2).AsDouble()), 1);
 }
 
 /*

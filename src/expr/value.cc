@@ -40,6 +40,22 @@ static bool IsInf(const double& d) {
   return ((v & kExponentMask) == kExponentMask) && ((v & kMantissaMask) == 0);
 }
 
+// Canonicalizes a double's bit pattern for unambiguous, lossless
+// serialization and hashing: every NaN collapses to one bit pattern and
+// -0.0 maps to +0.0, matching the equivalences CompareDoubles() already
+// treats as equal. Integer checks only -- no float compares, since
+// -ffast-math can fold those.
+uint64_t CanonicalDoubleBits(double d) {
+  uint64_t v = *(uint64_t*)&d;
+  if (IsNan(d)) {
+    return kExponentMask | 1;
+  }
+  if (v == kSignBitMask) {
+    return 0;
+  }
+  return v;
+}
+
 // Redisearch has no string form for an array and compares it as the empty
 // string -- `@array == ""` is true there, for an empty and a populated array
 // alike. Matching that keeps string comparisons against an array compatible.
@@ -259,7 +275,7 @@ std::string Value::Serialize() const {
       }
       const auto& elem = (*arr)[i];
       if (elem.IsString()) {
-        auto sv = *elem.AsStringView();
+        auto sv = elem.GetStringView();
         absl::StrAppend(&result, "\"");
         for (char c : sv) {
           if (c == '"' || c == '\\') {
@@ -274,6 +290,12 @@ std::string Value::Serialize() const {
         absl::StrAppend(&result, "null");
       } else if (elem.IsBool()) {
         absl::StrAppend(&result, elem.GetBool() ? "true" : "false");
+      } else if (elem.IsDouble()) {
+        // %.12g (used by AsStringView()) loses precision and collapses -0.0
+        // with 0.0 and all NaNs together; append the canonicalized 8-byte bit
+        // pattern instead so nested doubles hash unambiguously and losslessly.
+        uint64_t bits = CanonicalDoubleBits(elem.GetDouble());
+        result.append(reinterpret_cast<const char*>(&bits), sizeof(bits));
       } else {
         absl::StrAppend(&result, *elem.AsStringView());
       }

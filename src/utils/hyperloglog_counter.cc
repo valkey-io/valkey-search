@@ -9,6 +9,7 @@
 #include "src/utils/hyperloglog_counter.h"
 
 #include <algorithm>
+#include <cstring>
 
 namespace valkey_search {
 
@@ -25,13 +26,11 @@ void HyperLogLog::Add(const expr::Value& value) {
     AddBuffer(serialized.data(), serialized.size());
     return;
   }
-  // Doubles format to 12 significant digits, so hash their bits instead.
+  // Doubles format to 12 significant digits, so hash their canonicalized bits
+  // instead of their text.
   if (value.IsDouble()) {
-    double d = *value.AsDouble();
-    if (d == 0.0) {
-      d = 0.0;  // -0.0 and 0.0 hash alike
-    }
-    AddBuffer(&d, sizeof(d));
+    uint64_t bits = expr::CanonicalDoubleBits(*value.AsDouble());
+    AddBuffer(&bits, sizeof(bits));
     return;
   }
   auto sv = value.AsStringView();

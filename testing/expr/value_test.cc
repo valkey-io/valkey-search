@@ -1451,14 +1451,26 @@ TEST_F(ValueTest, Serialize_NilInArray) {
 }
 
 TEST_F(ValueTest, Serialize_NestedArray) {
+  // Doubles serialize to their raw 8-byte canonicalized bit pattern, not
+  // text, so compare against the same construction rather than a literal
+  // string.
   Value inner({Value(1.0), Value(2.0)});
   Value outer({inner, Value(std::string("end"))});
-  EXPECT_EQ(outer.Serialize(), "[[1,2],\"end\"]");
+  Value same_inner({Value(1.0), Value(2.0)});
+  Value same_outer({same_inner, Value(std::string("end"))});
+  EXPECT_EQ(outer.Serialize(), same_outer.Serialize());
+  Value different_outer(
+      {Value({Value(2.0), Value(1.0)}), Value(std::string("end"))});
+  EXPECT_NE(outer.Serialize(), different_outer.Serialize());
 }
 
 TEST_F(ValueTest, Serialize_MixedTypesArray) {
   Value arr({Value(3.14), Value(true), Value(std::string("hi")), Value()});
-  EXPECT_EQ(arr.Serialize(), "[3.14,true,\"hi\",null]");
+  Value same({Value(3.14), Value(true), Value(std::string("hi")), Value()});
+  EXPECT_EQ(arr.Serialize(), same.Serialize());
+  Value different(
+      {Value(2.71), Value(true), Value(std::string("hi")), Value()});
+  EXPECT_NE(arr.Serialize(), different.Serialize());
 }
 
 TEST_F(ValueTest, Serialize_DeterministicForHashing) {
@@ -1476,10 +1488,12 @@ TEST_F(ValueTest, Serialize_NegativeNumbers) {
   Value neg(-42.5);
   EXPECT_EQ(neg.Serialize(), "-42.5");
 
-  // -0.0 serializes as "-0" (IEEE 754 negative zero is preserved by
-  // FormatDouble)
-  Value arr({Value(-1.0), Value(-0.0), Value(0.0)});
-  EXPECT_EQ(arr.Serialize(), "[-1,-0,0]");
+  // In arrays, -0.0 and 0.0 canonicalize to the same bit pattern, so a
+  // leading -1.0 followed by -0.0 must serialize identically to one followed
+  // by 0.0.
+  Value arr_neg_zero({Value(-1.0), Value(-0.0)});
+  Value arr_pos_zero({Value(-1.0), Value(0.0)});
+  EXPECT_EQ(arr_neg_zero.Serialize(), arr_pos_zero.Serialize());
 }
 
 TEST_F(ValueTest, Serialize_VeryLargeAndSmallDoubles) {
@@ -1521,7 +1535,10 @@ TEST_F(ValueTest, Serialize_StringLooksLikeKeyword) {
 
 TEST_F(ValueTest, Serialize_SingleElementArray) {
   Value single({Value(99.0)});
-  EXPECT_EQ(single.Serialize(), "[99]");
+  Value same({Value(99.0)});
+  Value different({Value(98.0)});
+  EXPECT_EQ(single.Serialize(), same.Serialize());
+  EXPECT_NE(single.Serialize(), different.Serialize());
 }
 
 TEST_F(ValueTest, Serialize_DeeplyNestedArray) {

@@ -104,6 +104,9 @@ struct SearchRoutingPolicy {
 };
 
 SearchRoutingPolicy ComputeSearchRoutingPolicy(ValkeyModuleCtx *ctx) {
+  // Replica-only modes never select a primary, so prefer_local only takes
+  // effect on a replica coordinator. READONLY searches landing on a primary
+  // still offload the local shard to one of its replicas.
   const bool prefer_local = query::fanout::IsSystemUnderLowUtilization();
   if (ForceReplicasOnly.GetValue()) {
     return {.target_mode =

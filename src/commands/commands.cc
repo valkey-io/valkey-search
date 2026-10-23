@@ -255,6 +255,7 @@ absl::Status QueryCommand::ParseAfterIndex(QueryCommand &cmd,
 
 absl::Status QueryCommand::ExecuteSyncLocal(ValkeyModuleCtx *ctx,
                                             std::unique_ptr<QueryCommand> cmd) {
+  const absl::Time deadline = absl::Now() + absl::Milliseconds(cmd->timeout_ms);
   VMSDK_RETURN_IF_ERROR(query::Search(*cmd, query::SearchMode::kLocal));
   if (!cmd->search_result.status.ok()) {
     ValkeyModule_ReplyWithError(ctx,
@@ -269,11 +270,11 @@ absl::Status QueryCommand::ExecuteSyncLocal(ValkeyModuleCtx *ctx,
   }
   // SendReply revalidates text predicates against a key's index unlocked,
   // which is only correct and safe once its in-flight mutation is applied.
-  // EXEC/Lua cannot park this query, so block here, bounded by its timeout.
+  // A synchronous reply cannot park this query, so block here, bounded by
+  // its timeout.
   if (cmd->GetContentProcessing() == query::kContentionCheckRequired &&
-      !cmd->index_schema->WaitForContendedKeys(
-          cmd->search_result.neighbors,
-          absl::Now() + absl::Milliseconds(cmd->timeout_ms))) {
+      !cmd->index_schema->WaitForContendedKeys(cmd->search_result.neighbors,
+                                               deadline)) {
     ValkeyModule_ReplyWithError(ctx, query::kTimeoutMsg.data());
     ++Metrics::GetStats().query_failed_requests_cnt;
     return absl::OkStatus();

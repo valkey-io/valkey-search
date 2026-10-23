@@ -2291,6 +2291,42 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue(saved_emulate_release));
 }
 
+TEST_F(IndexSchemaFriendTest, WaitForContendedKeysWhileSuspended)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  auto vectors = DeterministicallyGenerateVectors(2, dimensions, 2);
+  auto mutate = [&](size_t i) {
+    IndexSchema::MutatedAttributes mutated;
+    mutated[attribute_identifier] = testing_infra::MakeAttributeData(
+        *hnsw_index, key,
+        absl::string_view(reinterpret_cast<const char *>(vectors[i].data()),
+                          dimensions * sizeof(float)));
+    index_schema->ProcessMutation(&fake_ctx, mutated, key, false, false);
+  };
+  mutate(0);
+  WaitWorkerTasksAreCompleted(mutations_thread_pool);
+  std::vector<indexes::Neighbor> neighbors(1);
+  neighbors[0].external_id = key;
+  neighbors[0].sequence_number = index_schema->GetDbMutationSequenceNumber(key);
+
+  VMSDK_EXPECT_OK(mutations_thread_pool.SuspendWorkers());
+  mutate(1);
+  EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 1u);
+
+  // Expired deadline: nothing is applied, the record stays for the workers.
+  EXPECT_FALSE(
+      index_schema->WaitForContendedKeys(neighbors, absl::InfinitePast()));
+  EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 1u);
+
+  EXPECT_TRUE(
+      index_schema->WaitForContendedKeys(neighbors, absl::InfiniteFuture()));
+  EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 0u);
+
+  VMSDK_EXPECT_OK(mutations_thread_pool.ResumeWorkers());
+  WaitWorkerTasksAreCompleted(mutations_thread_pool);
+  EXPECT_EQ(mutations_thread_pool.QueueSize(), 0);
+  EXPECT_EQ(index_schema->stats_.mutation_queue_size_, 0u);
+}
+
 void IndexSchemaFriendTest::VerifyVectorIndexConsistency(
     const std::shared_ptr<indexes::VectorBase> &vector_index,
     const std::string &attr_id) {

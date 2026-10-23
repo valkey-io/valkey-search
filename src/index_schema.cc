@@ -2126,8 +2126,12 @@ bool IndexSchema::WaitForContendedKeys(
   }
   if (ABSL_PREDICT_FALSE(mutations_thread_pool_->IsSuspended())) {
     // Fork in flight: workers resume only after this command, so apply here
-    // like ProcessMultiQueue does.
+    // like ProcessMultiQueue does. Keys left unapplied at the deadline are
+    // picked up by the workers on resume, as after any timed-out wait.
     for (const auto &key : contended) {
+      if (absl::Now() >= deadline) {
+        return false;
+      }
       {
         absl::MutexLock lock(&stats_.mutex_);
         ++stats_.mutation_queue_size_;

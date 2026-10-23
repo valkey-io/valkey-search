@@ -285,7 +285,7 @@ std::optional<svs_data_type_t> CompressionToSvsDataType(
       // SQ8 option; symmetric quantization around zero.
       return SVS_DATA_TYPE_INT8;
     default:
-      // LVQ / LEANVEC variants are v2 proprietary; rejected here.
+      // Not available in this build; rejected here.
       return std::nullopt;
   }
 }

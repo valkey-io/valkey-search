@@ -126,21 +126,15 @@ enum VectorDataType {
 }
 
 // Field numbers are fixed for wire compatibility; declaration order is
-// cosmetic. Open types are grouped first, proprietary variants below.
+// cosmetic.
 enum SVSCompressionType {
   // v1 (open): supported in v1-cpp-baseline and v1 submodule.
   SVS_COMPRESSION_NONE = 0;  // FP32 (default)
   SVS_COMPRESSION_FP16 = 1;
   SVS_COMPRESSION_SQ8 = 9;
 
-  // v2 (proprietary): wired for continuity, deferred to v2.
-  SVS_COMPRESSION_LVQ4 = 2;
-  SVS_COMPRESSION_LVQ8 = 3;
-  SVS_COMPRESSION_LVQ4X4 = 4;
-  SVS_COMPRESSION_LVQ4X8 = 5;
-  SVS_COMPRESSION_LEANVEC4X4 = 6;
-  SVS_COMPRESSION_LEANVEC4X8 = 7;
-  SVS_COMPRESSION_LEANVEC8X8 = 8;
+  // Kept out of this build; reserved so they are not reused.
+  reserved 2 to 8;
 }
 
 enum RawVectorStorage {
@@ -169,15 +163,10 @@ message SVSVamanaAlgorithm {
   // DROP: skip intern store, use SVS native reconstruct/get_distance APIs.
   RawVectorStorage raw_vector_storage = 8;
   // Number of vectors to accumulate before building an index whose
-  // compression trains on the data (SQ8; later LVQ / LeanVec). 0 for the
-  // other compressions.
+  // compression trains on the data (SQ8). 0 for the other compressions.
   uint32 training_threshold = 7;
-  reserved 9;
+  // 6 is kept out of this build; reserved so it is not reused.
+  reserved 6, 9;
   reserved "distance_match_epsilon_per_dim";
-
-  // v2 (proprietary) — wired for continuity, deferred to v2.
-  // Required when compression is one of the LEANVEC* variants. Number of
-  // dimensions the LeanVec projection reduces to; must be < dim.
-  uint32 leanvec_dims = 6;
 }
 

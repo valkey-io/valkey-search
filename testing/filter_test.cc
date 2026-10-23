@@ -2279,13 +2279,6 @@ TEST_P(InfieldsFilterTest, ParseParams) {
   }
   TextParsingOptions options{
       .infields = test_case.infields.empty() ? nullptr : &test_case.infields};
-  auto precompute_status = options.PrecomputeInfieldsMasks(*index_schema);
-  if (!precompute_status.ok()) {
-    EXPECT_FALSE(test_case.create_success);
-    EXPECT_EQ(precompute_status.message(),
-              test_case.create_expected_error_message);
-    return;
-  }
   FilterParser parser(*index_schema, test_case.filter, options);
   auto parse_results = parser.Parse();
   EXPECT_EQ(test_case.create_success, parse_results.ok());

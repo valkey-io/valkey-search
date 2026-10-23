@@ -36,46 +36,6 @@
 
 namespace valkey_search {
 
-// Precomputes the bitmask and identifier set for INFIELDS-restricted
-// queries: infields_field_mask covers all TEXT fields named in INFIELDS.
-// Suffix-trie restriction is handled separately by IndexSchema's own
-// suffix field mask/identifiers, which this mask/set is ANDed/intersected
-// against at use time (see SetupTextFieldConfiguration).
-absl::Status TextParsingOptions::PrecomputeInfieldsMasks(
-    const IndexSchema& index_schema) {
-  infields_identifiers.clear();
-  infields_field_mask = ~FieldMaskPredicate{0};
-  if (!infields || infields->empty()) {
-    return absl::OkStatus();
-  }
-  FieldMaskPredicate mask = 0ULL;
-  const auto& attributes = index_schema.GetAttributes();
-  for (const auto& field : *infields) {
-    auto itr = attributes.find(field);
-    if (itr == attributes.end()) {
-      // Divergence from RediSearch: RediSearch silently ignores non-existent
-      // fields in INFIELDS. We error to catch user mistakes early.
-      return absl::InvalidArgumentError(absl::StrCat(
-          "INFIELDS field '", field, "' does not exist in the index"));
-    }
-    const auto& index = itr->second.GetIndex();
-    if (index->GetIndexerType() != indexes::IndexerType::kText) {
-      // Divergence from RediSearch: RediSearch silently ignores non-TEXT
-      // fields in INFIELDS (they simply have no effect). We error because
-      // INFIELDS only applies to full-text matching and a non-TEXT field
-      // indicates a user mistake.
-      return absl::InvalidArgumentError(
-          absl::StrCat("INFIELDS field '", field, "' is not a TEXT field"));
-    }
-    auto* text_index = static_cast<const indexes::Text*>(index.get());
-    const auto& identifier = itr->second.GetIdentifier();
-    mask |= 1ULL << text_index->GetTextFieldNumber();
-    infields_identifiers.insert(identifier);
-  }
-  infields_field_mask = mask;
-  return absl::OkStatus();
-}
-
 namespace options {
 
 /// Register the "query-string-terms-count" flag. Controls the size of the
@@ -243,6 +203,40 @@ FilterParser::FilterParser(const IndexSchema& index_schema,
       expression_(absl::StripAsciiWhitespace(expression)),
       options_(options),
       query_operations_{QueryOperations::kNone} {}
+
+absl::Status FilterParser::ResolveInfields() {
+  infields_identifiers_.clear();
+  infields_field_mask_ = ~FieldMaskPredicate{0};
+  if (!options_.infields || options_.infields->empty()) {
+    return absl::OkStatus();
+  }
+  FieldMaskPredicate mask = 0ULL;
+  const auto& attributes = index_schema_.GetAttributes();
+  for (const auto& field : *options_.infields) {
+    auto itr = attributes.find(field);
+    if (itr == attributes.end()) {
+      // Divergence from RediSearch: RediSearch silently ignores non-existent
+      // fields in INFIELDS. We error to catch user mistakes early.
+      return absl::InvalidArgumentError(absl::StrCat(
+          "INFIELDS field '", field, "' does not exist in the index"));
+    }
+    const auto& index = itr->second.GetIndex();
+    if (index->GetIndexerType() != indexes::IndexerType::kText) {
+      // Divergence from RediSearch: RediSearch silently ignores non-TEXT
+      // fields in INFIELDS (they simply have no effect). We error because
+      // INFIELDS only applies to full-text matching and a non-TEXT field
+      // indicates a user mistake.
+      return absl::InvalidArgumentError(
+          absl::StrCat("INFIELDS field '", field, "' is not a TEXT field"));
+    }
+    auto* text_index = static_cast<const indexes::Text*>(index.get());
+    const auto& identifier = itr->second.GetIdentifier();
+    mask |= 1ULL << text_index->GetTextFieldNumber();
+    infields_identifiers_.insert(identifier);
+  }
+  infields_field_mask_ = mask;
+  return absl::OkStatus();
+}
 
 bool FilterParser::Match(char expected, bool skip_whitespace) {
   if (skip_whitespace) {
@@ -687,6 +681,7 @@ void FilterParser::FlagNestedComposedPredicate(
 }
 
 absl::StatusOr<FilterParseResults> FilterParser::Parse() {
+  VMSDK_RETURN_IF_ERROR(ResolveInfields());
   VMSDK_ASSIGN_OR_RETURN(auto is_match_all_expression, IsMatchAllExpression());
   FilterParseResults results;
   if (is_match_all_expression) {
@@ -1127,7 +1122,7 @@ absl::Status FilterParser::SetupTextFieldConfiguration(
     // surface the likely mistake.
     FieldMaskPredicate explicit_field_mask =
         1ULL << text_index->GetTextFieldNumber();
-    if ((explicit_field_mask & options_.infields_field_mask) == 0ULL) {
+    if ((explicit_field_mask & infields_field_mask_) == 0ULL) {
       return absl::InvalidArgumentError(
           absl::StrCat("Field '", *field_name, "' is not in INFIELDS list"));
     }
@@ -1147,7 +1142,7 @@ absl::Status FilterParser::SetupTextFieldConfiguration(
       }
       return absl::InvalidArgumentError("Index does not have any text field");
     }
-    field_mask &= options_.infields_field_mask;
+    field_mask &= infields_field_mask_;
     // INFIELDS only lists valid TEXT fields, so an empty intersection means
     // none of them supports suffix search.
     if (field_mask == 0ULL) {
@@ -1158,7 +1153,7 @@ absl::Status FilterParser::SetupTextFieldConfiguration(
     if (options_.infields && !options_.infields->empty()) {
       // Intersect with text_identifiers so a suffix-restricted call only
       // picks up INFIELDS identifiers that are also suffix-capable.
-      for (const auto& identifier : options_.infields_identifiers) {
+      for (const auto& identifier : infields_identifiers_) {
         if (text_identifiers.contains(identifier)) {
           filter_identifiers_.insert(identifier);
         }

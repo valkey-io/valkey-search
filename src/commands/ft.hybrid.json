@@ -592,7 +592,8 @@
           {
             "name": "field",
             "type": "string",
-            "multiple": true
+            "multiple": true,
+            "optional": true
           },
           {
             "name": "REDUCE",

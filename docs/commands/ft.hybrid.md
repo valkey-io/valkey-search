@@ -26,7 +26,7 @@ FT.HYBRID <index-name>
     (
       | APPLY <expression> AS <field>
       | FILTER <expression>
-      | GROUPBY <count> <field> [<field> ... ] [[REDUCE <reducer> <count> [<expression> [<expression> ...]]] [ REDUCE ...]]
+      | GROUPBY <count> [<field> ... ] [[REDUCE <reducer> <count> [<expression> [<expression> ...]]] [ REDUCE ...]]
       | LIMIT <offset> <count>
       | SORTBY <count> <expression> [ASC | DESC] [<expression> [ASC | DESC] ...] [MAX <num>]
     )*

@@ -184,10 +184,17 @@ def unpack_search_result(rs, key_type, has_sortkeys=False, nocontent=False,
                          has_scores=False, sortkeys=()):
     rows = []
     if has_sortkeys and nocontent:
-        # Format: [count, key1, sortkey1, key2, sortkey2, ...]
-        field = sortkeys[0]
-        for i in range(1, len(rs), 2):
-            rows += [{"__key": rs[i], field: parse_sortkey(rs[i+1])}]
+        if has_scores:
+            # Format: [count, key1, score1, sortkey1, key2, score2, sortkey2, ...]
+            field = sortkeys[0]
+            for i in range(1, len(rs), 3):
+                rows += [{"__key": rs[i], "__score": rs[i+1],
+                         field: parse_sortkey(rs[i+2])}]
+        else:
+            # Format: [count, key1, sortkey1, key2, sortkey2, ...]
+            field = sortkeys[0]
+            for i in range(1, len(rs), 2):
+                rows += [{"__key": rs[i], field: parse_sortkey(rs[i+1])}]
     elif nocontent:
         # NOCONTENT reply carries no field arrays. Driven by the command
         # (see unpack_result), not inferred from the reply shape.
@@ -226,10 +233,6 @@ def unpack_search_result(rs, key_type, has_sortkeys=False, nocontent=False,
             for j in range(0, len(value), 2):
                 row[parse_field(value[j], key_type)] = parse_value(value[j+1], key_type)
             rows += [row]
-    elif nocontent:
-        # Format: [count, key1, key2, ...]
-        for key in rs[1:]:
-            rows += [{"__key": key}]
     else:
         # Format: [count, key1, [fields1], key2, [fields2], ...]
         for (key, value) in [(rs[i],rs[i+1]) for i in range(1, len(rs), 2)]:

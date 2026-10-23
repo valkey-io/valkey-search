@@ -18,9 +18,11 @@
 #include "google/protobuf/text_format.h"
 #include "gtest/gtest.h"
 #include "src/commands/commands.h"
+#include "src/coordinator/metadata_manager.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search_options.h"
 #include "testing/common.h"
+#include "testing/coordinator/common.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -187,62 +189,6 @@ INSTANTIATE_TEST_SUITE_P(
       return info.param.test_name;
     });
 
-TEST_F(FTAliasAddTest, AlwaysReplicatesVerbatim_CoordinatorEnabled) {
-  auto& coordinator_flag =
-      const_cast<vmsdk::config::Boolean&>(options::GetUseCoordinator());
-  const bool original_coordinator_value = coordinator_flag.GetValue();
-  VMSDK_EXPECT_OK(coordinator_flag.SetValue(true));
-
-  data_model::IndexSchema index_schema_proto;
-  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
-      std::string(kTestIndexSchemaPbtxt), &index_schema_proto));
-  VMSDK_EXPECT_OK(SchemaManager::Instance().CreateIndexSchema(
-      &fake_ctx_, index_schema_proto));
-
-  EXPECT_CALL(*kMockValkeyModule, ReplicateVerbatim(&fake_ctx_))
-      .Times(0);  // Coordinator mode: MetadataManager handles propagation
-
-  ValkeyModuleString* argv[3];
-  argv[0] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.ALIASADD");
-  argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "my_alias");
-  argv[2] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_idx");
-
-  VMSDK_EXPECT_OK(FTAliasAddCmd(&fake_ctx_, argv, 3));
-
-  for (auto* arg : argv) {
-    TestValkeyModule_FreeString(&fake_ctx_, arg);
-  }
-  VMSDK_EXPECT_OK(coordinator_flag.SetValue(original_coordinator_value));
-}
-
-TEST_F(FTAliasAddTest, AlwaysReplicatesVerbatim_CoordinatorDisabled) {
-  auto& coordinator_flag =
-      const_cast<vmsdk::config::Boolean&>(options::GetUseCoordinator());
-  const bool original_coordinator_value = coordinator_flag.GetValue();
-  VMSDK_EXPECT_OK(coordinator_flag.SetValue(false));
-
-  data_model::IndexSchema index_schema_proto;
-  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
-      std::string(kTestIndexSchemaPbtxt), &index_schema_proto));
-  VMSDK_EXPECT_OK(SchemaManager::Instance().CreateIndexSchema(
-      &fake_ctx_, index_schema_proto));
-
-  EXPECT_CALL(*kMockValkeyModule, ReplicateVerbatim(&fake_ctx_))
-      .Times(1);  // Should replicate when coordinator disabled
-
-  ValkeyModuleString* argv[3];
-  argv[0] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.ALIASADD");
-  argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "my_alias");
-  argv[2] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_idx");
-
-  VMSDK_EXPECT_OK(FTAliasAddCmd(&fake_ctx_, argv, 3));
-
-  for (auto* arg : argv) {
-    TestValkeyModule_FreeString(&fake_ctx_, arg);
-  }
-  VMSDK_EXPECT_OK(coordinator_flag.SetValue(original_coordinator_value));
-}
-
 TEST_F(FTAliasAddTest, AliasMatchingExistingIndexNameSucceeds) {
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 5);
   SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
@@ -371,55 +317,6 @@ INSTANTIATE_TEST_SUITE_P(
       return info.param.test_name;
     });
 
-TEST_F(FTAliasDelTest, AlwaysReplicatesVerbatim_CoordinatorEnabled) {
-  auto& coordinator_flag =
-      const_cast<vmsdk::config::Boolean&>(options::GetUseCoordinator());
-  const bool original_coordinator_value = coordinator_flag.GetValue();
-  VMSDK_EXPECT_OK(coordinator_flag.SetValue(true));
-
-  data_model::IndexSchema index_schema_proto;
-  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
-      std::string(kTestIndexSchemaPbtxt), &index_schema_proto));
-  VMSDK_EXPECT_OK(SchemaManager::Instance().CreateIndexSchema(
-      &fake_ctx_, index_schema_proto));
-  VMSDK_EXPECT_OK(
-      SchemaManager::Instance().AddAlias(0, "my_alias", "test_idx"));
-
-  EXPECT_CALL(*kMockValkeyModule, ReplicateVerbatim(&fake_ctx_)).Times(0);
-
-  ValkeyModuleString* argv[2];
-  argv[0] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.ALIASDEL");
-  argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "my_alias");
-  VMSDK_EXPECT_OK(FTAliasDelCmd(&fake_ctx_, argv, 2));
-  for (auto* arg : argv) TestValkeyModule_FreeString(&fake_ctx_, arg);
-  VMSDK_EXPECT_OK(coordinator_flag.SetValue(original_coordinator_value));
-}
-
-TEST_F(FTAliasDelTest, AlwaysReplicatesVerbatim_CoordinatorDisabled) {
-  auto& coordinator_flag =
-      const_cast<vmsdk::config::Boolean&>(options::GetUseCoordinator());
-  const bool original_coordinator_value = coordinator_flag.GetValue();
-  VMSDK_EXPECT_OK(coordinator_flag.SetValue(false));
-
-  data_model::IndexSchema index_schema_proto;
-  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
-      std::string(kTestIndexSchemaPbtxt), &index_schema_proto));
-  VMSDK_EXPECT_OK(SchemaManager::Instance().CreateIndexSchema(
-      &fake_ctx_, index_schema_proto));
-  VMSDK_EXPECT_OK(
-      SchemaManager::Instance().AddAlias(0, "my_alias", "test_idx"));
-
-  EXPECT_CALL(*kMockValkeyModule, ReplicateVerbatim(&fake_ctx_)).Times(1);
-
-  ValkeyModuleString* argv[2];
-  argv[0] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.ALIASDEL");
-  argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "my_alias");
-
-  VMSDK_EXPECT_OK(FTAliasDelCmd(&fake_ctx_, argv, 2));
-  for (auto* arg : argv) TestValkeyModule_FreeString(&fake_ctx_, arg);
-  VMSDK_EXPECT_OK(coordinator_flag.SetValue(original_coordinator_value));
-}
-
 struct FTAliasUpdateTestCase {
   std::string test_name;
   std::vector<std::string> argv;
@@ -536,66 +433,10 @@ INSTANTIATE_TEST_SUITE_P(
             .second_index_pbtxt = std::nullopt,
             .return_code = absl::StatusCode::kInvalidArgument,
         },
-        {
-            // ALIASUPDATE on an already-existing alias must succeed (upsert).
-            // Upsert semantics: del old + add new, no "already exists" error.
-            .test_name = "upsert_existing_alias",
-            .argv = {"FT.ALIASUPDATE", "my_alias", "test_idx2"},
-            .index_schema_pbtxt = std::string(kTestIndexSchemaPbtxt),
-            .pre_existing_alias = "my_alias",
-            .second_index_pbtxt = std::string(kSecondIndexSchemaPbtxt),
-            .return_code = absl::StatusCode::kOk,
-        },
     }),
     [](const TestParamInfo<FTAliasUpdateTestCase>& info) {
       return info.param.test_name;
     });
-
-TEST_F(FTAliasUpdateTest, AlwaysReplicatesVerbatim_CoordinatorEnabled) {
-  auto& coordinator_flag =
-      const_cast<vmsdk::config::Boolean&>(options::GetUseCoordinator());
-  const bool original_coordinator_value = coordinator_flag.GetValue();
-  VMSDK_EXPECT_OK(coordinator_flag.SetValue(true));
-
-  data_model::IndexSchema index_schema_proto;
-  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
-      std::string(kTestIndexSchemaPbtxt), &index_schema_proto));
-  VMSDK_EXPECT_OK(SchemaManager::Instance().CreateIndexSchema(
-      &fake_ctx_, index_schema_proto));
-
-  EXPECT_CALL(*kMockValkeyModule, ReplicateVerbatim(&fake_ctx_)).Times(0);
-
-  ValkeyModuleString* argv[3];
-  argv[0] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.ALIASUPDATE");
-  argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "my_alias");
-  argv[2] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_idx");
-  VMSDK_EXPECT_OK(FTAliasUpdateCmd(&fake_ctx_, argv, 3));
-  for (auto* arg : argv) TestValkeyModule_FreeString(&fake_ctx_, arg);
-  VMSDK_EXPECT_OK(coordinator_flag.SetValue(original_coordinator_value));
-}
-
-TEST_F(FTAliasUpdateTest, AlwaysReplicatesVerbatim_CoordinatorDisabled) {
-  auto& coordinator_flag =
-      const_cast<vmsdk::config::Boolean&>(options::GetUseCoordinator());
-  const bool original_coordinator_value = coordinator_flag.GetValue();
-  VMSDK_EXPECT_OK(coordinator_flag.SetValue(false));
-
-  data_model::IndexSchema index_schema_proto;
-  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
-      std::string(kTestIndexSchemaPbtxt), &index_schema_proto));
-  VMSDK_EXPECT_OK(SchemaManager::Instance().CreateIndexSchema(
-      &fake_ctx_, index_schema_proto));
-
-  EXPECT_CALL(*kMockValkeyModule, ReplicateVerbatim(&fake_ctx_)).Times(1);
-
-  ValkeyModuleString* argv[3];
-  argv[0] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.ALIASUPDATE");
-  argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "my_alias");
-  argv[2] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_idx");
-  VMSDK_EXPECT_OK(FTAliasUpdateCmd(&fake_ctx_, argv, 3));
-  for (auto* arg : argv) TestValkeyModule_FreeString(&fake_ctx_, arg);
-  VMSDK_EXPECT_OK(coordinator_flag.SetValue(original_coordinator_value));
-}
 
 TEST_F(FTAliasUpdateTest, AliasMatchingExistingIndexNameSucceeds) {
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 5);
@@ -673,6 +514,135 @@ TEST_F(FTAliasUpdateTest, SelfReferentialAliasSucceeds) {
     TestValkeyModule_FreeString(&fake_ctx_, arg);
   }
 }
+
+struct FTAliasReplicationTestCase {
+  std::string test_name;
+  absl::Status (*cmd)(ValkeyModuleCtx*, ValkeyModuleString**, int);
+  std::vector<std::string> argv;
+  bool pre_existing_alias;
+  bool use_coordinator;
+  bool alias_resolves_after;
+};
+
+// Coordinator mode propagates through MetadataManager and must not replicate
+// verbatim; standalone mode must. The coordinator cases drive a
+// coordinator-enabled SchemaManager, so the metadata write path runs too.
+class FTAliasReplicationTest
+    : public ValkeySearchTestWithParam<FTAliasReplicationTestCase> {};
+
+TEST_P(FTAliasReplicationTest, ReplicatesOnlyWithoutCoordinator) {
+  const auto& test_case = GetParam();
+  auto& coordinator_flag =
+      const_cast<vmsdk::config::Boolean&>(options::GetUseCoordinator());
+  const bool original_coordinator_value = coordinator_flag.GetValue();
+  VMSDK_EXPECT_OK(coordinator_flag.SetValue(test_case.use_coordinator));
+
+  coordinator::MockClientPool client_pool;
+  if (test_case.use_coordinator) {
+    ON_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
+        .WillByDefault(testing::Return(&fake_ctx_));
+    ON_CALL(*kMockValkeyModule, FreeThreadSafeContext(testing::_))
+        .WillByDefault(testing::Return());
+    ON_CALL(*kMockValkeyModule, GetMyClusterID())
+        .WillByDefault(testing::Return("fake_node_id"));
+    coordinator::MetadataManager::InitInstance(
+        std::make_unique<coordinator::MetadataManager>(&fake_ctx_,
+                                                       client_pool));
+  }
+  SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
+      &fake_ctx_, []() {}, nullptr, test_case.use_coordinator));
+
+  data_model::IndexSchema index_schema_proto;
+  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
+      std::string(kTestIndexSchemaPbtxt), &index_schema_proto));
+  VMSDK_EXPECT_OK(SchemaManager::Instance().CreateIndexSchema(
+      &fake_ctx_, index_schema_proto));
+  if (test_case.pre_existing_alias) {
+    VMSDK_EXPECT_OK(
+        SchemaManager::Instance().AddAlias(0, "my_alias", "test_idx"));
+  }
+
+  EXPECT_CALL(*kMockValkeyModule, ReplicateVerbatim(&fake_ctx_))
+      .Times(test_case.use_coordinator ? 0 : 1);
+
+  std::vector<ValkeyModuleString*> cmd_argv;
+  for (const auto& arg : test_case.argv) {
+    cmd_argv.push_back(
+        TestValkeyModule_CreateStringPrintf(&fake_ctx_, "%s", arg.data()));
+  }
+  VMSDK_EXPECT_OK(test_case.cmd(&fake_ctx_, cmd_argv.data(), cmd_argv.size()));
+
+  auto resolved = SchemaManager::Instance().GetIndexSchema(0, "my_alias");
+  if (test_case.alias_resolves_after) {
+    VMSDK_EXPECT_OK(resolved);
+    EXPECT_EQ(resolved.value()->GetName(), "test_idx");
+  } else {
+    EXPECT_EQ(resolved.status().code(), absl::StatusCode::kNotFound);
+  }
+
+  for (auto* arg : cmd_argv) {
+    TestValkeyModule_FreeString(&fake_ctx_, arg);
+  }
+  SchemaManager::InitInstance(nullptr);
+  coordinator::MetadataManager::InitInstance(nullptr);
+  VMSDK_EXPECT_OK(coordinator_flag.SetValue(original_coordinator_value));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    FTAliasReplicationTests, FTAliasReplicationTest,
+    ValuesIn<FTAliasReplicationTestCase>({
+        {
+            .test_name = "add_coordinator",
+            .cmd = &FTAliasAddCmd,
+            .argv = {"FT.ALIASADD", "my_alias", "test_idx"},
+            .pre_existing_alias = false,
+            .use_coordinator = true,
+            .alias_resolves_after = true,
+        },
+        {
+            .test_name = "add_standalone",
+            .cmd = &FTAliasAddCmd,
+            .argv = {"FT.ALIASADD", "my_alias", "test_idx"},
+            .pre_existing_alias = false,
+            .use_coordinator = false,
+            .alias_resolves_after = true,
+        },
+        {
+            .test_name = "del_coordinator",
+            .cmd = &FTAliasDelCmd,
+            .argv = {"FT.ALIASDEL", "my_alias"},
+            .pre_existing_alias = true,
+            .use_coordinator = true,
+            .alias_resolves_after = false,
+        },
+        {
+            .test_name = "del_standalone",
+            .cmd = &FTAliasDelCmd,
+            .argv = {"FT.ALIASDEL", "my_alias"},
+            .pre_existing_alias = true,
+            .use_coordinator = false,
+            .alias_resolves_after = false,
+        },
+        {
+            .test_name = "update_coordinator",
+            .cmd = &FTAliasUpdateCmd,
+            .argv = {"FT.ALIASUPDATE", "my_alias", "test_idx"},
+            .pre_existing_alias = false,
+            .use_coordinator = true,
+            .alias_resolves_after = true,
+        },
+        {
+            .test_name = "update_standalone",
+            .cmd = &FTAliasUpdateCmd,
+            .argv = {"FT.ALIASUPDATE", "my_alias", "test_idx"},
+            .pre_existing_alias = false,
+            .use_coordinator = false,
+            .alias_resolves_after = true,
+        },
+    }),
+    [](const TestParamInfo<FTAliasReplicationTestCase>& info) {
+      return info.param.test_name;
+    });
 
 // FT.INFO must reply with aliases as bulk strings: a simple string stops at a
 // null byte and cannot carry CR/LF.

@@ -326,5 +326,60 @@ class TestFTSearchInfields(ValkeySearchTestCaseBase):
                 f"INFIELDS changed the score for {key}: "
                 f"{without_infields[key]} -> {with_infields[key]}"
             )
+    def test_infields_unscoped_term_scores_restricted_field_only(self):
+        """An unscoped term (no @field:) combined with INFIELDS must only
+        match/score against the INFIELDS field(s), exercising the unscoped
+        ScoringFieldMask path (as opposed to an explicit @field: scope)."""
+        client: Valkey = self.server.get_new_client()
+        idx = self._make_two_field_index(client)
+        client.execute_command("HSET", "scope:1", "title", "apple",
+                               "body", "unrelated text here")
+        client.execute_command("HSET", "scope:2", "title", "unrelated",
+                               "body", "apple")
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, idx)
+
+        # Unscoped "apple" with INFIELDS title: only scope:1 (apple in
+        # title) matches; scope:2's "apple" is in body, which is excluded.
+        result = client.execute_command(
+            "FT.SEARCH", idx, "apple",
+            "INFIELDS", "1", "title", "WITHSCORES", "NOCONTENT", "DIALECT", "2")
+        assert result[0] == 1
+        assert result[1] == b"scope:1"
+        assert float(result[2]) > 0
+
+    def test_infields_slop_inorder_excludes_other_field_match(self):
+        """SLOP/INORDER proximity query with INFIELDS: a document whose terms
+        only satisfy the proximity constraint when spanning both fields must
+        not match once INFIELDS restricts the search to a single field."""
+        client: Valkey = self.server.get_new_client()
+        idx = self._make_two_field_index(client)
+        # scope:1: both terms adjacent within title -> matches title-only.
+        client.execute_command("HSET", "scope:1", "title", "hello world",
+                               "body", "unrelated")
+        # scope:2: "hello" only in title, "world" only in body -- under
+        # INFIELDS title, "world" has no occurrence in the allowed field, so
+        # the AND-with-slop clause cannot match.
+        client.execute_command("HSET", "scope:2", "title", "hello",
+                               "body", "world")
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, idx)
+
+        # Unscoped: without INFIELDS the per-field term scoping still
+        # applies per matched field, so scope:2's "hello"/"world" pair is
+        # split across title and body and does not form a single-field
+        # proximity match; only scope:1 (adjacent within title) matches.
+        result = client.execute_command(
+            "FT.SEARCH", idx, "hello world",
+            "SLOP", "0", "INORDER", "NOCONTENT", "DIALECT", "2")
+        assert result[0] == 1
+        assert result[1] == b"scope:1"
+
+        # INFIELDS title: identical result, since body is excluded either
+        # way.
+        result = client.execute_command(
+            "FT.SEARCH", idx, "hello world",
+            "SLOP", "0", "INORDER",
+            "INFIELDS", "1", "title", "NOCONTENT", "DIALECT", "2")
+        assert result[0] == 1
+        assert result[1] == b"scope:1"
 
 

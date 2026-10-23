@@ -91,7 +91,7 @@ static uint64_t MurmurHash64A(const void *key, int len, unsigned int seed) {
   while (data != end) {
     uint64_t k;
 
-#if (BYTE_ORDER == LITTLE_ENDIAN) || (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+#if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
     memcpy(&k, data, sizeof(uint64_t));
 #else
     k = (uint64_t)data[0];

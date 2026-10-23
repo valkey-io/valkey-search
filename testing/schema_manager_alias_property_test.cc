@@ -29,6 +29,7 @@
 #include "src/schema_manager.h"
 #include "testing/common.h"
 #include "testing/coordinator/common.h"
+#include "vmsdk/src/debug.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -1970,6 +1971,80 @@ TEST_F(CrossIndexAliasConflictTest, AliasCommandsDoNotRebuildIndexes) {
     VMSDK_EXPECT_OK(SchemaManager::Instance().RemoveAlias(kDbNum, "p1"));
     expect_same_indexes("remove");
   }
+}
+
+// Fails index metadata writes: lets `skip` through, then fails `fail`.
+class AliasWriteFailureTest : public CrossIndexAliasConflictTest {
+ protected:
+  void TearDown() override {
+    VMSDK_EXPECT_OK(
+        vmsdk::debug::ControlledSet("ForceIndexMetadataWriteSkip", "0"));
+    VMSDK_EXPECT_OK(
+        vmsdk::debug::ControlledSet("ForceIndexMetadataWriteFailCount", "0"));
+    CrossIndexAliasConflictTest::TearDown();
+  }
+
+  static void FailWrites(int skip, int fail) {
+    VMSDK_EXPECT_OK(vmsdk::debug::ControlledSet("ForceIndexMetadataWriteSkip",
+                                                std::to_string(skip)));
+    VMSDK_EXPECT_OK(vmsdk::debug::ControlledSet(
+        "ForceIndexMetadataWriteFailCount", std::to_string(fail)));
+  }
+};
+
+// UpdateAlias writes the target, then the old owner. When the old owner write
+// fails, the target write is rolled back and the alias stays put.
+TEST_F(AliasWriteFailureTest, UpdateRollsBackWhenOldOwnerWriteFails) {
+  CreateIndex("idx_a");
+  CreateIndex("idx_b");
+  VMSDK_EXPECT_OK(SchemaManager::Instance().AddAlias(kDbNum, "p1", "idx_a"));
+
+  FailWrites(/*skip=*/1, /*fail=*/1);
+  auto status = SchemaManager::Instance().UpdateAlias(kDbNum, "p1", "idx_b");
+
+  EXPECT_EQ(status.code(), absl::StatusCode::kInternal);
+  EXPECT_EQ(status.message(),
+            "Failed to remove alias from old index; update rolled back");
+  EXPECT_EQ(
+      SchemaManager::Instance().GetAllAliases(kDbNum),
+      (std::vector<std::pair<std::string, std::string>>{{"p1", "idx_a"}}));
+  EXPECT_TRUE(
+      SchemaManager::Instance().GetAliasesForIndex(kDbNum, "idx_b").empty());
+}
+
+// When the rollback fails too, the target keeps the higher-epoch claim and
+// owns the alias; the error must say so.
+TEST_F(AliasWriteFailureTest, UpdateReportsMovedAliasWhenRollbackFails) {
+  CreateIndex("idx_a");
+  CreateIndex("idx_b");
+  VMSDK_EXPECT_OK(SchemaManager::Instance().AddAlias(kDbNum, "p1", "idx_a"));
+
+  FailWrites(/*skip=*/1, /*fail=*/2);
+  auto status = SchemaManager::Instance().UpdateAlias(kDbNum, "p1", "idx_b");
+
+  EXPECT_EQ(status.code(), absl::StatusCode::kInternal);
+  EXPECT_THAT(status.message(),
+              testing::HasSubstr("alias may now point to the new index"));
+  EXPECT_EQ(
+      SchemaManager::Instance().GetAllAliases(kDbNum),
+      (std::vector<std::pair<std::string, std::string>>{{"p1", "idx_b"}}));
+}
+
+TEST_F(AliasWriteFailureTest, AddAndRemoveSurfaceWriteFailure) {
+  CreateIndex("idx_a");
+
+  FailWrites(/*skip=*/0, /*fail=*/1);
+  EXPECT_EQ(SchemaManager::Instance().AddAlias(kDbNum, "p1", "idx_a").code(),
+            absl::StatusCode::kInternal);
+  EXPECT_TRUE(SchemaManager::Instance().GetAllAliases(kDbNum).empty());
+
+  VMSDK_EXPECT_OK(SchemaManager::Instance().AddAlias(kDbNum, "p1", "idx_a"));
+  FailWrites(/*skip=*/0, /*fail=*/1);
+  EXPECT_EQ(SchemaManager::Instance().RemoveAlias(kDbNum, "p1").code(),
+            absl::StatusCode::kInternal);
+  EXPECT_EQ(
+      SchemaManager::Instance().GetAllAliases(kDbNum),
+      (std::vector<std::pair<std::string, std::string>>{{"p1", "idx_a"}}));
 }
 
 // Cross-node alias convergence. Alias commands run on an "origin" node, and

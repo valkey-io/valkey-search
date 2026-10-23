@@ -41,6 +41,7 @@
 #include "src/rdb_section.pb.h"
 #include "src/rdb_serialization.h"
 #include "src/valkey_search.h"
+#include "vmsdk/src/debug.h"
 #include "vmsdk/src/info.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -59,6 +60,11 @@ constexpr uint32_t kMaxIndexesDefault{1000};
 constexpr absl::string_view kIndexSchemaBackfillBatchSizeConfig(
     "backfill-batch-size");
 constexpr uint32_t kIndexSchemaBackfillBatchSize{10240};
+
+// Test-only: let ForceIndexMetadataWriteSkip index metadata writes through,
+// then fail the next ForceIndexMetadataWriteFailCount of them.
+CONTROLLED_SIZE_T(ForceIndexMetadataWriteSkip, 0);
+CONTROLLED_SIZE_T(ForceIndexMetadataWriteFailCount, 0);
 
 namespace options {
 
@@ -197,6 +203,14 @@ absl::Status SchemaManager::ImportIndexSchema(
 absl::Status SchemaManager::MutateIndexProtoInMetadata(
     uint32_t db_num, absl::string_view index_name,
     absl::FunctionRef<void(data_model::IndexSchema &)> mutate) {
+  if (ForceIndexMetadataWriteFailCount.GetValue() > 0) {
+    if (ForceIndexMetadataWriteSkip.GetValue() > 0) {
+      ForceIndexMetadataWriteSkip.Decrement();
+    } else {
+      ForceIndexMetadataWriteFailCount.Decrement();
+      return absl::InternalError("Forced index metadata write failure");
+    }
+  }
   auto entry_or = coordinator::MetadataManager::Instance().GetEntryContent(
       kSchemaManagerMetadataTypeName, coordinator::ObjName(db_num, index_name));
   if (!entry_or.ok()) {
@@ -1669,6 +1683,10 @@ absl::Status SchemaManager::UpdateAlias(uint32_t db_num,
           << "UpdateAlias: rollback of alias '" << alias
           << "' from target index '" << index_name
           << "' also failed: " << rollback_status.message();
+      // The target still holds the highest-epoch claim, so it owns the alias.
+      return absl::InternalError(
+          "Failed to remove alias from old index and rollback failed; alias "
+          "may now point to the new index");
     }
     return absl::InternalError(
         "Failed to remove alias from old index; update rolled back");

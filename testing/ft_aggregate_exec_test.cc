@@ -971,16 +971,22 @@ TEST_F(AggregateExecTest, QuantileReducerTest) {
        {1.0, 3.0}},
   };
   for (auto &tc : testcases) {
-    std::cerr << "QuantileReducerTest: " << tc.text_ << "\n";
+    if (IsVerbose()) {
+      std::cerr << "QuantileReducerTest: " << tc.text_ << "\n";
+    }
     auto param = MakeStages(tc.text_);
     auto records = MakeData(tc.m);
     for (auto &r : records) {
-      std::cerr << *r << "\n";
+      if (IsVerbose()) {
+        std::cerr << *r << "\n";
+      }
     }
     EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
     EXPECT_EQ(records.size(), 1);
     auto record = records.pop_front();
-    std::cerr << "Result: " << *record << "\n";
+    if (IsVerbose()) {
+      std::cerr << "Result: " << *record << "\n";
+    }
     for (auto i = 0; i < tc.values_.size(); ++i) {
       EXPECT_TRUE(record->fields_.at(i + 2).IsDouble());
       EXPECT_NEAR(*(record->fields_.at(i + 2).AsDouble()), tc.values_[i], .001);
@@ -989,7 +995,9 @@ TEST_F(AggregateExecTest, QuantileReducerTest) {
 }
 
 TEST_F(AggregateExecTest, QuantileNilHandlingTest) {
-  std::cerr << "QuantileNilHandlingTest\n";
+  if (IsVerbose()) {
+    std::cerr << "QuantileNilHandlingTest\n";
+  }
 
   RecordSet records(nullptr);
   {
@@ -1021,14 +1029,18 @@ TEST_F(AggregateExecTest, QuantileNilHandlingTest) {
   EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
   EXPECT_EQ(records.size(), 1);
   auto record = records.pop_front();
-  std::cerr << "Result: " << *record << "\n";
+  if (IsVerbose()) {
+    std::cerr << "Result: " << *record << "\n";
+  }
 
   EXPECT_TRUE(record->fields_.at(2).IsDouble());
   EXPECT_NEAR(*(record->fields_.at(2).AsDouble()), 3.0, .001);
 }
 
 TEST_F(AggregateExecTest, QuantileAllNilTest) {
-  std::cerr << "QuantileAllNilTest\n";
+  if (IsVerbose()) {
+    std::cerr << "QuantileAllNilTest\n";
+  }
 
   RecordSet records(nullptr);
   for (int i = 0; i < 3; ++i) {
@@ -1042,7 +1054,9 @@ TEST_F(AggregateExecTest, QuantileAllNilTest) {
   EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
   EXPECT_EQ(records.size(), 1);
   auto record = records.pop_front();
-  std::cerr << "Result: " << *record << "\n";
+  if (IsVerbose()) {
+    std::cerr << "Result: " << *record << "\n";
+  }
 
   // Redisearch answers nan for a group with no numeric value.
   ASSERT_TRUE(record->fields_.at(2).IsDouble());
@@ -1050,7 +1064,9 @@ TEST_F(AggregateExecTest, QuantileAllNilTest) {
 }
 
 TEST_F(AggregateExecTest, QuantileDuplicateValuesTest) {
-  std::cerr << "QuantileDuplicateValuesTest\n";
+  if (IsVerbose()) {
+    std::cerr << "QuantileDuplicateValuesTest\n";
+  }
 
   RecordSet records(nullptr);
   std::vector<double> values = {5.0, 5.0, 10.0, 10.0, 15.0};
@@ -1065,14 +1081,18 @@ TEST_F(AggregateExecTest, QuantileDuplicateValuesTest) {
   EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
   EXPECT_EQ(records.size(), 1);
   auto record = records.pop_front();
-  std::cerr << "Result: " << *record << "\n";
+  if (IsVerbose()) {
+    std::cerr << "Result: " << *record << "\n";
+  }
 
   EXPECT_TRUE(record->fields_.at(2).IsDouble());
   EXPECT_NEAR(*(record->fields_.at(2).AsDouble()), 10.0, .001);
 }
 
 TEST_F(AggregateExecTest, QuantileNegativeNumbersTest) {
-  std::cerr << "QuantileNegativeNumbersTest\n";
+  if (IsVerbose()) {
+    std::cerr << "QuantileNegativeNumbersTest\n";
+  }
 
   RecordSet records(nullptr);
   std::vector<double> values = {-10.0, -5.0, 0.0, 5.0, 10.0};
@@ -1087,14 +1107,18 @@ TEST_F(AggregateExecTest, QuantileNegativeNumbersTest) {
   EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
   EXPECT_EQ(records.size(), 1);
   auto record = records.pop_front();
-  std::cerr << "Result: " << *record << "\n";
+  if (IsVerbose()) {
+    std::cerr << "Result: " << *record << "\n";
+  }
 
   EXPECT_TRUE(record->fields_.at(2).IsDouble());
   EXPECT_NEAR(*(record->fields_.at(2).AsDouble()), 0.0, .001);
 }
 
 TEST_F(AggregateExecTest, QuantileRangeValidationProperty) {
-  std::cerr << "QuantileRangeValidationProperty\n";
+  if (IsVerbose()) {
+    std::cerr << "QuantileRangeValidationProperty\n";
+  }
 
   // Test with 50 iterations of invalid quantile values
   std::mt19937 rng(43);
@@ -1137,7 +1161,9 @@ TEST_F(AggregateExecTest, QuantileRangeValidationProperty) {
 }
 
 TEST_F(AggregateExecTest, NilValueExclusionProperty) {
-  std::cerr << "NilValueExclusionProperty\n";
+  if (IsVerbose()) {
+    std::cerr << "NilValueExclusionProperty\n";
+  }
 
   // Test with 100 iterations of datasets with random nil values
   std::mt19937 rng(44);
@@ -1200,7 +1226,9 @@ TEST_F(AggregateExecTest, NilValueExclusionProperty) {
 }
 
 TEST_F(AggregateExecTest, NonNumericValueHandlingProperty) {
-  std::cerr << "NonNumericValueHandlingProperty\n";
+  if (IsVerbose()) {
+    std::cerr << "NonNumericValueHandlingProperty\n";
+  }
 
   // Test with 50 iterations of datasets with non-numeric string values
   std::mt19937 rng(45);
@@ -1273,7 +1301,9 @@ TEST_F(AggregateExecTest, NonNumericValueHandlingProperty) {
 }
 
 TEST_F(AggregateExecTest, ArgumentCountValidationProperty) {
-  std::cerr << "ArgumentCountValidationProperty\n";
+  if (IsVerbose()) {
+    std::cerr << "ArgumentCountValidationProperty\n";
+  }
 
   // Test with various invalid argument counts
   struct InvalidArgTestCase {
@@ -1295,7 +1325,9 @@ TEST_F(AggregateExecTest, ArgumentCountValidationProperty) {
   };
 
   for (const auto &tc : testcases) {
-    std::cerr << "Testing: " << tc.description << "\n";
+    if (IsVerbose()) {
+      std::cerr << "Testing: " << tc.description << "\n";
+    }
 
     auto argv = vmsdk::ToValkeyStringVector(tc.query);
     vmsdk::ArgsIterator itr(argv.data(), argv.size());
@@ -1317,7 +1349,9 @@ TEST_F(AggregateExecTest, ArgumentCountValidationProperty) {
         << "Expected parser error for " << tc.description << " but got success";
 
     if (!result.ok()) {
-      std::cerr << "Got expected error: " << result << "\n";
+      if (IsVerbose()) {
+        std::cerr << "Got expected error: " << result << "\n";
+      }
       // Verify error message mentions incorrect number of arguments
       std::string error_msg = std::string(result.message());
       EXPECT_TRUE(error_msg.find("incorrect number of arguments") !=
@@ -1333,18 +1367,24 @@ TEST_F(AggregateExecTest, ArgumentCountValidationProperty) {
   }
 
   // Also test that valid argument count (nargs=2) works correctly
-  std::cerr << "Testing: valid nargs=2\n";
+  if (IsVerbose()) {
+    std::cerr << "Testing: valid nargs=2\n";
+  }
   auto param = MakeStages("groupby 1 @n2 reduce quantile 2 @n1 0.5");
   auto records = MakeData(4);
   EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
   EXPECT_EQ(records.size(), 1);
   auto record = records.pop_front();
   EXPECT_TRUE(record->fields_.at(2).IsDouble());
-  std::cerr << "Valid nargs=2 test passed\n";
+  if (IsVerbose()) {
+    std::cerr << "Valid nargs=2 test passed\n";
+  }
 }
 
 TEST_F(AggregateExecTest, MultipleReducerIndependenceProperty) {
-  std::cerr << "MultipleReducerIndependenceProperty\n";
+  if (IsVerbose()) {
+    std::cerr << "MultipleReducerIndependenceProperty\n";
+  }
 
   // Test with 100 iterations of random scenarios
   std::mt19937 rng(45);
@@ -1452,12 +1492,16 @@ TEST_F(AggregateExecTest, MultipleReducerIndependenceProperty) {
   EXPECT_GE(successful_iterations, 80)
       << "Expected at least 80 successful iterations, got "
       << successful_iterations;
-  std::cerr << "MultipleReducerIndependenceProperty completed "
-            << successful_iterations << " successful iterations\n";
+  if (IsVerbose()) {
+    std::cerr << "MultipleReducerIndependenceProperty completed "
+              << successful_iterations << " successful iterations\n";
+  }
 }
 
 TEST_F(AggregateExecTest, NumericPrecisionConsistencyProperty) {
-  std::cerr << "NumericPrecisionConsistencyProperty\n";
+  if (IsVerbose()) {
+    std::cerr << "NumericPrecisionConsistencyProperty\n";
+  }
 
   // Test with 100 iterations focusing on numeric precision edge cases
   std::mt19937 rng(46);
@@ -1571,11 +1615,16 @@ TEST_F(AggregateExecTest, NumericPrecisionConsistencyProperty) {
     EXPECT_TRUE(record->fields_.at(2).IsDouble());
   }
 
-  std::cerr << "NumericPrecisionConsistencyProperty completed 100 iterations\n";
+  if (IsVerbose()) {
+    std::cerr
+        << "NumericPrecisionConsistencyProperty completed 100 iterations\n";
+  }
 }
 
 TEST_F(AggregateExecTest, QuantileStringNumericValueTest) {
-  std::cerr << "QuantileStringNumericValueTest\n";
+  if (IsVerbose()) {
+    std::cerr << "QuantileStringNumericValueTest\n";
+  }
 
   // Test that string values that look like numbers are parsed
   RecordSet records(nullptr);
@@ -1622,7 +1671,9 @@ TEST_F(AggregateExecTest, QuantileArrayValueTest) {
   EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
   ASSERT_EQ(records.size(), 1);
   auto record = records.pop_front();
-  std::cerr << "Result: " << *record << "\n";
+  if (IsVerbose()) {
+    std::cerr << "Result: " << *record << "\n";
+  }
   std::vector<double> expected{1.0, 2.0, 3.0, 5.0};
   for (size_t i = 0; i < expected.size(); ++i) {
     ASSERT_TRUE(record->fields_.at(i + 2).IsDouble());
@@ -1635,7 +1686,9 @@ TEST_F(AggregateExecTest, QuantileArrayValueTest) {
 // merged (g==0) samples were used as merge targets, reviving them.  After the
 // fix, a single pass must delete all consecutively-mergeable samples.
 TEST_F(AggregateExecTest, CompressBoundedSampleCount) {
-  std::cerr << "CompressBoundedSampleCount\n";
+  if (IsVerbose()) {
+    std::cerr << "CompressBoundedSampleCount\n";
+  }
 
   // Insert enough values to trigger many Flush()+Compress() cycles.
   // With EPSILON=0.01 the GK bound is O((1/ε)·log(ε·N)) ≈ 700 samples for
@@ -1665,7 +1718,9 @@ TEST_F(AggregateExecTest, CompressBoundedSampleCount) {
   EXPECT_NEAR(result, expected, expected * 0.01)
       << "Median of [0," << kN << ") should be within 1% of " << expected;
 
-  std::cerr << "CompressBoundedSampleCount passed, median=" << result << "\n";
+  if (IsVerbose()) {
+    std::cerr << "CompressBoundedSampleCount passed, median=" << result << "\n";
+  }
 }
 
 // Regression test: Compress() must keep the sample count bounded relative to
@@ -1811,7 +1866,9 @@ TEST_F(AggregateExecTest, QuantileRankErrorWithinBiasedBound) {
 }
 
 TEST_F(AggregateExecTest, QuantileInstrumentationPathCoverage) {
-  std::cerr << "QuantileInstrumentationPathCoverage\n";
+  if (IsVerbose()) {
+    std::cerr << "QuantileInstrumentationPathCoverage\n";
+  }
 
   // Create a QuantileReducer via the factory to inspect stats after execution.
   QuantileStats *stats = nullptr;
@@ -1864,12 +1921,14 @@ TEST_F(AggregateExecTest, QuantileInstrumentationPathCoverage) {
   EXPECT_NEAR(median, expected, expected * kQuantileEpsilon)
       << "Median should be within epsilon of " << expected;
 
-  std::cerr << "QuantileInstrumentationPathCoverage passed: " << "flushes(init="
-            << stats->flush_initial_count
-            << ", merge=" << stats->flush_merge_count
-            << "), compress=" << stats->compress_count
-            << ", inserts=" << stats->insert_count
-            << ", merged=" << stats->samples_merged << "\n";
+  if (IsVerbose()) {
+    std::cerr << "QuantileInstrumentationPathCoverage passed: "
+              << "flushes(init=" << stats->flush_initial_count
+              << ", merge=" << stats->flush_merge_count
+              << "), compress=" << stats->compress_count
+              << ", inserts=" << stats->insert_count
+              << ", merged=" << stats->samples_merged << "\n";
+  }
 }
 
 // Extracts the elements from a RANDOM_SAMPLE reducer result (Value::Array).

@@ -226,6 +226,8 @@ class MockValkeyModule {
   MOCK_METHOD(void *, Realloc, (void *ptr, size_t size));
   MOCK_METHOD(void *, Calloc, (size_t nmemb, size_t size));
   MOCK_METHOD(size_t, MallocUsableSize, (void *ptr));
+  MOCK_METHOD(int, IncrExternalMemory, (size_t bytes));
+  MOCK_METHOD(int, DecrExternalMemory, (size_t bytes));
   MOCK_METHOD(size_t, GetClusterSize, ());
   MOCK_METHOD(unsigned int, ClusterKeySlot, (ValkeyModuleString * key));
   MOCK_METHOD(ValkeyModuleCallReply *, Call,
@@ -295,6 +297,12 @@ class MockValkeyModule {
 };
 
 inline MockValkeyModule::MockValkeyModule() {
+  ON_CALL(*this, IncrExternalMemory).WillByDefault([](size_t) {
+    return VALKEYMODULE_OK;
+  });
+  ON_CALL(*this, DecrExternalMemory).WillByDefault([](size_t) {
+    return VALKEYMODULE_OK;
+  });
   ON_CALL(*this, EventLoopAddOneShot)
       .WillByDefault(
           [this](ValkeyModuleEventLoopOneShotFunc callback, void *data) -> int {
@@ -1266,6 +1274,14 @@ inline size_t TestValkeyModule_MallocUsableSize(void *ptr) {
   return kMockValkeyModule->MallocUsableSize(ptr);
 }
 
+inline int TestValkeyModule_IncrExternalMemory(size_t bytes) {
+  return kMockValkeyModule->IncrExternalMemory(bytes);
+}
+
+inline int TestValkeyModule_DecrExternalMemory(size_t bytes) {
+  return kMockValkeyModule->DecrExternalMemory(bytes);
+}
+
 inline size_t TestValkeyModule_GetClusterSize() {
   return kMockValkeyModule->GetClusterSize();
 }
@@ -1713,6 +1729,8 @@ inline void TestValkeyModule_Init() {
   ValkeyModule_Realloc = &TestValkeyModule_Realloc;
   ValkeyModule_Calloc = &TestValkeyModule_Calloc;
   ValkeyModule_MallocUsableSize = &TestValkeyModule_MallocUsableSize;
+  ValkeyModule_IncrExternalMemory = &TestValkeyModule_IncrExternalMemory;
+  ValkeyModule_DecrExternalMemory = &TestValkeyModule_DecrExternalMemory;
   ValkeyModule_GetClusterSize = &TestValkeyModule_GetClusterSize;
   ValkeyModule_ClusterKeySlot = &TestValkeyModule_ClusterKeySlot;
   ValkeyModule_GetSharedAPI = &TestValkeyModule_GetSharedAPI;

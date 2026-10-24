@@ -48,6 +48,7 @@
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/status/status_macros.h"
+#include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -486,7 +487,7 @@ absl::Status VectorBase::LoadTrackedKeys(
     ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
     SupplementalContentChunkIter &&iter) {
   absl::WriterMutexLock lock(&key_to_metadata_mutex_);
-
+  size_t keys_without_vector = 0;
   while (iter.HasNext()) {
     VMSDK_ASSIGN_OR_RETURN(auto metadata_str, iter.Next(),
                            _ << "Error loading metadata");
@@ -505,20 +506,37 @@ absl::Status VectorBase::LoadTrackedKeys(
     auto key = vmsdk::MakeUniqueValkeyString(interned_key->Str());
     auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
         ctx, key.get(), VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
-    CHECK(key_obj) << "Failed to open key during LoadTrackedKeys: "
-                   << interned_key->Str();
-    auto attribute_status = attribute_data_type->GetAttribute(
-        ctx, key_obj.get(), interned_key->Str(), attribute_identifier_);
-    CHECK(attribute_status.ok());
-    auto attribute_val = std::move(attribute_status.value());
+    vmsdk::UniqueValkeyString attribute_val;
+    if (key_obj) {
+      attribute_val =
+          attribute_data_type
+              ->GetAttribute(ctx, key_obj.get(), interned_key->Str(),
+                             attribute_identifier_)
+              .value_or(vmsdk::UniqueValkeyString());
+    }
     if (attribute_data_type->AttributesProvidedAsString() && attribute_val) {
       attribute_val = NormalizeStringAttribute(std::move(attribute_val));
+    }
+    if (!attribute_val ||
+        !IsValidSizeVector(vmsdk::ToStringView(attribute_val.get()))) {
+      // The keyspace no longer holds a valid vector for this key: it expired
+      // before the load, or a delete or update was still queued when the RDB
+      // was saved. Keep the vector loaded from the index content; the
+      // post-load reconciliation (index extension replay, or the stale-entry
+      // scan for V1) removes or re-indexes the key.
+      ++keys_without_vector;
+      continue;
     }
     auto vector_record_with_size = VectorRegistry::Instance().DedupOrConstruct(
         interned_key, attribute_val.get(), attribute_data_type->ToProto(),
         db_num_, this);
     auto &save_vector = GetVectorLockFree(tracked_key_metadata.internal_id());
     save_vector = std::move(vector_record_with_size.vector_record);
+  }
+  if (keys_without_vector > 0) {
+    VMSDK_LOG(NOTICE, ctx) << keys_without_vector
+                           << " tracked keys have no valid vector in the "
+                              "keyspace; reconciling them after the load";
   }
   inc_id_ = GetMaxLoadedLabel() + 1;
   return absl::OkStatus();

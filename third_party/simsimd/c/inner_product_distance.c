@@ -205,14 +205,14 @@ static InnerProductDistanceFn SelectBF16InnerProductDistance(void) {
 #endif
 #endif  // SIMSIMD_TARGET_ARM
 #if SIMSIMD_TARGET_X86
-#if SIMSIMD_TARGET_HASWELL
-  if (simsimd_uses_haswell()) {
-    return InnerProductDistance_BF16_haswell;
-  }
-#endif
 #if SIMSIMD_TARGET_GENOA
   if (simsimd_uses_genoa()) {
     return InnerProductDistance_BF16_genoa;
+  }
+#endif
+#if SIMSIMD_TARGET_HASWELL
+  if (simsimd_uses_haswell()) {
+    return InnerProductDistance_BF16_haswell;
   }
 #endif
 #endif  // SIMSIMD_TARGET_X86

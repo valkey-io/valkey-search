@@ -61,6 +61,7 @@
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/scoped_thread_cpu_monitor.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/time_sliced_mrmw_mutex.h"
@@ -1734,6 +1735,18 @@ absl::Status ForcedMultiArmFailure(size_t arm_index) {
   return absl::InternalError("Forced multi-arm failure");
 }
 
+namespace {
+// Remote partition searches account their CPU time, on both the worker and the
+// main thread, to the coordinator server partition CPU time metric.
+vmsdk::ShardedAtomic<uint64_t> *RemoteCPUTimeAccumulator(
+    SearchMode search_mode) {
+  return search_mode == SearchMode::kRemote
+             ? &Metrics::GetStats()
+                    .coordinator_server_search_index_partition_cpu_time_usec
+             : nullptr;
+}
+}  // namespace
+
 absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
                          vmsdk::ThreadPool *thread_pool,
                          SearchMode search_mode) {
@@ -1749,6 +1762,10 @@ absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
   const bool scheduled = thread_pool->Schedule(
       [holder, search_mode]() mutable {
         std::unique_ptr<SearchParameters> parameters = std::move(*holder);
+        // Covers the background completion too: for a remote search it
+        // serializes the reply on this thread.
+        vmsdk::ScopedThreadCPUMonitor remote_cpu_monitor(
+            RemoteCPUTimeAccumulator(search_mode));
         auto res = Search(*parameters, search_mode);
         BACKGROUND_PAUSEPOINT("background_search_completing");
         parameters->search_result.status = res;
@@ -1758,6 +1775,8 @@ absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
             break;
           case ContentProcessing::kContentRequired:
           case ContentProcessing::kContentionCheckRequired:
+            parameters->content_resolution_cpu_time_usec =
+                RemoteCPUTimeAccumulator(search_mode);
             vmsdk::RunByMain([parameters = std::move(parameters)]() mutable {
               ResolveContent(std::move(parameters));
             });

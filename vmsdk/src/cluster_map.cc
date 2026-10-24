@@ -103,6 +103,10 @@ NodeInfo ShardInfo::GetRandomNode(bool replica_only, bool prefer_local) const {
 
 std::vector<NodeInfo> ClusterMap::GetTargets(FanoutTargetMode mode,
                                              bool prefer_local) const {
+  // `mode` establishes the role-based candidate set for each shard. Future
+  // health/CPU/latency-aware routing should rank eligible candidates here,
+  // while retaining the mode's fallback guarantees and one-target-per-shard
+  // behavior.
   switch (mode) {
     case FanoutTargetMode::kAll:
       return all_targets_;
@@ -120,6 +124,22 @@ std::vector<NodeInfo> ClusterMap::GetTargets(FanoutTargetMode mode,
         random_replicas.push_back(shard_info.GetRandomNode(true, prefer_local));
       }
       return random_replicas;
+    }
+    case FanoutTargetMode::kReplicaPreferred: {
+      std::vector<NodeInfo> targets;
+      targets.reserve(shards_.size());
+      for (const auto& [shard_id, shard_info] : shards_) {
+        // The replica list is the preferred candidate set. Selectors that use
+        // remote load signals should choose within this set before falling back
+        // to the primary; they must not promote a primary while a replica is
+        // eligible.
+        if (!shard_info.replicas.empty()) {
+          targets.push_back(shard_info.GetRandomNode(true, prefer_local));
+        } else if (shard_info.primary.has_value()) {
+          targets.push_back(shard_info.primary.value());
+        }
+      }
+      return targets;
     }
     case FanoutTargetMode::kRandom: {
       std::vector<NodeInfo> random_targets;
@@ -177,6 +197,14 @@ std::vector<NodeInfo> ClusterMap::GetTargetsForSlot(FanoutTargetMode mode,
     case FanoutTargetMode::kOneReplicaPerShard:
       if (!shard->replicas.empty()) {
         return {shard->GetRandomNode(true, prefer_local)};
+      }
+      return {};
+    case FanoutTargetMode::kReplicaPreferred:
+      if (!shard->replicas.empty()) {
+        return {shard->GetRandomNode(true, prefer_local)};
+      }
+      if (shard->primary.has_value()) {
+        return {shard->primary.value()};
       }
       return {};
     case FanoutTargetMode::kRandom:

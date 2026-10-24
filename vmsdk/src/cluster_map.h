@@ -39,6 +39,8 @@ static constexpr highwayhash::HHKey kHashKey{
 enum class FanoutTargetMode {
   kRandom,              // Default: randomly select one node per shard
   kOneReplicaPerShard,  // Select only replicas, one per shard
+  kReplicaPreferred,    // Select one replica per shard; use the primary only
+                        // when the cluster map has no replica for the shard
   kPrimary,             // Select all primary nodes
   kReplicas,            // Select all replica nodes
   kAll                  // Select all nodes (both primary and replica)

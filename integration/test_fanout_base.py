@@ -155,15 +155,19 @@ class TestFanout(ValkeySearchClusterTestCase):
     @pytest.mark.parametrize(
         "setup_test", [{"replica_count": 2}], indirect=True
     )
-    @pytest.mark.parametrize("threshold", [0, 100])
-    def test_fanout_low_utilization_fanout(self, threshold):
+    @pytest.mark.parametrize(
+        "client_mode, expects_replica_requests",
+        [("READWRITE", False), ("READONLY", True)],
+    )
+    def test_fanout_client_mode_routing(self, client_mode,
+                                        expects_replica_requests):
         number_of_searches_to_run = 10
         rg = self.get_replication_group(0)
         primary = rg.get_primary_connection()
         assert(primary.info("replication")["role"] == "master")
-        
-        # Set the fanout low utilization threshold
-        primary.execute_command("CONFIG", "SET", "search.local-fanout-queue-wait-threshold", threshold)
+
+        if client_mode == "READONLY":
+            assert primary.execute_command("READONLY") is True
         
         index = Index("test", [Vector("v", 3, type="FLAT")], type=KeyDataType.HASH)
         index.create(primary)
@@ -176,23 +180,62 @@ class TestFanout(ValkeySearchClusterTestCase):
         # Assert replicas of the primary didn't run any search queries
         assert(sum_of_remote_searches(rg.replicas) == 0)
 
-        # Verify the threshold was applied
-        result = primary.execute_command("CONFIG", "GET", "search.local-fanout-queue-wait-threshold")
-        assert result[1].decode() == str(threshold)
-
         # Execute searches
         for i in range(number_of_searches_to_run):
             result = primary.execute_command(*search_command(index.name))
             assert(len(result) > 1)
-        
+
+        replica_searches = sum_of_remote_searches(rg.replicas)
+        if expects_replica_requests:
+            assert(replica_searches > 0)
+        else:
+            assert(replica_searches == 0)
+
+    @pytest.mark.parametrize(
+        "setup_test", [{"replica_count": 2}], indirect=True
+    )
+    @pytest.mark.parametrize("threshold", [0, 100])
+    def test_fanout_low_utilization_fanout(self, threshold):
+        # prefer_local only applies to replica-only target selection on a
+        # replica coordinator, so issue READONLY searches from a replica.
+        number_of_searches_to_run = 10
+        rg = self.get_replication_group(0)
+        primary = rg.get_primary_connection()
+        local_replica = rg.get_replica_connection(0)
+        other_replicas = rg.replicas[1:]
+        assert(local_replica.info("replication")["role"] == "slave")
+
+        # Set the fanout low utilization threshold
+        local_replica.execute_command("CONFIG", "SET", "search.local-fanout-queue-wait-threshold", threshold)
+        assert local_replica.execute_command("READONLY") is True
+
+        index = Index("test", [Vector("v", 3, type="FLAT")], type=KeyDataType.HASH)
+        index.create(primary)
+        for node in self.get_nodes():
+            waiters.wait_for_true(lambda: index_on_node(node.client, index.name))
+        index.load_data(self.new_cluster_client(), 100)
+
+        waiters.wait_for_true(lambda: self.replication_lag() == 0)
+
+        # Verify the threshold was applied
+        result = local_replica.execute_command("CONFIG", "GET", "search.local-fanout-queue-wait-threshold")
+        assert result[1].decode() == str(threshold)
+
+        # Execute searches
+        for i in range(number_of_searches_to_run):
+            result = local_replica.execute_command(*search_command(index.name))
+            assert(len(result) > 1)
+
         if threshold:
-            # threshold == 100 means we are always under utilize and prefer to do local search on the shard
-            # Assert replicas of the primary didn't run any search queries
-            assert(sum_of_remote_searches(rg.replicas) == 0)
+            # threshold == 100 means we are always under utilized and prefer to
+            # run the local shard on this replica
+            assert(sum_of_remote_searches(other_replicas) == 0)
         else:
             # threshold == 0 means we are always "too busy"
-            # Assert replicas of the primary run some of the search queries 
-            assert(sum_of_remote_searches(rg.replicas) > 0)
+            # Assert other replicas of the shard run some of the search queries
+            assert(sum_of_remote_searches(other_replicas) > 0)
+        # Primaries are never targeted while the shard has a mapped replica
+        assert(sum_of_remote_searches([rg.primary]) == 0)
 
     def test_sample_queue_size_config(self):
         """Test thread-pool-wait-time-samples configuration parameter"""

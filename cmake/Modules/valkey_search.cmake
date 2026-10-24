@@ -178,8 +178,8 @@ if(UNIX AND NOT APPLE)
   target_link_libraries(lib_to_add_end_group_flag INTERFACE "-Wl,--end-group")
 endif()
 
-macro(finalize_test_flags __TARGET)
-  # --end-group will added by our fake target "lib_to_add_end_group_flag"
+macro(_finalize_executable_flags __TARGET)
+  # --end-group will be added by our fake target "lib_to_add_end_group_flag".
   if(UNIX AND NOT APPLE)
     target_link_options(${__TARGET} PRIVATE "LINKER:--start-group")
   endif()
@@ -192,7 +192,6 @@ macro(finalize_test_flags __TARGET)
                         "LINKER:--allow-multiple-definition")
   endif()
 
-  target_compile_options(${__TARGET} PRIVATE -O1)
   valkey_search_target_update_compile_flags(${__TARGET})
   set_target_properties(${__TARGET} PROPERTIES RUNTIME_OUTPUT_DIRECTORY
                                                "${CMAKE_BINARY_DIR}/tests")
@@ -203,11 +202,21 @@ macro(finalize_test_flags __TARGET)
   if(VALKEY_SEARCH_IS_ARM)
     target_link_libraries(${__TARGET} PRIVATE pthread)
   endif()
-  target_link_libraries(${__TARGET} PRIVATE GTest::gtest GTest::gtest_main
-                                            GTest::gmock)
   if(SAN_BUILD)
     target_link_options(${__TARGET} PRIVATE "-fsanitize=${SAN_BUILD}")
-
   endif()
+endmacro()
+
+macro(finalize_test_flags __TARGET)
+  target_compile_options(${__TARGET} PRIVATE -O1)
+  _finalize_executable_flags(${__TARGET})
+  target_link_libraries(${__TARGET} PRIVATE GTest::gtest GTest::gtest_main
+                                            GTest::gmock)
   add_test(NAME ${__TARGET} COMMAND "${CMAKE_BINARY_DIR}/tests/${__TARGET}")
+endmacro()
+
+# Benchmarks are standalone binaries, not GTest tests. Keep them out of the
+# test registry and retain the release optimization level for measurements.
+macro(finalize_benchmark_flags __TARGET)
+  _finalize_executable_flags(${__TARGET})
 endmacro()

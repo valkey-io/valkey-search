@@ -7,7 +7,6 @@
 
 #include "src/coordinator/client.h"
 
-#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -160,8 +159,8 @@ void ClientImpl::SearchIndexPartition(
   args->request = std::move(request);
   args->latency_sample = SAMPLE_EVERY_N(100);
   auto *args_raw = args.release();
-  Metrics::GetStats().coordinator_bytes_out.fetch_add(
-      args_raw->request->ByteSizeLong(), std::memory_order_relaxed);
+  Metrics::GetStats().coordinator_bytes_out.Add(
+      args_raw->request->ByteSizeLong());
   stub_->async()->SearchIndexPartition(
       &args_raw->context, args_raw->request.get(), args_raw->response,
       // std::function is not move-only.
@@ -177,8 +176,7 @@ void ClientImpl::SearchIndexPartition(
           Metrics::GetStats()
               .coordinator_client_search_index_partition_success_latency
               .SubmitSample(std::move(args->latency_sample));
-          Metrics::GetStats().coordinator_bytes_in.fetch_add(
-              response_bytes, std::memory_order_relaxed);
+          Metrics::GetStats().coordinator_bytes_in.Add(response_bytes);
         } else {
           Metrics::GetStats()
               .coordinator_client_search_index_partition_failure_cnt++;
@@ -207,8 +205,8 @@ void ClientImpl::MultiSearchIndexPartition(
   args->request = std::move(request);
   args->latency_sample = SAMPLE_EVERY_N(100);
   auto args_raw = args.release();
-  Metrics::GetStats().coordinator_bytes_out.fetch_add(
-      args_raw->request->ByteSizeLong(), std::memory_order_relaxed);
+  Metrics::GetStats().coordinator_bytes_out.Add(
+      args_raw->request->ByteSizeLong());
   stub_->async()->MultiSearchIndexPartition(
       &args_raw->context, args_raw->request.get(), &args_raw->response,
       [args_raw](grpc::Status s) mutable {
@@ -221,8 +219,8 @@ void ClientImpl::MultiSearchIndexPartition(
           Metrics::GetStats()
               .coordinator_client_search_index_partition_success_latency
               .SubmitSample(std::move(args->latency_sample));
-          Metrics::GetStats().coordinator_bytes_in.fetch_add(
-              args->response.ByteSizeLong(), std::memory_order_relaxed);
+          Metrics::GetStats().coordinator_bytes_in.Add(
+              args->response.ByteSizeLong());
         } else {
           Metrics::GetStats()
               .coordinator_client_search_index_partition_failure_cnt++;
@@ -251,8 +249,8 @@ void ClientImpl::InfoIndexPartition(
   args->request = std::move(request);
   args->latency_sample = SAMPLE_EVERY_N(100);
   auto *args_raw = args.release();
-  Metrics::GetStats().coordinator_bytes_out.fetch_add(
-      args_raw->request->ByteSizeLong(), std::memory_order_relaxed);
+  Metrics::GetStats().coordinator_bytes_out.Add(
+      args_raw->request->ByteSizeLong());
   stub_->async()->InfoIndexPartition(
       &args_raw->context, args_raw->request.get(), &args_raw->response,
       // std::function is not move-only
@@ -267,8 +265,7 @@ void ClientImpl::InfoIndexPartition(
         args->callback(s, args->response);
         // (Optional) record metrics here
         if (s.ok()) {
-          Metrics::GetStats().coordinator_bytes_in.fetch_add(
-              response_bytes, std::memory_order_relaxed);
+          Metrics::GetStats().coordinator_bytes_in.Add(response_bytes);
         }
       });
 }

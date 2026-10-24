@@ -20,11 +20,31 @@ class StabilityTests(parameterized.TestCase):
             level=logging.DEBUG,
         )
         self.valkey_cluster_under_test = None
+        self.stability_runner = None
 
     def tearDown(self):
-        if self.valkey_cluster_under_test:
-            self.valkey_cluster_under_test.terminate()
-        super().tearDown()
+        # try/finally so a failure while tearing one cluster down cannot skip
+        # super().tearDown(), and so the ports are always checked. Every test
+        # shares one process, so a leaked cluster keeps its ports bound and its
+        # index memory resident for every test that follows.
+        try:
+            # Before the servers go away, so background tasks are not left
+            # issuing commands against a cluster that is being torn down.
+            if self.stability_runner:
+                self.stability_runner.cleanup()
+            if self.valkey_cluster_under_test:
+                self.valkey_cluster_under_test.terminate()
+                leaked = utils.ports_still_listening(
+                    self.valkey_cluster_under_test.get_ports()
+                )
+                if leaked:
+                    logging.error(
+                        "Ports still bound after teardown, a valkey-server "
+                        "leaked and will affect later tests: %s",
+                        leaked,
+                    )
+        finally:
+            super().tearDown()
 
 
     @parameterized.named_parameters(
@@ -270,7 +290,7 @@ class StabilityTests(parameterized.TestCase):
                 num_memtier_threads=10,
                 num_memtier_clients=10,
                 num_search_clients=10,
-                insertion_mode="time_interval",
+                insertion_mode="request_count",  # -n, not --test-time: memtier is paused for failover
                 test_time_sec=60,
                 test_timeout=120,
                 keyspace_size=1000000,
@@ -296,7 +316,7 @@ class StabilityTests(parameterized.TestCase):
                 num_memtier_threads=10,
                 num_memtier_clients=10,
                 num_search_clients=10,
-                insertion_mode="time_interval",
+                insertion_mode="request_count",  # -n, not --test-time: memtier is paused for failover
                 test_time_sec=60,
                 test_timeout=120,
                 keyspace_size=1000000,
@@ -322,7 +342,7 @@ class StabilityTests(parameterized.TestCase):
                 num_memtier_threads=10,
                 num_memtier_clients=10,
                 num_search_clients=10,
-                insertion_mode="time_interval",
+                insertion_mode="request_count",  # -n, not --test-time: memtier is paused for failover
                 test_time_sec=90,
                 test_timeout=180,
                 keyspace_size=1000000,
@@ -350,7 +370,7 @@ class StabilityTests(parameterized.TestCase):
                 num_memtier_threads=10,
                 num_memtier_clients=10,
                 num_search_clients=10,
-                insertion_mode="time_interval",
+                insertion_mode="request_count",  # -n, not --test-time: memtier is paused for failover
                 test_time_sec=120,
                 test_timeout=180,
                 keyspace_size=1000000,
@@ -448,7 +468,7 @@ class StabilityTests(parameterized.TestCase):
                 num_memtier_threads=10,
                 num_memtier_clients=10,
                 num_search_clients=10,
-                insertion_mode="time_interval",
+                insertion_mode="request_count",  # -n, not --test-time: memtier is paused for failover
                 test_time_sec=90,
                 test_timeout=120,
                 keyspace_size=1000000,
@@ -546,7 +566,7 @@ class StabilityTests(parameterized.TestCase):
                 num_memtier_threads=10,
                 num_memtier_clients=10,
                 num_search_clients=10,
-                insertion_mode="time_interval",
+                insertion_mode="request_count",  # -n, not --test-time: memtier is paused for failover
                 test_time_sec=90,
                 test_timeout=120,
                 keyspace_size=1000000,
@@ -644,7 +664,7 @@ class StabilityTests(parameterized.TestCase):
                 num_memtier_threads=10,
                 num_memtier_clients=10,
                 num_search_clients=10,
-                insertion_mode="time_interval",
+                insertion_mode="request_count",  # -n, not --test-time: memtier is paused for failover
                 test_time_sec=90,
                 test_timeout=120,
                 keyspace_size=1000000,
@@ -711,10 +731,31 @@ class StabilityTests(parameterized.TestCase):
         if not connected:
             self.fail("Failed to connect to valkey server")
 
-        results = stability_runner.StabilityRunner(config).run()
+        # Kept on self so tearDown can release the runner's background tasks and
+        # memtier processes even if run() or a later assertion raises.
+        self.stability_runner = stability_runner.StabilityRunner(
+            config, cluster=self.valkey_cluster_under_test
+        )
+        results = self.stability_runner.run()
 
         if results is None:
             self.fail("Failed to run stability test")
+
+        # A node killed by a signal is a defect even if that port was shut down
+        # on purpose earlier in the run, so this is checked before (and
+        # independently of) the intentional-shutdown allowance below. Without
+        # this, a segfault on a node that had already been a failover victim is
+        # excused as an intentional shutdown.
+        crashed = self.valkey_cluster_under_test.get_crashed_servers()
+        if crashed:
+            details = ", ".join(
+                f"port {port} killed by signal {sig}"
+                for port, sig in sorted(crashed.items())
+            )
+            self.fail(
+                f"Valkey servers crashed during test: {details}. "
+                "See the per-node *_stdout.txt logs for the bug report."
+            )
 
         # Check for unexpectedly terminated servers
         # During failover testing, only allow servers that were intentionally shut down
@@ -757,24 +798,32 @@ class StabilityTests(parameterized.TestCase):
                 ),
             )
         for result in results.background_task_results:
+            # An unhandled exception is a defect regardless of the task, so it is
+            # checked before the BGSAVE allowance below: a task whose failures
+            # are tolerated still may not hide a crash. Tracebacks are in the
+            # test log.
+            self.assertEqual(
+                result.crashes,
+                0,
+                msg=(
+                    f"Background task {result.name} raised {result.crashes} "
+                    "unhandled exception(s); see the log for tracebacks"
+                ),
+            )
             self.assertGreater(
                 result.total_ops,
                 0,
                 msg=f"Expected positive total ops for background task {result.name}",
             )
-            # BGSAVE will fail if another is ongoing.
+            # BGSAVE failures are tolerated: a node busy forking can exceed the
+            # client's socket timeout under load. "Background save already in
+            # progress" is not counted as a failure at all.
             if result.name == "BGSAVE":
                 pass
-            elif config.failover_interval_sec > 0 and result.name in ["FT.CREATE", "FLUSHDB", "FT.DROPINDEX"]:
-                # Allow up to 3 failures per background task during failover testing. These are for the situation where the
-                # cluster information is not updated fast enough and causes a race condition in the check. This is a situation
-                # that can happen and we want to avoid catching failures like those because they are not true failures (they are expected)
-                self.assertLessEqual(
-                    result.failures,
-                    3,
-                    f"Expected at most 3 transient failures for background task {result.name} during failover, got {result.failures}",
-                )
             else:
+                # Zero failures is required even with failover enabled: a node
+                # is excluded from the fan-out while it is down, and index
+                # state is tracked per node.
                 self.assertEqual(
                     result.failures,
                     0,

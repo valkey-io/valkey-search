@@ -48,7 +48,9 @@ class Registry {
     uint64_t min_epoch = std::numeric_limits<uint64_t>::max();
     absl::ReaderMutexLock lock(&mutex_);
     for (const ThreadState *state : threads_) {
-      const uint64_t e = state->epoch.load(std::memory_order_relaxed);
+      // Acquire pairs with the release stores in EpochGuard, so a record
+      // released after this scan is released after the guards' reads.
+      const uint64_t e = state->epoch.load(std::memory_order_acquire);
       if (e != 0) {
         min_epoch = std::min(min_epoch, e);
       }

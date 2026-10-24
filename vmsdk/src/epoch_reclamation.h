@@ -79,8 +79,10 @@ class EpochGuard {
     if (!state.registered) {
       internal::Register(&state);
     }
+    // Release: a reclaimer that reads this announcement in place of the
+    // previous guard's 0 must still be ordered after that guard's reads.
     state.epoch.store(internal::global_epoch.load(std::memory_order_acquire),
-                      std::memory_order_relaxed);
+                      std::memory_order_release);
     std::atomic_thread_fence(std::memory_order_seq_cst);
   }
 

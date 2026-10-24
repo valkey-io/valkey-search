@@ -10,6 +10,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <type_traits>
 
 #include "absl/strings/string_view.h"
 #include "src/index_schema.pb.h"
@@ -43,6 +44,26 @@ namespace valkey_search::indexes {
 // float, never on T. Only the concrete space class chosen by CreateSpace<T>
 // knows the storage layout. Templating the space on T (as upstream's
 // float-only code did) conflates the two and breaks for 2-byte storage.
+// Compile-time mapping from T to its data_model::VectorDataType enum.
+// If a new element type is added, add its arm here plus one arm in
+// CreateSpace and NormalizeStringRecord in vector_type.cc; both leaves'
+// ToProtoImpl / RespondWithInfoImpl stay unchanged.
+template <typename T>
+constexpr data_model::VectorDataType VectorDataTypeEnumFor() {
+  if constexpr (std::is_same_v<T, float>) {
+    return data_model::VECTOR_DATA_TYPE_FLOAT32;
+  } else if constexpr (std::is_same_v<T, float16>) {
+    return data_model::VECTOR_DATA_TYPE_FLOAT16;
+  } else if constexpr (std::is_same_v<T, bfloat16>) {
+    return data_model::VECTOR_DATA_TYPE_BFLOAT16;
+  } else {
+    // Force a compile error rather than a silent runtime UNSPECIFIED --
+    // adding a new T without adding an arm here is a bug we want caught
+    // at build time.
+    static_assert(sizeof(T) == 0, "no VectorDataType enum for this T");
+  }
+}
+
 template <typename T>
 class VectorType : public VectorBase {
  public:
@@ -60,7 +81,8 @@ class VectorType : public VectorBase {
   VectorType(IndexerType indexer_type, int dimensions,
              data_model::AttributeDataType attribute_data_type,
              absl::string_view attribute_identifier, int db_num)
-      : VectorBase(indexer_type, dimensions, sizeof(T), attribute_data_type,
+      : VectorBase(indexer_type, dimensions, sizeof(T),
+                   VectorDataTypeEnumFor<T>(), attribute_data_type,
                    attribute_identifier, db_num) {}
 
   size_t GetDataTypeSize() const override { return sizeof(T); }

@@ -15,6 +15,7 @@
 #include "src/indexes/vector_base.h"
 #include "src/keyspace_event_manager.h"
 #include "src/utils/string_interning.h"
+#include "src/utils/vector_pool.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -57,7 +58,7 @@ indexes::VectorRecordWithSize ConstructVectorRecord(
   }
   float reciprocal_magnitude = vector_base->ComputeReciprocalMagnitude(record);
   return {.vector_record = indexes::VectorRecord::Construct(
-              record, reciprocal_magnitude, vector_base->GetVectorAllocator()),
+              record, reciprocal_magnitude, vector_base->GetVectorPool()),
           .size = record.size()};
 }
 
@@ -93,14 +94,22 @@ indexes::VectorRecordWithSize VectorRegistry::DedupOrConstruct(
   auto &db_tracked = tracked_vectors_[db_num];
   auto it = db_tracked.find(search_key);
   if (it != db_tracked.end() && it->second == vector_str) {
+    // Equal bytes are only the same vector if read as the same element type.
+    // A record built for another type has that type's magnitude (and pool).
+    // Give this index its own untracked record; the tracked one stays shared
+    // with the hash.
+    if (it->second.data_type != vector_base->GetVectorDataType()) {
+      return ConstructVectorRecord(vector_str, vector_base);
+    }
     ++stats_.dedup_cnt;
     result = it->second;
   } else {
     result = ConstructVectorRecord(vector_str, vector_base);
+    TrackedRecord tracked{result, vector_base->GetVectorDataType()};
     if (it != db_tracked.end()) {
-      it->second = result;
+      it->second = tracked;
     } else {
-      db_tracked.emplace(search_key, result);
+      db_tracked.emplace(search_key, tracked);
     }
   }
 
@@ -111,7 +120,7 @@ indexes::VectorRecordWithSize VectorRegistry::DedupOrConstruct(
   return result;
 }
 
-std::optional<indexes::VectorRecordWithSize>
+std::optional<VectorRegistry::TrackedRecord>
 VectorRegistry::ExtractTrackedRecord(
     int db_num, const InternedStringPtr &key,
     const InternedStringPtr &attribute_identifier) {

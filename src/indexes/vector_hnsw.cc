@@ -115,7 +115,7 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
     RDBChunkInputStream input(std::move(iter));
     index->algo_->normalized_ = index->normalize_;
 
-    auto generator = [allocator = index->GetVectorAllocator()](
+    auto generator = [pool = index->GetVectorPool()](
                          absl::string_view vector_data,
                          bool is_marked_deleted) {
       if (!is_marked_deleted) {
@@ -125,8 +125,7 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
       // AlgoDeleteRecord), so restore them with a reciprocal magnitude of
       // exactly 1.0; the HNSW distance path relies on this invariant. For
       // other indexes the magnitude is not used.
-      return VectorRecord::Construct(
-          vector_data, 1.0f, static_cast<FixedSizeAllocator *>(allocator));
+      return VectorRecord::Construct(vector_data, 1.0f, pool);
     };
     VMSDK_RETURN_IF_ERROR(index->algo_->LoadIndex(
         input, index->space_.get(), vector_index_proto.initial_cap(),
@@ -270,7 +269,7 @@ absl::Status VectorHNSW<T>::AlgoDeleteRecord(uint64_t label) {
 
   absl::string_view norm_view(norm_record.data(), norm_record.size());
   auto vector_record =
-      VectorRecord::Construct(norm_view, 1.0f, GetVectorAllocator());
+      VectorRecord::Construct(norm_view, 1.0f, GetVectorPool());
   algo_->SetDataByInternalId(*hnsw_internal_id, std::move(vector_record));
   algo_->markDeletedInternal(*hnsw_internal_id);
   return absl::OkStatus();
@@ -338,8 +337,8 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
                  : kDefaultMagnitude;
   try {
     CancelCondition cancel_condition(cancellation_token);
-    VectorRecord query_record = VectorRecord::Construct(
-        query, reciprocal_magnitude, GetVectorAllocator());
+    VectorRecord query_record =
+        VectorRecord::Construct(query, reciprocal_magnitude, nullptr);
     QueryVector embedding(query_record, query.size(), normalize_,
                           GetVectorDataType());
     auto res = algo_->searchKnn(embedding, count, ef_runtime, filter.get(),
@@ -377,8 +376,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
     try {
       CancelCondition cancel_condition(cancellation_token);
       QueryVector embedding(
-          VectorRecord::Construct(query_view, reciprocal_magnitude,
-                                  GetVectorAllocator()),
+          VectorRecord::Construct(query_view, reciprocal_magnitude, nullptr),
           query_view.size(), normalize_, GetVectorDataType());
       auto res = algo_->searchKnn(embedding, max_candidates,
                                   std::optional<size_t>(max_candidates),

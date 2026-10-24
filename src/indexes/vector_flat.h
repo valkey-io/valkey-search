@@ -41,7 +41,7 @@ class VectorFlat : public VectorType<T> {
   using VectorType<T>::CreateReply;
   using VectorType<T>::GetCapacity;
   using VectorType<T>::GetDataTypeSize;
-  using VectorType<T>::GetVectorAllocator;
+  using VectorType<T>::GetVectorPool;
   using VectorType<T>::GetVectorDataSize;
   using VectorType<T>::IsValidSizeVector;
   using VectorType<T>::EmitDataTypeInfo;
@@ -117,6 +117,12 @@ class VectorFlat : public VectorType<T> {
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
   VectorRecord &GetVector(uint64_t internal_id) const override
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  // Also sets the element's copy of the reciprocal magnitude.
+  void SetLoadedVector(uint64_t internal_id, VectorRecord &&record) override
+      ABSL_NO_THREAD_SAFETY_ANALYSIS {
+    CHECK(algo_->ReplacePointLockFree(internal_id, std::move(record)))
+        << "Internal ID not found: " << internal_id;
+  }
   // Lock-free search optimization: Phase-based locking guarantees that queries
   // and resizes/mutations are strictly mutually exclusive. Therefore, no data
   // races can occur during the search phase.

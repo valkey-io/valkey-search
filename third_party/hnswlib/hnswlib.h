@@ -5,6 +5,7 @@
 
 #include "absl/status/status.h"
 #include "iostream.h"
+#include "vmsdk/src/chunked_array.h"
 
 #ifdef VMSDK_ENABLE_MEMORY_ALLOCATION_OVERRIDES
 #include "vmsdk/src/memory_allocation_overrides.h"  // IWYU pragma: keep
@@ -254,71 +255,7 @@ AlgorithmInterface<dist_t, QueryVectorT, StoredVectorT>::searchKnnCloserFirst(
   return result;
 }
 
-class ChunkedArray {
- public:
-  ChunkedArray(size_t element_byte_size, size_t elements_per_chunk,
-               size_t element_count)
-      : element_byte_size_(element_byte_size),
-        elements_per_chunk_(elements_per_chunk),
-        element_count_(0) {
-    resize(element_count);
-  }
-
-  ~ChunkedArray() { clear(); }
-
-  ChunkedArray(const ChunkedArray &) = delete;
-  ChunkedArray &operator=(const ChunkedArray &) = delete;
-
-  size_t getCapacity() const {
-    return element_count_.load(std::memory_order_relaxed);
-  }
-
-  size_t getSizePerElement() const { return element_byte_size_; }
-
-  size_t getSizePerChunk() const {
-    return elements_per_chunk_ * element_byte_size_;
-  }
-
-  char *operator[](size_t i) const {
-    assert(i < getCapacity());
-    if (i >= getCapacity()) return nullptr;
-    size_t chunk_index = i / elements_per_chunk_;
-    size_t index_in_chunk = i % elements_per_chunk_;
-    return chunks_[chunk_index] + element_byte_size_ * index_in_chunk;
-  }
-
-  void clear() {
-    for (auto chunk : chunks_) {
-      delete[] chunk;
-    }
-    chunks_.clear();
-    element_count_.store(0, std::memory_order_relaxed);
-  }
-
-  void resize(size_t new_element_count) {
-    size_t chunk_count =
-        getChunkCount(element_count_.load(std::memory_order_relaxed));
-    size_t new_chunk_count = getChunkCount(new_element_count);
-
-    chunks_.resize(new_chunk_count);
-    for (size_t i = chunk_count; i < new_chunk_count; i++) {
-      chunks_[i] = new char[elements_per_chunk_ * element_byte_size_];
-      // Note that we don't initialize the memory on purpose. The caller
-      // is expected to track the initialization state.
-    }
-    element_count_.store(new_element_count, std::memory_order_relaxed);
-  }
-
- private:
-  size_t getChunkCount(size_t element_count) const {
-    return (element_count + elements_per_chunk_ - 1) / elements_per_chunk_;
-  }
-
-  size_t element_byte_size_;
-  size_t elements_per_chunk_;
-  std::atomic<size_t> element_count_;
-  std::deque<char *> chunks_;
-};
+using ChunkedArray = vmsdk::ChunkedArray;
 
 }  // namespace hnswlib
 

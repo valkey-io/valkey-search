@@ -312,3 +312,21 @@ Redisearch's fuzzy search also matches against the stems of indexed terms;
 Valkey matches only the indexed forms. The fuzzy generator filters its
 vocabulary at generation time (`_compute_safe_fuzzy_vocab` in
 `generate_text.py`). Asserted by Divergence #5.
+
+## 5. Intentional divergences
+
+### 5.1 INFIELDS strict validation
+
+Redis silently ignores non-existent and non-TEXT fields in `INFIELDS` — they
+simply have no effect on the query. An explicit `@field:term` where the field
+is not in `INFIELDS` silently matches nothing (empty intersection).
+valkey-search errors on all three cases to surface likely user mistakes early:
+
+```
+INFIELDS 1 nosuchfield     -> INFIELDS field 'nosuchfield' does not exist in the index
+INFIELDS 1 price           -> INFIELDS field 'price' is not a TEXT field
+INFIELDS 1 title @body:foo -> Field 'body' is not in INFIELDS list
+```
+
+This falls under the "stricter input validation" clause in `COMPATIBILITY.md`
+(intentionally ungated).

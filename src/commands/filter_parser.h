@@ -29,6 +29,7 @@ struct TextParsingOptions {
   bool verbatim = false;
   bool inorder = false;
   std::optional<uint32_t> slop = std::nullopt;
+  const absl::flat_hash_set<std::string>* infields = nullptr;
 };
 enum class QueryOperations : uint64_t {
   kNone = 0,
@@ -89,6 +90,9 @@ class FilterParser {
   size_t node_count_{0};
   absl::flat_hash_set<std::string> filter_identifiers_;
   QueryOperations query_operations_{QueryOperations::kNone};
+  // Resolved by ResolveInfields(); ~0 when INFIELDS is absent.
+  FieldMaskPredicate infields_field_mask_ = ~FieldMaskPredicate{0};
+  absl::flat_hash_set<std::string> infields_identifiers_;
 
   struct TokenResult {
     std::unique_ptr<query::TextPredicate> predicate;
@@ -105,6 +109,8 @@ class FilterParser {
   absl::Status SetupTextFieldConfiguration(
       FieldMaskPredicate& field_mask,
       const std::optional<std::string>& field_name, bool with_suffix);
+  // Errors if an INFIELDS field is missing or not TEXT.
+  absl::Status ResolveInfields();
   absl::StatusOr<std::optional<std::unique_ptr<query::Predicate>>>
   ParseTextTokens(const std::optional<std::string>& field_for_default);
   absl::StatusOr<bool> IsMatchAllExpression();

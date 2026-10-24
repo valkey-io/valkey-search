@@ -5,6 +5,7 @@ FT.SEARCH <index> <query>
   [ALLSHARDS | SOMESHARDS]
   [CONSISTENT | INCONSISTENT]
   [DIALECT <dialect>]
+  [INFIELDS <count> <field> [<field> ...]]
   [INKEYS <count> <key> [<key> ...]]
   [INORDER]
   [LIMIT <offset> <num>]
@@ -27,6 +28,7 @@ FT.SEARCH <index> <query>
 - `CONSISTENT` (Optional): If specified, the command is terminated with an error if the cluster is in an inconsistent state. This is the default when `search.enable-consistent-results` is `yes`; otherwise `INCONSISTENT` is the default.
 - `DIALECT <dialect>` (optional): Specifies your dialect. The only supported dialect is 2.
 - `INCONSISTENT` (Optional): If specified, the command will generate a best-effort reply if the cluster remains inconsistent within the timeout interval.
+- `INFIELDS <count> <field> [<field> ...]` (optional): Restricts full-text term matching to the listed TEXT fields, named by attribute name (the `AS` alias when one is given). `<count>` is the number of fields that follow, at most 64; duplicate names are ignored. If `<count>` is 0, INFIELDS is a no-op. An error is returned if a listed field does not exist or is not a TEXT field, or if the query contains an explicit `@field:` text term whose field is not listed. Non-text predicates and vector KNN matching are not restricted.
 - `INKEYS <count> <key> [<key> ...]` (optional): Restricts results to the specified set of document keys. `<count>` is the number of keys that follow and must be a non-negative integer. Duplicate keys are deduplicated. If `<count>` is 0, no results are returned. The filter is applied as a post-filter after the search, so `total_count` in the response reflects only the keys that matched both the query and the INKEYS set.
 - `LIMIT <offset> <count>` (optional): Lets you choose a portion of the result. The first `<offset>` keys are skipped and only a maximum of `<count>` keys are included. The default is LIMIT 0 10, which returns at most 10 keys.
 - `NOCONTENT` (optional): When present, only the resulting key names are returned, no key values are included.

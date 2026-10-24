@@ -192,6 +192,7 @@ set(COORDINATOR_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/coordinator/metadata_manager_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/coordinator/client_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/coordinator/multi_search_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/coordinator/tls_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/coordinator/search_converter_test.cc)
 
 add_executable(coordinator_test ${COORDINATOR_TEST_SOURCES})
@@ -201,6 +202,7 @@ target_include_directories(coordinator_test
 target_link_libraries(coordinator_test PRIVATE testing_common_base)
 target_link_libraries(coordinator_test PRIVATE testing_common_coordinator)
 target_link_libraries(coordinator_test PRIVATE search_converter)
+target_link_libraries(coordinator_test PRIVATE coordinator_tls)
 target_link_libraries(coordinator_test PRIVATE text)
 finalize_test_flags(coordinator_test)
 

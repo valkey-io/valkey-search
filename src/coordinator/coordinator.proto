@@ -248,8 +248,21 @@ message MultiSearchIndexPartitionResponse {
 }
 
 message GlobalMetadataVersionHeader {
+  // Deterministic fingerprint of the metadata entries.
+  //
+  // The fingerprint changes when an entry's type, ID, version, or fingerprint
+  // changes. The entry order does not affect the result.
   uint64 top_level_fingerprint = 1;
+  // Logical revision of the global metadata.
+  //
+  // The revision increases when reconciliation produces a distinct metadata
+  // state. It does not represent a Valkey Search module version.
   uint32 top_level_version = 2;
+  // Oldest Valkey Search module version that can interpret the metadata.
+  //
+  // For example, kModuleVersion (1.3.0) is stored as 66304, which requires
+  // Valkey Search 1.3.0 or newer. Reconciliation rejects the metadata when
+  // the local module version is lower.
   uint32 top_level_min_version = 3;
 }
 

@@ -1,5 +1,7 @@
 # valkey-search
 
+[![codecov](https://codecov.io/gh/valkey-io/valkey-search/branch/main/graph/badge.svg)](https://codecov.io/gh/valkey-io/valkey-search)
+
 **Valkey-Search** (BSD-3-Clause), provided as a Valkey module, is a high-performance Search engine
 optimized for AI-driven / Search / Analytics / Recommendation System related workloads. It delivers single-digit millisecond
 latency and high QPS, capable of handling billions of vectors with over 99% recall as part of vector searches. It also provides

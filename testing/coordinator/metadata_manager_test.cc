@@ -132,7 +132,8 @@ TEST_P(EntryOperationTest, TestEntryOperations) {
           callbacks_tracker.push_back(std::move(callback_result));
           return type_to_register.status_to_return;
         },
-        [](auto) { return 1; }, type_to_register.encoding_version);
+        [](auto) { return 1; }, /*validate_callback=*/nullptr,
+        type_to_register.encoding_version);
   }
   if (test_case.expect_num_broadcasts > 0) {
     EXPECT_CALL(*kMockValkeyModule,
@@ -596,7 +597,8 @@ TEST_P(MetadataManagerReconciliationTest, TestReconciliation) {
           });
           return type_to_register.status_to_return;
         },
-        [](auto) { return kModuleVersion; }, type_to_register.encoding_version);
+        [](auto) { return kModuleVersion; }, /*validate_callback=*/nullptr,
+        type_to_register.encoding_version);
   }
 
   if (test_case.expect_broadcast && !expect_failure) {
@@ -1664,7 +1666,8 @@ TEST_F(MetadataManagerReconciliationTest,
         callback_called = true;
         return absl::OkStatus();
       },
-      [](auto) { return kModuleVersion; }, vmsdk::ValkeyVersion{0, 0, 1});
+      [](auto) { return kModuleVersion; }, /*validate_callback=*/nullptr,
+      vmsdk::ValkeyVersion{0, 0, 1});
 
   int context_flags = 0;
   ON_CALL(*kMockValkeyModule, GetContextFlags(testing::_))
@@ -1967,6 +1970,83 @@ TEST_F(MetadataManagerTest, TestSaveWrongTimeIsNoOp) {
 
   VMSDK_EXPECT_OK(test_metadata_manager_->SaveMetadata(
       fake_ctx, &fake_rdb, VALKEYMODULE_AUX_BEFORE_RDB));
+}
+
+// A reconciliation validates every entry it would apply before applying any.
+// If one is rejected, nothing is applied and the local metadata is unchanged,
+// so the node stays on its last good state and retries on the next broadcast
+// rather than rebuilding whichever entries happened to precede the rejected
+// one. Once the rejection clears, the same proposal applies in full.
+TEST_F(MetadataManagerTest, ReconcileAppliesNothingWhenAnEntryFailsValidation) {
+  std::vector<std::string> applied;
+  bool reject_bad = true;
+  test_metadata_manager_->RegisterType(
+      "my_type",
+      [](const google::protobuf::Any&) -> absl::StatusOr<uint64_t> {
+        return 1234;
+      },
+      [&](const ObjName& obj_name, const google::protobuf::Any*, uint64_t,
+          uint32_t) {
+        applied.push_back(obj_name.GetName());
+        return absl::OkStatus();
+      },
+      [](auto) { return kModuleVersion; },
+      [&](const ObjName& obj_name,
+          const google::protobuf::Any*) -> absl::Status {
+        if (reject_bad && obj_name.GetName() == "bad") {
+          return absl::OutOfRangeError("over limit");
+        }
+        return absl::OkStatus();
+      });
+
+  int internal_updates = 0;
+  ValkeyModuleCallReply ok_reply;
+  ok_reply.type = VALKEYMODULE_REPLY_STRING;
+  ON_CALL(*kMockValkeyModule,
+          Call(testing::_, testing::StrEq("FT.INTERNAL_UPDATE"),
+               testing::StrEq("!Kcbb"), testing::_, testing::_, testing::_,
+               testing::_, testing::_))
+      .WillByDefault([&](auto&&...) {
+        ++internal_updates;
+        return &ok_reply;
+      });
+
+  GlobalMetadata proposed;
+  auto& entries =
+      *(*proposed.mutable_type_namespace_map())["my_type"].mutable_entries();
+  const std::vector<std::string> names = {"good_0", "good_1", "bad", "good_2",
+                                          "good_3"};
+  for (size_t i = 0; i < names.size(); ++i) {
+    GlobalMetadataEntry entry;
+    entry.set_version(1);
+    entry.set_fingerprint(i + 1);
+    entry.set_encoding_version(kModuleVersion.ToInt());
+    entry.mutable_content()->set_type_url("type.googleapis.com/FakeType");
+    entry.mutable_content()->set_value(names[i]);
+    entries[ObjName(0, names[i]).Encode()] = entry;
+  }
+  proposed.mutable_version_header()->set_top_level_version(1);
+
+  const auto before = test_metadata_manager_->GetGlobalMetadata();
+  const auto completed_before =
+      test_metadata_manager_->GetMetadataReconciliationCompletedCount();
+  for (int round = 0; round < 2; ++round) {
+    auto status = test_metadata_manager_->ReconcileMetadata(proposed, "test");
+    EXPECT_EQ(status.code(), absl::StatusCode::kOutOfRange);
+    EXPECT_THAT(applied, testing::IsEmpty());
+    EXPECT_EQ(internal_updates, 0);
+    EXPECT_TRUE(google::protobuf::util::MessageDifferencer::Equals(
+        *test_metadata_manager_->GetGlobalMetadata(), *before));
+    EXPECT_EQ(test_metadata_manager_->GetMetadataReconciliationCompletedCount(),
+              completed_before);
+  }
+
+  reject_bad = false;
+  VMSDK_EXPECT_OK(test_metadata_manager_->ReconcileMetadata(proposed, "test"));
+  EXPECT_THAT(applied, testing::UnorderedElementsAreArray(names));
+  EXPECT_EQ(internal_updates, static_cast<int>(names.size()));
+  EXPECT_EQ(test_metadata_manager_->GetMetadataReconciliationCompletedCount(),
+            completed_before + 1);
 }
 
 class MetadataManagerTimestampTest : public MetadataManagerTest {

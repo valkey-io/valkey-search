@@ -18,5 +18,8 @@
     ],
     "clangd.inactiveRegions.useBackgroundHighlight": true,
     "clangd.enableCodeCompletion": true,
-    "remote.SSH.enableAgentForwarding": false
+    "remote.SSH.enableAgentForwarding": false,
+    "[cpp]": {
+        "editor.tabSize": 2
+    }
 }

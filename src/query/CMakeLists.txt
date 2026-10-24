@@ -145,3 +145,12 @@ valkey_search_add_static_library(planner "${SRCS_PLANNER}")
 target_include_directories(planner PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(planner PUBLIC index_base)
 target_link_libraries(planner PUBLIC vector_base)
+
+set(SRCS_SPARSE_SEARCH ${CMAKE_CURRENT_LIST_DIR}/sparse_search.cc
+                       ${CMAKE_CURRENT_LIST_DIR}/sparse_search.h)
+valkey_search_add_static_library(sparse_search "${SRCS_SPARSE_SEARCH}")
+target_link_libraries(sparse_search PUBLIC absl::statusor absl::strings absl::span)
+# Sparse search promises finite scores and ordered FP64 accumulation.
+# Override the shared fast-math flags for validation and reproducible ranking.
+set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/sparse_search.cc
+    PROPERTIES COMPILE_OPTIONS "-fno-fast-math;-ffp-contract=off")

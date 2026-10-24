@@ -1,0 +1,60 @@
+{
+  "FT.SPARSESEARCHBIN": {
+    "acl_categories": [
+      "READ",
+      "SLOW",
+      "SEARCH"
+    ],
+    "arguments": [
+      {
+        "name": "k",
+        "type": "integer"
+      },
+      {
+        "name": "numkeys",
+        "type": "integer"
+      },
+      {
+        "name": "dimension",
+        "type": "block",
+        "multiple": true,
+        "arguments": [
+          {
+            "name": "key",
+            "type": "key",
+            "key_spec_index": 0
+          },
+          {
+            "name": "weight",
+            "type": "double"
+          }
+        ]
+      }
+    ],
+    "arity": -5,
+    "complexity": "O(P + M * B + U * log(K) + K * log(K)), where P is postings, M is dimensions, B is occupied ID blocks, and U is candidate IDs",
+    "group": "search",
+    "module_since": "1.3.0",
+    "summary": "Returns exact sparse dot-product top-K over packed posting lists as binary ID/score records",
+    "key_specs": [
+      {
+        "flags": [
+          "RO",
+          "ACCESS"
+        ],
+        "begin_search": {
+          "index": {
+            "pos": 3
+          }
+        },
+        "find_keys": {
+          "range": {
+            "lastkey": -1,
+            "keystep": 2,
+            "limit": 0
+          }
+        }
+      }
+    ]
+  }
+}

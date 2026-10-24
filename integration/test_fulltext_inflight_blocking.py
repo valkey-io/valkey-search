@@ -5,6 +5,7 @@ import struct
 import pytest
 import time
 from valkey.client import Valkey
+from valkey.exceptions import ResponseError
 from valkey.cluster import ValkeyCluster
 from valkey_search_test_case import (
     ValkeySearchTestCaseDebugMode,
@@ -161,6 +162,63 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
         # After mutation completes, "hello" is no longer in the document
         result = search_res[0]
         assert result[0] == 0
+
+    def test_sync_query_with_inflight_mutation(self):
+        """FT.SEARCH inside MULTI/EXEC and EVAL replies on the main thread, so
+        it blocks until in-flight result keys are indexed, bounded by its
+        TIMEOUT (issue #1602)."""
+        client: Valkey = self.server.get_new_client()
+        client.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:",
+            "SCHEMA", "content", "TEXT"
+        )
+        client.execute_command("HSET", "doc:1", "content", "hello world")
+        IndexingTestHelper.wait_for_indexing_complete_on_node(client, "idx")
+
+        client.execute_command("FT._DEBUG PAUSEPOINT SET mutation_processing")
+        hset_thread, _, hset_err = run_in_thread(
+            lambda: self.server.get_new_client().execute_command(
+                "HSET", "doc:1", "content", "bye"
+            )
+        )
+        waiters.wait_for_true(
+            lambda: client.execute_command(
+                "FT._DEBUG PAUSEPOINT TEST mutation_processing") > 0
+        )
+
+        def multi_search(query):
+            pipe = client.pipeline(transaction=True)
+            pipe.execute_command("FT.SEARCH", "idx", query, "TIMEOUT", "200")
+            return pipe.execute(raise_on_error=False)[0]
+
+        def lua_search(query):
+            return client.eval(
+                "return redis.call('FT.SEARCH', 'idx', ARGV[1], 'TIMEOUT', '200')",
+                0, query,
+            )
+
+        blocked = lambda: client.info("SEARCH")["search_text_query_blocked_count"]
+        # Term and prefix: the prefix walk reads the per-key tree the paused
+        # writer is about to free.
+        for query in ("@content:hello", "@content:hel*"):
+            before, t0 = blocked(), time.monotonic()
+            multi_res = multi_search(query)
+            assert isinstance(multi_res, ResponseError), multi_res
+            assert "timeout" in str(multi_res).lower()
+            with pytest.raises(ResponseError, match="(?i)timeout"):
+                lua_search(query)
+            assert time.monotonic() - t0 >= 0.4
+            assert blocked() == before + 2
+
+        client.execute_command("FT._DEBUG PAUSEPOINT RESET mutation_processing")
+        hset_thread.join()
+        assert hset_err[0] is None
+        IndexingTestHelper.wait_for_indexing_complete_on_node(client, "idx")
+
+        before = blocked()
+        assert multi_search("@content:hello") == [0]
+        assert lua_search("@content:bye") == [1, b"doc:1", [b"content", b"bye"]]
+        assert blocked() == before
 
     def test_non_text_query_does_not_block(self):
         """Test that non-text queries on index with text field do NOT block."""

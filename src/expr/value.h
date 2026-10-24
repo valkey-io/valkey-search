@@ -7,6 +7,7 @@
 #ifndef VALKEYSEARCH_EXPR_VALUE_H
 #define VALKEYSEARCH_EXPR_VALUE_H
 
+#include <cstdint>
 #include <functional>
 #include <iostream>
 #include <memory>
@@ -113,6 +114,12 @@ class Value {
   std::optional<std::string> AsString() const;
   std::optional<Array> AsArray() const;
 
+  // Deterministic string representation for hashing/identity. Unlike
+  // AsStringView()/AsString() which return nullopt/"" for arrays (and must for
+  // compatibility), this handles all types including arrays (serialized as
+  // JSON-like bracketed strings).
+  std::string Serialize() const;
+
   bool IsTrue() const {
     auto r = AsBool();
     return (r && *r);
@@ -144,6 +151,12 @@ class Value {
 
   std::variant<Nil, bool, double, absl::string_view, std::string, Array> value_;
 };
+
+// Canonicalizes a double's bit pattern so equal values hash and serialize
+// identically: every NaN collapses to one bit pattern and -0.0 maps to +0.0,
+// matching the equivalences value comparison already treats as equal.
+// Integer checks only -- no float compares, since -ffast-math can fold those.
+uint64_t CanonicalDoubleBits(double d);
 
 enum Ordering { kLESS, kEQUAL, kGREATER, kUNORDERED };
 

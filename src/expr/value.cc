@@ -13,6 +13,7 @@
 #include <sstream>
 #include <system_error>
 
+#include "absl/strings/str_cat.h"
 #include "src/utils/scanner.h"
 #include "src/valkey_search_options.h"  // VALKEY_SEARCH_COMPATIBILITY_FIX
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -37,6 +38,22 @@ static bool IsNan(const double& d) {
 static bool IsInf(const double& d) {
   uint64_t v = *(uint64_t*)&d;
   return ((v & kExponentMask) == kExponentMask) && ((v & kMantissaMask) == 0);
+}
+
+// Canonicalizes a double's bit pattern for unambiguous, lossless
+// serialization and hashing: every NaN collapses to one bit pattern and
+// -0.0 maps to +0.0, matching the equivalences CompareDoubles() already
+// treats as equal. Integer checks only -- no float compares, since
+// -ffast-math can fold those.
+uint64_t CanonicalDoubleBits(double d) {
+  uint64_t v = *(uint64_t*)&d;
+  if (IsNan(d)) {
+    return kExponentMask | 1;
+  }
+  if (v == kSignBitMask) {
+    return 0;
+  }
+  return v;
 }
 
 // Redisearch has no string form for an array and compares it as the empty
@@ -243,6 +260,55 @@ std::optional<Value::Array> Value::AsArray() const {
     return *result;
   }
   return std::nullopt;
+}
+
+std::string Value::Serialize() const {
+  if (IsNil()) {
+    return "";
+  }
+  if (IsArray()) {
+    auto arr = GetArray();
+    std::string result = "[";
+    for (size_t i = 0; i < arr->size(); ++i) {
+      if (i > 0) {
+        absl::StrAppend(&result, ",");
+      }
+      const auto& elem = (*arr)[i];
+      if (elem.IsString()) {
+        auto sv = elem.GetStringView();
+        absl::StrAppend(&result, "\"");
+        for (char c : sv) {
+          if (c == '"' || c == '\\') {
+            result += '\\';
+          }
+          result += c;
+        }
+        absl::StrAppend(&result, "\"");
+      } else if (elem.IsArray()) {
+        absl::StrAppend(&result, elem.Serialize());
+      } else if (elem.IsNil()) {
+        absl::StrAppend(&result, "null");
+      } else if (elem.IsBool()) {
+        absl::StrAppend(&result, elem.GetBool() ? "true" : "false");
+      } else if (elem.IsDouble()) {
+        // %.12g (used by AsStringView()) loses precision and collapses -0.0
+        // with 0.0 and all NaNs together; append the canonicalized 8-byte bit
+        // pattern instead so nested doubles hash unambiguously and losslessly.
+        uint64_t bits = CanonicalDoubleBits(elem.GetDouble());
+        result.append(reinterpret_cast<const char*>(&bits), sizeof(bits));
+      } else {
+        absl::StrAppend(&result, *elem.AsStringView());
+      }
+    }
+    absl::StrAppend(&result, "]");
+    return result;
+  }
+  // Scalar: bool/double/string
+  auto sv = AsStringView();
+  if (sv.has_value()) {
+    return std::string(*sv);
+  }
+  return "";
 }
 
 Value::Array Value::GetArray() const { return std::get<Array>(value_); }

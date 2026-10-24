@@ -345,14 +345,19 @@ class GroupBy : public Stage {
     virtual ~Reducer() = default;
     virtual std::unique_ptr<ReducerInstance> MakeInstance() = 0;
 
-    friend std::ostream& operator<<(std::ostream& os, const Reducer& r) {
-      os << r.name_ << '(';
-      for (auto& a : r.args_) {
-        if (&a != &r.args_[0]) {
+    // Overridden by reducers (e.g. QUANTILE) with non-Expression args.
+    virtual void DumpArgs(std::ostream& os) const {
+      for (auto& a : args_) {
+        if (&a != &args_[0]) {
           os << ',';
         }
         os << a.get();
       }
+    }
+
+    friend std::ostream& operator<<(std::ostream& os, const Reducer& r) {
+      os << r.name_ << '(';
+      r.DumpArgs(os);
       return os << ')';
     }
   };
@@ -365,9 +370,11 @@ class GroupBy : public Stage {
   absl::InlinedVector<std::unique_ptr<Reducer>, 4> reducers_;
 
   void Dump(std::ostream& os) const override {
-    os << "GROUPBY ";
+    os << "GROUPBY";
     for (auto& g : groups_) {
-      if (&g != &groups_[0]) {
+      if (&g == &groups_[0]) {
+        os << ' ';
+      } else {
         os << ',';
       }
       os << '@' << g.get();

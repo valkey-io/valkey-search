@@ -268,6 +268,13 @@ absl::Status QueryCommand::ExecuteSyncLocal(ValkeyModuleCtx *ctx,
     return absl::OkStatus();
   }
   cmd->SendReply(ctx, cmd->search_result);
+  // The SORTBY fallback candidates are no longer needed: free them off the main
+  // thread, as ResolveContent does, and before a cursor can adopt the command.
+  if (!cmd->search_result.sortby_candidates.empty()) {
+    ValkeySearch::Instance().ScheduleUtilityTask(
+        [candidates = std::move(cmd->search_result.sortby_candidates)]() {});
+    cmd->search_result.sortby_candidates.clear();
+  }
   if (cmd->adopted_by_cursor) {
     cmd.release();  // Now owned by the cursor table.
     return absl::OkStatus();

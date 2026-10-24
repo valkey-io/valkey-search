@@ -444,6 +444,9 @@ bool ShouldReturnNoResults(const SearchParameters &parameters);
 // rather than registering a duplicate field.
 void RecordNonVectorResultsFetchedLimited();
 
+// Returns the shared fetch-cap counter for behavioral tests and diagnostics.
+int64_t GetNonVectorResultsFetchedLimitedCount();
+
 // Scans for the vector filter delimiter `=>` that is followed by `[` (after
 // optional whitespace). Returns the position of `=>` or npos if not found.
 // Exposed for testing.

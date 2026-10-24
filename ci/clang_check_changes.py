@@ -7,7 +7,8 @@ only on cmake-tests-macos, three quarters of an hour in.
 
 This replays each changed .cc file's own compile command from
 compile_commands.json through `clang++ -fsyntax-only` and reports the errors.
-It needs a configured build tree (ci/refresh_comp_db.sh, or any build.sh run)
+It needs a configured build tree (./build.sh --no-build --configure, or any
+build.sh run)
 so that the compilation database exists.
 
 Usage:
@@ -60,11 +61,14 @@ def main():
                           capture_output=True, text=True,
                           check=True).stdout.strip()
 
-    db_path = os.path.join(root, ".build-release", "compile_commands.json")
+    suffix = os.environ.get("BUILD_DIR_SUFFIX", "")
+    db_path = os.path.join(root, f".build-release{suffix}", "compile_commands.json")
     if not os.path.exists(db_path):
         db_path = os.path.join(root, "compile_commands.json")
     if not os.path.exists(db_path):
-        sys.stderr.write("No compile_commands.json; run ci/refresh_comp_db.sh\n")
+        db_path = os.path.join(root, ".build-release", "compile_commands.json")
+    if not os.path.exists(db_path):
+        sys.stderr.write("No compile_commands.json; run ./build.sh --no-build --configure\n")
         return 2
 
     changed = subprocess.run(

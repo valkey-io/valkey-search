@@ -154,7 +154,7 @@ fi
 
 BUILD_DIR=${ROOT_DIR}/.build-${BUILD_CONFIG}${BUILD_DIR_SUFFIX:-}${SAN_SUFFIX}
 WD=${BUILD_DIR}/integration
-export LOGS_DIR=${LOGS_DIR:-${WD}/.valkey-test-framework}
+export LOGS_DIR=${LOGS_DIR:-${WD}/.valkey-test-framework-$$}
 
 # Check for user provided module path
 MODULE_PATH="${MODULE_PATH:=}"
@@ -221,7 +221,6 @@ else
 fi
 
 RUN_SUCCESS=0
-export LOGS_DIR=${LOGS_DIR:-${WD}/.valkey-test-framework}
 print_environment_var "LOGS_DIR" "${LOGS_DIR}"
 
 rm -fr ${LOGS_DIR}

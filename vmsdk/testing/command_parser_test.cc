@@ -19,6 +19,7 @@
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
+#include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace vmsdk {
@@ -360,6 +361,20 @@ INSTANTIATE_TEST_SUITE_P(
     [](const TestParamInfo<ParseParamsTestCase> &info) {
       return info.param.test_name;
     });
+
+// Every spelling that parses to NaN is not a valid double or float, not just
+// "nan". Infinities stay valid.
+TEST(ToDoubleTest, RejectsEveryNaNSpelling) {
+  for (absl::string_view s :
+       {"nan", "NaN", "-nan", "+nan", "-NaN", "nan(1)", " nan", "nan "}) {
+    EXPECT_FALSE(To<double>(s).ok()) << "double '" << s << "'";
+    EXPECT_FALSE(To<float>(s).ok()) << "float '" << s << "'";
+  }
+  for (absl::string_view s : {"inf", "-inf", "1e309", "1.5", "-2"}) {
+    EXPECT_TRUE(To<double>(s).ok()) << "double '" << s << "'";
+    EXPECT_TRUE(To<float>(s).ok()) << "float '" << s << "'";
+  }
+}
 
 }  // namespace
 

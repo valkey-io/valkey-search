@@ -28,6 +28,7 @@ static constexpr uint32_t kDefaultMinStemSize = 4;
 
 struct FTCreateTagParameters {
   absl::string_view separator{","};
+  bool explicit_separator{false};
   bool case_sensitive{false};
 };
 

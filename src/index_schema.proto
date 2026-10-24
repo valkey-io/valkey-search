@@ -107,6 +107,7 @@ message VectorIndex {
   oneof algorithm {
     HNSWAlgorithm hnsw_algorithm = 6;
     FlatAlgorithm flat_algorithm = 7;
+    SVSVamanaAlgorithm svs_vamana_algorithm = 8;
   }
 }
 
@@ -124,6 +125,23 @@ enum VectorDataType {
   VECTOR_DATA_TYPE_BFLOAT16 = 3;
 }
 
+// Field numbers are fixed for wire compatibility; declaration order is
+// cosmetic.
+enum SVSCompressionType {
+  // v1 (open): supported in v1-cpp-baseline and v1 submodule.
+  SVS_COMPRESSION_NONE = 0;  // FP32 (default)
+  SVS_COMPRESSION_FP16 = 1;
+  SVS_COMPRESSION_SQ8 = 9;
+
+  // Kept out of this build; reserved so they are not reused.
+  reserved 2 to 8;
+}
+
+enum RawVectorStorage {
+  RAW_VECTOR_STORAGE_KEEP = 0;
+  RAW_VECTOR_STORAGE_DROP = 1;
+}
+
 message HNSWAlgorithm {
   uint32 m = 1;
   uint32 ef_construction = 2;
@@ -132,5 +150,23 @@ message HNSWAlgorithm {
 
 message FlatAlgorithm {
   uint32 block_size = 1;
+}
+
+message SVSVamanaAlgorithm {
+  // v1 (open) — supported in v1-cpp-baseline and v1 submodule.
+  uint32 graph_max_degree = 1;
+  uint32 construction_window_size = 2;
+  uint32 search_window_size = 3;
+  float alpha = 4;
+  SVSCompressionType compression = 5;
+  // KEEP (default): retain intern store for exact vector retrieval.
+  // DROP: skip intern store, use SVS native reconstruct/get_distance APIs.
+  RawVectorStorage raw_vector_storage = 8;
+  // Number of vectors to accumulate before building an index whose
+  // compression trains on the data (SQ8). 0 for the other compressions.
+  uint32 training_threshold = 7;
+  // 6 is kept out of this build; reserved so it is not reused.
+  reserved 6, 9;
+  reserved "distance_match_epsilon_per_dim";
 }
 

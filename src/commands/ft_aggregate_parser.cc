@@ -412,13 +412,12 @@ AggregateParameters::MakeReference(const absl::string_view name, bool create) {
       case indexes::IndexerType::kTag:
       case indexes::IndexerType::kNumeric:
       case indexes::IndexerType::kText:
-      case indexes::IndexerType::kVector:
-      case indexes::IndexerType::kFlat:
-      case indexes::IndexerType::kHNSW:
         break;
       default:
-        return absl::InvalidArgumentError(
-            absl::StrCat("Invalid data type for @", name));
+        if (!indexes::IsVectorIndex(fieldType)) {
+          return absl::InvalidArgumentError(
+              absl::StrCat("Invalid data type for @", name));
+        }
     }
   }
   auto identifier = parse_vars_.index_interface_->GetIdentifier(name);

@@ -121,6 +121,31 @@ struct FlatParameters : public FTCreateVectorParameters {
   std::unique_ptr<data_model::VectorIndex> ToProto() const;
 };
 
+constexpr uint32_t kDefaultSVSGraphMaxDegree = 64;
+constexpr uint32_t kDefaultSVSConstructionWindowSize = 128;
+constexpr uint32_t kDefaultSVSSearchWindowSize = 10;
+constexpr float kDefaultSVSAlphaSentinel = -1.0f;
+// Vectors an SQ8 index holds uncompressed before it converts. The minimum
+// keeps the range from coming from a handful of vectors; the maximum bounds
+// the conversion, which pauses writes and searches while it runs.
+constexpr uint32_t kDefaultSVSTrainingThreshold = 1024;
+constexpr uint32_t kMinSVSTrainingThreshold = 64;
+constexpr uint32_t kMaxSVSTrainingThreshold = 1000000;
+
+struct SVSVamanaParameters : public FTCreateVectorParameters {
+  uint32_t graph_max_degree{kDefaultSVSGraphMaxDegree};
+  uint32_t construction_window_size{kDefaultSVSConstructionWindowSize};
+  uint32_t search_window_size{kDefaultSVSSearchWindowSize};
+  // -1.0 sentinel: use the metric-specific compiled default (1.2 for L2,
+  // 0.95 for IP/COSINE) when the user does not pass ALPHA.
+  float alpha{kDefaultSVSAlphaSentinel};
+  data_model::SVSCompressionType compression{data_model::SVS_COMPRESSION_NONE};
+  // Unset: SQ8 uses kDefaultSVSTrainingThreshold.
+  std::optional<uint32_t> training_threshold;
+  absl::Status Verify() const;
+  std::unique_ptr<data_model::VectorIndex> ToProto() const;
+};
+
 absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
     ValkeyModuleCtx* ctx, ValkeyModuleString** argv, int argc);
 }  // namespace valkey_search

@@ -81,6 +81,9 @@ struct FTCreateParserTestCase {
   int text_field_count{0};
   std::vector<HNSWParameters> hnsw_parameters;
   std::vector<FlatParameters> flat_parameters;
+  // For SQ8, training_threshold is the value the proto should hold (1024
+  // when TRAINING_THRESHOLD is omitted); unset means 0.
+  std::vector<SVSVamanaParameters> svs_parameters;
   std::vector<FTCreateTagParameters> tag_parameters;
   std::vector<PerFieldTextParams> text_parameters;
   FTCreateParameters expected;
@@ -194,6 +197,7 @@ TEST_P(FTCreateParserTest, ParseParams) {
 
     auto hnsw_index = 0;
     auto flat_index = 0;
+    size_t svs_index = 0;
     auto tag_index = 0;
     auto text_index = 0;
     for (auto i = 0; i < index_schema_proto->attributes().size(); ++i) {
@@ -240,6 +244,25 @@ TEST_P(FTCreateParserTest, ParseParams) {
                   test_case.hnsw_parameters[hnsw_index].ef_runtime);
         EXPECT_EQ(hnsw_proto.m(), test_case.hnsw_parameters[hnsw_index].m);
         ++hnsw_index;
+      } else if (test_case.expected.attributes[i].indexer_type ==
+                 indexes::IndexerType::kSVS) {
+        const auto &vector_proto =
+            index_schema_proto->attributes(i).index().vector_index();
+        EXPECT_TRUE(vector_proto.has_svs_vamana_algorithm());
+        ASSERT_LT(svs_index, test_case.svs_parameters.size());
+        const auto &expected_svs = test_case.svs_parameters[svs_index];
+        VerifyVectorParams(vector_proto, &expected_svs);
+        const auto &svs_proto = vector_proto.svs_vamana_algorithm();
+        EXPECT_EQ(svs_proto.graph_max_degree(), expected_svs.graph_max_degree);
+        EXPECT_EQ(svs_proto.construction_window_size(),
+                  expected_svs.construction_window_size);
+        EXPECT_EQ(svs_proto.search_window_size(),
+                  expected_svs.search_window_size);
+        EXPECT_FLOAT_EQ(svs_proto.alpha(), expected_svs.alpha);
+        EXPECT_EQ(svs_proto.compression(), expected_svs.compression);
+        EXPECT_EQ(svs_proto.training_threshold(),
+                  expected_svs.training_threshold.value_or(0));
+        ++svs_index;
       } else if (test_case.expected.attributes[i].indexer_type ==
                  indexes::IndexerType::kNumeric) {
         EXPECT_TRUE(
@@ -1000,9 +1023,336 @@ INSTANTIATE_TEST_SUITE_P(
                  "greater than 0 and cannot exceed 1000000.",
          },
          {
+             .test_name = "svs_graph_max_degree_below_two",
+             .success = false,
+             .command_str = "idx1 SChema hash_field1 vector SVS_VAMANA 8 "
+                            "TYPE FLOAT32 DIM 3 DISTANCE_METRIC L2 "
+                            "GRAPH_MAX_DEGREE 1",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Invalid range: "
+                 "Value below minimum; GRAPH_MAX_DEGREE must be an integer of "
+                 "at least 2 and cannot exceed 2000000.",
+         },
+         {
+             .test_name = "svs_alpha_negative_nan",
+             .success = false,
+             .command_str = "idx1 SChema hash_field1 vector SVS_VAMANA 8 "
+                            "TYPE FLOAT32 DIM 3 DISTANCE_METRIC L2 ALPHA -nan",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: ALPHA must be "
+                 ">= 1.0 for DISTANCE_METRIC L2.",
+         },
+         {
+             .test_name = "svs_alpha_inf",
+             .success = false,
+             .command_str = "idx1 SChema hash_field1 vector SVS_VAMANA 8 "
+                            "TYPE FLOAT32 DIM 3 DISTANCE_METRIC L2 ALPHA inf",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: ALPHA must be "
+                 ">= 1.0 for DISTANCE_METRIC L2.",
+         },
+         {
+             .test_name = "svs_alpha_valid",
+             .success = true,
+             .command_str = "idx1 SChema hash_field1 vector SVS_VAMANA 8 "
+                            "TYPE FLOAT32 DIM 3 DISTANCE_METRIC L2 ALPHA 1.2",
+             .svs_parameters = {{
+                 {
+                     .dimensions = 3,
+                     .distance_metric = data_model::DISTANCE_METRIC_L2,
+                     .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
+                 },
+                 /* .graph_max_degree =*/kDefaultSVSGraphMaxDegree,
+                 /* .construction_window_size =*/
+                 kDefaultSVSConstructionWindowSize,
+                 /* .search_window_size =*/kDefaultSVSSearchWindowSize,
+                 /* .alpha =*/1.2f,
+                 /* .compression =*/data_model::SVS_COMPRESSION_NONE,
+                 /* .training_threshold =*/std::nullopt,
+             }},
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .attributes = {{
+                              .identifier = "hash_field1",
+                              .attribute_alias = "hash_field1",
+                              .indexer_type = indexes::IndexerType::kSVS,
+                          }}},
+         },
+         {
+             .test_name = "svs_metric_ip_alpha_valid",
+             .success = true,
+             .command_str = "idx1 SChema hash_field1 vector SVS_VAMANA 8 "
+                            "TYPE FLOAT32 DIM 3 DISTANCE_METRIC IP ALPHA 0.95",
+             .svs_parameters = {{
+                 {
+                     .dimensions = 3,
+                     .distance_metric = data_model::DISTANCE_METRIC_IP,
+                     .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
+                 },
+                 /* .graph_max_degree =*/kDefaultSVSGraphMaxDegree,
+                 /* .construction_window_size =*/
+                 kDefaultSVSConstructionWindowSize,
+                 /* .search_window_size =*/kDefaultSVSSearchWindowSize,
+                 /* .alpha =*/0.95f,
+                 /* .compression =*/data_model::SVS_COMPRESSION_NONE,
+                 /* .training_threshold =*/std::nullopt,
+             }},
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .attributes = {{
+                              .identifier = "hash_field1",
+                              .attribute_alias = "hash_field1",
+                              .indexer_type = indexes::IndexerType::kSVS,
+                          }}},
+         },
+         {
+             .test_name = "svs_metric_cosine_alpha_omitted",
+             .success = true,
+             .command_str = "idx1 SChema hash_field1 vector SVS_VAMANA 6 "
+                            "TYPE FLOAT32 DIM 3 DISTANCE_METRIC COSINE",
+             .svs_parameters = {{
+                 {
+                     .dimensions = 3,
+                     .distance_metric = data_model::DISTANCE_METRIC_COSINE,
+                     .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
+                 },
+                 /* .graph_max_degree =*/kDefaultSVSGraphMaxDegree,
+                 /* .construction_window_size =*/
+                 kDefaultSVSConstructionWindowSize,
+                 /* .search_window_size =*/kDefaultSVSSearchWindowSize,
+                 /* .alpha =*/kDefaultSVSAlphaSentinel,
+                 /* .compression =*/data_model::SVS_COMPRESSION_NONE,
+                 /* .training_threshold =*/std::nullopt,
+             }},
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .attributes = {{
+                              .identifier = "hash_field1",
+                              .attribute_alias = "hash_field1",
+                              .indexer_type = indexes::IndexerType::kSVS,
+                          }}},
+         },
+         {
+             .test_name = "svs_metric_ip_alpha_above_one",
+             .success = false,
+             .command_str = "idx1 SChema hash_field1 vector SVS_VAMANA 8 "
+                            "TYPE FLOAT32 DIM 3 DISTANCE_METRIC IP ALPHA 1.2",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: ALPHA must be "
+                 "in (0, 1.0] for DISTANCE_METRIC IP and COSINE.",
+         },
+         {
+             .test_name = "svs_metric_cosine_alpha_zero",
+             .success = false,
+             .command_str = "idx1 SChema hash_field1 vector SVS_VAMANA 8 "
+                            "TYPE FLOAT32 DIM 3 DISTANCE_METRIC COSINE ALPHA 0",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: ALPHA must be "
+                 "in (0, 1.0] for DISTANCE_METRIC IP and COSINE.",
+         },
+         {
+             .test_name = "svs_metric_cosine_alpha_inf",
+             .success = false,
+             .command_str = "idx1 SChema hash_field1 vector SVS_VAMANA 8 "
+                            "TYPE FLOAT32 DIM 3 DISTANCE_METRIC COSINE ALPHA inf",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: ALPHA must be "
+                 "in (0, 1.0] for DISTANCE_METRIC IP and COSINE.",
+         },
+         {
+             .test_name = "svs_alpha_omitted",
+             .success = true,
+             .command_str = "idx1 SChema hash_field1 vector SVS_VAMANA 6 "
+                            "TYPE FLOAT32 DIM 3 DISTANCE_METRIC L2",
+             .svs_parameters = {{
+                 {
+                     .dimensions = 3,
+                     .distance_metric = data_model::DISTANCE_METRIC_L2,
+                     .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
+                 },
+                 /* .graph_max_degree =*/kDefaultSVSGraphMaxDegree,
+                 /* .construction_window_size =*/
+                 kDefaultSVSConstructionWindowSize,
+                 /* .search_window_size =*/kDefaultSVSSearchWindowSize,
+                 /* .alpha =*/kDefaultSVSAlphaSentinel,
+                 /* .compression =*/data_model::SVS_COMPRESSION_NONE,
+                 /* .training_threshold =*/std::nullopt,
+             }},
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .attributes = {{
+                              .identifier = "hash_field1",
+                              .attribute_alias = "hash_field1",
+                              .indexer_type = indexes::IndexerType::kSVS,
+                          }}},
+         },
+         {
+             .test_name = "svs_sq8_l2_training_threshold_omitted",
+             .success = true,
+             .command_str = "idx1 SCHEMA embedding VECTOR SVS_VAMANA 8 "
+                            "TYPE FLOAT32 DIM 3 DISTANCE_METRIC L2 COMPRESSION SQ8",
+             .svs_parameters = {{
+                 {
+                     .dimensions = 3,
+                     .distance_metric = data_model::DISTANCE_METRIC_L2,
+                     .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
+                 },
+                 /* .graph_max_degree =*/kDefaultSVSGraphMaxDegree,
+                 /* .construction_window_size =*/
+                 kDefaultSVSConstructionWindowSize,
+                 /* .search_window_size =*/kDefaultSVSSearchWindowSize,
+                 /* .alpha =*/kDefaultSVSAlphaSentinel,
+                 /* .compression =*/data_model::SVS_COMPRESSION_SQ8,
+                 /* .training_threshold =*/1024,
+             }},
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .attributes = {{
+                              .identifier = "embedding",
+                              .attribute_alias = "embedding",
+                              .indexer_type = indexes::IndexerType::kSVS,
+                          }}},
+         },
+         {
+             .test_name = "svs_sq8_cosine_training_threshold_omitted",
+             .success = true,
+             .command_str = "idx1 SCHEMA embedding VECTOR SVS_VAMANA 8 "
+                            "TYPE FLOAT32 DIM 3 DISTANCE_METRIC COSINE COMPRESSION SQ8",
+             .svs_parameters = {{
+                 {
+                     .dimensions = 3,
+                     .distance_metric = data_model::DISTANCE_METRIC_COSINE,
+                     .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
+                 },
+                 /* .graph_max_degree =*/kDefaultSVSGraphMaxDegree,
+                 /* .construction_window_size =*/
+                 kDefaultSVSConstructionWindowSize,
+                 /* .search_window_size =*/kDefaultSVSSearchWindowSize,
+                 /* .alpha =*/kDefaultSVSAlphaSentinel,
+                 /* .compression =*/data_model::SVS_COMPRESSION_SQ8,
+                 /* .training_threshold =*/1024,
+             }},
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .attributes = {{
+                              .identifier = "embedding",
+                              .attribute_alias = "embedding",
+                              .indexer_type = indexes::IndexerType::kSVS,
+                          }}},
+         },
+         {
+             .test_name = "svs_sq8_l2_training_threshold_valid",
+             .success = true,
+             .command_str = "idx1 SCHEMA embedding VECTOR SVS_VAMANA 10 "
+                            "TYPE FLOAT32 DIM 3 DISTANCE_METRIC L2 COMPRESSION SQ8 "
+                            "TRAINING_THRESHOLD 100",
+             .svs_parameters = {{
+                 {
+                     .dimensions = 3,
+                     .distance_metric = data_model::DISTANCE_METRIC_L2,
+                     .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
+                 },
+                 /* .graph_max_degree =*/kDefaultSVSGraphMaxDegree,
+                 /* .construction_window_size =*/
+                 kDefaultSVSConstructionWindowSize,
+                 /* .search_window_size =*/kDefaultSVSSearchWindowSize,
+                 /* .alpha =*/kDefaultSVSAlphaSentinel,
+                 /* .compression =*/data_model::SVS_COMPRESSION_SQ8,
+                 /* .training_threshold =*/100,
+             }},
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .attributes = {{
+                              .identifier = "embedding",
+                              .attribute_alias = "embedding",
+                              .indexer_type = indexes::IndexerType::kSVS,
+                          }}},
+         },
+         {
+             .test_name = "svs_sq8_cosine_training_threshold_valid",
+             .success = true,
+             .command_str = "idx1 SCHEMA embedding VECTOR SVS_VAMANA 10 "
+                            "TYPE FLOAT32 DIM 3 DISTANCE_METRIC COSINE COMPRESSION SQ8 "
+                            "TRAINING_THRESHOLD 100",
+             .svs_parameters = {{
+                 {
+                     .dimensions = 3,
+                     .distance_metric = data_model::DISTANCE_METRIC_COSINE,
+                     .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
+                 },
+                 /* .graph_max_degree =*/kDefaultSVSGraphMaxDegree,
+                 /* .construction_window_size =*/
+                 kDefaultSVSConstructionWindowSize,
+                 /* .search_window_size =*/kDefaultSVSSearchWindowSize,
+                 /* .alpha =*/kDefaultSVSAlphaSentinel,
+                 /* .compression =*/data_model::SVS_COMPRESSION_SQ8,
+                 /* .training_threshold =*/100,
+             }},
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .attributes = {{
+                              .identifier = "embedding",
+                              .attribute_alias = "embedding",
+                              .indexer_type = indexes::IndexerType::kSVS,
+                          }}},
+         },
+         {
+             .test_name = "svs_sq8_training_threshold_zero",
+             .success = false,
+             .command_str = "idx1 SCHEMA embedding VECTOR SVS_VAMANA 10 "
+                            "TYPE FLOAT32 DIM 3 DISTANCE_METRIC COSINE COMPRESSION SQ8 "
+                            "TRAINING_THRESHOLD 0",
+             .expected_error_message =
+                 "Invalid field type for field `embedding`: Invalid range: "
+                 "Value below minimum; TRAINING_THRESHOLD must be an integer "
+                 "of at least 64 and cannot exceed 1000000.",
+         },
+         {
+             .test_name = "svs_sq8_training_threshold_below_min",
+             .success = false,
+             .command_str = "idx1 SCHEMA embedding VECTOR SVS_VAMANA 10 "
+                            "TYPE FLOAT32 DIM 3 DISTANCE_METRIC L2 COMPRESSION SQ8 "
+                            "TRAINING_THRESHOLD 63",
+             .expected_error_message =
+                 "Invalid field type for field `embedding`: Invalid range: "
+                 "Value below minimum; TRAINING_THRESHOLD must be an integer "
+                 "of at least 64 and cannot exceed 1000000.",
+         },
+         {
+             .test_name = "svs_sq8_training_threshold_above_max",
+             .success = false,
+             .command_str = "idx1 SCHEMA embedding VECTOR SVS_VAMANA 10 "
+                            "TYPE FLOAT32 DIM 3 DISTANCE_METRIC L2 COMPRESSION SQ8 "
+                            "TRAINING_THRESHOLD 1000001",
+             .expected_error_message =
+                 "Invalid field type for field `embedding`: Invalid range: "
+                 "Value above maximum; TRAINING_THRESHOLD must be an integer "
+                 "of at least 64 and cannot exceed 1000000.",
+         },
+         {
+             .test_name = "svs_training_threshold_with_compression_none",
+             .success = false,
+             .command_str = "idx1 SCHEMA embedding VECTOR SVS_VAMANA 10 "
+                            "TYPE FLOAT32 DIM 3 DISTANCE_METRIC L2 COMPRESSION NONE "
+                            "TRAINING_THRESHOLD 100",
+             .expected_error_message =
+                 "Invalid field type for field `embedding`: "
+                 "TRAINING_THRESHOLD only applies to COMPRESSION SQ8.",
+         },
+         {
+             .test_name = "svs_training_threshold_with_compression_fp16",
+             .success = false,
+             .command_str = "idx1 SCHEMA embedding VECTOR SVS_VAMANA 10 "
+                            "TYPE FLOAT32 DIM 3 DISTANCE_METRIC COSINE COMPRESSION FP16 "
+                            "TRAINING_THRESHOLD 100",
+             .expected_error_message =
+                 "Invalid field type for field `embedding`: "
+                 "TRAINING_THRESHOLD only applies to COMPRESSION SQ8.",
+         },
+         {
              .test_name = "invalid_m_negative",
              .success = false,
-             .command_str = "idx1 SChema hash_field1 as "
+             .command_str = "idx1 SCHEMA hash_field1 as "
                             "hash_field11 vector hnsw 8 TYPE  FLOAT32 DIM 3 "
                             "DISTANCE_METRIC IP M -10",
              .expected_error_message =

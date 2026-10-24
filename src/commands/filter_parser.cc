@@ -506,11 +506,12 @@ FilterParser::ParseVectorRangePredicate(const std::string& attribute_alias) {
         score_as = std::move(attrs.yield_distance_as);
       }
       if (attrs.epsilon.has_value()) {
-        // For compatibility, $epsilon is an HNSW-only knob and must be strictly
-        // positive: reject it on FLAT indexes and reject a value of 0. (The
-        // value is not yet forwarded to the range traversal; see
-        // SearchVectorRangeQuery.)
-        if (index.value()->GetIndexerType() != indexes::IndexerType::kHNSW) {
+        // For compatibility, $epsilon is a graph-index knob (HNSW and
+        // SVS_VAMANA) and must be strictly positive: reject it on FLAT indexes
+        // and reject a value of 0. (The value is not yet forwarded to the
+        // range traversal; see SearchVectorRangeQuery.)
+        if (index.value()->GetIndexerType() != indexes::IndexerType::kHNSW &&
+            index.value()->GetIndexerType() != indexes::IndexerType::kSVS) {
           return absl::InvalidArgumentError(
               "Invalid option (Error parsing vector similarity parameters)");
         }

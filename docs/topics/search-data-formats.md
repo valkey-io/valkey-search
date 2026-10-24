@@ -136,6 +136,8 @@ Choosing a 2-byte type is lossy: each element is rounded to the target type when
 it is ingested, and the rounded value is what the index stores and compares. Recall
 may therefore differ slightly from the same data indexed as `FLOAT32`.
 
+`SVS_VAMANA` accepts `FLOAT32` and `FLOAT16`, but not `BFLOAT16`.
+
 The data type is specified as a required parameter in the [`FT.CREATE`](../commands/ft.create.md) command, and is reported back by [`FT.INFO`](../commands/ft.info.md) as the attribute's `data_type`:
 
 ```

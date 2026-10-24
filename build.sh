@@ -354,6 +354,16 @@ function check_subcommand_dependencies() {
 
 check_subcommand_dependencies
 
+function init_submodules_if_needed() {
+    # Fresh clones without --recursive leave submodules empty. Detect this
+    # via the SVS submodule's CMakeLists.txt and init transparently so
+    # ./build.sh succeeds on a plain `git clone`.
+    if [ ! -f "${ROOT_DIR}/third_party/svs/CMakeLists.txt" ] && [ -e "${ROOT_DIR}/.git" ]; then
+        printf "${BOLD_PINK}Initializing git submodules...${RESET}\n"
+        (cd "${ROOT_DIR}" && git submodule update --init --recursive)
+    fi
+}
+
 function build_icu_if_needed() {
     printf "${BOLD_PINK}Checking ICU dependencies...${RESET}\n"
     
@@ -566,6 +576,8 @@ FORCE_CMAKE=$(is_configure_required)
 printf "${GREEN}${FORCE_CMAKE}${RESET}\n"
 
 START_TIME=$(date +%s)
+
+init_submodules_if_needed
 
 # Build ICU dependencies before configuring cmake
 build_icu_if_needed

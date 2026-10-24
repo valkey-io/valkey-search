@@ -29,6 +29,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 2  # Relevant for push case
+          submodules: recursive
+          persist-credentials: false
 
       - name: Determine base branch
         id: determine-base

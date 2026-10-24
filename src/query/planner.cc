@@ -40,10 +40,13 @@ bool UsePreFiltering(size_t estimated_num_of_keys,
     pre-filtering */
     return true;
   }
-  if (vector_index->GetIndexerType() == indexes::IndexerType::kHNSW) {
+  if (vector_index->GetIndexerType() == indexes::IndexerType::kHNSW ||
+      vector_index->GetIndexerType() == indexes::IndexerType::kSVS) {
     // TODO: Come up with a formulation accounting for various
-    // other factors like ef_construction, M, size of vectors, ef_runtime, k
-    // etc. Also benchmark various combinations to tune the hyperparameters.
+    // other factors like HNSW's ef_construction/M/ef_runtime, SVS's
+    // construction_window_size/graph_max_degree/search_window_size/alpha,
+    // size of vectors, k, etc. Also benchmark various combinations to
+    // tune the hyperparameters.
     // size_t N = vector_index->GetCapacity();
 
     // Switching to using the actual number of vectors in the index

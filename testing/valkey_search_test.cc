@@ -673,6 +673,38 @@ TEST_F(CompatibilityFixTest, FixedPathDoesNotIncrementCounter) {
               ::testing::HasSubstr("compatibility-test_label_no_increment: 0"));
 }
 
+static int SharedLabelSiteA() {
+  return VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 1, 0, "test_shared_label", [] { return 0; }, [] { return 0; });
+}
+
+static int SharedLabelSiteB() {
+  return VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 1, 0, "test_shared_label", [] { return 0; }, [] { return 0; });
+}
+
+template <int N>
+static int SharedLabelTemplateSite() {
+  return VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 1, 0, "test_shared_label_template", [] { return N; },
+      [] { return N; });
+}
+
+TEST_F(CompatibilityFixTest, ExpansionsWithOneLabelShareOneCounter) {
+  SetEmulateRelease({1, 0, 0});
+
+  SharedLabelSiteA();
+  SharedLabelSiteB();
+  SharedLabelTemplateSite<1>();
+  SharedLabelTemplateSite<2>();
+
+  const std::string section = DumpCompatibilitySection();
+  EXPECT_THAT(section,
+              ::testing::HasSubstr("compatibility-test_shared_label: 2"));
+  EXPECT_THAT(section, ::testing::HasSubstr(
+                           "compatibility-test_shared_label_template: 2"));
+}
+
 class MockPthreadAtfork {
  public:
   MOCK_METHOD(int, pthread_atfork,

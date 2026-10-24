@@ -21,6 +21,7 @@
 #include "absl/strings/str_join.h"
 #include "absl/strings/strip.h"
 #include "absl/time/clock.h"
+#include "absl/types/span.h"
 #include "src/attribute_data_type.h"
 #include "src/commands/ft_aggregate_parser.h"
 #include "src/cursor.h"
@@ -752,6 +753,29 @@ struct RandomSampleReducer : GroupBy::Reducer {
   }
 };
 
+// Name of a REDUCE with no AS clause. New release 1.3.0 builds it as
+// "__generated_alias" + reducer + comma-joined args with the leading '@'
+// stripped, lowercasing the whole thing; the legacy form is "REDUCER(args)".
+// See COMPATIBILITY.md.
+static std::string DefaultReducerAlias(absl::string_view reducer,
+                                       absl::Span<const std::string> args) {
+  return VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 3, 0, "aggregate_reducer_default_alias",
+      [&] {
+        auto name = absl::StrCat(
+            "__generated_alias", reducer,
+            absl::StrJoin(args, ",",
+                          [](std::string *out, absl::string_view arg) {
+                            absl::StrAppend(out, absl::StripPrefix(arg, "@"));
+                          }));
+        absl::AsciiStrToLower(&name);
+        return name;
+      },
+      [&] {
+        return absl::StrCat(reducer, "(", absl::StrJoin(args, ","), ")");
+      });
+}
+
 // Custom parser for RANDOM_SAMPLE: compiles both args as expressions (so the
 // base Reducer::operator<< produces a correct auto-alias), then evaluates the
 // sample-size arg at parse time to validate it.
@@ -807,29 +831,10 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> RandomSampleReducerParser(
     r->output_ =
         std::unique_ptr<Attribute>(dynamic_cast<Attribute *>(output.release()));
   } else {
-    // Name of a REDUCE with no AS clause. New release 1.3.0 builds it as
-    // "__generated_alias" + reducer + comma-joined args with the leading '@'
-    // stripped, lowercasing the whole thing; the legacy form is
-    // "REDUCER(args)". See COMPATIBILITY.md.
-    const std::vector<absl::string_view> alias_args{field_text, size_text};
-    std::string default_name = VALKEY_SEARCH_COMPATIBILITY_FIX(
-        1, 3, 0, "aggregate_reducer_default_alias",
-        [&] {
-          auto name = absl::StrCat(
-              "__generated_alias", r->name_,
-              absl::StrJoin(alias_args, ",",
-                            [](std::string *out, absl::string_view arg) {
-                              absl::StrAppend(out, absl::StripPrefix(arg, "@"));
-                            }));
-          absl::AsciiStrToLower(&name);
-          return name;
-        },
-        [&] {
-          return absl::StrCat(r->name_, "(", absl::StrJoin(alias_args, ","),
-                              ")");
-        });
-    VMSDK_ASSIGN_OR_RETURN(auto output,
-                           parameters.MakeReference(default_name, true));
+    VMSDK_ASSIGN_OR_RETURN(
+        auto output,
+        parameters.MakeReference(
+            DefaultReducerAlias(r->name_, {field_text, size_text}), true));
     r->output_ =
         std::unique_ptr<Attribute>(dynamic_cast<Attribute *>(output.release()));
   }
@@ -877,28 +882,9 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> BasicReducerParser(
     r->output_ =
         std::unique_ptr<Attribute>(dynamic_cast<Attribute *>(output.release()));
   } else {
-    // Name of a REDUCE with no AS clause. New release 1.3.0 builds it as
-    // "__generated_alias" + reducer + comma-joined args with the leading '@'
-    // stripped, lowercasing the whole thing; the legacy form is
-    // "REDUCER(args)". See COMPATIBILITY.md.
-    std::string default_name = VALKEY_SEARCH_COMPATIBILITY_FIX(
-        1, 3, 0, "aggregate_reducer_default_alias",
-        [&] {
-          auto name = absl::StrCat(
-              "__generated_alias", r->name_,
-              absl::StrJoin(arg_texts, ",",
-                            [](std::string *out, absl::string_view arg) {
-                              absl::StrAppend(out, absl::StripPrefix(arg, "@"));
-                            }));
-          absl::AsciiStrToLower(&name);
-          return name;
-        },
-        [&] {
-          return absl::StrCat(r->name_, "(", absl::StrJoin(arg_texts, ","),
-                              ")");
-        });
     VMSDK_ASSIGN_OR_RETURN(auto output,
-                           parameters.MakeReference(default_name, true));
+                           parameters.MakeReference(
+                               DefaultReducerAlias(r->name_, arg_texts), true));
     r->output_ =
         std::unique_ptr<Attribute>(dynamic_cast<Attribute *>(output.release()));
   }

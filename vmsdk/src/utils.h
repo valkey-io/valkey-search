@@ -9,6 +9,7 @@
 #define VMSDK_SRC_UTILS_H_
 #include <absl/strings/str_format.h>
 
+#include <chrono>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -18,7 +19,6 @@
 #include "absl/log/check.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
-#include "absl/time/clock.h"
 #include "absl/time/time.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -26,13 +26,25 @@ namespace vmsdk {
 
 class StopWatch {
  public:
+  using Clock = std::chrono::steady_clock;
+  using TimePoint = Clock::time_point;
+
   StopWatch() { Reset(); }
   ~StopWatch() = default;
-  void Reset() { start_time_ = absl::Now(); }
-  absl::Duration Duration() const { return absl::Now() - start_time_; }
+  void Reset() { start_time_ = Clock::now(); }
+  absl::Duration Duration() const {
+    return absl::FromChrono(Clock::now() - start_time_);
+  }
+  TimePoint StartTime() const { return start_time_; }
+  int64_t StartMonotonicUs() const {
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+               start_time_.time_since_epoch())
+        .count();
+  }
+  int64_t StartMonotonicMs() const { return StartMonotonicUs() / 1000LL; }
 
  private:
-  absl::Time start_time_;
+  TimePoint start_time_;
 };
 // Timer creation from background threads is not safe. The event loop of Redis/
 // Valkey releases the GIL, and during this period also checks the timer data

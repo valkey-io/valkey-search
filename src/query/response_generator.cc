@@ -143,23 +143,9 @@ class PredicateEvaluator : public query::Evaluator {
     // Judges the vector as fetched into records_ (like the tag/numeric checks
     // above), not via the index: this runs post-lock on the main thread, so
     // the lock-free index accessors would race writer threads.
-    auto it = records_.find(predicate.GetIdentifier());
-    if (it == records_.end()) {
-      return EvaluationResult(false);
-    }
-    ValkeyModuleString *record = it->second.value.get();
-    // A JSON vector is fetched as text; convert it the way ingestion does.
-    vmsdk::UniqueValkeyString converted;
-    if (index_schema_.GetAttributeDataType().AttributesProvidedAsString()) {
-      converted = vector_index->NormalizeStringAttribute(
-          vmsdk::RetainUniqueValkeyString(record));
-      if (!converted) {
-        return EvaluationResult(false);
-      }
-      record = converted.get();
-    }
     return EvaluationResult(vector_index->IsRecordWithinVectorRange(
-        vmsdk::ToStringView(record), query_vector, predicate.GetRadius()));
+        index_schema_.GetAttributeDataType(), records_, query_vector,
+        predicate.GetRadius()));
   }
 
  private:
@@ -436,28 +422,29 @@ absl::StatusOr<RecordsMap> GetContent(
   return return_content;
 }
 
-// The vector bytes this document holds now, or nullopt if they cannot be read.
+// The distance from the query to the vector this document holds now, or an
+// error if it holds no usable one.
 //
-// The content already fetched for the reply usually carries them, but a RETURN
-// clause that did not ask for the vector field leaves them out. Reading them
+// The content already fetched for the reply usually carries the vector, but a
+// RETURN clause that did not ask for the vector field leaves it out. Reading it
 // again for that case costs one key open, and only for a document that was
 // actually mutated -- asking for the vector up front would pull a full vector
 // per row through every KNN reply that names its columns.
-std::optional<absl::string_view> CurrentVectorBytes(
+absl::StatusOr<float> RecomputeCurrentDistance(
     ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
     const query::SearchParameters &parameters, absl::string_view key,
     const std::string &vector_identifier, const RecordsMap &fetched,
-    RecordsMap &scratch) {
-  auto itr = fetched.find(vector_identifier);
-  if (itr != fetched.end()) {
-    return vmsdk::ToStringView(itr->second.value.get());
+    const indexes::VectorBase &vector_index) {
+  if (fetched.contains(vector_identifier)) {
+    return vector_index.RecomputeDistance(attribute_data_type, fetched,
+                                          parameters.query);
   }
   vmsdk::ValkeySelectDbGuard select_db_guard(ctx, parameters.db_num);
   auto key_str = vmsdk::MakeUniqueValkeyString(key);
   auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
       ctx, key_str.get(), VALKEYMODULE_OPEN_KEY_NOEXPIRE | VALKEYMODULE_READ);
   if (!key_obj) {
-    return std::nullopt;
+    return absl::NotFoundError("Key not found");
   }
   // Inserted rather than brace-initialized on purpose.
   // `want{vector_identifier}` deduces std::initializer_list<std::string> --
@@ -468,17 +455,11 @@ std::optional<absl::string_view> CurrentVectorBytes(
   // which outlives the fetch.
   absl::flat_hash_set<absl::string_view> want;
   want.insert(vector_identifier);
-  auto records = attribute_data_type.FetchAllAttributes(
-      ctx, vector_identifier, key_obj.get(), key, want);
-  if (!records.ok()) {
-    return std::nullopt;
-  }
-  scratch = std::move(records.value());
-  auto found = scratch.find(vector_identifier);
-  if (found == scratch.end()) {
-    return std::nullopt;
-  }
-  return vmsdk::ToStringView(found->second.value.get());
+  VMSDK_ASSIGN_OR_RETURN(auto records,
+                         attribute_data_type.FetchAllAttributes(
+                             ctx, vector_identifier, key_obj.get(), key, want));
+  return vector_index.RecomputeDistance(attribute_data_type, records,
+                                        parameters.query);
 }
 
 // Adds all local content for neighbors to the list of neighbors.
@@ -564,24 +545,22 @@ void ProcessNeighborsForReply(
         continue;
       }
       if (*db_seq != neighbor.sequence_number) {
-        RecordsMap scratch;
-        auto bytes = CurrentVectorBytes(
+        auto distance = RecomputeCurrentDistance(
             ctx, attribute_data_type, parameters, neighbor.external_id->Str(),
-            *vector_identifier, content.value(), scratch);
-        if (bytes.has_value()) {
-          auto distance =
-              vector_index->RecomputeDistance(*bytes, parameters.query);
-          if (distance.ok()) {
-            neighbor.distance = *distance;
-            // For a query ranked on the distance the two are the same number;
-            // where they are not, Neighbor.score is a relevance the distance
-            // must not overwrite.
-            if (ranks_on_distance) {
-              neighbor.score = *distance;
-            }
-            any_distance_recomputed = true;
-          }
+            *vector_identifier, content.value(), *vector_index);
+        // Without a usable current vector, this key is no longer a KNN
+        // candidate. Leave it without content so the pass below removes it.
+        if (!distance.ok()) {
+          continue;
         }
+        neighbor.distance = *distance;
+        // For a query ranked on the distance the two are the same number;
+        // where they are not, Neighbor.score is a relevance the distance
+        // must not overwrite.
+        if (ranks_on_distance) {
+          neighbor.score = *distance;
+        }
+        any_distance_recomputed = true;
       }
     }
 

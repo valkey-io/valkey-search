@@ -485,13 +485,13 @@ class VectorBase : public IndexBase {
     }
     return distance;
   }
-  // Range test for `record`, the raw vector bytes just read back from the
-  // database. Like RecomputeDistance it touches no index structure, so it is
-  // safe on the main thread outside the search phase, where
-  // IsWithinVectorRange is not.
-  bool IsRecordWithinVectorRange(absl::string_view record,
+  // Range test for the vector in `records`, just read back from the database.
+  // Like RecomputeDistance it touches no index structure, so it is safe on the
+  // main thread outside the search phase, where IsWithinVectorRange is not.
+  bool IsRecordWithinVectorRange(const AttributeDataType &data_type,
+                                 const RecordsMap &records,
                                  absl::string_view query, float radius) const {
-    auto distance = RecomputeDistance(record, query);
+    auto distance = RecomputeDistance(data_type, records, query);
     return distance.ok() && ClampCosineDistance(*distance) <= radius;
   }
   bool IsVectorIndex() const override { return true; }
@@ -540,6 +540,13 @@ class VectorBase : public IndexBase {
   // callable from the main thread, where the index structures are not held
   // under a reader lock.
   absl::StatusOr<float> RecomputeDistance(absl::string_view record,
+                                          absl::string_view query) const;
+  // The same for this index's attribute in `records`, as `data_type` read it:
+  // a vector read as text (JSON) is parsed the way ingestion parses it. An
+  // error means the attribute holds no usable vector -- it is missing,
+  // unparsable, or of the wrong dimension.
+  absl::StatusOr<float> RecomputeDistance(const AttributeDataType &data_type,
+                                          const RecordsMap &records,
                                           absl::string_view query) const;
   const InternedStringPtr &GetInternedAttributeIdentifier() const {
     return interned_attribute_identifier_;

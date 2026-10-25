@@ -11,8 +11,7 @@
 #include <cstddef>
 
 // Reserved address space that is materialized in huge-page units. On Linux a
-// reserved region is advised to use transparent huge pages and its pages are
-// interleaved round-robin across the NUMA nodes the process may use.
+// reserved region is advised to use transparent huge pages.
 // Materialized bytes are reported via ValkeyModule_IncrExternalMemory /
 // DecrExternalMemory and the module's own memory counter.
 namespace vmsdk::numa_slab {

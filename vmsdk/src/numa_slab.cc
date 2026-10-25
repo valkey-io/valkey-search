@@ -19,12 +19,6 @@
 #include "vmsdk/src/memory_allocation.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
-#ifdef __linux__
-#include <linux/mempolicy.h>
-#include <sys/syscall.h>
-#include <unistd.h>
-#endif
-
 namespace vmsdk::numa_slab {
 
 namespace {
@@ -32,54 +26,15 @@ namespace {
 constexpr size_t kHugePage = kHugePageBytes;
 
 #ifdef __linux__
-constexpr size_t kMaxNodes = 1024;
-constexpr size_t kBitsPerLong = 8 * sizeof(unsigned long);
-
-struct NodeMask {
-  unsigned long bits[kMaxNodes / kBitsPerLong] = {};
-  size_t count = 0;
-};
-
-// The NUMA nodes this process may allocate from, computed once.
-const NodeMask &AllowedNodes() {
-  static const NodeMask mask = [] {
-    NodeMask m;
-    if (syscall(SYS_get_mempolicy, nullptr, m.bits, kMaxNodes, nullptr,
-                MPOL_F_MEMS_ALLOWED) != 0) {
-      VMSDK_LOG(WARNING, nullptr)
-          << "get_mempolicy failed, slabs will not be NUMA-interleaved: "
-          << std::strerror(errno);
-      return NodeMask{};
-    }
-    for (auto word : m.bits) {
-      m.count += __builtin_popcountl(word);
-    }
-    return m;
-  }();
-  return mask;
-}
-
-// Advises huge pages and interleaves pages round-robin across the allowed NUMA
-// nodes. Must be applied before any page of the region is touched. Best
-// effort: failures are logged once and ignored.
+// Advises huge pages. Must be applied before any page of the region is
+// touched. Pages are placed by the kernel's default (first-touch) policy. Best
+// effort: a failure is logged once and ignored.
 void ApplyPlacementPolicy(char *base, size_t bytes) {
   static std::atomic<bool> logged_madvise{false};
-  static std::atomic<bool> logged_mbind{false};
   if (madvise(base, bytes, MADV_HUGEPAGE) != 0 &&
       !logged_madvise.exchange(true)) {
     VMSDK_LOG(WARNING, nullptr)
         << "madvise(MADV_HUGEPAGE) failed: " << std::strerror(errno);
-  }
-  const auto &nodes = AllowedNodes();
-  if (nodes.count < 2) {
-    return;
-  }
-  // The kernel reads maxnode - 1 bits from the mask.
-  if (syscall(SYS_mbind, base, bytes, MPOL_INTERLEAVE, nodes.bits,
-              kMaxNodes + 1, 0) != 0 &&
-      !logged_mbind.exchange(true)) {
-    VMSDK_LOG(WARNING, nullptr)
-        << "mbind(MPOL_INTERLEAVE) failed: " << std::strerror(errno);
   }
 }
 #endif

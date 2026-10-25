@@ -25,9 +25,8 @@ class VectorPoolRegistry;
 
 /*
 VectorPool hands out fixed-size vector entries for one (vector type, data size)
-pair. Its memory comes from slabs mapped on demand, which are NUMA-interleaved,
-materialized one 2 MiB huge page at a time, and unmapped once all their pages
-are released. A huge page is released back to the OS once its last entry is
+pair. Its memory comes from slabs mapped on demand, which are materialized one
+2 MiB huge page at a time and unmapped once all their pages are released. A huge page is released back to the OS once its last entry is
 freed.
 
 Each page holds its own metadata, so an entry's metadata is found from the

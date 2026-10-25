@@ -26,8 +26,7 @@ class Number;
 // "chunked-array-slab-size" config when the array is constructed) that is
 // materialized in huge-page-sized units as the array grows and released as it
 // shrinks. Elements never move and never straddle a segment. On Linux each
-// slab is advised to use transparent huge pages and its pages are interleaved
-// round-robin across the NUMA nodes the process may use.
+// slab is advised to use transparent huge pages.
 //
 // Materialized bytes are reported via ValkeyModule_IncrExternalMemory /
 // DecrExternalMemory and the module's own memory counter. Memory contents are

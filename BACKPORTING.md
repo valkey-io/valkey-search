@@ -22,6 +22,7 @@ Each release branch has a corresponding GitHub Project board in the `valkey-io` 
 | `1.0` | 36 | https://github.com/orgs/valkey-io/projects/36 |
 | `1.1` | 34 | https://github.com/orgs/valkey-io/projects/34 |
 | `1.2` | 58 | https://github.com/orgs/valkey-io/projects/58 |
+| `1.3` | 69 | https://github.com/orgs/valkey-io/projects/69 |
 
 Each board must have a **"Status"** field with a **"To be backported"** option. This is the value the agent queries via GraphQL to discover candidates.
 

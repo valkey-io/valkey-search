@@ -76,6 +76,73 @@ class TestFtHybridBase(ValkeySearchTestCaseBase):
 
     Q = _vec(1.0, 2.0, 3.0, 4.0)
 
+    def test_policy_controls_all_vector_query_commands(self):
+        client = self.server.get_new_client()
+        self.setup_index(client)
+        assert client.execute_command(
+            "CONFIG", "SET", "search.info-developer-visible", "yes") == b"OK"
+
+        def strategy_counts():
+            info = client.info("search")
+            return (
+                int(info.get("search_prefiltering_requests_count", 0)),
+                int(info.get("search_inline_filtering_requests_count", 0)),
+            )
+
+        command_pairs = [
+            (
+                "FT.SEARCH",
+                ["FT.SEARCH", self.INDEX,
+                 "@category:{cat1}=>[KNN 3 @vec $q HYBRID_POLICY ADHOC_BF]",
+                 "NOCONTENT", "PARAMS", "2", "q", self.Q, "DIALECT", "2"],
+                ["FT.SEARCH", self.INDEX,
+                 "@category:{cat1}=>[KNN 3 @vec $q HYBRID_POLICY BATCHES]",
+                 "NOCONTENT", "PARAMS", "2", "q", self.Q, "DIALECT", "2"],
+            ),
+            (
+                "FT.AGGREGATE",
+                ["FT.AGGREGATE", self.INDEX,
+                 "@category:{cat1}=>[KNN 3 @vec $q HYBRID_POLICY ADHOC_BF]",
+                 "PARAMS", "2", "q", self.Q, "DIALECT", "2"],
+                ["FT.AGGREGATE", self.INDEX,
+                 "@category:{cat1}=>[KNN 3 @vec $q HYBRID_POLICY BATCHES]",
+                 "PARAMS", "2", "q", self.Q, "DIALECT", "2"],
+            ),
+            (
+                "FT.HYBRID",
+                ["FT.HYBRID", self.INDEX, "SEARCH", "@title:hello",
+                 "VSIM", "@vec", "$q", "KNN", "2", "K", "3",
+                 "FILTER", "3", "@category:{cat1}", "POLICY", "ADHOC",
+                 "PARAMS", "2", "q", self.Q],
+                ["FT.HYBRID", self.INDEX, "SEARCH", "@title:hello",
+                 "VSIM", "@vec", "$q", "KNN", "2", "K", "3",
+                 "FILTER", "3", "@category:{cat1}", "POLICY", "BATCHES",
+                 "PARAMS", "2", "q", self.Q],
+            ),
+        ]
+
+        for command, adhoc, batches in command_pairs:
+            before = strategy_counts()
+            client.execute_command(*adhoc)
+            after_adhoc = strategy_counts()
+            assert after_adhoc == (before[0] + 1, before[1]), command
+
+            client.execute_command(*batches)
+            after_batches = strategy_counts()
+            assert after_batches == (after_adhoc[0], after_adhoc[1] + 1), command
+
+        for policy in ["ADHOC", "BATCHES"]:
+            before = strategy_counts()
+            result = client.execute_command(
+                "FT.HYBRID", self.INDEX,
+                "SEARCH", "@title:hello",
+                "VSIM", "@vec", "$q", "KNN", "2", "K", "3",
+                "FILTER", "3", "*", "POLICY", policy,
+                "PARAMS", "2", "q", self.Q,
+            )
+            assert isinstance(result, list)
+            assert strategy_counts() == before, policy
+
     # ---------------------------------------------------------------------
     # Control-path coverage (local-only; cluster control paths are deferred
     # to the cluster-fixture suite below).
@@ -569,36 +636,28 @@ class TestFtHybridBase(ValkeySearchTestCaseBase):
         assert counts == {b"cat0": b"5", b"cat1": b"5"}
 
     # ---------------------------------------------------------------------
-    # POLICY tolerance (parser accepts and silently discards POLICY <value>).
+    # POLICY placement: Redis accepts it only inside a counted VSIM FILTER.
     # ---------------------------------------------------------------------
 
-    def test_policy_accepted_and_ignored(self):
+    def test_policy_requires_counted_vsim_filter(self):
         client = self.server.get_new_client()
         self.setup_index(client)
-        result = client.execute_command(
-            "FT.HYBRID", self.INDEX,
-            "SEARCH", "@title:hello",
-            "VSIM", "@vec", "$q", "KNN", "2", "K", "5",
-            "POLICY", "any-value",
-            "PARAMS", "2", "q", self.Q,
-        )
-        assert isinstance(result, list)
-        assert result[0] == 10
-        # POLICY sits inside the VSIM clause, so the token after it still
-        # belongs to VSIM. This used to end the clause and leave
-        # YIELD_SCORE_AS to be read as a top-level keyword.
-        result = client.execute_command(
-            "FT.HYBRID", self.INDEX,
-            "SEARCH", "@title:hello",
-            "VSIM", "@vec", "$q", "KNN", "2", "K", "5",
-            "POLICY", "BATCHES", "YIELD_SCORE_AS", "vs",
-            "PARAMS", "2", "q", self.Q,
-        )
-        assert isinstance(result, list)
-        assert result[0] == 10
-        # The 5 docs the vector arm returned carry the alias; the rest of the
-        # union came from the text arm alone and have no vector score.
-        assert sum(b"vs" in self._rec_to_dict(rec) for rec in result[1:]) == 5
+        invalid_policy_args = [
+            ["POLICY", "BATCHES"],
+            ["FILTER", "@category:{cat1}", "POLICY", "BATCHES"],
+        ]
+        for policy_args in invalid_policy_args:
+            with pytest.raises(
+                ResponseError,
+                match=r"POLICY is only supported inside a counted VSIM FILTER",
+            ):
+                client.execute_command(
+                    "FT.HYBRID", self.INDEX,
+                    "SEARCH", "@title:hello",
+                    "VSIM", "@vec", "$q", "KNN", "2", "K", "5",
+                    *policy_args,
+                    "PARAMS", "2", "q", self.Q,
+                )
 
     # ---------------------------------------------------------------------
     # Reserved-feature rejections.

@@ -27,12 +27,8 @@
 #include "absl/synchronization/mutex.h"
 #include "flat_position_map.h"
 #include "invasive_ptr.h"
-#include "lexer.h"
-#include "libstemmer.h"
 #include "posting.h"
 #include "rax/rax.h"
-#include "rax_wrapper.h"
-#include "src/index_schema.pb.h"
 #include "src/valkey_search_options.h"
 #include "string_interning.h"
 namespace valkey_search::indexes::text {
@@ -157,13 +153,13 @@ std::optional<std::reference_wrapper<const Rax>> TextIndex::GetSuffix() const {
 
 /*** TextIndexSchema ***/
 
-TextIndexSchema::TextIndexSchema(data_model::Language language,
+TextIndexSchema::TextIndexSchema(std::shared_ptr<const Language> language,
                                  const std::string &punctuation,
-                                 bool with_offsets,
                                  const std::vector<std::string> &stop_words,
-                                 uint32_t min_stem_size)
+                                 bool with_offsets, uint32_t min_stem_size)
     : with_offsets_(with_offsets),
-      lexer_(language, punctuation, stop_words),
+      language_(std::move(language)),
+      tokenizer_config_(language_->TokenizerConfigFor(punctuation, stop_words)),
       stem_tree_(FreeStemParentsCallback),
       min_stem_size_(min_stem_size),
       rax_target_mutex_pool_(options::GetRaxTargetMutexPoolSize().GetValue()) {}
@@ -171,15 +167,22 @@ TextIndexSchema::TextIndexSchema(data_model::Language language,
 absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
     const InternedStringPtr &key, absl::string_view data,
     size_t text_field_number, bool stem, bool suffix) {
-  // Get or create stem mappings for this key if stemming is enabled
-  InProgressStemMap *stem_mappings_ptr = nullptr;
-  if (stem) {
-    std::lock_guard<std::mutex> stem_guard(in_progress_stem_mappings_mutex_);
-    stem_mappings_ptr = &in_progress_stem_mappings_[key];
-  }
+  absl::StatusOr<std::vector<std::string>> tokens;
 
-  // Tokenize and collect stem mappings
-  auto tokens = lexer_.Tokenize(data, stem, min_stem_size_, stem_mappings_ptr);
+  if (stem) {
+    // Lock briefly to obtain a stable pointer — node_hash_map guarantees
+    // pointer stability, so we can write to it after releasing the mutex.
+    InProgressStemMap *stem_mappings_ptr;
+    {
+      std::lock_guard<std::mutex> stem_guard(in_progress_stem_mappings_mutex_);
+      stem_mappings_ptr = &in_progress_stem_mappings_[key];
+    }
+    tokens = language_->TokenizeWithStemMap(
+        data, *tokenizer_config_, min_stem_size_, language_->GetLengthUnit(),
+        *stem_mappings_ptr);
+  } else {
+    tokens = language_->Tokenize(data, *tokenizer_config_);
+  }
 
   if (!tokens.ok()) {
     if (tokens.status().code() == absl::StatusCode::kInvalidArgument) {
@@ -352,6 +355,8 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
   std::vector<std::string> empty_words;
   // Roots this key incremented; a set, so each is decremented exactly once.
   absl::flat_hash_set<std::string> stem_roots;
+  Stemmer *stem_filter = language_->GetStemmer();
+  const LengthUnit unit = language_->GetLengthUnit();
 
   auto iter = key_index.GetPrefix().GetWordIterator("");
   while (!iter.Done()) {
@@ -374,8 +379,9 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
         auto key_iter = existing->GetKeyIterator();
         if (key_iter.SkipForwardKey(key) &&
             key_iter.ContainsFields(stem_text_field_mask_)) {
-          std::string stem(word_str);
-          lexer_.StemWordInPlace(stem, lexer_.GetStemmer(), min_stem_size_);
+          std::string stem = stem_filter ? stem_filter->GetStemRoot(
+                                               word_str, min_stem_size_, unit)
+                                         : word_str;
           if (stem != word_str) {
             stem_roots.insert(std::move(stem));
           }
@@ -417,8 +423,9 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
       stem_tree_.MutateTarget(root, stem_uncount_fn);
     }
     for (const auto &word : empty_words) {
-      std::string stem(word);
-      lexer_.StemWordInPlace(stem, lexer_.GetStemmer(), min_stem_size_);
+      std::string stem =
+          stem_filter ? stem_filter->GetStemRoot(word, min_stem_size_, unit)
+                      : word;
       if (stem != word) {
         auto stem_remove_fn = CreateSimpleTargetMutateFn<StemParents>(
             [&word](InvasivePtr<StemParents> existing) {
@@ -459,47 +466,13 @@ uint64_t TextIndexSchema::GetTotalTermFrequency() const {
   return metadata_.total_term_frequency.load();
 }
 
-std::string TextIndexSchema::GetAllStemVariants(
-    absl::string_view search_term,
-    absl::InlinedVector<absl::string_view, kStemVariantsInlineCapacity>
-        &words_to_search,
-    uint64_t stem_enabled_mask, bool lock_needed, uint32_t *out_distinct_docs) {
-  // Stem the search term
-  std::string stemmed(search_term);
-  lexer_.StemWordInPlace(stemmed, lexer_.GetStemmer());
-
-  std::optional<absl::ReaderMutexLock> stem_guard;
-  if (lock_needed) {
-    stem_guard.emplace(&stem_tree_mutex_);
-  }
-
-  auto stem_iter = stem_tree_.GetWordIterator(stemmed);
-  // GetWordIterator positions at the first word with this prefix, check if
-  // exact match
-  if (!stem_iter.Done() && stem_iter.GetWord() == stemmed) {
-    const auto &parents_ptr = stem_iter.GetStemParentsTarget();
-    if (parents_ptr) {
-      const auto &parents = parents_ptr->parents;
-      // The whole group's df, even when max_expansions truncates the words.
-      if (out_distinct_docs != nullptr) {
-        *out_distinct_docs = parents_ptr->distinct_docs;
-      }
-      uint32_t max_expansions = options::GetMaxTermExpansions().GetValue();
-      uint32_t count = 0;
-      for (const auto &parent : parents) {
-        if (++count > max_expansions) {
-          break;  // Limit parent words added
-        }
-        words_to_search.push_back(parent);  // Views to tree-owned strings
-      }
-    }
-  }
-
-  return stemmed;  // Caller owns this and will add view to words_to_search
+std::string TextIndexSchema::StemWord(absl::string_view word) const {
+  auto *stemmer = language_->GetStemmer();
+  return stemmer ? stemmer->GetStemRoot(word) : std::string(word);
 }
 
 const TextIndex *TextIndexSchema::GetPerKeyTextIndex(const Key &key,
-                                                     bool lock) {
+                                                     bool lock) const {
   if (!key) {
     CHECK(false) << "Invalid null key passed to GetPerKeyTextIndex";
   }

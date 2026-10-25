@@ -22,7 +22,7 @@ A pure-vector query performs a K Nearest Neighbors (KNN) query of a single vecto
 A hybrid query adds a filter expression to indicate which keys within the index are candidates for results.
 
 ```
-<filter>=>[ KNN <K> @<field> $<parameter> [EF_RUNTIME <ef-value>] [AS <name>] ]
+<filter>=>[ KNN <K> @<field> $<parameter> [EF_RUNTIME <ef-value>] [HYBRID_POLICY <policy>] [AS <name>] ]
 ```
 
 # Non-vector Query
@@ -40,8 +40,26 @@ Where:
 - `field` (required): The name of a vector field within the specified index.
 - `parameter` (required): A `PARAM` name whose corresponding value provides the query vector for the KNN algorithm.
   Note that this parameter must be encoded in little-endian byte order using the element type declared by the index (`TYPE FLOAT32`, `FLOAT16` or `BFLOAT16`); see [Supported Data Types](search-data-formats.md#supported-data-types). Its length must therefore be `DIM * 4` bytes for `FLOAT32` and `DIM * 2` bytes for the 16-bit types.
-- `EF_RUNTIME <ef-value>` (optional): Overrides the default value of `EF_RUNTIME` specified when the index was created.
-- `AS <name>` (optional): Overrides the default naming of the output distance field. By default this field is constructed by appending the string "\_\_score" to the name of the vector field.
+- `EF_RUNTIME <ef-value>` (optional): Overrides the default value of `EF_RUNTIME` specified when the index was created. `EF_RUNTIME` is valid with the automatic policy and `HYBRID_POLICY BATCHES`. It is rejected with `HYBRID_POLICY ADHOC_BF`, which performs an exact search over the filtered candidates and does not use the HNSW runtime candidate limit.
+- `HYBRID_POLICY <policy>` (optional; requires a filter expression or `INKEYS`): Overrides the automatic choice between the two filtered-vector execution paths:
+  - `ADHOC_BF` evaluates the filter first, then computes exact distances for the matching vectors.
+  - `BATCHES` searches the vector index first and applies the filter while traversing vector candidates. An explicit `BATCHES` also takes precedence when `INKEYS` is supplied; the named keys remain part of the inline candidate filter. With the automatic policy, `INKEYS` uses filter-first execution.
+  - When omitted, Valkey Search chooses the path using its existing planner heuristic.
+- `AS <name>` (optional): Overrides the default naming of the output distance field; the supplied name is used as-is. By default this field is named `__<field>_score`, where `<field>` is the field named in `@<field>` (the attribute's `AS` alias from `FT.CREATE`, if it has one). For example, `@vec` produces `__vec_score`.
+
+For example, this query forces exact filter-first execution for documents tagged `electronics`:
+
+```
+FT.SEARCH products "@category:{electronics}=>[KNN 10 @embedding $query_vector HYBRID_POLICY ADHOC_BF]" PARAMS 2 query_vector "<vector blob>" DIALECT 2
+```
+
+`HYBRID_POLICY` is accepted only inside the KNN brackets. Query-attribute syntax after the KNN brackets is not supported; for example, the following form returns an error:
+
+```
+@category:{electronics}=>[KNN 10 @embedding $query_vector]=>{$HYBRID_POLICY: ADHOC_BF}
+```
+
+`BATCH_SIZE` is not currently supported.
 
 ## Filter Expression
 

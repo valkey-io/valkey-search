@@ -152,10 +152,11 @@ absl::Status RejectIfMultiExecInCme(ValkeyModuleCtx *ctx) {
 
 // Performs the cluster consistency fanout for alias add/update operations.
 // The primary check is alias resolution: the fanout retries until every node
-// can resolve the alias name to an index via GetIndexSchema. The IFV
+// resolves the alias name to the expected index via GetIndexSchema. The IFV
 // (fingerprint/version) check is secondary — it guards against stale index
 // state but is not the mechanism that ensures alias visibility.
-absl::Status FanoutAliasExists(ValkeyModuleCtx *ctx, absl::string_view alias) {
+absl::Status FanoutAliasExists(ValkeyModuleCtx *ctx, absl::string_view alias,
+                               absl::string_view expected_index_name) {
   const bool is_loading =
       ValkeyModule_GetContextFlags(ctx) & VALKEYMODULE_CTX_FLAGS_LOADING;
   if (ValkeySearch::Instance().IsCluster() &&
@@ -167,7 +168,10 @@ absl::Status FanoutAliasExists(ValkeyModuleCtx *ctx, absl::string_view alias) {
       // exact-match consistency check to retry until timeout.
       auto schema_or = SchemaManager::Instance().GetIndexSchema(
           ValkeyModule_GetSelectedDb(ctx), alias);
-      if (schema_or.ok()) {
+      // A concurrent update may have repointed the alias; a same-named real
+      // index always resolves to itself.
+      if (schema_or.ok() && ((*schema_or)->GetName() == expected_index_name ||
+                             (*schema_or)->GetName() == alias)) {
         coordinator::IndexFingerprintVersion ifv;
         ifv.set_fingerprint((*schema_or)->GetFingerprint());
         ifv.set_version((*schema_or)->GetVersion());
@@ -181,8 +185,10 @@ absl::Status FanoutAliasExists(ValkeyModuleCtx *ctx, absl::string_view alias) {
       // The alias was just committed on this node, so failing to resolve it
       // means the change did not take effect; never report that as success.
       return absl::InternalError(
-          absl::StrCat("Alias '", alias, "' did not resolve after the update: ",
-                       schema_or.status().message()));
+          absl::StrCat("Alias '", alias, "' did not resolve to '",
+                       expected_index_name, "' after the update: ",
+                       schema_or.ok() ? (*schema_or)->GetName()
+                                      : schema_or.status().message()));
     }
   }
   ValkeyModule_ReplyWithSimpleString(ctx, "OK");
@@ -240,7 +246,7 @@ absl::Status FTAliasAddCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
   VMSDK_RETURN_IF_ERROR(SchemaManager::Instance().AddAlias(
       ValkeyModule_GetSelectedDb(ctx), alias, index_name));
 
-  VMSDK_RETURN_IF_ERROR(FanoutAliasExists(ctx, alias));
+  VMSDK_RETURN_IF_ERROR(FanoutAliasExists(ctx, alias, index_name));
   ReplicateIfNeeded(ctx);
   return absl::OkStatus();
 }
@@ -306,7 +312,7 @@ absl::Status FTAliasUpdateCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
   VMSDK_RETURN_IF_ERROR(SchemaManager::Instance().UpdateAlias(
       ValkeyModule_GetSelectedDb(ctx), alias, index_name));
 
-  VMSDK_RETURN_IF_ERROR(FanoutAliasExists(ctx, alias));
+  VMSDK_RETURN_IF_ERROR(FanoutAliasExists(ctx, alias, index_name));
   ReplicateIfNeeded(ctx);
   return absl::OkStatus();
 }

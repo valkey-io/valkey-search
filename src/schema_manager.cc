@@ -1376,7 +1376,8 @@ absl::StatusOr<vmsdk::ValkeyVersion> SchemaManager::GetMinVersion() const {
   for (const auto &[db_num, schema_map] : db_to_index_schemas_) {
     for (const auto &[name, schema] : schema_map) {
       auto any_proto = std::make_unique<google::protobuf::Any>();
-      auto proto = schema->ToProto();
+      auto proto =
+          schema->ToProto(GetAliasClaimsForIndexInternal(db_num, name));
       any_proto->PackFrom(*proto);
 
       VMSDK_ASSIGN_OR_RETURN(auto this_version,
@@ -1396,7 +1397,8 @@ absl::Status SchemaManager::ShowIndexSchemas(ValkeyModuleCtx *ctx,
     ValkeyModule_ReplyWithLongLong(ctx, db_num);
     ValkeyModule_ReplyWithArray(ctx, inner_map.size());
     for (const auto &[name, schema] : inner_map) {
-      auto proto = schema->ToProto()->DebugString();
+      auto proto = schema->ToProto(GetAliasClaimsForIndexInternal(db_num, name))
+                       ->DebugString();
       VMSDK_LOG(DEBUG, ctx) << "Index Schema in DB " << db_num << ": "
                             << vmsdk::config::RedactIfNeeded(name) << " "
                             << vmsdk::config::RedactIfNeeded(proto);

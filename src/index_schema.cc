@@ -2389,7 +2389,10 @@ absl::StatusOr<vmsdk::ValkeyVersion> IndexSchema::GetMinVersion(
   // proto field, so it would load the index, silently ignore the filter, and
   // index every key the filter exists to exclude -- a wrong index rather than
   // a failed load. Recording 1.3.0 makes that RDB refuse to load instead.
-  if (has_low_precision_vector || unpacked->has_filter()) {
+  // Aliases are likewise a 1.3.0 field: an older module would silently drop
+  // them on load.
+  if (has_low_precision_vector || unpacked->has_filter() ||
+      !unpacked->aliases().empty()) {
     return kRelease13;
   }
   if (has_text_index) {

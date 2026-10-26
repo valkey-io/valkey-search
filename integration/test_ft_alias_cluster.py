@@ -598,6 +598,24 @@ class TestFTAliasNameCollisionCluster(ValkeySearchClusterTestCase):
             "FT.ALIASUPDATE", INDEX_NAME, INDEX_NAME_2
         ) == b"OK"
 
+    def test_aliasdel_name_same_as_existing_index_cluster(self):
+        """FT.ALIASDEL succeeds although the name still resolves to the index."""
+        node0 = self.new_client_for_primary(0)
+        assert node0.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        assert node0.execute_command(*CREATE_TAG_INDEX_2) == b"OK"
+        assert node0.execute_command("FT.ALIASADD", INDEX_NAME, INDEX_NAME_2) == b"OK"
+
+        assert node0.execute_command("FT.ALIASDEL", INDEX_NAME) == b"OK"
+
+    def test_dropindex_name_same_as_existing_alias_cluster(self):
+        """FT.DROPINDEX succeeds although the name now resolves to the alias."""
+        node0 = self.new_client_for_primary(0)
+        assert node0.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        assert node0.execute_command(*CREATE_TAG_INDEX_2) == b"OK"
+        assert node0.execute_command("FT.ALIASADD", INDEX_NAME, INDEX_NAME_2) == b"OK"
+
+        assert node0.execute_command("FT.DROPINDEX", INDEX_NAME) == b"OK"
+
 
 class TestFTListDoesNotExposeAliasesCluster(ValkeySearchClusterTestCase):
     """FT._LIST must not include alias names in cluster mode."""

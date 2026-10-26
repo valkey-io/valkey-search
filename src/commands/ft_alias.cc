@@ -90,6 +90,7 @@ class AliasRemovedConsistencyCheckFanoutOperation
     coordinator::InfoIndexPartitionRequest req;
     req.set_db_num(db_num_);
     req.set_index_name(alias_name_);
+    req.set_name_lookup(coordinator::NAME_LOOKUP_ALIAS_ONLY);
     return req;
   }
 

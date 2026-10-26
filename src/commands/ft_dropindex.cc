@@ -49,6 +49,7 @@ class DropConsistencyCheckFanoutOperation
     coordinator::InfoIndexPartitionRequest req;
     req.set_db_num(db_num_);
     req.set_index_name(index_name_);
+    req.set_name_lookup(coordinator::NAME_LOOKUP_INDEX_ONLY);
     *req.mutable_index_fingerprint_version() = expected_fingerprint_version_;
     return req;
   }

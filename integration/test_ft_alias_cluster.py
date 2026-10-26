@@ -10,6 +10,7 @@ from valkey_search_test_case import ValkeySearchClusterTestCase, ValkeySearchClu
 from valkeytestframework.conftest import resource_port_tracker
 from valkeytestframework.util import waiters
 from utils import IndexingTestHelper
+from ft_info_parser import FTInfoParser
 
 INDEX_NAME = "alias_cluster_idx"
 INDEX_NAME_2 = "alias_cluster_idx2"
@@ -1178,3 +1179,25 @@ class TestFTAliasReplicaCluster(ValkeySearchClusterTestCase):
 
         assert primary.execute_command("FT.ALIASDEL", ALIAS_NAME) == b"OK"
         _wait_for_aliaslist_on_all_nodes([replica], [])
+
+
+class TestFTInfoAliasScopeCluster(ValkeySearchClusterTestCase):
+
+    @pytest.mark.parametrize("scope", ["PRIMARY", "CLUSTER"])
+    def test_info_via_alias_reports_canonical_name(self, scope):
+        node0 = self.new_client_for_primary(0)
+        assert node0.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        nodes = [self.new_client_for_primary(i)
+                 for i in range(self.CLUSTER_SIZE)]
+        IndexingTestHelper.wait_for_indexing_complete_on_all_nodes(
+            nodes, INDEX_NAME
+        )
+
+        assert node0.execute_command(
+            "FT.ALIASADD", ALIAS_NAME, INDEX_NAME
+        ) == b"OK"
+        _wait_for_alias_on_all_nodes(nodes, ALIAS_NAME, expect_present=True)
+
+        raw = node0.execute_command("FT.INFO", ALIAS_NAME, scope)
+        info = FTInfoParser(raw)
+        assert info.index_name == INDEX_NAME

@@ -1560,6 +1560,20 @@ TEST_F(ValueTest, Serialize_StringWithSpecialChars) {
   EXPECT_NE(s.find("\"{f}\""), std::string::npos);
 }
 
+TEST_F(ValueTest, Serialize_DoubleBitsDoNotCollideWithString) {
+  // 0x2261616161616122, read little-endian, is exactly the bytes '"aaaaaa"'
+  // -- what [elem.IsString()] would append for the string "aaaaaa". Without
+  // a type tag on the double's raw bytes, array[double] and array["aaaaaa"]
+  // serialized identically.
+  uint64_t bits = 0x2261616161616122ull;
+  double d;
+  std::memcpy(&d, &bits, sizeof(d));
+
+  Value double_arr({Value(d)});
+  Value string_arr({Value(std::string("aaaaaa"))});
+  EXPECT_NE(double_arr.Serialize(), string_arr.Serialize());
+}
+
 TEST_F(ValueTest, Serialize_AllNilArray) {
   Value arr({Value(), Value(), Value()});
   EXPECT_EQ(arr.Serialize(), "[null,null,null]");

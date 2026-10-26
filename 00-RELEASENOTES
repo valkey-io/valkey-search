@@ -2,6 +2,36 @@ Valkey Search 1.3 release notes
 ===============================
 
 ================================================================================
+Valkey Search 1.3.0 RC2 - Released Mon Oct 26th 2026
+================================================================================
+
+This is the second release candidate of Valkey Search 1.3. It contains bug
+fixes and a query optimization on top of 1.3.0 RC1. Like RC1, this release 
+requires Valkey core 9.1.0 or higher.
+
+Optimizations
+=============
+* Filtering and scoring share a per-query cache of resolved text terms and tag values, so each is looked up once per query instead of once per candidate document. The
+main thread no longer waits on the index-wide lock to revalidate results. In benchmarks, queries that combine NUMERIC and TAG filters have more than twice the 
+throughput, TEXT queries filtered by TAG or NUMERIC clauses have 17% to 68% more, and KNN queries with a TAG or NUMERIC prefilter have 8% to 16% more; with concurrent 
+writes, read p95 latency drops by up to 70%. Pure TEXT queries are unchanged (#1472)
+
+Bug fixes
+=========
+* FLUSHALL now drops the indexes of every database. Previously only the indexes of database 0 were dropped, so indexes in other databases kept returning the flushed keys and could not be recreated under the same name (#1404)
+* FT.SEARCH and FT.AGGREGATE text queries that run on the main thread (inside MULTI/EXEC or a Lua script, or with reader-threads set to 0) now wait for in-flight indexing of their result keys before revalidating them, bounded by the query's TIMEOUT, and return the timeout error past that. Previously they could return a document that no longer matched, or drop one that did (#1610)
+* Fixed an abort during RDB save when a key queued by MULTI/EXEC no longer had a pending mutation; such keys are now skipped (#1361)
+* In cluster mode, when one FT.HYBRID arm fails on the coordinator's own shard, that shard is now dropped from both arms, as remote shards already were, instead of fusing results scored by only one arm. With search.enable-partial-results set to no, the query returns an error (#1529)
+* In cluster mode, a node no longer rejects index metadata from other nodes as requiring a newer module version once the metadata revision, which grows with every index creation and deletion, exceeds the module's packed version number. The check now compares the metadata's minimum required module version (#1447)
+* A KNN query filtered by tag clauses, such as @cat:{a}=>[KNN 3 @vec $q], now scores the tag clauses and ranks the K nearest documents by that score, as KNN queries filtered by text clauses already do; documents with equal scores are returned in key order. Previously every score was 0 and results came back in distance order. To keep distance order, add SORTBY on the distance field (__<field>_score, or the name given with AS) (#1490)
+* $weight: 0 is now accepted, so a clause can restrict results without changing their scores; negative weights are still rejected. A document whose relevance sums to 0 now scores 0 even when its SCORE_FIELD value is inf or -inf (#1505)
+* FT.SEARCH no longer rejects a query whose PARAMS include a parameter the query does not reference, matching FT.AGGREGATE (#1407)
+* --debug-mode is now applied before the other module arguments, so developer configs passed as module arguments load in any order (#1562)
+* Rejecting TAG values that are not valid UTF-8 (#1075, in RC1) is now a compatibility fix enabled by setting search.emulate-release to 1.3.0. By default such values are indexed as in 1.2 and counted by compatibility-tag_rejects_non_utf8 (#1536)
+* Fixed the native build on Amazon Linux 2 (#1574)
+* Improvements to tests and test infrastructure with no corresponding module code changes.
+
+================================================================================
 Valkey Search 1.3.0 RC1 - Released Tue Oct 6th 2026
 ================================================================================
 

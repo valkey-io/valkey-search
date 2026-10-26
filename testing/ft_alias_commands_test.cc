@@ -16,9 +16,12 @@
 #include "absl/strings/str_cat.h"
 #include "gmock/gmock.h"
 #include "google/protobuf/text_format.h"
+#include "grpcpp/support/status.h"
 #include "gtest/gtest.h"
 #include "src/commands/commands.h"
+#include "src/coordinator/coordinator.pb.h"
 #include "src/coordinator/metadata_manager.h"
+#include "src/coordinator/server.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search_options.h"
 #include "testing/common.h"
@@ -669,6 +672,38 @@ TEST_F(FTInfoAliasesTest, RepliesAliasesAsBulkStrings) {
   for (auto* arg : argv) {
     TestValkeyModule_FreeString(&fake_ctx_, arg);
   }
+}
+
+// A node that has not seen an alias update yet resolves the alias to another
+// index; the fanout must retry rather than treat the index as gone.
+class FTInfoAliasConsistencyTest : public ValkeySearchTest {};
+
+TEST_F(FTInfoAliasConsistencyTest, StaleAliasTargetIsInconsistentState) {
+  SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
+      &fake_ctx_, []() {}, nullptr, false));
+  for (auto pbtxt : {kTestIndexSchemaPbtxt, kSecondIndexSchemaPbtxt}) {
+    data_model::IndexSchema index_schema_proto;
+    ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
+        std::string(pbtxt), &index_schema_proto));
+    VMSDK_EXPECT_OK(SchemaManager::Instance().CreateIndexSchema(
+        &fake_ctx_, index_schema_proto));
+  }
+  VMSDK_EXPECT_OK(SchemaManager::Instance().AddAlias(0, "a", "test_idx2"));
+  auto resolved = SchemaManager::Instance().GetIndexSchema(0, "a");
+  VMSDK_EXPECT_OK(resolved);
+
+  coordinator::InfoIndexPartitionRequest request;
+  request.set_db_num(0);
+  request.set_index_name("a");
+  request.mutable_index_fingerprint_version()->set_fingerprint(
+      (*resolved)->GetFingerprint() + 1);
+  request.mutable_index_fingerprint_version()->set_version(
+      (*resolved)->GetVersion());
+
+  auto [status, response] = coordinator::Service::GenerateInfoResponse(request);
+  EXPECT_EQ(status.error_code(), grpc::StatusCode::FAILED_PRECONDITION);
+  EXPECT_EQ(response.error_type(),
+            coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR);
 }
 
 class FTAliasListTest : public ValkeySearchTest {};

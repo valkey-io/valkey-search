@@ -2644,8 +2644,6 @@ absl::Status PostParseVectorRangeParameters(
 }
 
 absl::Status query::SearchParameters::PostParseQueryString() {
-  // Counted after any re-parse, so the counters describe the tree that runs.
-  IncrementQueryOperationMetrics(filter_parse_results.query_operations);
   if (IsVectorQuery()) {
     VMSDK_RETURN_IF_ERROR(PostParseVectorParameters(*this)).SetPrepend()
         << "Error parsing vector similarity parameters: ";
@@ -2657,6 +2655,8 @@ absl::Status query::SearchParameters::PostParseQueryString() {
         << "Error parsing vector range parameters: ";
   }
 
+  // Counted after any re-parse, so the counters describe the tree that runs.
+  IncrementQueryOperationMetrics(filter_parse_results.query_operations);
   return absl::OkStatus();
 }
 

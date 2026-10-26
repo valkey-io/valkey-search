@@ -142,6 +142,11 @@ class TestAggregateTextFlags(ValkeySearchTestCaseBase):
         client.execute_command(
             "FT.AGGREGATE", "idx", "@s:(hello world)", "LOAD", "1", "@__key")
         assert self._counter(client) == before
+        with pytest.raises(ResponseError, match="Dialects"):
+            client.execute_command(
+                "FT.AGGREGATE", "idx", "@s:(hello world)", "INORDER",
+                "DIALECT", "1", "LOAD", "1", "@__key")
+        assert self._counter(client) == before
 
         self._populate(client, "NOOFFSETS")
         assert agg_keys(client.execute_command(
@@ -163,9 +168,19 @@ class TestAggregateTextFlagsMetrics(ValkeySearchTestCaseDebugMode):
         client: Valkey = self.server.get_new_client()
         client.execute_command(
             "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "d:",
-            "SCHEMA", "s", "TEXT")
+            "SCHEMA", "s", "TEXT",
+            "v", "VECTOR", "FLAT", "6", "TYPE", "FLOAT32", "DIM", "2",
+            "DISTANCE_METRIC", "L2")
         client.execute_command("HSET", "d:1", "s", "hello world")
         IndexingTestHelper.wait_for_indexing_complete_on_node(client, "idx")
+        before = client.info("SEARCH")
+        with pytest.raises(ResponseError, match="blob size"):
+            client.execute_command(
+                "FT.AGGREGATE", "idx", "@s:hello=>[KNN 1 @v $q]",
+                "PARAMS", "2", "q", _vec(0.0, 0.0, 0.0), "DIALECT", "2")
+        after = client.info("SEARCH")
+        assert after.get("search_text_requests_count", 0) == before.get(
+            "search_text_requests_count", 0)
         for release, proximity in ((FIX_RELEASE, 1), (LEGACY_RELEASE, 0)):
             assert client.execute_command(
                 "CONFIG", "SET", "search.emulate-release", release) == b"OK"

@@ -207,7 +207,11 @@ absl::Status AggregateParameters::ParseCommand(vmsdk::ArgsIterator &itr) {
         absl::StrCat("Unexpected parameter at position ", (itr.Position() + 1),
                      ":", vmsdk::ToStringView(itr.Get().value())));
   }
-  // The filter tree above was built before VERBATIM / INORDER / SLOP were read.
+  if (dialect < 2 || dialect > 4) {
+    return absl::InvalidArgumentError("Only Dialects 2, 3 and 4 are supported");
+  }
+
+  // The filter tree was built before VERBATIM / INORDER / SLOP were read.
   if (verbatim || inorder || slop.has_value()) {
     VMSDK_RETURN_IF_ERROR(VALKEY_SEARCH_COMPATIBILITY_FIX(
         1, 3, 0, "ft_aggregate_text_flags", [&] { return ParseFilter(); },
@@ -218,10 +222,6 @@ absl::Status AggregateParameters::ParseCommand(vmsdk::ArgsIterator &itr) {
           slop.reset();
           return absl::OkStatus();
         }));
-  }
-
-  if (dialect < 2 || dialect > 4) {
-    return absl::InvalidArgumentError("Only Dialects 2, 3 and 4 are supported");
   }
 
   // SORTBY's retention bound depends on the LIMIT stages around it, so it can

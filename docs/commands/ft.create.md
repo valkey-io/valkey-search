@@ -98,7 +98,7 @@ See [Numeric Field Format](../topics/search-data-formats.md#numeric-fields) for 
   - `INITIAL_CAP <size>` (optional): Initial index size.
   - `M <number>` (optional): Number of maximum allowed outgoing edges for each node in the graph in each layer. on layer zero the maximal number of outgoing edges will be 2\*M. Default is 16, the maximum is 512\.
   - `EF_CONSTRUCTION <number>` (optional): controls the number of vectors examined during index construction. Higher values for this parameter will improve recall ratio at the expense of longer index creation times. The default value is 200\. Maximum value is 4096\.
-  - `EF_RUNTIME <number>` (optional): controls the number of vectors to be examined during a query operation. The default is 10, and the max is 4096\. You can set this parameter value for each query you run. Higher values increase query times, but improve query recall.
+  - `EF_RUNTIME <number>` (optional): controls the nearest-neighbor beam during query execution. The field-level value applies to KNN and to the nearest-neighbor phase of HNSW `VECTOR_RANGE`; higher values can improve recall at the expense of more distance computations. The default is 10 and the maximum is 4096. A per-query override applies to KNN only: `EF_RUNTIME` written inside `VECTOR_RANGE` is accepted for compatibility and ignored. For `VECTOR_RANGE`, the effective beam is also capped by `search.max-nonvector-search-results-fetched`.
   - `DISTANCE_METRIC [L2 | IP | COSINE]` (required): Specifies the distance algorithm.
 
 See [Vector Field Format](../topics/search-data-formats.md#vector-fields) for more details and examples.

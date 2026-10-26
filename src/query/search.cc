@@ -845,11 +845,12 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
         entries_fetchers, false);
   }
 
-  const size_t max_keys = static_cast<size_t>(
+  const size_t fetch_threshold = static_cast<size_t>(
       options::GetMaxNonVectorSearchResultsFetched().GetValue());
   std::vector<indexes::Neighbor> neighbors;
   neighbors.reserve(std::min(qualified_entries, kInitialNeighborReserveSize));
-  bool fetch_limited = false;
+  bool fetch_threshold_crossed = false;
+  bool cancelled = false;
 
   // Deduplication setup
   bool needs_dedup =
@@ -902,6 +903,10 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
       const auto &key = **iterator;
       if (needs_dedup && result_keys.contains(key->Str().data())) {
         iterator->Next();
+        if (parameters.cancellation_token->IsCancelled()) {
+          cancelled = true;
+          break;
+        }
         continue;
       }
       const valkey_search::indexes::text::TextIndex *text_index =
@@ -914,10 +919,11 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
       auto eval_result = key_evaluator.EvaluateFull(
           *parameters.filter_parse_results.root_predicate, key);
       if (eval_result.matches) {
-        if (neighbors.size() >= max_keys) {
-          // This fetcher is scanned to the end, but the fetchers after it
-          // (e.g. the remaining OR branches) are dropped by the break below.
-          fetch_limited = true;
+        if (neighbors.size() >= fetch_threshold) {
+          // The threshold is diagnostic for compound VECTOR_RANGE queries.
+          // Continue every fetcher so an early OR branch cannot hide unique
+          // matches from a later branch.
+          fetch_threshold_crossed = true;
         }
         // Single-VR model: EvaluateFull propagates the matched VectorRange
         // distance up through AND/OR composition, so write it straight into
@@ -957,15 +963,16 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
       }
       iterator->Next();
       if (parameters.cancellation_token->IsCancelled()) {
+        cancelled = true;
         break;
       }
     }
-    if (fetch_limited) {
+    if (cancelled) {
       break;
     }
   }
 
-  if (fetch_limited) {
+  if (fetch_threshold_crossed) {
     nonvector_results_fetched_limited_count.Increment();
   }
 

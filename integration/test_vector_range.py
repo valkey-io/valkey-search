@@ -747,6 +747,93 @@ class TestVectorRange(ValkeySearchTestCaseBase):
         keys = parse_result_keys(result)
         assert keys == {"doc:0", "doc:1", "doc:3"}
 
+    @pytest.mark.parametrize("algorithm", ["FLAT", "HNSW"])
+    def test_vector_range_or_processes_all_fetchers_past_cap(self, algorithm):
+        """A full early OR branch must not hide unique matches from a later
+        branch after the non-vector fetch threshold is reached."""
+        client = self.server.get_new_client()
+        client.config_set("search.info-developer-visible", "yes")
+        client.config_set("search.max-nonvector-search-results-fetched", "3")
+        create = (self._create_flat_index if algorithm == "FLAT"
+                  else self._create_hnsw_index)
+        create(client, extra_fields=["category", "TAG", "body", "TEXT"])
+        vectors = {f"doc:v{i}": [i * 0.1, 0.0, 0.0] for i in range(6)}
+        extra = {
+            key: {
+                "category": "special" if key == "doc:v0" else "ordinary",
+                "body": "late" if key == "doc:v0" else "ordinary",
+            }
+            for key in vectors
+        }
+        self._load_vector_data(client, vectors=vectors, extra_data=extra)
+        client.hset(
+            "doc:a-special", mapping={"category": "special", "body": "late"})
+
+        expected = {*vectors, "doc:a-special"}
+        blob = float_to_bytes(QUERY_VEC)
+        params = ["PARAMS", "2", "blob", blob]
+        counter = "search_nonvector_results_fetched_limited_count"
+        before = client.info("SEARCH").get(counter, 0)
+        queries = (
+            "@vec:[VECTOR_RANGE 1 $blob] | @category:{special}",
+            "@category:{special} | @vec:[VECTOR_RANGE 1 $blob]",
+        )
+        for query in queries:
+            result = self._search(
+                client, "idx", query, *params,
+                "NOCONTENT", "LIMIT", "0", "100")
+            assert result[0] == len(expected), (algorithm, query, result)
+            assert parse_result_keys(result) == expected, (algorithm, query)
+
+        sorted_queries = (
+            "@vec:[VECTOR_RANGE 1 $blob]=>{$yield_distance_as: dist}"
+            " | @category:{special}",
+            "@category:{special} | "
+            "@vec:[VECTOR_RANGE 1 $blob]=>{$yield_distance_as: dist}",
+        )
+        expected_order = [f"doc:v{i}".encode() for i in range(6)]
+        expected_order.append(b"doc:a-special")
+        for query in sorted_queries:
+            result = self._search(
+                client, "idx", query, *params, "SORTBY", "dist", "ASC",
+                "NOCONTENT", "LIMIT", "0", "100")
+            assert result == [len(expected), *expected_order], (algorithm, query)
+
+        text_result = self._search(
+            client, "idx", "@vec:[VECTOR_RANGE 1 $blob] | @body:late",
+            *params, "WITHSCORES", "NOCONTENT", "LIMIT", "0", "100")
+        assert text_result[0] == len(expected), (algorithm, text_result)
+        key_scores = {
+            text_result[i].decode(): float(text_result[i + 1])
+            for i in range(1, len(text_result), 2)
+        }
+        assert set(key_scores) == expected
+        assert {key for key, score in key_scores.items() if score > 0} == {
+            "doc:a-special", "doc:v0"}
+
+        aggregate = self._aggregate(
+            client, "idx", sorted_queries[0], *params,
+            "LOAD", "2", "__key", "dist")
+        assert aggregate[0] == len(expected), (algorithm, aggregate)
+        rows = []
+        for row in aggregate[1:]:
+            fields = {
+                row[i].decode(): row[i + 1]
+                for i in range(0, len(row), 2)
+            }
+            rows.append(fields)
+        assert {fields["__key"].decode() for fields in rows} == expected
+        for fields in rows:
+            if fields["__key"] == b"doc:a-special":
+                assert "dist" not in fields
+            else:
+                assert "dist" in fields
+
+        # Each of the six compound queries crosses its fetch threshold once.
+        # HNSW also records its internal shell-cap fallback before each drain.
+        expected_delta = 6 if algorithm == "FLAT" else 12
+        assert client.info("SEARCH")[counter] - before == expected_delta
+
 
     # =================================================================
     # 8. Negated Vector Range
@@ -2193,6 +2280,37 @@ class TestVectorRangeCluster(ValkeySearchClusterTestCase):
         flat = range_distances(primaries[0], flat_index, "v", query, radius)
         assert flat.keys() == expected
         assert hnsw == pytest.approx(flat)
+
+    def test_compound_or_processes_all_shard_fetchers_past_cap(self):
+        """A full vector branch on each shard must not hide a tag-only match
+        from a later compound OR branch."""
+        cluster_client = self.new_cluster_client()
+        assert cluster_client.execute_command(
+            "FT.CREATE", "compound_or", "ON", "HASH", "PREFIX", "1", "co:",
+            "SCHEMA", "vec", "VECTOR", "HNSW", "6", "TYPE", "FLOAT32",
+            "DIM", "3", "DISTANCE_METRIC", "L2", "category", "TAG") == b"OK"
+        vectors = [f"co:v{i}" for i in range(60)]
+        blob = float_to_bytes(QUERY_VEC)
+        for key in vectors:
+            cluster_client.hset(key, mapping={"vec": blob, "category": "ordinary"})
+        cluster_client.hset("co:a-special", mapping={"category": "special"})
+        primaries = self._primaries()
+        wait_indexed(primaries, ("compound_or",))
+        assert sum(primary.dbsize() for primary in primaries) == 61
+        for primary in primaries:
+            primary.config_set(
+                "search.max-nonvector-search-results-fetched", "3")
+
+        expected = {*vectors, "co:a-special"}
+        for query_string in (
+                "@vec:[VECTOR_RANGE 1 $blob] | @category:{special}",
+                "@category:{special} | @vec:[VECTOR_RANGE 1 $blob]"):
+            result = primaries[0].execute_command(
+                "FT.SEARCH", "compound_or", query_string,
+                "PARAMS", "2", "blob", blob,
+                "NOCONTENT", "LIMIT", "0", "100", "DIALECT", "2")
+            assert result[0] == len(expected), (query_string, result)
+            assert parse_result_keys(result) == expected, query_string
 
     def test_query_attr_epsilon_saturated_cluster(self):
         """

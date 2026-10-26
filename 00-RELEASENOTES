@@ -6,14 +6,15 @@ Valkey Search 1.3.0 RC2 - Released Mon Oct 26th 2026
 ================================================================================
 
 This is the second release candidate of Valkey Search 1.3. It contains bug
-fixes and a query optimization on top of 1.3.0 RC1. KNN queries filtered by
-tag clauses are now ranked by the relevance score of those clauses instead of
-by vector distance; see Bug fixes. Like RC1, this release requires Valkey core
-9.1.0 or higher.
+fixes and a query optimization on top of 1.3.0 RC1. Like RC1, this release 
+requires Valkey core 9.1.0 or higher.
 
 Optimizations
 =============
-* Filtering and scoring share a per-query cache of resolved text terms and tag values, so each is looked up once per query instead of once per candidate document; mixed text queries are 8% to 36% faster. The main thread no longer waits on the index-wide lock to revalidate results (#1472)
+* Filtering and scoring share a per-query cache of resolved text terms and tag values, so each is looked up once per query instead of once per candidate document. The
+main thread no longer waits on the index-wide lock to revalidate results. In benchmarks, queries that combine NUMERIC and TAG filters have more than twice the 
+throughput, TEXT queries filtered by TAG or NUMERIC clauses have 17% to 68% more, and KNN queries with a TAG or NUMERIC prefilter have 8% to 16% more; with concurrent 
+writes, read p95 latency drops by up to 70%. Pure TEXT queries are unchanged (#1472)
 
 Bug fixes
 =========

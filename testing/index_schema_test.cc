@@ -2346,24 +2346,28 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   neighbors[0].sequence_number = index_schema->GetDbMutationSequenceNumber(key);
 
   // The writer cannot apply while a reader slice is held; it is let through
-  // only once this thread is observed blocking on the key.
+  // only once this thread is observed blocking on the key. Both waits are
+  // bounded so a regression fails instead of hanging.
   const auto blocked_before = Metrics::GetStats().text_query_blocked_cnt.load();
+  const absl::Time give_up = absl::Now() + absl::Seconds(10);
   absl::Notification reader_held;
+  bool observed_blocked = false;
   std::thread release([&] {
-    {
-      vmsdk::ReaderMutexLock lock(&index_schema->GetTimeSlicedMutex());
-      reader_held.Notify();
-      while (Metrics::GetStats().text_query_blocked_cnt.load() ==
-             blocked_before) {
-        std::this_thread::yield();
-      }
+    vmsdk::ReaderMutexLock lock(&index_schema->GetTimeSlicedMutex());
+    reader_held.Notify();
+    while (Metrics::GetStats().text_query_blocked_cnt.load() ==
+               blocked_before &&
+           absl::Now() < give_up) {
+      std::this_thread::yield();
     }
+    observed_blocked =
+        Metrics::GetStats().text_query_blocked_cnt.load() != blocked_before;
   });
   reader_held.WaitForNotification();
   mutate(1);
-  EXPECT_TRUE(
-      index_schema->WaitForContendedKeys(neighbors, absl::InfiniteFuture()));
+  EXPECT_TRUE(index_schema->WaitForContendedKeys(neighbors, give_up));
   release.join();
+  EXPECT_TRUE(observed_blocked);
   EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 0u);
   WaitWorkerTasksAreCompleted(mutations_thread_pool);
 }

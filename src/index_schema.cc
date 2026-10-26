@@ -2151,6 +2151,16 @@ bool IndexSchema::WaitForContendedKeys(
   if (applied()) {
     return true;
   }
+  // The pending mutations may sit deep in the kHigh queue; re-queue them at
+  // kMax so this thread is released as soon as possible. Whichever task runs
+  // second finds nothing left to consume.
+  for (const auto &key : contended) {
+    if (tracked_mutated_records_.contains(key)) {
+      ScheduleMutation(/*from_backfill=*/false, key,
+                       vmsdk::ThreadPool::Priority::kMax,
+                       /*blocking_counter=*/nullptr);
+    }
+  }
   ++Metrics::GetStats().text_query_blocked_cnt;
   return mutated_records_mutex_.AwaitWithDeadline(absl::Condition(&applied),
                                                   deadline);

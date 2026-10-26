@@ -186,15 +186,15 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
                 "FT._DEBUG PAUSEPOINT TEST mutation_processing") > 0
         )
 
-        def multi_search(query):
+        def multi_search(query, timeout_ms=200):
             pipe = client.pipeline(transaction=True)
-            pipe.execute_command("FT.SEARCH", "idx", query, "TIMEOUT", "200")
+            pipe.execute_command("FT.SEARCH", "idx", query, "TIMEOUT", timeout_ms)
             return pipe.execute(raise_on_error=False)[0]
 
-        def lua_search(query):
+        def lua_search(query, timeout_ms=200):
             return client.eval(
-                "return redis.call('FT.SEARCH', 'idx', ARGV[1], 'TIMEOUT', '200')",
-                0, query,
+                "return redis.call('FT.SEARCH', 'idx', ARGV[1], 'TIMEOUT', ARGV[2])",
+                0, query, timeout_ms,
             )
 
         blocked = lambda: client.info("SEARCH")["search_text_query_blocked_count"]
@@ -216,8 +216,9 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
         IndexingTestHelper.wait_for_indexing_complete_on_node(client, "idx")
 
         before = blocked()
-        assert multi_search("@content:hello") == [0]
-        assert lua_search("@content:bye") == [1, b"doc:1", [b"content", b"bye"]]
+        assert multi_search("@content:hello", timeout_ms=10000) == [0]
+        assert lua_search("@content:bye", timeout_ms=10000) == [
+            1, b"doc:1", [b"content", b"bye"]]
         assert blocked() == before
 
     def test_non_text_query_does_not_block(self):

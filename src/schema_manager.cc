@@ -1711,6 +1711,20 @@ std::vector<std::pair<std::string, std::string>> SchemaManager::GetAllAliases(
   return result;
 }
 
+std::optional<std::string> SchemaManager::GetAliasOwner(
+    uint32_t db_num, absl::string_view alias) const {
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  auto db_alias_it = db_to_aliases_.find(db_num);
+  if (db_alias_it == db_to_aliases_.end()) {
+    return std::nullopt;
+  }
+  auto alias_it = db_alias_it->second.find(alias);
+  if (alias_it == db_alias_it->second.end()) {
+    return std::nullopt;
+  }
+  return alias_it->second.owner;
+}
+
 std::vector<std::string> SchemaManager::GetAliasesForIndex(
     uint32_t db_num, absl::string_view index_name) const {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);

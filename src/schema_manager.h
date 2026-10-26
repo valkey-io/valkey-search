@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -149,6 +150,11 @@ class SchemaManager {
       ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
   std::vector<std::pair<std::string, std::string>> GetAllAliases(
       uint32_t db_num) const ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
+
+  // Returns the index owning `alias`, even when a real index shares its name.
+  std::optional<std::string> GetAliasOwner(uint32_t db_num,
+                                           absl::string_view alias) const
+      ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
 
   // Returns the sorted alias names owned by `index_name` in `db_num`.
   std::vector<std::string> GetAliasesForIndex(

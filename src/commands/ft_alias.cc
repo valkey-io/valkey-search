@@ -15,6 +15,7 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
+#include "src/acl.h"
 #include "src/commands/commands.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/query/cluster_info_fanout_operation.h"
@@ -230,6 +231,12 @@ absl::Status FTAliasAddCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     return absl::InvalidArgumentError("Index name cannot be empty");
   }
 
+  VMSDK_ASSIGN_OR_RETURN(auto index_schema,
+                         SchemaManager::Instance().GetIndexSchema(
+                             ValkeyModule_GetSelectedDb(ctx), index_name));
+  VMSDK_RETURN_IF_ERROR(AclPrefixCheck(ctx, acl::KeyAccess::kWrite,
+                                       index_schema->GetKeyPrefixes()));
+
   VMSDK_RETURN_IF_ERROR(SchemaManager::Instance().AddAlias(
       ValkeyModule_GetSelectedDb(ctx), alias, index_name));
 
@@ -245,6 +252,17 @@ absl::Status FTAliasDelCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
   auto alias = vmsdk::ToStringView(argv[1]);
   if (alias.empty()) {
     return absl::InvalidArgumentError("Alias name cannot be empty");
+  }
+
+  // A missing alias is left to RemoveAlias, which reports it.
+  auto owner = SchemaManager::Instance().GetAliasOwner(
+      ValkeyModule_GetSelectedDb(ctx), alias);
+  if (owner.has_value()) {
+    VMSDK_ASSIGN_OR_RETURN(auto index_schema,
+                           SchemaManager::Instance().GetIndexSchema(
+                               ValkeyModule_GetSelectedDb(ctx), *owner));
+    VMSDK_RETURN_IF_ERROR(AclPrefixCheck(ctx, acl::KeyAccess::kWrite,
+                                         index_schema->GetKeyPrefixes()));
   }
 
   VMSDK_RETURN_IF_ERROR(SchemaManager::Instance().RemoveAlias(
@@ -266,6 +284,23 @@ absl::Status FTAliasUpdateCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
   auto index_name = vmsdk::ToStringView(argv[2]);
   if (index_name.empty()) {
     return absl::InvalidArgumentError("Index name cannot be empty");
+  }
+
+  VMSDK_ASSIGN_OR_RETURN(auto index_schema,
+                         SchemaManager::Instance().GetIndexSchema(
+                             ValkeyModule_GetSelectedDb(ctx), index_name));
+  VMSDK_RETURN_IF_ERROR(AclPrefixCheck(ctx, acl::KeyAccess::kWrite,
+                                       index_schema->GetKeyPrefixes()));
+
+  // Moving the alias off its current owner needs write access there too.
+  auto owner = SchemaManager::Instance().GetAliasOwner(
+      ValkeyModule_GetSelectedDb(ctx), alias);
+  if (owner.has_value() && *owner != index_name) {
+    VMSDK_ASSIGN_OR_RETURN(auto owner_schema,
+                           SchemaManager::Instance().GetIndexSchema(
+                               ValkeyModule_GetSelectedDb(ctx), *owner));
+    VMSDK_RETURN_IF_ERROR(AclPrefixCheck(ctx, acl::KeyAccess::kWrite,
+                                         owner_schema->GetKeyPrefixes()));
   }
 
   VMSDK_RETURN_IF_ERROR(SchemaManager::Instance().UpdateAlias(

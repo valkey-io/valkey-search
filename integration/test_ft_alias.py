@@ -709,3 +709,98 @@ class TestFTAliasListRDBPersistence(ValkeySearchTestCaseDebugMode):
 
         result = client.execute_command("FT.ALIASLIST")
         assert result == []
+
+
+class TestFTAliasAclPrefixCheck(ValkeySearchTestCaseBase):
+    """ALIASADD/ALIASUPDATE/ALIASDEL must enforce the same key-prefix ACL
+    check as FT.CREATE/FT.DROPINDEX/FT.INFO."""
+
+    def _restricted_client(self, prefix):
+        client: Valkey = self.server.get_new_client()
+        client.execute_command(
+            "ACL", "SETUSER", "alias_acl_user", "on", ">alias_acl_pass",
+            f"~{prefix}*", "&*", "-@all", "+@all",
+        )
+        client.execute_command("AUTH", "alias_acl_user", "alias_acl_pass")
+        return client
+
+    @pytest.mark.parametrize("cmd", ["FT.ALIASADD", "FT.ALIASUPDATE"])
+    def test_rejected_for_wrong_prefix(self, cmd):
+        admin = self.client
+        assert admin.execute_command(
+            "FT.CREATE", INDEX_NAME, "ON", "HASH",
+            "PREFIX", "1", "prefix_b:",
+            "SCHEMA", "category", "TAG",
+        ) == b"OK"
+
+        restricted = self._restricted_client("prefix_a:")
+        with pytest.raises(ResponseError, match="(?i)permission"):
+            restricted.execute_command(cmd, ALIAS_NAME, INDEX_NAME)
+
+    def test_aliasdel_rejected_for_wrong_prefix(self):
+        admin = self.client
+        assert admin.execute_command(
+            "FT.CREATE", INDEX_NAME, "ON", "HASH",
+            "PREFIX", "1", "prefix_b:",
+            "SCHEMA", "category", "TAG",
+        ) == b"OK"
+        assert admin.execute_command("FT.ALIASADD", ALIAS_NAME, INDEX_NAME) == b"OK"
+
+        restricted = self._restricted_client("prefix_a:")
+        with pytest.raises(ResponseError, match="(?i)permission"):
+            restricted.execute_command("FT.ALIASDEL", ALIAS_NAME)
+
+    def test_aliasadd_allowed_for_matching_prefix(self):
+        admin = self.client
+        assert admin.execute_command(
+            "FT.CREATE", INDEX_NAME, "ON", "HASH",
+            "PREFIX", "1", "prefix_a:",
+            "SCHEMA", "category", "TAG",
+        ) == b"OK"
+
+        restricted = self._restricted_client("prefix_a:")
+        assert restricted.execute_command(
+            "FT.ALIASADD", ALIAS_NAME, INDEX_NAME
+        ) == b"OK"
+
+    def test_aliasupdate_rejected_when_repointing_away_from_forbidden_owner(self):
+        """A user restricted to the new index's prefix cannot repoint an
+        alias away from an index outside that prefix, even though they can
+        write the target."""
+        admin = self.client
+        assert admin.execute_command(
+            "FT.CREATE", INDEX_NAME, "ON", "HASH",
+            "PREFIX", "1", "prefix_b:",
+            "SCHEMA", "category", "TAG",
+        ) == b"OK"
+        assert admin.execute_command(
+            "FT.CREATE", INDEX_NAME_2, "ON", "HASH",
+            "PREFIX", "1", "prefix_a:",
+            "SCHEMA", "category", "TAG",
+        ) == b"OK"
+        assert admin.execute_command("FT.ALIASADD", ALIAS_NAME, INDEX_NAME) == b"OK"
+
+        restricted = self._restricted_client("prefix_a:")
+        with pytest.raises(ResponseError, match="(?i)permission"):
+            restricted.execute_command("FT.ALIASUPDATE", ALIAS_NAME, INDEX_NAME_2)
+
+    def test_aliasdel_checks_alias_owner_not_shadowing_index(self):
+        """ALIASDEL on an alias must check the alias's own owner, not a real
+        index that happens to share the alias's name (shadowing)."""
+        admin = self.client
+        assert admin.execute_command(
+            "FT.CREATE", INDEX_NAME, "ON", "HASH",
+            "PREFIX", "1", "prefix_b:",
+            "SCHEMA", "category", "TAG",
+        ) == b"OK"
+        assert admin.execute_command("FT.ALIASADD", ALIAS_NAME, INDEX_NAME) == b"OK"
+        # A real index shadowing the alias's name, restricted to prefix_a.
+        assert admin.execute_command(
+            "FT.CREATE", ALIAS_NAME, "ON", "HASH",
+            "PREFIX", "1", "prefix_a:",
+            "SCHEMA", "category", "TAG",
+        ) == b"OK"
+
+        restricted = self._restricted_client("prefix_a:")
+        with pytest.raises(ResponseError, match="(?i)permission"):
+            restricted.execute_command("FT.ALIASDEL", ALIAS_NAME)

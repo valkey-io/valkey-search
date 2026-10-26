@@ -1604,29 +1604,6 @@ constexpr absl::string_view kFingerprintTestProto = R"(
   }
 )";
 
-// ComputeFingerprint is invariant to alias changes.
-TEST(AliasFingerprint, ComputeFingerprintIgnoresAliases) {
-  data_model::IndexSchema proto_no_aliases;
-  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
-      std::string(kFingerprintTestProto), &proto_no_aliases));
-
-  data_model::IndexSchema proto_with_aliases = proto_no_aliases;
-  proto_with_aliases.add_aliases()->set_name("a");
-  proto_with_aliases.add_aliases()->set_name("b");
-
-  google::protobuf::Any any_base;
-  any_base.PackFrom(proto_no_aliases);
-  auto fp_base = SchemaManager::ComputeFingerprint(any_base);
-  ASSERT_TRUE(fp_base.ok()) << fp_base.status();
-
-  google::protobuf::Any any_aliased;
-  any_aliased.PackFrom(proto_with_aliases);
-  auto fp_aliased = SchemaManager::ComputeFingerprint(any_aliased);
-  ASSERT_TRUE(fp_aliased.ok()) << fp_aliased.status();
-
-  EXPECT_EQ(*fp_base, *fp_aliased);
-}
-
 // ComputeFingerprint produces distinct values for structural changes.
 TEST(AliasFingerprint, ComputeFingerprintDistinguishesStructuralChanges) {
   data_model::IndexSchema base_proto;
@@ -2335,6 +2312,30 @@ TEST_F(AliasConvergenceTest, ConcurrentUpdatesConverge) {
   // Both updates claim epoch 2; the greater index name wins the tie.
   EXPECT_EQ(reference[0].second, "idx3");
   ExpectPeersConverge(merged, reference);
+}
+
+// Two nodes add different aliases to the same index at the same time, so both
+// entries share a version. Reconciling with each other must converge.
+TEST_F(AliasConvergenceTest, ConcurrentAddsToSameIndexConverge) {
+  auto add = [&](const char *alias, History &history) {
+    ResetNode();
+    CreateIndex("idx");
+    VMSDK_EXPECT_OK(SchemaManager::Instance().AddAlias(kDbNum, alias, "idx"));
+    Record(history);
+  };
+  History node_a;
+  History node_b;
+  add("p1", node_a);
+  add("p2", node_b);
+
+  add("p1", node_a);
+  ReconcileLatest(node_b);
+  auto aliases_a = SchemaManager::Instance().GetAllAliases(kDbNum);
+  add("p2", node_b);
+  ReconcileLatest(node_a);
+  auto aliases_b = SchemaManager::Instance().GetAllAliases(kDbNum);
+
+  EXPECT_EQ(aliases_a, aliases_b);
 }
 
 // After concurrent updates, FT.ALIASDEL removes the alias for good: dropping

@@ -720,9 +720,6 @@ absl::StatusOr<uint64_t> SchemaManager::ComputeFingerprint(
   // deployed, metadata with the latest encoding version is guaranteed to be
   // prioritized by the metadata manager
 
-  // Exclude aliases from fingerprint so alias operations don't destabilize
-  // search consistency checks.
-  unpacked->clear_aliases();
   std::string serialized_entry;
   if (!unpacked->SerializeToString(&serialized_entry)) {
     return absl::InternalError(

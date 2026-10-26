@@ -2144,9 +2144,12 @@ bool IndexSchema::WaitForContendedKeys(
   absl::MutexLock lock(&mutated_records_mutex_);
   // A record is erased only after its mutation is applied.
   auto applied = [&]() ABSL_NO_THREAD_SAFETY_ANALYSIS {
-    return std::ranges::none_of(contended, [&](const Key &key) {
-      return tracked_mutated_records_.contains(key);
-    });
+    for (const auto &key : contended) {
+      if (tracked_mutated_records_.contains(key)) {
+        return false;
+      }
+    }
+    return true;
   };
   if (applied()) {
     return true;

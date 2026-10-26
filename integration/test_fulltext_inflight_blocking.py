@@ -186,12 +186,12 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
                 "FT._DEBUG PAUSEPOINT TEST mutation_processing") > 0
         )
 
-        def multi_search(query, timeout_ms=200):
+        def multi_search(query, timeout_ms=1000):
             pipe = client.pipeline(transaction=True)
             pipe.execute_command("FT.SEARCH", "idx", query, "TIMEOUT", timeout_ms)
             return pipe.execute(raise_on_error=False)[0]
 
-        def lua_search(query, timeout_ms=200):
+        def lua_search(query, timeout_ms=1000):
             return client.eval(
                 "return redis.call('FT.SEARCH', 'idx', ARGV[1], 'TIMEOUT', ARGV[2])",
                 0, query, timeout_ms,
@@ -200,14 +200,15 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
         blocked = lambda: client.info("SEARCH")["search_text_query_blocked_count"]
         # Term and prefix: the prefix walk reads the per-key tree the paused
         # writer is about to free.
+        # The blocked count is what proves the wait was reached: a search
+        # that times out before it would raise the same error without it.
         for query in ("@content:hello", "@content:hel*"):
-            before, t0 = blocked(), time.monotonic()
+            before = blocked()
             multi_res = multi_search(query)
             assert isinstance(multi_res, ResponseError), multi_res
             assert "timeout" in str(multi_res).lower()
             with pytest.raises(ResponseError, match="(?i)timeout"):
                 lua_search(query)
-            assert time.monotonic() - t0 >= 0.4
             assert blocked() == before + 2
 
         client.execute_command("FT._DEBUG PAUSEPOINT RESET mutation_processing")

@@ -2318,8 +2318,8 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
       index_schema->WaitForContendedKeys(neighbors, absl::InfinitePast()));
   EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 1u);
 
-  EXPECT_TRUE(
-      index_schema->WaitForContendedKeys(neighbors, absl::InfiniteFuture()));
+  EXPECT_TRUE(index_schema->WaitForContendedKeys(
+      neighbors, absl::Now() + absl::Seconds(10)));
   EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 0u);
 
   VMSDK_EXPECT_OK(mutations_thread_pool.ResumeWorkers());
@@ -2346,8 +2346,8 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   neighbors[0].sequence_number = index_schema->GetDbMutationSequenceNumber(key);
 
   // The writer cannot apply while a reader slice is held; it is let through
-  // only once this thread is observed blocking on the key. Both waits are
-  // bounded so a regression fails instead of hanging.
+  // only once this thread has entered the await path (blocked count bumped).
+  // Both waits are bounded so a regression fails instead of hanging.
   const auto blocked_before = Metrics::GetStats().text_query_blocked_cnt.load();
   const absl::Time give_up = absl::Now() + absl::Seconds(10);
   absl::Notification reader_held;
@@ -2368,8 +2368,13 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   EXPECT_TRUE(index_schema->WaitForContendedKeys(neighbors, give_up));
   release.join();
   EXPECT_TRUE(observed_blocked);
+  EXPECT_EQ(Metrics::GetStats().text_query_blocked_cnt.load(),
+            blocked_before + 1);
   EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 0u);
+  // The kMax re-queue and the original task both ran; accounting balances.
   WaitWorkerTasksAreCompleted(mutations_thread_pool);
+  EXPECT_EQ(mutations_thread_pool.QueueSize(), 0);
+  EXPECT_EQ(index_schema->stats_.mutation_queue_size_, 0u);
 }
 
 void IndexSchemaFriendTest::VerifyVectorIndexConsistency(

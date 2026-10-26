@@ -1598,6 +1598,7 @@ absl::Status SchemaManager::UpdateAlias(uint32_t db_num,
 
   uint64_t epoch;
   std::vector<std::string> other_claimants;
+  bool target_already_owned = false;
   {
     absl::MutexLock lock(&db_to_index_schemas_mutex_);
     static const AliasMap kNoAliases;
@@ -1606,8 +1607,9 @@ absl::Status SchemaManager::UpdateAlias(uint32_t db_num,
         db_alias_it != db_to_aliases_.end() ? db_alias_it->second : kNoAliases;
     auto alias_it = alias_map.find(alias);
     if (alias_it != alias_map.end()) {
-      // Idempotent: alias already points to the target → OK.
-      if (alias_it->second.owner == index_name) {
+      target_already_owned = alias_it->second.owner == index_name;
+      // Idempotent unless a losing claim is left to clean up.
+      if (target_already_owned && alias_it->second.epochs.size() == 1) {
         return absl::OkStatus();
       }
       for (const auto &[claimant, _] : alias_it->second.epochs) {
@@ -1617,7 +1619,9 @@ absl::Status SchemaManager::UpdateAlias(uint32_t db_num,
       }
       // The old owner goes last, so a failed removal plus rollback leaves the
       // alias on the old owner rather than on a loser.
-      other_claimants.push_back(alias_it->second.owner);
+      if (!target_already_owned) {
+        other_claimants.push_back(alias_it->second.owner);
+      }
     }
     // Reject if index_name is only an alias.
     if (alias_map.contains(index_name) &&
@@ -1672,6 +1676,12 @@ absl::Status SchemaManager::UpdateAlias(uint32_t db_num,
         << "UpdateAlias: failed to remove alias '" << alias
         << "' from old index '" << old_index
         << "' proto; rolling back add to target: " << remove_status.message();
+
+    // Step 1 only refreshed the owner's claim; removing it would hand the
+    // alias to the loser.
+    if (target_already_owned) {
+      return remove_status;
+    }
 
     // Roll back: remove the alias we already added to the target. Best
     // effort; a NotFound here means the target is gone, which already

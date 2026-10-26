@@ -1832,6 +1832,20 @@ TEST_F(CrossIndexAliasConflictTest, LosingClaimTakesOverWhenOwnerReleases) {
   EXPECT_EQ(aliases[0].second, "idx_a");
 }
 
+// UpdateAlias to the owner drops the losing claim, so it can't take over later.
+TEST_F(CrossIndexAliasConflictTest, UpdateToOwnerDropsLosingClaim) {
+  CreateIndex("idx_a");
+  CreateIndex("idx_z");
+  SimulateAliasCallback("idx_a", {"shared_alias"});
+  SimulateAliasCallback("idx_z", {"shared_alias"});
+
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().UpdateAlias(kDbNum, "shared_alias", "idx_z"));
+  SimulateAliasCallback("idx_z", {});
+
+  EXPECT_TRUE(SchemaManager::Instance().GetAllAliases(kDbNum).empty());
+}
+
 TEST_F(CrossIndexAliasConflictTest, NoConflictDifferentAliasesCoexist) {
   CreateIndex("idx_a");
   CreateIndex("idx_b");
@@ -2080,6 +2094,22 @@ TEST_F(AliasWriteFailureTest, UpdateReportsMovedAliasWhenRollbackFails) {
   EXPECT_EQ(
       SchemaManager::Instance().GetAllAliases(kDbNum),
       (std::vector<std::pair<std::string, std::string>>{{"p1", "idx_b"}}));
+}
+
+// The owner's claim is only refreshed, so a failed loser removal must not roll
+// it back and hand the alias to the loser.
+TEST_F(AliasWriteFailureTest, UpdateToOwnerKeepsOwnerWhenLoserWriteFails) {
+  CreateIndex("idx_a");
+  CreateIndex("idx_z");
+  SimulateAliasCallback("idx_a", {"p1"});
+  SimulateAliasCallback("idx_z", {"p1"});
+
+  FailWrites(/*skip=*/1, /*fail=*/1);
+  EXPECT_FALSE(
+      SchemaManager::Instance().UpdateAlias(kDbNum, "p1", "idx_z").ok());
+  EXPECT_EQ(
+      SchemaManager::Instance().GetAllAliases(kDbNum),
+      (std::vector<std::pair<std::string, std::string>>{{"p1", "idx_z"}}));
 }
 
 TEST_F(AliasWriteFailureTest, AddAndRemoveSurfaceWriteFailure) {

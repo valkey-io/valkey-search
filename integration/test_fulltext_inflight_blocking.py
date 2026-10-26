@@ -191,6 +191,13 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
             pipe.execute_command("FT.SEARCH", "idx", query, "TIMEOUT", timeout_ms)
             return pipe.execute(raise_on_error=False)[0]
 
+        def multi_aggregate(query, timeout_ms=1000):
+            # Without LOAD nothing is revalidated and the wait is skipped.
+            pipe = client.pipeline(transaction=True)
+            pipe.execute_command("FT.AGGREGATE", "idx", query, "LOAD", "1",
+                                 "content", "TIMEOUT", timeout_ms)
+            return pipe.execute(raise_on_error=False)[0]
+
         def lua_search(query, timeout_ms=1000):
             return client.eval(
                 "return redis.call('FT.SEARCH', 'idx', ARGV[1], 'TIMEOUT', ARGV[2])",
@@ -209,9 +216,17 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
             assert "timeout" in str(multi_res).lower()
             with pytest.raises(ResponseError, match="(?i)timeout"):
                 lua_search(query)
-            assert blocked() == before + 2
+            agg_res = multi_aggregate(query)
+            assert isinstance(agg_res, ResponseError), agg_res
+            assert "timeout" in str(agg_res).lower()
+            assert blocked() == before + 3
 
-        client.execute_command("FT._DEBUG PAUSEPOINT RESET mutation_processing")
+        # Release the writer inside the transaction: the search that follows
+        # sees the stale index, waits for the mutation and replies fresh.
+        pipe = client.pipeline(transaction=True)
+        pipe.execute_command("FT._DEBUG", "PAUSEPOINT", "RESET", "mutation_processing")
+        pipe.execute_command("FT.SEARCH", "idx", "@content:hello", "TIMEOUT", 10000)
+        assert pipe.execute()[1] == [0]
         hset_thread.join()
         assert hset_err[0] is None
         IndexingTestHelper.wait_for_indexing_complete_on_node(client, "idx")

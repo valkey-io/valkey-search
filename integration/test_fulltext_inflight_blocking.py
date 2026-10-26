@@ -221,8 +221,9 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
             assert "timeout" in str(agg_res).lower()
             assert blocked() == before + 3
 
-        # Release the writer inside the transaction: the search that follows
-        # sees the stale index, waits for the mutation and replies fresh.
+        # Release the writer inside the transaction. The search that follows
+        # either finds the mutation applied or sees the stale index and waits
+        # for it; it must reply fresh either way.
         pipe = client.pipeline(transaction=True)
         pipe.execute_command("FT._DEBUG", "PAUSEPOINT", "RESET", "mutation_processing")
         pipe.execute_command("FT.SEARCH", "idx", "@content:hello", "TIMEOUT", 10000)

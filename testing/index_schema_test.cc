@@ -1891,7 +1891,7 @@ class IndexSchemaFriendTest : public ValkeySearchTest {
   void ExpectWriterQueueDrained() {
     WaitWorkerTasksAreCompleted(mutations_thread_pool);
     EXPECT_EQ(mutations_thread_pool.QueueSize(), 0);
-    EXPECT_EQ(index_schema->stats_.mutation_queue_size_, 0u);
+    EXPECT_EQ(index_schema->GetStats().GetStats().mutation_queue_size, 0u);
   }
 
   void VerifyVectorIndexConsistency(

@@ -873,6 +873,9 @@ absl::Status SchemaManager::OnMetadataCallback(
     const auto *descriptor = data_model::IndexSchema::descriptor();
     differ.IgnoreField(descriptor->FindFieldByName("aliases"));
     differ.IgnoreField(descriptor->FindFieldByName("stats"));
+    // Indexes loaded from older RDB files carry their grown capacity.
+    differ.IgnoreField(
+        data_model::VectorIndex::descriptor()->FindFieldByName("initial_cap"));
     differ.TreatAsSet(descriptor->FindFieldByName("attributes"));
 
     auto existing_proto = existing.value()->ToProto();

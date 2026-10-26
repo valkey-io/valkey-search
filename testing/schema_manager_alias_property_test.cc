@@ -1987,6 +1987,33 @@ TEST_F(CrossIndexAliasConflictTest, AliasCommandsDoNotRebuildIndexes) {
   }
 }
 
+// An index loaded from an older RDB file has its grown capacity as
+// initial_cap, while the stored metadata keeps the configured one. That alone
+// must not make an alias edit look structural.
+TEST_F(CrossIndexAliasConflictTest,
+       AliasEditWithDifferentInitialCapKeepsIndex) {
+  CreateIndex("idx_a");
+  auto schema = SchemaManager::Instance().GetIndexSchema(kDbNum, "idx_a");
+  ASSERT_TRUE(schema.ok()) << schema.status();
+  auto proto = (*schema)->ToProto();
+  proto->mutable_attributes(0)
+      ->mutable_index()
+      ->mutable_vector_index()
+      ->set_initial_cap(2058);
+  auto *alias = proto->add_aliases();
+  alias->set_name("p1");
+  alias->set_epoch(1);
+  auto packed = std::make_unique<google::protobuf::Any>();
+  packed->PackFrom(*proto);
+
+  VMSDK_EXPECT_OK(coordinator::MetadataManager::Instance().CreateEntry(
+      kSchemaManagerMetadataTypeName, coordinator::ObjName(kDbNum, "idx_a"),
+      std::move(packed)));
+
+  EXPECT_EQ(SchemaManager::Instance().GetIndexSchema(kDbNum, "idx_a")->get(),
+            schema->get());
+}
+
 TEST_F(CrossIndexAliasConflictTest, UpdateToCurrentTargetWritesNothing) {
   CreateIndex("idx_a");
   VMSDK_EXPECT_OK(SchemaManager::Instance().AddAlias(kDbNum, "p1", "idx_a"));

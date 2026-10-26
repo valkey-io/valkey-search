@@ -61,9 +61,7 @@ uint64_t CanonicalDoubleBits(double d) {
 // alike. Matching that keeps string comparisons against an array compatible.
 static constexpr absl::string_view kArrayAsString{""};
 
-// Precedes a double's serialized bit pattern in Serialize(). '"', 't', 'f',
-// 'n', and '[' all start the other element encodings, so this NUL tag can't
-// collide with any of them.
+// Unused by any other element encoding's first byte.
 static constexpr char kDoubleTag = '\0';
 
 Value::Value(double d) { value_ = d; }
@@ -299,9 +297,6 @@ std::string Value::Serialize() const {
         // %.12g (used by AsStringView()) loses precision and collapses -0.0
         // with 0.0 and all NaNs together; append the canonicalized 8-byte bit
         // pattern instead so nested doubles hash unambiguously and losslessly.
-        // A type-tag byte (unused by any other element encoding) precedes the
-        // bits so a double's raw bytes can never read back as a quoted
-        // string, bool, or null from a sibling element.
         result += kDoubleTag;
         uint64_t bits = CanonicalDoubleBits(elem.GetDouble());
         result.append(reinterpret_cast<const char*>(&bits), sizeof(bits));

@@ -245,13 +245,10 @@ void Service::SearchOneArm(grpc::CallbackServerContext *context,
         request, context, search_operation.get()));
     search_operation->multi_arm = multi_arm;
 
-    // perform index consistency check (index fingerprint/version), required
-    auto schema = SchemaManager::Instance()
-                      .GetIndexSchema(search_operation->db_num,
-                                      search_operation->index_schema_name)
-                      .value();
+    // Reuse the already-resolved schema; re-resolving a repointed alias here
+    // could crash via .value().
     VMSDK_RETURN_IF_ERROR(ToAbslStatus(PerformIndexConsistencyCheck(
-        request.index_fingerprint_version(), schema)));
+        request.index_fingerprint_version(), search_operation->index_schema)));
 
     if (request.enable_consistency()) {
       // Perform slot consistency check

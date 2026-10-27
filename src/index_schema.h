@@ -42,6 +42,7 @@
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/command_parser.h"
+#include "vmsdk/src/huge/flat_hash_map.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/thread_pool.h"
@@ -100,8 +101,8 @@ class IndexSchema : public KeyspaceEventSubscription,
 
   // Transparent functors so GetDocumentScore() can probe with a borrowed key.
   using IndexKeyInfoMap =
-      absl::flat_hash_map<Key, IndexKeyInfo, InternedStringPtrHash,
-                          InternedStringPtrEq>;
+      vmsdk::HugeFlatHashMap<Key, IndexKeyInfo, InternedStringPtrHash,
+                             InternedStringPtrEq>;
 
   struct InfoIndexPartitionData {
     uint64_t num_docs;
@@ -530,7 +531,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   mutable absl::Mutex mutated_records_mutex_;
 
   MutationSequenceNumber schema_mutation_sequence_number_{0};
-  vmsdk::MainThreadAccessGuard<absl::flat_hash_map<Key, DbKeyInfo>>
+  vmsdk::MainThreadAccessGuard<vmsdk::HugeFlatHashMap<Key, DbKeyInfo>>
       db_key_info_;  // Mainthread.
 
   // For proper sequencing and thread-safety, we separate reads/writes into

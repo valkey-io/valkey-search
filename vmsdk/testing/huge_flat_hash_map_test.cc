@@ -8,11 +8,13 @@
 #include <cstdint>
 #include <random>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
+#include "absl/strings/string_view.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "vmsdk/src/huge/flat_hash_map.h"
@@ -72,6 +74,11 @@ using CountedMap =
                     absl::flat_hash_map<int64_t, int64_t>::hasher,
                     absl::flat_hash_map<int64_t, int64_t>::key_equal,
                     CountingAllocator<std::pair<const int64_t, int64_t>>>;
+using Set = HugeFlatHashSet<int64_t>;
+using CountedSet =
+    HugeFlatHashSet<int64_t, absl::flat_hash_set<int64_t>::hasher,
+                    absl::flat_hash_set<int64_t>::key_equal,
+                    CountingAllocator<int64_t>>;
 
 class FlatHashMapTest : public ValkeyTest {
  protected:
@@ -220,10 +227,15 @@ TEST_F(FlatHashMapTest, EraseMigrates) {
 
 // Fails if absl rehashes fg_ on its own. A grow allocates outside a cycle; an
 // in-place rehash moves elements, which `sampled` pointers detect.
+int64_t KeyOf(const std::pair<const int64_t, int64_t> &entry) {
+  return entry.first;
+}
+int64_t KeyOf(int64_t entry) { return entry; }
+
+template <typename M>
 class NoRehashChecker {
  public:
-  explicit NoRehashChecker(CountedMap &m, size_t samples)
-      : m_(m), samples_(samples) {
+  explicit NoRehashChecker(M &m, size_t samples) : m_(m), samples_(samples) {
     Reset();
   }
 
@@ -251,7 +263,7 @@ class NoRehashChecker {
       if (sampled_.size() >= samples_) {
         break;
       }
-      sampled_.try_emplace(entry.first, &entry);
+      sampled_.try_emplace(KeyOf(entry), &entry);
     }
   }
 
@@ -263,7 +275,7 @@ class NoRehashChecker {
     sampled_.clear();
   }
 
-  CountedMap &m_;
+  M &m_;
   size_t samples_;
   size_t cycles_;
   size_t allocations_;
@@ -350,6 +362,39 @@ TEST_P(FlatHashMapNoRehashTest, TombstoneChurn) {
   }
 }
 
+TEST_P(FlatHashMapNoRehashTest, MoveMidCycle) {
+  CountedMap a;
+  for (int64_t i = 0; i < 100000; ++i) {
+    a[i] = i;
+    if (!Peer::Bg(a).empty() && Peer::Bg(a).size() % 2 == 0) {
+      CountedMap b(std::move(a));
+      a = std::move(b);
+    }
+  }
+  NoRehashChecker checker(a, 64);
+  for (int64_t i = 100000; i < 200000; ++i) {
+    a[i] = i;
+    ASSERT_NO_FATAL_FAILURE(checker.Check()) << i;
+  }
+  EXPECT_EQ(a.size(), 200000);
+}
+
+TEST_P(FlatHashMapNoRehashTest, SetGrowAndShrink) {
+  CountedSet s;
+  NoRehashChecker checker(s, 64);
+  constexpr int64_t kPeak = 100000;
+  for (int64_t i = 0; i < kPeak; ++i) {
+    s.insert(i);
+    ASSERT_NO_FATAL_FAILURE(checker.Check()) << i;
+  }
+  for (int64_t i = 0; i < kPeak - 100; ++i) {
+    EXPECT_EQ(s.erase(i), 1);
+    ASSERT_NO_FATAL_FAILURE(checker.Check()) << i;
+  }
+  EXPECT_EQ(s.size(), 100);
+  EXPECT_GT(Peer::Cycles(s), 0);
+}
+
 INSTANTIATE_TEST_SUITE_P(MigrateBatch, FlatHashMapNoRehashTest,
                          ::testing::Values(1, 8));
 
@@ -399,6 +444,165 @@ TEST_F(FlatHashMapTest, MatchesAbslUnderRandomOperations) {
     ++visited;
   }
   EXPECT_EQ(visited, ref.size());
+}
+
+// absl's default string hasher is transparent, so lookups take a string_view.
+TEST_F(FlatHashMapTest, HeterogeneousLookup) {
+  SetBatch(1);
+  HugeFlatHashMap<std::string, int> m;
+  int n = 0;
+  while (Peer::Bg(m).empty()) {
+    m[std::to_string(n)] = n;
+    ++n;
+  }
+  for (int i = 0; i < n; ++i) {
+    std::string key = std::to_string(i);
+    absl::string_view view = key;
+    ASSERT_NE(m.find(view), m.end()) << i;
+    EXPECT_EQ(m.find(view)->second, i);
+    EXPECT_TRUE(std::as_const(m).contains(view));
+    EXPECT_EQ(m.count(view), 1);
+  }
+  EXPECT_FALSE(m.contains(absl::string_view("missing")));
+}
+
+TEST_F(FlatHashMapTest, SetBasicOperations) {
+  Set s;
+  EXPECT_TRUE(s.empty());
+  EXPECT_TRUE(s.insert(1).second);
+  EXPECT_FALSE(s.insert(1).second);
+  int64_t two = 2;
+  EXPECT_TRUE(s.insert(two).second);
+  EXPECT_EQ(*s.insert(3).first, 3);
+  EXPECT_EQ(s.size(), 3);
+  EXPECT_TRUE(s.contains(2));
+  EXPECT_EQ(s.count(4), 0);
+  EXPECT_EQ(*s.find(3), 3);
+  EXPECT_EQ(s.erase(2), 1);
+  EXPECT_EQ(s.erase(2), 0);
+  s.erase(s.find(3));
+  EXPECT_EQ(s.size(), 1);
+  s.clear();
+  EXPECT_TRUE(s.empty());
+  EXPECT_EQ(s.begin(), s.end());
+}
+
+TEST_F(FlatHashMapTest, SetMatchesAbslUnderRandomOperations) {
+  Set s;
+  absl::flat_hash_set<int64_t> ref;
+  std::mt19937_64 rng(7);
+  constexpr int kOps = 100000;
+  for (int i = 0; i < kOps; ++i) {
+    if (i % (kOps / 4) == 0) {
+      SetBatch(std::vector<long long>{1, 8, 64, 2}[i / (kOps / 4)]);
+    }
+    int64_t range = i < kOps / 2 ? 20000 : 500;
+    int64_t key = static_cast<int64_t>(rng() % range);
+    switch (rng() % 4) {
+      case 0:
+      case 1:
+        ASSERT_EQ(s.insert(key).second, ref.insert(key).second);
+        break;
+      case 2:
+        ASSERT_EQ(s.erase(key), ref.erase(key));
+        break;
+      case 3:
+        ASSERT_EQ(s.contains(key), ref.contains(key));
+        break;
+    }
+    ASSERT_EQ(s.size(), ref.size());
+  }
+  size_t visited = 0;
+  for (int64_t k : s) {
+    ASSERT_TRUE(ref.contains(k));
+    ++visited;
+  }
+  EXPECT_EQ(visited, ref.size());
+}
+
+// Moves a map in the middle of a drain, then finishes the drain.
+TEST_F(FlatHashMapTest, MoveDuringDrain) {
+  SetBatch(1);
+  Map a;
+  int64_t n = FillUntilBackground(a);
+  a[n] = n;
+  ++n;
+  ASSERT_FALSE(Peer::Bg(a).empty());
+
+  Map b(std::move(a));
+  EXPECT_TRUE(a.empty());
+  EXPECT_TRUE(Peer::Bg(a).empty());
+  EXPECT_EQ(b.size(), n);
+  ASSERT_FALSE(Peer::Bg(b).empty());
+
+  Map c;
+  c[-1] = -1;
+  c = std::move(b);
+  EXPECT_TRUE(b.empty());
+  EXPECT_EQ(c.size(), n);
+
+  // The moved-from maps are usable.
+  a[1] = 1;
+  b[2] = 2;
+  EXPECT_EQ(a.size(), 1);
+  EXPECT_EQ(b.size(), 1);
+
+  while (!Peer::Bg(c).empty()) {
+    c[n] = n;
+    ++n;
+  }
+  EXPECT_EQ(c.size(), n);
+  for (int64_t i = 0; i < n; ++i) {
+    ASSERT_EQ(c.at(i), i);
+  }
+  EXPECT_EQ(std::distance(c.begin(), c.end()), n);
+}
+
+TEST_F(FlatHashMapTest, SwapWithActiveBackgrounds) {
+  SetBatch(1);
+  Map a;
+  Map b;
+  int64_t na = FillUntilBackground(a);
+  int64_t nb = FillUntilBackground(b, 1000000) - 1000000;
+  ASSERT_FALSE(Peer::Bg(a).empty());
+  ASSERT_FALSE(Peer::Bg(b).empty());
+  std::swap(a, b);
+  EXPECT_EQ(a.size(), nb);
+  EXPECT_EQ(b.size(), na);
+  using std::swap;
+  swap(a, b);
+  EXPECT_EQ(a.size(), na);
+  EXPECT_EQ(b.size(), nb);
+  while (!Peer::Bg(a).empty()) {
+    a.erase(-1);
+  }
+  while (!Peer::Bg(b).empty()) {
+    b.erase(-1);
+  }
+  for (int64_t i = 0; i < na; ++i) {
+    ASSERT_TRUE(a.contains(i));
+  }
+  for (int64_t i = 0; i < nb; ++i) {
+    ASSERT_TRUE(b.contains(1000000 + i));
+  }
+}
+
+TEST_F(FlatHashMapTest, SetMoveDuringDrain) {
+  SetBatch(1);
+  Set a;
+  int64_t n = 0;
+  while (Peer::Bg(a).empty()) {
+    a.insert(n++);
+  }
+  Set b(std::move(a));
+  EXPECT_TRUE(a.empty());
+  while (!Peer::Bg(b).empty()) {
+    b.insert(n++);
+  }
+  EXPECT_EQ(b.size(), n);
+  for (int64_t i = 0; i < n; ++i) {
+    ASSERT_TRUE(b.contains(i));
+  }
 }
 
 TEST_F(FlatHashMapTest, CapacityHelpersMatchAbsl) {

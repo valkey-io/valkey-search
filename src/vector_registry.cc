@@ -404,7 +404,7 @@ void VectorRegistry::RemoveIndexKeys(
 
 void VectorRegistry::RemoveIndexKeys(
     int db_num, const InternedStringPtr &attribute_identifier,
-    absl::flat_hash_map<uint64_t, InternedStringPtr> keys) {
+    vmsdk::HugeFlatHashMap<uint64_t, InternedStringPtr> keys) {
   vmsdk::VerifyMainThread();
   if (keys.empty()) {
     return;
@@ -447,8 +447,8 @@ size_t VectorRegistry::ProcessPendingUnshares(uint32_t batch_size) {
     vmsdk::ValkeySelectDbGuard db_guard(ctx_.get(), db_num);
 
     while (!pending_keys.empty() && processed < batch_size) {
-      auto node = pending_keys.extract(pending_keys.begin());
-      const auto &rk = node.value();
+      RegistryKey rk = *pending_keys.begin();
+      pending_keys.erase(pending_keys.begin());
       ++processed;
 
       auto tracked_db_it = tracked_vectors_.find(db_num);

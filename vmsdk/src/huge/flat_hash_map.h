@@ -16,6 +16,7 @@
 #include <utility>
 
 #include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
 #include "vmsdk/src/huge/allocator.h"
 
@@ -53,15 +54,18 @@ config::Number &GetHugeFlatHashMapMigrateBatch();
 
 struct HugeFlatHashMapTestPeer;
 
-// A hash map for very large tables that never stalls on a full rehash.
+namespace internal {
+
+// The shared implementation of HugeFlatHashMap and HugeFlatHashSet. `Table` is
+// the absl::flat_hash_map or absl::flat_hash_set holding the entries.
 //
-// Two absl::flat_hash_maps are kept. New entries always go to the foreground.
-// When the foreground would have to grow (or has become mostly empty), it
-// becomes the background and a new, correctly sized foreground is created.
-// Each later insertion or erase then moves at least
-// "huge-hash-map-migrate-batch" entries from the background to the
-// foreground, so the cost of the rehash is spread across operations. Lookups
-// check the foreground, then the background, and never move entries.
+// Two tables are kept. New entries always go to the foreground. When the
+// foreground would have to grow (or has become mostly empty), it becomes the
+// background and a new, correctly sized foreground is created. Each later
+// insertion or erase then moves at least "huge-hash-map-migrate-batch"
+// entries from the background to the foreground, so the cost of the rehash is
+// spread across operations. Lookups check the foreground, then the
+// background, and never move entries.
 //
 // Sizing follows absl's power-of-2 capacities: a new foreground is reserved
 // for twice the live entries. A shrink starts once the live entries would fit
@@ -71,41 +75,35 @@ struct HugeFlatHashMapTestPeer;
 // conservatively (erases are treated as permanent tombstones) and the
 // background is always drained before that budget runs out.
 //
-// As with absl::flat_hash_map, lookups (find, contains, count, at) preserve
-// iterators, pointers and references. Unlike it, every insertion (including
-// operator[] on an existing key) and every erase may move elements and so
-// invalidates all of them. A background lingers until enough insertions or
-// erases have drained it.
-template <typename K, typename V,
-          typename Hash = typename absl::flat_hash_map<K, V>::hasher,
-          typename Eq = typename absl::flat_hash_map<K, V>::key_equal,
-          typename Alloc = HugeAllocator<std::pair<const K, V>>>
-class HugeFlatHashMap {
-  using Map = absl::flat_hash_map<K, V, Hash, Eq, Alloc>;
-
+// As with absl, lookups (find, contains, count, at) preserve iterators,
+// pointers and references. Unlike it, every insertion (including operator[]
+// on an existing key) and every erase may move elements and so invalidates
+// all of them. A background lingers until enough insertions or erases have
+// drained it. Moving the container also invalidates its iterators; it moves
+// no entries.
+template <typename Table>
+class HugeHashTable {
  public:
-  using key_type = K;
-  using mapped_type = V;
-  using value_type = typename Map::value_type;
+  using key_type = typename Table::key_type;
+  using value_type = typename Table::value_type;
   using size_type = size_t;
-  using hasher = Hash;
-  using key_equal = Eq;
-  using allocator_type = Alloc;
+  using hasher = typename Table::hasher;
+  using key_equal = typename Table::key_equal;
+  using allocator_type = typename Table::allocator_type;
 
   template <bool Const>
   class Iterator {
     using Owner =
-        std::conditional_t<Const, const HugeFlatHashMap *, HugeFlatHashMap *>;
-    using Inner = std::conditional_t<Const, typename Map::const_iterator,
-                                     typename Map::iterator>;
+        std::conditional_t<Const, const HugeHashTable *, HugeHashTable *>;
+    using Inner = std::conditional_t<Const, typename Table::const_iterator,
+                                     typename Table::iterator>;
 
    public:
     using iterator_category = std::forward_iterator_tag;
-    using value_type = typename Map::value_type;
+    using value_type = typename Table::value_type;
     using difference_type = std::ptrdiff_t;
-    using reference =
-        std::conditional_t<Const, const value_type &, value_type &>;
-    using pointer = std::conditional_t<Const, const value_type *, value_type *>;
+    using reference = decltype(*std::declval<const Inner &>());
+    using pointer = std::add_pointer_t<std::remove_reference_t<reference>>;
 
     Iterator() = default;
     Iterator(const Iterator &) = default;
@@ -127,13 +125,13 @@ class HugeFlatHashMap {
       ++*this;
       return tmp;
     }
-    // Iterators into different absl maps must not be compared.
+    // Iterators into different absl tables must not be compared.
     friend bool operator==(const Iterator &a, const Iterator &b) {
       return a.in_bg_ == b.in_bg_ && a.it_ == b.it_;
     }
 
    private:
-    friend class HugeFlatHashMap;
+    friend class HugeHashTable;
     friend class Iterator<!Const>;
 
     Iterator(Owner owner, bool in_bg, Inner it)
@@ -155,17 +153,50 @@ class HugeFlatHashMap {
   using iterator = Iterator<false>;
   using const_iterator = Iterator<true>;
 
-  HugeFlatHashMap() = default;
-  // The migration cursor points into bg_, so copying and moving are not
-  // supported.
-  HugeFlatHashMap(const HugeFlatHashMap &) = delete;
-  HugeFlatHashMap &operator=(const HugeFlatHashMap &) = delete;
+  HugeHashTable() = default;
+  HugeHashTable(const HugeHashTable &) = delete;
+  HugeHashTable &operator=(const HugeHashTable &) = delete;
+  // absl does not promise that iterators survive a move, so the migration
+  // cursor restarts at bg_.begin(). That is exact: migrated entries were
+  // extracted, so everything left in bg_ is still to be migrated.
+  HugeHashTable(HugeHashTable &&other) noexcept(
+      std::is_nothrow_move_constructible_v<Table>)
+      : fg_(std::move(other.fg_)),
+        bg_(std::move(other.bg_)),
+        fg_erased_(other.fg_erased_),
+        cycles_(other.cycles_) {
+    RestartCursor();
+    other.clear();
+  }
+  HugeHashTable &operator=(HugeHashTable &&other) noexcept(
+      std::is_nothrow_move_assignable_v<Table>) {
+    if (this != &other) {
+      fg_ = std::move(other.fg_);
+      bg_ = std::move(other.bg_);
+      fg_erased_ = other.fg_erased_;
+      cycles_ = other.cycles_;
+      RestartCursor();
+      other.clear();
+    }
+    return *this;
+  }
+  void swap(HugeHashTable &other) noexcept(
+      std::is_nothrow_move_constructible_v<Table> &&
+      std::is_nothrow_move_assignable_v<Table>) {
+    HugeHashTable tmp(std::move(other));
+    other = std::move(*this);
+    *this = std::move(tmp);
+  }
+  friend void swap(HugeHashTable &a,
+                   HugeHashTable &b) noexcept(noexcept(a.swap(b))) {
+    a.swap(b);
+  }
 
   size_t size() const { return fg_.size() + bg_.size(); }
   bool empty() const { return size() == 0; }
 
   void clear() {
-    fg_ = Map();
+    fg_ = Table();
     fg_erased_ = 0;
     ResetBackground();
   }
@@ -177,7 +208,10 @@ class HugeFlatHashMap {
   }
   const_iterator end() const { return const_iterator(this, true, bg_.end()); }
 
-  iterator find(const K &key) {
+  // Like absl, these accept any type the hasher and key_equal are transparent
+  // for.
+  template <typename Q = key_type>
+  iterator find(const Q &key) {
     if (auto it = fg_.find(key); it != fg_.end()) {
       return iterator(this, false, it);
     }
@@ -188,7 +222,8 @@ class HugeFlatHashMap {
     }
     return end();
   }
-  const_iterator find(const K &key) const {
+  template <typename Q = key_type>
+  const_iterator find(const Q &key) const {
     if (auto it = fg_.find(key); it != fg_.end()) {
       return const_iterator(this, false, it);
     }
@@ -200,61 +235,16 @@ class HugeFlatHashMap {
     return end();
   }
 
-  bool contains(const K &key) { return find(key) != end(); }
-  bool contains(const K &key) const { return find(key) != end(); }
-  size_t count(const K &key) { return contains(key) ? 1 : 0; }
-  size_t count(const K &key) const { return contains(key) ? 1 : 0; }
-
-  V &at(const K &key) {
-    auto it = find(key);
-    if (it == end()) {
-      throw std::out_of_range("vmsdk::HugeFlatHashMap::at");
-    }
-    return it->second;
+  template <typename Q = key_type>
+  bool contains(const Q &key) const {
+    return find(key) != end();
   }
-  const V &at(const K &key) const {
-    auto it = find(key);
-    if (it == end()) {
-      throw std::out_of_range("vmsdk::HugeFlatHashMap::at");
-    }
-    return it->second;
+  template <typename Q = key_type>
+  size_t count(const Q &key) const {
+    return contains(key) ? 1 : 0;
   }
 
-  template <typename... Args>
-  std::pair<iterator, bool> try_emplace(const K &key, Args &&...args) {
-    PrepareInsert(key);
-    return Wrap(fg_.try_emplace(key, std::forward<Args>(args)...));
-  }
-  template <typename... Args>
-  std::pair<iterator, bool> try_emplace(K &&key, Args &&...args) {
-    PrepareInsert(key);
-    return Wrap(fg_.try_emplace(std::move(key), std::forward<Args>(args)...));
-  }
-
-  std::pair<iterator, bool> insert(const value_type &value) {
-    PrepareInsert(value.first);
-    return Wrap(fg_.insert(value));
-  }
-  std::pair<iterator, bool> insert(value_type &&value) {
-    PrepareInsert(value.first);
-    return Wrap(fg_.insert(std::move(value)));
-  }
-
-  template <typename... Args>
-  std::pair<iterator, bool> emplace(Args &&...args) {
-    return insert(value_type(std::forward<Args>(args)...));
-  }
-
-  template <typename M>
-  std::pair<iterator, bool> insert_or_assign(const K &key, M &&obj) {
-    PrepareInsert(key);
-    return Wrap(fg_.insert_or_assign(key, std::forward<M>(obj)));
-  }
-
-  V &operator[](const K &key) { return try_emplace(key).first->second; }
-  V &operator[](K &&key) { return try_emplace(std::move(key)).first->second; }
-
-  size_t erase(const K &key) {
+  size_t erase(const key_type &key) {
     size_t erased = EraseKey(key);
     Migrate(internal::g_huge_map_migrate_batch);
     return erased;
@@ -269,40 +259,13 @@ class HugeFlatHashMap {
     Migrate(internal::g_huge_map_migrate_batch);
   }
 
- private:
-  friend struct HugeFlatHashMapTestPeer;
-
-  size_t EraseKey(const K &key) {
-    if (fg_.erase(key) != 0) {
-      ErasedFromForeground();
-      return 1;
-    }
-    if (bg_.empty()) {
-      return 0;
-    }
-    auto it = bg_.find(key);
-    if (it == bg_.end()) {
-      return 0;
-    }
-    EraseFromBackground(it);
-    return 1;
-  }
-
-  std::pair<iterator, bool> Wrap(std::pair<typename Map::iterator, bool> r) {
+ protected:
+  std::pair<iterator, bool> Wrap(std::pair<typename Table::iterator, bool> r) {
     return {iterator(this, false, r.first), r.second};
   }
 
-  // Inserts still allowed into fg_ before absl would rehash it, after every
-  // background entry has been migrated.
-  size_t Budget() const {
-    size_t used = fg_.size() + fg_erased_ + bg_.size();
-    size_t growth = internal::HugeMapGrowth(fg_.capacity());
-    CHECK_LE(used, growth);
-    return growth - used;
-  }
-
   // Called before an insertion of `key` into fg_.
-  void PrepareInsert(const K &key) {
+  void PrepareInsert(const key_type &key) {
     if (bg_.empty()) {
       if (Budget() > 0 || fg_.contains(key)) {
         return;
@@ -324,11 +287,41 @@ class HugeFlatHashMap {
     Migrate(internal::g_huge_map_migrate_batch);
   }
 
+  Table fg_;
+
+ private:
+  friend struct vmsdk::HugeFlatHashMapTestPeer;
+
+  size_t EraseKey(const key_type &key) {
+    if (fg_.erase(key) != 0) {
+      ErasedFromForeground();
+      return 1;
+    }
+    if (bg_.empty()) {
+      return 0;
+    }
+    auto it = bg_.find(key);
+    if (it == bg_.end()) {
+      return 0;
+    }
+    EraseFromBackground(it);
+    return 1;
+  }
+
+  // Inserts still allowed into fg_ before absl would rehash it, after every
+  // background entry has been migrated.
+  size_t Budget() const {
+    size_t used = fg_.size() + fg_erased_ + bg_.size();
+    size_t growth = internal::HugeMapGrowth(fg_.capacity());
+    CHECK_LE(used, growth);
+    return growth - used;
+  }
+
   // Makes fg_ the background and replaces it with a table reserved for
-  // `reserve` entries. A failed allocation leaves the map unchanged.
+  // `reserve` entries. A failed allocation leaves the table unchanged.
   void StartCycle(size_t reserve) {
     CHECK(bg_.empty());
-    Map next;
+    Table next;
     next.reserve(reserve);
     bg_ = std::move(fg_);
     fg_ = std::move(next);
@@ -355,7 +348,7 @@ class HugeFlatHashMap {
     }
   }
 
-  void MoveToForeground(typename Map::iterator it) {
+  void MoveToForeground(typename Table::iterator it) {
     if (it == bg_it_) {
       ++bg_it_;
     }
@@ -365,7 +358,7 @@ class HugeFlatHashMap {
     }
   }
 
-  void EraseFromBackground(typename Map::iterator it) {
+  void EraseFromBackground(typename Table::iterator it) {
     if (it == bg_it_) {
       ++bg_it_;
     }
@@ -386,15 +379,107 @@ class HugeFlatHashMap {
 
   // Frees the drained background table.
   void ResetBackground() {
-    bg_ = Map();
+    bg_ = Table();
     bg_it_ = bg_.end();
   }
 
-  Map fg_;
-  Map bg_;
-  typename Map::iterator bg_it_ = bg_.end();
+  void RestartCursor() { bg_it_ = bg_.empty() ? bg_.end() : bg_.begin(); }
+
+  Table bg_;
+  typename Table::iterator bg_it_ = bg_.end();
   size_t fg_erased_ = 0;
   size_t cycles_ = 0;
+};
+
+}  // namespace internal
+
+// A hash map for very large tables that never stalls on a full rehash. See
+// internal::HugeHashTable for how rehashing is spread out and which
+// operations invalidate iterators.
+template <typename K, typename V,
+          typename Hash = typename absl::flat_hash_map<K, V>::hasher,
+          typename Eq = typename absl::flat_hash_map<K, V>::key_equal,
+          typename Alloc = HugeAllocator<std::pair<const K, V>>>
+class HugeFlatHashMap : public internal::HugeHashTable<
+                            absl::flat_hash_map<K, V, Hash, Eq, Alloc>> {
+  using Base =
+      internal::HugeHashTable<absl::flat_hash_map<K, V, Hash, Eq, Alloc>>;
+
+ public:
+  using mapped_type = V;
+  using typename Base::iterator;
+  using typename Base::value_type;
+
+  V &at(const K &key) {
+    auto it = this->find(key);
+    if (it == this->end()) {
+      throw std::out_of_range("vmsdk::HugeFlatHashMap::at");
+    }
+    return it->second;
+  }
+  const V &at(const K &key) const {
+    auto it = this->find(key);
+    if (it == this->end()) {
+      throw std::out_of_range("vmsdk::HugeFlatHashMap::at");
+    }
+    return it->second;
+  }
+
+  template <typename... Args>
+  std::pair<iterator, bool> try_emplace(const K &key, Args &&...args) {
+    this->PrepareInsert(key);
+    return this->Wrap(this->fg_.try_emplace(key, std::forward<Args>(args)...));
+  }
+  template <typename... Args>
+  std::pair<iterator, bool> try_emplace(K &&key, Args &&...args) {
+    this->PrepareInsert(key);
+    return this->Wrap(
+        this->fg_.try_emplace(std::move(key), std::forward<Args>(args)...));
+  }
+
+  std::pair<iterator, bool> insert(const value_type &value) {
+    this->PrepareInsert(value.first);
+    return this->Wrap(this->fg_.insert(value));
+  }
+  std::pair<iterator, bool> insert(value_type &&value) {
+    this->PrepareInsert(value.first);
+    return this->Wrap(this->fg_.insert(std::move(value)));
+  }
+
+  template <typename... Args>
+  std::pair<iterator, bool> emplace(Args &&...args) {
+    return insert(value_type(std::forward<Args>(args)...));
+  }
+
+  template <typename M>
+  std::pair<iterator, bool> insert_or_assign(const K &key, M &&obj) {
+    this->PrepareInsert(key);
+    return this->Wrap(this->fg_.insert_or_assign(key, std::forward<M>(obj)));
+  }
+
+  V &operator[](const K &key) { return try_emplace(key).first->second; }
+  V &operator[](K &&key) { return try_emplace(std::move(key)).first->second; }
+};
+
+// The set counterpart of HugeFlatHashMap, with the same rehash behavior.
+template <typename T, typename Hash = typename absl::flat_hash_set<T>::hasher,
+          typename Eq = typename absl::flat_hash_set<T>::key_equal,
+          typename Alloc = HugeAllocator<T>>
+class HugeFlatHashSet
+    : public internal::HugeHashTable<absl::flat_hash_set<T, Hash, Eq, Alloc>> {
+  using Base = internal::HugeHashTable<absl::flat_hash_set<T, Hash, Eq, Alloc>>;
+
+ public:
+  using typename Base::iterator;
+
+  std::pair<iterator, bool> insert(const T &value) {
+    this->PrepareInsert(value);
+    return this->Wrap(this->fg_.insert(value));
+  }
+  std::pair<iterator, bool> insert(T &&value) {
+    this->PrepareInsert(value);
+    return this->Wrap(this->fg_.insert(std::move(value)));
+  }
 };
 
 }  // namespace vmsdk

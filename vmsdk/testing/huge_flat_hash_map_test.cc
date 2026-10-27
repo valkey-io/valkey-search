@@ -97,10 +97,14 @@ class FlatHashMapTest : public ValkeyTest {
   }
   void TearDown() override {
     SetBatch(GetHugeFlatHashMapMigrateBatch().GetDefaultValue());
+    SetJitter(GetHugeFlatHashMapStartJitterPercent().GetDefaultValue());
     ValkeyTest::TearDown();
   }
   static void SetBatch(long long k) {
     VMSDK_EXPECT_OK(GetHugeFlatHashMapMigrateBatch().SetValue(k));
+  }
+  static void SetJitter(long long percent) {
+    VMSDK_EXPECT_OK(GetHugeFlatHashMapStartJitterPercent().SetValue(percent));
   }
 
   int64_t external_{0};
@@ -397,6 +401,51 @@ TEST_P(FlatHashMapNoRehashTest, SetGrowAndShrink) {
 
 INSTANTIATE_TEST_SUITE_P(MigrateBatch, FlatHashMapNoRehashTest,
                          ::testing::Values(1, 8));
+
+// Fills two maps in lockstep and returns, for each, the size at which each
+// growth cycle started.
+std::pair<std::vector<size_t>, std::vector<size_t>> LockstepCycleStarts() {
+  Map a;
+  Map b;
+  std::vector<size_t> starts[2];
+  for (int64_t i = 0; i < (1 << 17); ++i) {
+    int which = 0;
+    for (Map *m : {&a, &b}) {
+      size_t cycles = Peer::Cycles(*m);
+      size_t growth = internal::HugeMapGrowth(Peer::Fg(*m).capacity());
+      size_t capacity = Peer::Fg(*m).capacity();
+      size_t size = m->size();
+      (*m)[i] = i;
+      if (Peer::Cycles(*m) != cycles && size > 0) {
+        EXPECT_EQ(Peer::Fg(*m).capacity(), 2 * capacity + 1);
+        EXPECT_LE(size, growth);
+        EXPECT_GE(size, growth - growth / 4);
+        starts[which].push_back(size);
+      }
+      ++which;
+    }
+  }
+  return {starts[0], starts[1]};
+}
+
+TEST_F(FlatHashMapTest, StartJitterSpreadsCycles) {
+  SetJitter(0);
+  auto [a0, b0] = LockstepCycleStarts();
+  EXPECT_EQ(a0, b0);
+
+  SetJitter(25);
+  auto [a, b] = LockstepCycleStarts();
+  ASSERT_EQ(a.size(), a0.size());
+  ASSERT_EQ(b.size(), a0.size());
+  size_t differ = 0;
+  for (size_t i = 0; i < a.size(); ++i) {
+    EXPECT_LE(a[i], a0[i]);
+    EXPECT_LE(b[i], a0[i]);
+    differ += a[i] != b[i];
+  }
+  // Only the smallest tables have too little budget to jitter.
+  EXPECT_GE(differ, a.size() - 4);
+}
 
 TEST_F(FlatHashMapTest, MatchesAbslUnderRandomOperations) {
   Map m;

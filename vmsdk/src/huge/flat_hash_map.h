@@ -32,6 +32,11 @@ namespace internal {
 // synchronization since it is only a tuning knob.
 extern size_t g_huge_map_migrate_batch;
 
+// Percent of a foreground's growth budget that its next growth cycle may start
+// early. Written by the "huge-hash-map-start-jitter-percent" config; read
+// without synchronization since it is only a tuning knob.
+extern size_t g_huge_map_start_jitter_percent;
+
 // Bumps the "huge_hash_map_rehashes" developer info field.
 void CountHugeMapRehash();
 long long GetHugeMapRehashCount();
@@ -42,6 +47,12 @@ inline size_t HugeMapGrowth(size_t capacity) {
                        : absl::container_internal::CapacityToGrowth(capacity);
 }
 
+// How much budget to leave unused before a foreground of `growth` starts its
+// next growth cycle. Successive calls walk a golden-ratio sequence over
+// [0, jitter% of growth), so tables that fill in lockstep start their cycles,
+// and finish draining them, at different sizes.
+size_t HugeMapEarlyStart(size_t growth);
+
 // The capacity absl picks for reserve(n) on an empty table.
 inline size_t HugeMapCapacityFor(size_t n) {
   return absl::container_internal::NormalizeCapacity(
@@ -51,6 +62,7 @@ inline size_t HugeMapCapacityFor(size_t n) {
 }  // namespace internal
 
 config::Number &GetHugeFlatHashMapMigrateBatch();
+config::Number &GetHugeFlatHashMapStartJitterPercent();
 
 struct HugeFlatHashMapTestPeer;
 
@@ -70,6 +82,9 @@ namespace internal {
 // Sizing follows absl's power-of-2 capacities: a new foreground is reserved
 // for twice the live entries. A shrink starts once the live entries would fit
 // in a table a quarter of the current size, which leaves 2x hysteresis.
+// A growth cycle starts up to "huge-hash-map-start-jitter-percent" of the
+// budget early, by a different amount for each cycle, so that many tables
+// growing together don't all allocate (and later free) at the same moment.
 //
 // absl itself never rehashes: its private growth_left is mirrored
 // conservatively (erases are treated as permanent tombstones) and the
@@ -164,6 +179,7 @@ class HugeHashTable {
       : fg_(std::move(other.fg_)),
         bg_(std::move(other.bg_)),
         fg_erased_(other.fg_erased_),
+        early_start_(other.early_start_),
         cycles_(other.cycles_) {
     RestartCursor();
     other.clear();
@@ -174,6 +190,7 @@ class HugeHashTable {
       fg_ = std::move(other.fg_);
       bg_ = std::move(other.bg_);
       fg_erased_ = other.fg_erased_;
+      early_start_ = other.early_start_;
       cycles_ = other.cycles_;
       RestartCursor();
       other.clear();
@@ -198,6 +215,7 @@ class HugeHashTable {
   void clear() {
     fg_ = Table();
     fg_erased_ = 0;
+    early_start_ = 0;
     ResetBackground();
   }
 
@@ -267,7 +285,7 @@ class HugeHashTable {
   // Called before an insertion of `key` into fg_.
   void PrepareInsert(const key_type &key) {
     if (bg_.empty()) {
-      if (Budget() > 0 || fg_.contains(key)) {
+      if (Budget() > early_start_ || fg_.contains(key)) {
         return;
       }
       StartCycle(std::max<size_t>(2 * size(), 1));
@@ -326,6 +344,8 @@ class HugeHashTable {
     bg_ = std::move(fg_);
     fg_ = std::move(next);
     fg_erased_ = 0;
+    early_start_ = internal::HugeMapEarlyStart(
+        internal::HugeMapGrowth(fg_.capacity()));
     ++cycles_;
     internal::CountHugeMapRehash();
     if (bg_.empty()) {
@@ -388,6 +408,8 @@ class HugeHashTable {
   Table bg_;
   typename Table::iterator bg_it_ = bg_.end();
   size_t fg_erased_ = 0;
+  // Budget left unused when the next growth cycle starts.
+  size_t early_start_ = 0;
   size_t cycles_ = 0;
 };
 

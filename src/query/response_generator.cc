@@ -24,6 +24,7 @@
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
 #include "src/query/predicate.h"
+#include "src/query/query_context.h"
 #include "src/query/search.h"
 #include "src/valkey_search.h"
 #include "vmsdk/src/info.h"
@@ -31,7 +32,6 @@
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
-#include "vmsdk/src/time_sliced_mrmw_mutex.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -82,47 +82,26 @@ vmsdk::config::Number &GetMaxSearchResultFieldsCount() {
 
 namespace valkey_search::query {
 
+// Revalidates a mutated document against the fetched record (tags, numerics,
+// vector range) and the text index (text). Runs on the main thread, so text
+// goes through a main-thread QueryContext and never the time-sliced mutex.
 class PredicateEvaluator : public query::Evaluator {
  public:
-  PredicateEvaluator(const RecordsMap &records,
-                     QueryOperations query_operations,
-                     const valkey_search::IndexSchema *index_schema = nullptr)
+  PredicateEvaluator(const RecordsMap &records, InternedStringPtr target_key,
+                     QueryContext &query_ctx, QueryOperations query_operations,
+                     const IndexSchema &index_schema)
       : Evaluator(query_operations),
         records_(records),
-        text_index_(nullptr),
-        index_schema_(index_schema) {}
-
-  PredicateEvaluator(const RecordsMap &records,
-                     const valkey_search::indexes::text::TextIndex *text_index,
-                     InternedStringPtr target_key,
-                     QueryOperations query_operations,
-                     const valkey_search::IndexSchema *index_schema = nullptr)
-      : Evaluator(query_operations),
-        records_(records),
-        text_index_(text_index),
-        target_key_(target_key),
+        target_key_(std::move(target_key)),
+        query_ctx_(query_ctx),
         index_schema_(index_schema) {}
 
   const InternedStringPtr &GetTargetKey() const override { return target_key_; }
 
   EvaluationResult EvaluateTags(const query::TagPredicate &predicate) override {
-    auto identifier = predicate.GetRetainedIdentifier();
-    auto it = records_.find(vmsdk::ToStringView(identifier.get()));
-    if (it == records_.end()) {
-      return EvaluationResult(false);
-      ;
-    }
-    auto index = predicate.GetIndex();
-    // Parsing RECORD DATA: Field value from database key for post-query
-    // verification. Uses schema-defined separator since this is record data,
-    // not query syntax.
-    auto tags = indexes::Tag::ParseSearchTags(
-        vmsdk::ToStringView(it->second.value.get()), index->GetSeparator());
-    if (!tags.ok()) {
-      return EvaluationResult(false);
-      ;
-    }
-    return predicate.Evaluate(&tags.value(), index->IsCaseSensitive());
+    auto tags = ReadRecordTags(records_, predicate);
+    return predicate.Evaluate(tags ? &*tags : nullptr,
+                              predicate.GetIndex()->IsCaseSensitive());
   }
 
   EvaluationResult EvaluateNumeric(
@@ -142,24 +121,18 @@ class PredicateEvaluator : public query::Evaluator {
 
   EvaluationResult EvaluateText(const query::TextPredicate &predicate,
                                 bool require_positions) override {
-    CHECK(target_key_);
-    if (!text_index_) {
-      return EvaluationResult(false);
-    }
-    return predicate.Evaluate(*text_index_, target_key_, require_positions);
+    return query::EvaluateTextLeaf(
+        query_ctx_, predicate, target_key_, require_positions,
+        [this] { return query_ctx_.PerKeyTextIndex(target_key_); });
   }
 
   EvaluationResult EvaluateVectorRange(
       const query::VectorRangePredicate &predicate) override {
-    if (!index_schema_) {
-      // No index schema available — cannot re-verify; pass through.
-      return EvaluationResult(true);
-    }
     auto query_vector = predicate.GetQueryVector();
     if (query_vector.empty()) {
       return EvaluationResult(false);
     }
-    auto index = index_schema_->GetIndex(predicate.GetAlias());
+    auto index = index_schema_.GetIndex(predicate.GetAlias());
     if (!index.ok()) {
       return EvaluationResult(false);
     }
@@ -177,7 +150,7 @@ class PredicateEvaluator : public query::Evaluator {
     ValkeyModuleString *record = it->second.value.get();
     // A JSON vector is fetched as text; convert it the way ingestion does.
     vmsdk::UniqueValkeyString converted;
-    if (index_schema_->GetAttributeDataType().AttributesProvidedAsString()) {
+    if (index_schema_.GetAttributeDataType().AttributesProvidedAsString()) {
       converted = vector_index->NormalizeStringAttribute(
           vmsdk::RetainUniqueValkeyString(record));
       if (!converted) {
@@ -191,18 +164,24 @@ class PredicateEvaluator : public query::Evaluator {
 
  private:
   const RecordsMap &records_;
-  const valkey_search::indexes::text::TextIndex *text_index_ = nullptr;
   InternedStringPtr target_key_;
-  const valkey_search::IndexSchema *index_schema_ = nullptr;
+  QueryContext &query_ctx_;
+  const IndexSchema &index_schema_;
 };
 
 DEV_INTEGER_COUNTER(query, predicate_revalidation);
 
-FilterVerification VerifyFilter(
-    const query::SearchParameters &parameters, const RecordsMap &records,
-    const indexes::Neighbor &n,
-    std::unique_ptr<query::SingleDocumentScorer> &document_scorer,
-    std::optional<bool> recompute_score_override) {
+// Contract: a query with a text predicate reaches here only after the key
+// contention check (GetContentProcessing() == kContentionCheckRequired for
+// FT.SEARCH, ArmGate for FT.HYBRID), so `n` has no in-flight mutation. That is
+// what lets the text walk read the key's own tree unlocked and use a
+// PostingValue after its word's bucket is released: only a mutation of this
+// key could free either.
+FilterVerification VerifyFilter(const query::SearchParameters &parameters,
+                                const RecordsMap &records,
+                                const indexes::Neighbor &n,
+                                std::unique_ptr<QueryContext> &query_ctx,
+                                std::optional<bool> recompute_score_override) {
   auto predicate = parameters.filter_parse_results.root_predicate.get();
   if (predicate == nullptr) {
     return {true, std::nullopt};
@@ -223,82 +202,36 @@ FilterVerification VerifyFilter(
   }
   predicate_revalidation.Increment();
 
-  // The document changed between shard-side scoring and this content fetch, so
-  // its carried Neighbor.score is stale. Besides re-checking membership, for a
-  // non-vector query recompute the relevance score through the SAME Scorer seam
-  // ScoreTextQuery uses (search.cc: ResolveLeaves -> ScoreNode ->
-  // Scorer::ComposeDocumentScore). Text leaves are scored via Scorer::ScoreLeaf
-  // (never TextIterator::GetScore) and numeric/tag leaves via 1.0 * weight,
-  // identical to ScoreNode. A query whose Neighbor.score is a KNN distance
-  // rather than a relevance score is skipped: by default that means any vector
-  // query, and FT.HYBRID overrides the choice per arm.
-  const bool recompute_score =
-      recompute_score_override.value_or(parameters.IsNonVectorQuery());
-  auto recompute = [&](EvaluationResult &result) -> FilterVerification {
-    if (!result.matches || !recompute_score) {
-      return {result.matches, std::nullopt};
-    }
-    // The document-independent scoring inputs (posting lists, IDF, corpus
-    // stats) are resolved once per reply: construct the scorer lazily on the
-    // first mutated document and reuse it for every later one.
-    if (!document_scorer) {
-      document_scorer = std::make_unique<query::SingleDocumentScorer>(
-          *parameters.index_schema, predicate,
-          indexes::scoring::GetScorer(parameters.scorer));
-    }
-    // nullopt (empty corpus / ScoreNode non-match) degrades to 0 rather than
-    // dropping the already-admitted document. Carry the value on the
-    // EvaluationResult (meaningful when matches == true) and hand it back.
-    result.score = document_scorer->Score(n.external_id).value_or(0.0f);
-    return {true, result.score};
-  };
-
-  // For text predicates, evaluate using the text index instead of raw data.
-  if (parameters.index_schema &&
-      parameters.index_schema->GetTextIndexSchema()) {
-    // We run on the main thread, outside the background search's reader lock,
-    // while ingestion workers mutate the index. A key's per-key TextIndex does
-    // NOT own private postings: CommitKeyData installs the very same
-    // InvasivePtr<Postings> that the per-index tree holds (see the sharing
-    // invariant in text_index.h and the "Per-key tree became unaligned" CHECK
-    // in text_index.cc), so walking this key's tree reaches Postings shared
-    // with every other key containing the token. The reader there
-    // (Postings::KeyIterator over key_to_positions_) races the writer's
-    // emplace/extract, which holds only the per-word bucket mutex we do not
-    // take. So hold the reader lock across BOTH the index lookup and the
-    // evaluation -- spanning the lookup also closes the returned-pointer
-    // lifetime hazard, since DeleteKeyData runs under the writer lock.
-    //
-    // The lock MUST be released before recompute(): it builds and calls
-    // SingleDocumentScorer, which acquires this same mutex internally, and
-    // TimeSlicedMRMWMutex is non-reentrant -- a nested acquire can deadlock in
-    // SwitchWithWait() (see the SingleDocumentScorer contract in search.h).
-    // Do not widen this scope. Cost is bounded: the sequence-number fast path
-    // above returns for any unmutated key, so we only lock for revalidated
-    // documents.
-    EvaluationResult result(false);
-    {
-      vmsdk::ReaderMutexLock lock(
-          &parameters.index_schema->GetTimeSlicedMutex());
-      // lock=false: the per-key map mutex is redundant under the reader lock,
-      // matching the in-query prefilter callers in search.cc.
-      const indexes::text::TextIndex *text_index =
-          parameters.index_schema->GetTextIndexSchema()->GetPerKeyTextIndex(
-              n.external_id, false);
-
-      PredicateEvaluator evaluator(
-          records, text_index, n.external_id,
-          parameters.filter_parse_results.query_operations,
-          parameters.index_schema.get());
-      result = predicate->Evaluate(evaluator);
-    }
-    return recompute(result);
+  const IndexSchema &index_schema = *parameters.index_schema;
+  // One context per reply: leaves resolve on the first mutated document and are
+  // reused for the rest.
+  if (!query_ctx) {
+    query_ctx = std::make_unique<QueryContext>(
+        index_schema, indexes::scoring::GetScorer(parameters.scorer),
+        LockMode::kShortLocks);
   }
-  PredicateEvaluator evaluator(records, /*text_index=*/nullptr, n.external_id,
+  PredicateEvaluator evaluator(records, n.external_id, *query_ctx,
                                parameters.filter_parse_results.query_operations,
-                               parameters.index_schema.get());
+                               index_schema);
   EvaluationResult result = predicate->Evaluate(evaluator);
-  return recompute(result);
+
+  // The document changed between shard-side scoring and this content fetch, so
+  // its carried Neighbor.score is stale; recompute it through the same Scorer
+  // seam ScoreTextQuery uses. A query whose Neighbor.score is a KNN distance
+  // rather than a relevance score is skipped: by default that means a vector
+  // query without a scored predicate (or with vector_score_only), and FT.HYBRID
+  // overrides the choice per arm.
+  const bool recompute_score =
+      recompute_score_override.value_or(parameters.ScoreIsRelevance());
+  if (!result.matches || !recompute_score) {
+    return {result.matches, std::nullopt};
+  }
+  // nullopt (empty corpus / non-match) degrades to 0 rather than dropping the
+  // already-admitted document.
+  result.score =
+      RecomputeDocumentScore(predicate, n.external_id, *query_ctx, records)
+          .value_or(0.0f);
+  return {true, result.score};
 }
 
 // Check if this node owns the slot for the given key in cluster mode
@@ -318,7 +251,7 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
     const query::SearchParameters &parameters,
     const indexes::Neighbor &neighbor,
     const std::optional<std::string> &vector_identifier,
-    std::unique_ptr<query::SingleDocumentScorer> &document_scorer,
+    std::unique_ptr<query::QueryContext> &query_ctx,
     std::optional<float> *out_recomputed_score = nullptr) {
   auto key = neighbor.external_id->Str();
   absl::flat_hash_set<absl::string_view> identifiers;
@@ -371,8 +304,7 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
     }
     return content;
   }
-  auto verification =
-      VerifyFilter(parameters, content, neighbor, document_scorer);
+  auto verification = VerifyFilter(parameters, content, neighbor, query_ctx);
   if (!verification.matches) {
     return absl::NotFoundError("Verify filter failed");
   }
@@ -413,7 +345,7 @@ absl::StatusOr<RecordsMap> GetContent(
     const query::SearchParameters &parameters,
     const indexes::Neighbor &neighbor,
     const std::optional<std::string> &vector_identifier,
-    std::unique_ptr<query::SingleDocumentScorer> &document_scorer,
+    std::unique_ptr<query::QueryContext> &query_ctx,
     std::optional<SortByContent> &out_sortby_content,
     std::optional<float> *out_recomputed_score = nullptr) {
   auto key = neighbor.external_id->Str();
@@ -421,7 +353,7 @@ absl::StatusOr<RecordsMap> GetContent(
           data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON &&
       parameters.return_attributes.empty()) {
     return GetContentNoReturnJson(ctx, attribute_data_type, parameters,
-                                  neighbor, vector_identifier, document_scorer,
+                                  neighbor, vector_identifier, query_ctx,
                                   out_recomputed_score);
   }
   absl::flat_hash_set<absl::string_view> identifiers;
@@ -470,8 +402,7 @@ absl::StatusOr<RecordsMap> GetContent(
   if (parameters.filter_parse_results.filter_identifiers.empty()) {
     return content;
   }
-  auto verification =
-      VerifyFilter(parameters, content, neighbor, document_scorer);
+  auto verification = VerifyFilter(parameters, content, neighbor, query_ctx);
   if (!verification.matches) {
     return absl::NotFoundError("Verify filter failed");
   }
@@ -584,7 +515,7 @@ void ProcessNeighborsForReply(
   // Set when a neighbor's score was recomputed on the main thread because its
   // document mutated between shard-side scoring and this content fetch. Any
   // such recompute means the carried scores are no longer globally ordered, so
-  // the survivors must be re-ranked below (non-vector queries only).
+  // the survivors must be re-ranked below.
   bool any_score_recomputed = false;
   // The same for a vector query, whose Neighbor.score is a KNN distance rather
   // than a relevance score and so is refreshed against the document's current
@@ -598,9 +529,7 @@ void ProcessNeighborsForReply(
   // exactly what vector_score_only says and what ApplyHybridTextScore and
   // TrimResults already read. This mirrors the coordinator's own
   // per_arm_score_is_distance in ft_hybrid_parser.cc.
-  const bool ranks_on_distance =
-      !parameters.IsNonVectorQuery() &&
-      (parameters.vector_score_only || !QueryHasTextPredicate(parameters));
+  const bool ranks_on_distance = !parameters.ScoreIsRelevance();
   indexes::VectorBase *vector_index = nullptr;
   if (!parameters.IsNonVectorQuery() && vector_identifier.has_value() &&
       parameters.index_schema != nullptr) {
@@ -612,7 +541,7 @@ void ProcessNeighborsForReply(
   // Lazily built by VerifyFilter on the first mutated document and reused for
   // the rest of the reply, so leaf resolution runs once instead of once per
   // recomputed document.
-  std::unique_ptr<query::SingleDocumentScorer> document_scorer;
+  std::unique_ptr<query::QueryContext> query_ctx;
   for (auto &neighbor : neighbors) {
     // Remote neighbors (from fanout) always have attribute_contents populated,
     // so they skip this entire block. Only local neighbors without content
@@ -629,13 +558,13 @@ void ProcessNeighborsForReply(
     std::optional<float> recomputed_score;
     std::optional<SortByContent> sortby_content;
     auto content = GetContent(ctx, attribute_data_type, parameters, neighbor,
-                              vector_identifier, document_scorer,
-                              sortby_content, &recomputed_score);
+                              vector_identifier, query_ctx, sortby_content,
+                              &recomputed_score);
     if (!content.ok()) {
       continue;
     }
-    // Apply the fresh, scale-consistent score (non-vector only; VerifyFilter
-    // never recomputes for vector queries, whose score is a KNN distance).
+    // Apply the fresh, scale-consistent score (only set when Neighbor.score is
+    // a relevance, never when it is a KNN distance).
     if (recomputed_score.has_value()) {
       neighbor.score = *recomputed_score;
       any_score_recomputed = true;
@@ -725,18 +654,15 @@ void ProcessNeighborsForReply(
 
   // Re-rank survivors when any score was recomputed: a document mutated
   // between shard-side scoring and this content fetch, so VerifyFilter
-  // recomputed its score through the same Scorer seam (SingleDocumentScorer)
+  // recomputed its score through the same Scorer seam (RecomputeDocumentScore)
   // and wrote it to Neighbor.score. That fresh score can reorder the survivors
   // relative to the stale ones. The general ordering of merged cluster results
   // is handled earlier in SearchResult::TrimResults; this block only handles
   // post-recompute reordering, which happens after that sort.
-  // Only for non-vector queries: for KNN, Neighbor.score holds the distance
-  // (lower is better) and results already arrive ascending, so a descending
-  // re-sort would reverse the correct order, and VerifyFilter never recomputes
-  // for vector queries. Skipped when SORTBY is present (explicit ordering
-  // wins).
-  if (any_score_recomputed && !neighbors.empty() &&
-      parameters.IsNonVectorQuery() &&
+  // Not for queries ranked on distance: there Neighbor.score holds the distance
+  // (lower is better) and is re-ranked by the block below instead. Skipped
+  // when SORTBY is present (explicit ordering wins).
+  if (any_score_recomputed && !neighbors.empty() && !ranks_on_distance &&
       !parameters.sortby_parameter.has_value()) {
     std::stable_sort(
         neighbors.begin(), neighbors.end(),

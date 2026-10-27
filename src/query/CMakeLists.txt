@@ -1,17 +1,31 @@
 set(SRCS_PREDICATE ${CMAKE_CURRENT_LIST_DIR}/predicate.cc
-                   ${CMAKE_CURRENT_LIST_DIR}/predicate.h)
+                   ${CMAKE_CURRENT_LIST_DIR}/predicate.h
+                   ${CMAKE_CURRENT_LIST_DIR}/resolved_leaf.h)
 
 valkey_search_add_static_library(predicate "${SRCS_PREDICATE}")
 target_include_directories(predicate PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(predicate PUBLIC numeric)
 target_link_libraries(predicate PUBLIC tag)
+target_link_libraries(predicate PUBLIC text)
 target_link_libraries(predicate PUBLIC vmsdklib)
 
-set(SRCS_PREDICATE_HEADER ${CMAKE_CURRENT_LIST_DIR}/predicate.h)
+set(SRCS_PREDICATE_HEADER ${CMAKE_CURRENT_LIST_DIR}/predicate.h
+                          ${CMAKE_CURRENT_LIST_DIR}/resolved_leaf.h)
 
 add_library(predicate_header INTERFACE ${SRCS_PREDICATE_HEADER})
 target_include_directories(predicate_header INTERFACE ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(predicate_header INTERFACE vmsdklib)
+
+set(SRCS_QUERY_CONTEXT ${CMAKE_CURRENT_LIST_DIR}/query_context.cc
+                         ${CMAKE_CURRENT_LIST_DIR}/query_context.h)
+
+valkey_search_add_static_library(query_context "${SRCS_QUERY_CONTEXT}")
+target_include_directories(query_context PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(query_context PUBLIC predicate)
+target_link_libraries(query_context PUBLIC tag)
+target_link_libraries(query_context PUBLIC text)
+target_link_libraries(query_context PUBLIC scoring)
+target_link_libraries(query_context PUBLIC vmsdklib)
 
 set(SRCS_SEARCH ${CMAKE_CURRENT_LIST_DIR}/search.cc
                 ${CMAKE_CURRENT_LIST_DIR}/search.h)
@@ -20,6 +34,7 @@ valkey_search_add_static_library(search "${SRCS_SEARCH}")
 target_include_directories(search PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(search PUBLIC planner)
 target_link_libraries(search PUBLIC predicate)
+target_link_libraries(search PUBLIC query_context)
 target_link_libraries(search PUBLIC attribute_data_type)
 target_link_libraries(search PUBLIC index_schema)
 target_link_libraries(search PUBLIC metrics)

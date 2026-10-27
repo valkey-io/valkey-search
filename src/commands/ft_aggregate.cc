@@ -211,17 +211,21 @@ absl::Status AggregateParameters::ParseCommand(vmsdk::ArgsIterator &itr) {
     return absl::InvalidArgumentError("Only Dialects 2, 3 and 4 are supported");
   }
 
-  // The filter tree was built before VERBATIM / INORDER / SLOP were read.
-  if (verbatim || inorder || slop.has_value()) {
+  // Redisearch ignores these on an index without offsets, and rejecting them
+  // as FT.SEARCH does would fail working queries, so the error is gated.
+  if ((inorder || slop.has_value()) && !index_schema->HasTextOffsets()) {
     VMSDK_RETURN_IF_ERROR(VALKEY_SEARCH_COMPATIBILITY_FIX(
-        1, 3, 0, "ft_aggregate_text_flags", [&] { return ParseFilter(); },
+        1, 3, 0, "ft_aggregate_nooffsets_inorder_slop",
+        [] { return absl::OkStatus(); },
         [&] {
-          // Keep the fields in step with the tree the flags never reached.
-          verbatim = false;
           inorder = false;
           slop.reset();
           return absl::OkStatus();
         }));
+  }
+  // The filter tree was built before VERBATIM / INORDER / SLOP were read.
+  if (verbatim || inorder || slop.has_value()) {
+    VMSDK_RETURN_IF_ERROR(ParseFilter());
   }
 
   // SORTBY's retention bound depends on the LIMIT stages around it, so it can

@@ -403,9 +403,6 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
   return return_content;
 }
 
-// The SORTBY value of a filter + RETURN row. GetContent hands it back instead
-// of filing it, so the caller can file it after the response limits are checked
-// against the RETURN entries alone.
 struct SortByContent {
   std::string identifier;
   vmsdk::UniqueValkeyString value;
@@ -510,9 +507,7 @@ absl::StatusOr<RecordsMap> GetContent(
   return return_content;
 }
 
-// Files the SORTBY value under both names: the sort reads the identifier, a
-// coordinator on an older release reads the alias. Runs after the response
-// limits are checked because neither entry reaches the client.
+// A coordinator on an older release looks the sort value up by alias.
 void FileSortByContent(RecordsMap &content, SortByContent sortby_content,
                        absl::string_view alias) {
   auto owned_identifier =
@@ -710,6 +705,8 @@ void ProcessNeighborsForReply(
 
     // Only assign content if it's within size limit
     if (!size_exceeded) {
+      // The limits above must not count the sort entries: the client never
+      // receives them.
       if (sortby_content.has_value()) {
         FileSortByContent(content.value(), *std::move(sortby_content),
                           parameters.sortby_parameter->field);

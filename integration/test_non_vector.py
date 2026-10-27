@@ -1423,12 +1423,6 @@ class TestSortByAliasGate(ValkeySearchTestCaseDebugMode):
 
 
 class TestSortByResponseLimits(ValkeySearchTestCaseBase):
-    """
-        Issue #1440 review. The SORTBY value a filter + RETURN query carries
-        for the sort is internal, so it must not count toward the two limits
-        that bound what the client receives.
-    """
-
     def test_internal_sortby_entries_do_not_count(self):
         client: Valkey = self.server.get_new_client()
         assert client.execute_command(
@@ -1442,7 +1436,7 @@ class TestSortByResponseLimits(ValkeySearchTestCaseBase):
                 "n") == 3
         IndexingTestHelper.wait_for_indexing_complete_on_node(client, "srl_idx")
 
-        # RETURN 2 title note: 2 fields, 5 + 95 + 4 + 1 = 105 bytes per row.
+        # One row's RETURN footprint: 2 fields, 5 + 95 + 4 + 1 = 105 bytes.
         fields_config = "search.max-search-result-fields-count"
         size_config = "search.max-search-result-record-size"
         saved = {c: client.config_get(c)[c] for c in (fields_config, size_config)}

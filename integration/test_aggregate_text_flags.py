@@ -98,6 +98,23 @@ class TestAggregateTextFlags(ValkeySearchTestCaseBase):
             "GROUPBY", "0", "REDUCE", "COUNT", "0", "AS", "c")
         assert reply[1] == [b"c", b"1"]
 
+    def test_reparse_counts_compatibility_once(self):
+        client = self._client(LEGACY_RELEASE)
+        self._populate(client)
+        counters = ("search_compatibility-filter_parser_invalid_utf8_expression",
+                    "search_compatibility-ft_search_apostrophe_phrase")
+        query = b"@s:(hel\xfflo world's)"
+        for flags in ((), ("VERBATIM",), ("INORDER",), ("SLOP", "1")):
+            before = client.info("SEARCH")
+            client.execute_command(
+                "FT.AGGREGATE", "idx", query, *flags, "LOAD", "1", "@__key")
+            after = client.info("SEARCH")
+            deltas = [after.get(c, 0) - before.get(c, 0) for c in counters]
+            if not flags:
+                expected = deltas
+                assert deltas[0] == 1 and deltas[1] >= 1, deltas
+            assert deltas == expected, (flags, deltas)
+
     def test_inorder_with_knn(self):
         client = self._client()
         self._populate(client)

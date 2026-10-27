@@ -6,8 +6,10 @@
 
 #include <algorithm>
 #include <string>
+#include <utility>
 #include <vector>
 
+#include "absl/cleanup/cleanup.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -225,6 +227,12 @@ absl::Status AggregateParameters::ParseCommand(vmsdk::ArgsIterator &itr) {
   }
   // The filter tree was built before VERBATIM / INORDER / SLOP were read.
   if (verbatim || inorder || slop.has_value()) {
+    // The first parse already counted this query text.
+    const bool was_suppressed =
+        std::exchange(options::compat_counters_suppressed, true);
+    absl::Cleanup restore = [was_suppressed] {
+      options::compat_counters_suppressed = was_suppressed;
+    };
     VMSDK_RETURN_IF_ERROR(ParseFilter());
   }
 

@@ -640,6 +640,22 @@ CalcBestMatchingInkeys(const SearchParameters &parameters,
   return results;
 }
 
+SortByKey::SortByKey(const IndexSchema &schema, absl::string_view sortby_alias)
+    : alias(sortby_alias) {
+  auto resolved = schema.GetIdentifier(alias);
+  // A non-attribute name (KNN score, VR distance) is never read from the map.
+  identifier = resolved.ok() ? *std::move(resolved) : alias;
+  is_json = schema.GetAttributeDataType().ToProto() ==
+            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON;
+}
+
+SortByKey SortByKey::Legacy(absl::string_view sortby_alias) {
+  SortByKey key;
+  key.alias = std::string(sortby_alias);
+  key.identifier = key.alias;
+  return key;
+}
+
 absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
     absl::StatusOr<std::vector<indexes::Neighbor>> results,
     const SearchParameters &parameters) {
@@ -650,10 +666,44 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
     return results;
   }
   struct AttributeInfo {
-    const ReturnAttribute *attribute;
+    absl::string_view identifier;
     indexes::IndexBase *index;
   };
   std::vector<AttributeInfo> attributes;
+  // Gated: for 1.3.0 and later, fetch the document on the main thread when
+  // SORTBY cannot be served by the index, such as for TEXT or a missing value.
+  // This also returns stored bytes for other RETURN fields instead of indexed
+  // copies. Issue #1440.
+  std::optional<SortByKey> sortby_key;
+  // Sorted from Neighbor::distance, not from attribute_contents.
+  const bool sort_by_computed_key =
+      parameters.sortby_parameter.has_value() &&
+      ((parameters.score_as &&
+        parameters.sortby_parameter->field ==
+            vmsdk::ToStringView(parameters.score_as.get())) ||
+       parameters.sortby_parameter->field == GetVrScoreFieldName(parameters));
+  if (parameters.sortby_parameter.has_value() && !sort_by_computed_key &&
+      options::EnabledInVersion(1, 3, 0)) {
+    const std::string &sortby_field = parameters.sortby_parameter->field;
+    sortby_key.emplace(*parameters.index_schema, sortby_field);
+    const bool sort_key_already_returned = std::any_of(
+        parameters.return_attributes.begin(),
+        parameters.return_attributes.end(), [&](const ReturnAttribute &attr) {
+          return attr.identifier.get() &&
+                 vmsdk::ToStringView(attr.identifier.get()) ==
+                     sortby_key->identifier;
+        });
+    if (!sort_key_already_returned) {
+      auto index = parameters.index_schema->GetIndex(sortby_field);
+      // Defensive guard for callers that bypass parser and shard validation.
+      DCHECK(index.ok()) << index.status();
+      if (!index.ok()) {
+        return results;
+      }
+      attributes.push_back(AttributeInfo{.identifier = sortby_key->identifier,
+                                         .index = index.value().get()});
+    }
+  }
   for (auto &attribute : parameters.return_attributes) {
     if (!attribute.attribute_alias.get()) {
       // Any attribute that is not indexed will result in all attributes being
@@ -665,7 +715,9 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
     if (!index.ok()) {
       return results;
     }
-    attributes.push_back(AttributeInfo{&attribute, index.value().get()});
+    attributes.push_back(AttributeInfo{
+        .identifier = vmsdk::ToStringView(attribute.identifier.get()),
+        .index = index.value().get()});
   }
   for (auto &neighbor : *results) {
     if (neighbor.attribute_contents.has_value()) {
@@ -748,8 +800,8 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
       }
 
       if (attribute_value != nullptr) {
-        auto identifier = vmsdk::MakeUniqueValkeyString(
-            vmsdk::ToStringView(attribute_info.attribute->identifier.get()));
+        auto identifier =
+            vmsdk::MakeUniqueValkeyString(attribute_info.identifier);
         auto identifier_view = vmsdk::ToStringView(identifier.get());
         neighbor.attribute_contents->emplace(
             identifier_view,

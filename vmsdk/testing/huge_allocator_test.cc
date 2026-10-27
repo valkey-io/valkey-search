@@ -5,13 +5,12 @@
  *
  */
 
-#include "vmsdk/src/huge/allocator.h"
-
 #include <cstdint>
 #include <vector>
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
+#include "vmsdk/src/huge/allocator.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"

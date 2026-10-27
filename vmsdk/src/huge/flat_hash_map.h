@@ -344,8 +344,8 @@ class HugeHashTable {
     bg_ = std::move(fg_);
     fg_ = std::move(next);
     fg_erased_ = 0;
-    early_start_ = internal::HugeMapEarlyStart(
-        internal::HugeMapGrowth(fg_.capacity()));
+    early_start_ =
+        internal::HugeMapEarlyStart(internal::HugeMapGrowth(fg_.capacity()));
     ++cycles_;
     internal::CountHugeMapRehash();
     if (bg_.empty()) {

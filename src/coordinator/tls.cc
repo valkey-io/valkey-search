@@ -7,9 +7,11 @@
 
 #include "tls.h"
 
-#include <fstream>
+#include <filesystem>
 #include <memory>
 #include <string>
+#include <system_error>
+#include <utility>
 
 #include "absl/functional/function_ref.h"
 #include "absl/status/status.h"
@@ -62,6 +64,11 @@ absl::Status RejectIfSet(
     return absl::FailedPreconditionError(
         absl::StrCat("Coordinator TLS does not support ", name, ": ", reason));
   }
+  // A lookup that failed for any reason other than the config not existing
+  // must not read as "not set".
+  if (!value.ok() && !absl::IsNotFound(value.status())) {
+    return value.status();
+  }
   return absl::OkStatus();
 }
 
@@ -78,8 +85,8 @@ absl::Status ValidateFiles(const std::string &key_file,
   // ValidateCredentials() only checks the PEM of what was loaded, and passes
   // when a file is missing, so make sure every file is there and not empty.
   for (const std::string *file : {&key_file, &cert_file, &ca_file}) {
-    std::ifstream in(*file);
-    if (!in.is_open() || in.peek() == std::ifstream::traits_type::eof()) {
+    std::error_code ec;
+    if (std::filesystem::file_size(*file, ec) == 0 || ec) {
       return absl::FailedPreconditionError(absl::StrCat(
           "Coordinator TLS cannot read ", *file, " (missing or empty)"));
     }
@@ -100,9 +107,14 @@ absl::Status ValidateFiles(const std::string &key_file,
 absl::StatusOr<TlsConfig> LoadTlsConfig(
     absl::FunctionRef<absl::StatusOr<std::string>(const char *)> get_config) {
   // gRPC loads PEM files itself, so encrypted keys and CA directories, which
-  // the server accepts, cannot be honored here. Fail instead of downgrading.
-  for (const char *name : {"tls-key-file-pass", "tls-client-key-file-pass"}) {
-    auto status = RejectIfSet(get_config, name, "encrypted keys");
+  // the server accepts, cannot be honored here. Fail instead of downgrading or
+  // silently ignoring them.
+  for (const auto &[name, reason] :
+       {std::pair<const char *, const char *>{"tls-key-file-pass",
+                                              "encrypted keys"},
+        {"tls-client-key-file-pass", "encrypted keys"},
+        {"tls-ca-cert-dir", "a CA directory, use tls-ca-cert-file"}}) {
+    auto status = RejectIfSet(get_config, name, reason);
     if (!status.ok()) {
       return status;
     }
@@ -120,8 +132,7 @@ absl::StatusOr<TlsConfig> LoadTlsConfig(
   if (!ca.ok()) return ca.status();
   if (ca->empty()) {
     return absl::FailedPreconditionError(
-        "Coordinator TLS requires tls-ca-cert-file to be set; tls-ca-cert-dir "
-        "is not supported");
+        "Coordinator TLS requires tls-ca-cert-file to be set");
   }
   config.ca_file = *std::move(ca);
 

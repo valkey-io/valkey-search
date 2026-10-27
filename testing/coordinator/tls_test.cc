@@ -160,6 +160,37 @@ TEST(CoordinatorTlsConfigTest, RejectsInvalidReloadInterval) {
   }
 }
 
+TEST(CoordinatorTlsConfigTest, RejectsCaDirectory) {
+  // Also when tls-ca-cert-file is set: the directory would be ignored, so a
+  // peer certificate trusted only through it would fail to verify.
+  auto values = EnabledConfig();
+  values["tls-ca-cert-dir"] = "/certs/ca";
+  auto config = Load(values);
+  ASSERT_FALSE(config.ok());
+  EXPECT_THAT(config.status().message(), HasSubstr("tls-ca-cert-dir"));
+}
+
+// A password lookup that fails must not read as "no password", or an
+// encrypted key would slip through. A config the server lacks is fine.
+TEST(CoordinatorTlsConfigTest, PasswordLookupFailureIsNotTreatedAsUnset) {
+  auto values = EnabledConfig();
+  auto load = [&values](absl::Status password_lookup) {
+    return LoadTlsConfig([&](const char *name) -> absl::StatusOr<std::string> {
+      if (std::string(name) == "tls-key-file-pass") {
+        if (!password_lookup.ok()) return password_lookup;
+        return std::string();
+      }
+      auto it = values.find(name);
+      return it == values.end() ? std::string() : it->second;
+    });
+  };
+  EXPECT_TRUE(load(absl::OkStatus()).ok());
+  EXPECT_TRUE(load(absl::NotFoundError("no such config")).ok());
+  auto failed = load(absl::InternalError("CONFIG GET failed"));
+  ASSERT_FALSE(failed.ok());
+  EXPECT_EQ(failed.status().code(), absl::StatusCode::kInternal);
+}
+
 TEST(CoordinatorTlsConfigTest, RejectsEncryptedKeys) {
   for (const char *name : {"tls-key-file-pass", "tls-client-key-file-pass"}) {
     auto values = EnabledConfig();
@@ -296,6 +327,11 @@ TEST_F(CoordinatorTlsHandshakeTest, ValidationRejectsUnusableFiles) {
   std::ofstream(Path("garbage.pem")) << "not a certificate";
   not_pem.ca_file = Path("garbage.pem");
   EXPECT_FALSE(ValidateTlsConfig(not_pem).ok());
+
+  // A directory is not a certificate file either.
+  auto is_dir = ConfigFor("server", "ca");
+  is_dir.ca_file = dir_.string();
+  EXPECT_FALSE(ValidateTlsConfig(is_dir).ok());
 
   // An unusable dedicated client identity is caught even when the server
   // identity is fine.

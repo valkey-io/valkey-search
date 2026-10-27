@@ -1020,26 +1020,45 @@ SchemaManager::AccumulateIndexSchemaResults(
   return total_cnt;
 }
 
-void SchemaManager::OnFlushDBEnded(ValkeyModuleCtx *ctx) {
+void SchemaManager::OnFlushDBEnded(ValkeyModuleCtx *ctx,
+                                   std::optional<int> dbnum) {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
-  int selected_db = ValkeyModule_GetSelectedDb(ctx);
-  if (!db_to_index_schemas_.contains(selected_db)) {
+  if (dbnum.has_value()) {
+    FlushDBIndexSchemas(ctx, *dbnum, /*flush_all=*/false);
     return;
   }
+  // Snapshot the DB numbers: removing a DB's last index erases its map entry,
+  // and the coordinated mode recreate inserts into it.
+  std::vector<uint32_t> db_nums;
+  db_nums.reserve(db_to_index_schemas_.size());
+  for (const auto &[db_num, _] : db_to_index_schemas_) {
+    db_nums.push_back(db_num);
+  }
+  for (auto db_num : db_nums) {
+    FlushDBIndexSchemas(ctx, static_cast<int>(db_num), /*flush_all=*/true);
+  }
+}
 
-  auto to_delete = GetIndexSchemasInDBInternal(selected_db);
-  VMSDK_LOG(NOTICE, ctx) << "Deleting index schema on FLUSHDB of DB "
-                         << selected_db;
+void SchemaManager::FlushDBIndexSchemas(ValkeyModuleCtx *ctx, int db_num,
+                                        bool flush_all) {
+  if (!db_to_index_schemas_.contains(db_num)) {
+    return;
+  }
+  const char *flush_cmd = flush_all ? "FLUSHALL" : "FLUSHDB";
+
+  auto to_delete = GetIndexSchemasInDBInternal(db_num);
+  VMSDK_LOG(NOTICE, ctx) << "Deleting index schema on " << flush_cmd
+                         << " of DB " << db_num;
   absl::once_flag log_recreate_once;
   for (const auto &name : to_delete) {
     VMSDK_LOG(DEBUG, ctx) << "Deleting index schema "
-                          << vmsdk::config::RedactIfNeeded(name)
-                          << " on FLUSHDB of DB " << selected_db;
-    auto old_schema = RemoveIndexSchemaInternal(selected_db, name);
+                          << vmsdk::config::RedactIfNeeded(name) << " on "
+                          << flush_cmd << " of DB " << db_num;
+    auto old_schema = RemoveIndexSchemaInternal(db_num, name);
     if (!old_schema.ok()) {
       VMSDK_LOG(WARNING, ctx) << "Unable to delete index schema "
-                              << vmsdk::config::RedactIfNeeded(name)
-                              << " on FLUSHDB of DB " << selected_db;
+                              << vmsdk::config::RedactIfNeeded(name) << " on "
+                              << flush_cmd << " of DB " << db_num;
       continue;
     }
     if (coordinator_enabled_) {
@@ -1047,49 +1066,50 @@ void SchemaManager::OnFlushDBEnded(ValkeyModuleCtx *ctx) {
       // cluster-level construct, not a node-level construct. To delete,
       // FT.DROPINDEX must be done explicitly.
       absl::call_once(log_recreate_once, [&]() {
-        VMSDK_LOG(NOTICE, ctx)
-            << "Recreating index schema on FLUSHDB of DB " << selected_db;
+        VMSDK_LOG(NOTICE, ctx) << "Recreating index schema on " << flush_cmd
+                               << " of DB " << db_num;
       });
       VMSDK_LOG(DEBUG, ctx)
           << "Recreating index schema " << vmsdk::config::RedactIfNeeded(name)
-          << " on FLUSHDB of DB " << selected_db;
+          << " on " << flush_cmd << " of DB " << db_num;
       // Fetch the authoritative stored proto from MetadataManager (includes
       // aliases). We do NOT rely on ToProto() for alias data per requirement
       // 6.3.
       auto stored_proto_or =
           coordinator::MetadataManager::Instance().GetEntryContent(
               kSchemaManagerMetadataTypeName,
-              coordinator::ObjName(selected_db, name));
+              coordinator::ObjName(db_num, name));
       if (!stored_proto_or.ok()) {
         if (absl::IsNotFound(stored_proto_or.status())) {
           // Entry genuinely absent — fall back to ToProto().
           auto to_add = old_schema.value()->ToProto();
           auto add_status = CreateIndexSchemaInternal(ctx, *to_add);
           if (!add_status.ok()) {
-            VMSDK_LOG(WARNING, ctx) << "Unable to recreate index schema "
-                                    << vmsdk::config::RedactIfNeeded(name)
-                                    << " on FLUSHDB of DB " << selected_db;
+            VMSDK_LOG(WARNING, ctx)
+                << "Unable to recreate index schema "
+                << vmsdk::config::RedactIfNeeded(name) << " on " << flush_cmd
+                << " of DB " << db_num;
           }
         } else {
-          VMSDK_LOG(WARNING, ctx)
-              << "MetadataManager lookup failed for "
-              << vmsdk::config::RedactIfNeeded(name) << " on FLUSHDB of DB "
-              << selected_db << ": " << stored_proto_or.status().message();
+          VMSDK_LOG(WARNING, ctx) << "MetadataManager lookup failed for "
+                                  << vmsdk::config::RedactIfNeeded(name)
+                                  << " on " << flush_cmd << " of DB " << db_num
+                                  << ": " << stored_proto_or.status().message();
         }
         continue;
       }
       data_model::IndexSchema stored_schema;
       if (!stored_proto_or.value().UnpackTo(&stored_schema)) {
         VMSDK_LOG(WARNING, ctx) << "Unable to unpack stored proto for "
-                                << vmsdk::config::RedactIfNeeded(name)
-                                << " on FLUSHDB of DB " << selected_db;
+                                << vmsdk::config::RedactIfNeeded(name) << " on "
+                                << flush_cmd << " of DB " << db_num;
         continue;
       }
       auto add_status = CreateIndexSchemaInternal(ctx, stored_schema);
       if (!add_status.ok()) {
         VMSDK_LOG(WARNING, ctx) << "Unable to recreate index schema "
-                                << vmsdk::config::RedactIfNeeded(name)
-                                << " on FLUSHDB of DB " << selected_db;
+                                << vmsdk::config::RedactIfNeeded(name) << " on "
+                                << flush_cmd << " of DB " << db_num;
       }
     }
     // Move expensive destruction (radix trees, posting lists, per-key indexes)
@@ -1318,8 +1338,18 @@ absl::Status SchemaManager::LoadIndex(
 void SchemaManager::OnFlushEndDBCallback(ValkeyModuleCtx *ctx,
                                          [[maybe_unused]] ValkeyModuleEvent eid,
                                          [[maybe_unused]] uint64_t subevent,
-                                         [[maybe_unused]] void *data) {
-  SchemaManager::Instance().OnFlushDBEnded(ctx);
+                                         void *data) {
+  auto *flush_info = static_cast<ValkeyModuleFlushInfo *>(data);
+  if (flush_info == nullptr) {
+    VMSDK_LOG(WARNING, ctx)
+        << "FLUSHDB event without flush info, assuming all databases";
+  }
+  // The engine reports dbnum -1 when every database was flushed.
+  std::optional<int> dbnum;
+  if (flush_info != nullptr && flush_info->dbnum != -1) {
+    dbnum = flush_info->dbnum;
+  }
+  SchemaManager::Instance().OnFlushDBEnded(ctx, dbnum);
 }
 
 void SchemaManager::OnLoadingCallback(ValkeyModuleCtx *ctx,

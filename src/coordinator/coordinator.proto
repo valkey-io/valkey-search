@@ -248,8 +248,17 @@ message MultiSearchIndexPartitionResponse {
 }
 
 message GlobalMetadataVersionHeader {
+  // Deterministic aggregate hash of the metadata entries. Each entry contributes
+  // its type, ID, version, and fingerprint. Entry order does not affect the
+  // hash.
   uint64 top_level_fingerprint = 1;
+  // Logical clock used to order metadata states. Incremented on every local
+  // create or delete. On reconciliation, set to the maximum of the local and
+  // incoming values, plus one if the merged result matches neither side.
   uint32 top_level_version = 2;
+  // Minimum Valkey Search module version (as ValkeyVersion::ToInt(), e.g.
+  // 1.3.0 = 66304) required to interpret this metadata. Nodes running an older
+  // module reject it.
   uint32 top_level_min_version = 3;
 }
 

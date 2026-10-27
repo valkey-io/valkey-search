@@ -97,7 +97,8 @@ class SchemaManager {
           std::atomic<uint64_t>> &(const IndexSchema::Stats &) const>
           get_result_cnt_func) const;
 
-  void OnFlushDBEnded(ValkeyModuleCtx *ctx);
+  // An empty dbnum means every database was flushed.
+  void OnFlushDBEnded(ValkeyModuleCtx *ctx, std::optional<int> dbnum);
   void OnSwapDB(ValkeyModuleSwapDbInfo *swap_db_info);
 
   void OnLoadingEnded(ValkeyModuleCtx *ctx)
@@ -238,6 +239,9 @@ class SchemaManager {
   // Returns every alias claim of `index_name` in `db_num`, owned or not.
   std::vector<data_model::IndexSchema::Alias> GetAliasClaimsForIndexInternal(
       uint32_t db_num, absl::string_view index_name) const
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);
+
+  void FlushDBIndexSchemas(ValkeyModuleCtx *ctx, int db_num, bool flush_all)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);
 
   void SubscribeToServerEventsIfNeeded();

@@ -9,7 +9,6 @@
 #include <thread>
 #include <vector>
 
-#include "absl/container/inlined_vector.h"
 #include "absl/strings/string_view.h"
 #include "gtest/gtest.h"
 #include "src/index_schema.pb.h"
@@ -50,13 +49,13 @@ class TextIndexSchemaTest : public vmsdk::ValkeyTest {
   // Returns nullopt when the root has no stem-tree entry.
   std::optional<uint32_t> StemDistinctDocs(TextIndexSchema &schema,
                                            absl::string_view word) {
-    absl::InlinedVector<absl::string_view, kStemVariantsInlineCapacity>
-        variants;
-    uint32_t distinct_docs = 0;
-    schema.GetAllStemVariants(word, variants, /*stem_enabled_mask=*/1,
-                              /*lock_needed=*/true, &distinct_docs);
-    if (variants.empty()) return std::nullopt;
-    return distinct_docs;
+    const std::string stemmed = schema.StemWord(word);
+    return schema.WithStemTreeLock(
+        [&](const Rax &stem_tree) -> std::optional<uint32_t> {
+          const auto root = stem_tree.FindStemParentsTarget(stemmed);
+          if (!root || root->parents.empty()) return std::nullopt;
+          return root->distinct_docs;
+        });
   }
 };
 

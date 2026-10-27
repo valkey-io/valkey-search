@@ -5,6 +5,29 @@ target_link_libraries(blocked_client_test PUBLIC vmsdklib)
 target_link_libraries(blocked_client_test PUBLIC vmsdk_testing_infra)
 finalize_test_flags(blocked_client_test)
 
+set(SRCS_HUGE_ALLOCATOR_TEST ${CMAKE_CURRENT_LIST_DIR}/huge_allocator_test.cc)
+add_executable(huge_allocator_test ${SRCS_HUGE_ALLOCATOR_TEST})
+target_include_directories(huge_allocator_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(huge_allocator_test PUBLIC vmsdklib)
+target_link_libraries(huge_allocator_test PUBLIC vmsdk_testing_infra)
+finalize_test_flags(huge_allocator_test)
+
+set(SRCS_HUGE_FLAT_HASH_MAP_TEST
+    ${CMAKE_CURRENT_LIST_DIR}/huge_flat_hash_map_test.cc)
+add_executable(huge_flat_hash_map_test ${SRCS_HUGE_FLAT_HASH_MAP_TEST})
+target_include_directories(huge_flat_hash_map_test
+                           PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(huge_flat_hash_map_test PUBLIC vmsdklib)
+target_link_libraries(huge_flat_hash_map_test PUBLIC vmsdk_testing_infra)
+finalize_test_flags(huge_flat_hash_map_test)
+
+set(SRCS_HUGE_PAGE_SLAB_TEST ${CMAKE_CURRENT_LIST_DIR}/huge_page_slab_test.cc)
+add_executable(huge_page_slab_test ${SRCS_HUGE_PAGE_SLAB_TEST})
+target_include_directories(huge_page_slab_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(huge_page_slab_test PUBLIC vmsdklib)
+target_link_libraries(huge_page_slab_test PUBLIC vmsdk_testing_infra)
+finalize_test_flags(huge_page_slab_test)
+
 set(SRCS_COMMAND_PARSER_TEST ${CMAKE_CURRENT_LIST_DIR}/command_parser_test.cc)
 add_executable(command_parser_test ${SRCS_COMMAND_PARSER_TEST})
 target_include_directories(command_parser_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})

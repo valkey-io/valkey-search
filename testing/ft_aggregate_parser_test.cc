@@ -461,6 +461,31 @@ TEST_F(AggregateTest, EmptyApplyAndFilterExpressionsAreRejected) {
   }
 }
 
+TEST_F(AggregateTest, NonSchemaLoadIsVisibleToLaterStagesOnly) {
+  const auto saved = options::GetEmulateRelease().GetValue();
+  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue({1, 3, 0}));
+  for (const auto &[test_case, accepted] :
+       std::vector<std::pair<absl::string_view, bool>>{
+           {"LOAD 1 @extra APPLY upper(@extra) AS u", true},
+           {"LOAD 1 extra GROUPBY 1 @extra", true},
+           {"LOAD 3 @extra AS e SORTBY 2 @e ASC", true},
+           {"LOAD 1 @extra FILTER @extra=='x'", true},
+           {"APPLY upper(@extra) AS u LOAD 1 @extra", false},
+           {"GROUPBY 1 @extra", false},
+       }) {
+    auto argv = vmsdk::ToValkeyStringVector(test_case);
+    vmsdk::ArgsIterator itr(argv.data(), argv.size());
+    AggregateParameters params(0);
+    params.parse_vars_.index_interface_ = &fake_index;
+    auto parser = CreateAggregateParser();
+    EXPECT_EQ(parser.Parse(params, itr).ok(), accepted) << test_case;
+    for (auto arg : argv) {
+      ValkeyModule_FreeString(nullptr, arg);
+    }
+  }
+  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue(saved));
+}
+
 TEST_F(AggregateTest, AddScoresFlagParses) {
   for (const bool given : {true, false}) {
     auto argv = vmsdk::ToValkeyStringVector(given ? "ADDSCORES LOAD 1 @n1"

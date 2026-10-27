@@ -1052,15 +1052,6 @@ class TestFtHybridLoad(ValkeySearchTestCaseDebugMode):
         assert {r[b"hue"]: int(r[b"total"]) for r in rows} == {
             b"red": 0 + 20 + 40, b"blue": 10 + 30}
 
-    def test_load_of_an_unknown_field_is_rejected(self):
-        """Redis returns no column for a field the index does not have;
-        valkey-search rejects the command. Tracked in
-        integration/compatibility/unsupported_tests.md section 5.1."""
-        client = self.server.get_new_client()
-        self.setup_index(client)
-        with pytest.raises(ResponseError, match=r"does not exist"):
-            self._rows(client, "LOAD", "1", "@nosuchfield")
-
 class _ScoreAliasOverAStoredFieldTests:
     """A YIELD_SCORE_AS alias naming a field the document also carries.
 

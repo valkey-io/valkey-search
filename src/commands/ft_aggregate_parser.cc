@@ -112,9 +112,11 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
           // unresolved and the load fails outright ("Index field `$.price`
           // does not exist"), so the old behavior is unusable and there is no
           // user base for SemVer to protect.
-          if (!index.GetFieldType(identifier).ok()) {
+          bool in_schema = index.GetFieldType(identifier).ok();
+          if (!in_schema) {
             if (auto resolved = index.GetAlias(identifier); resolved.ok()) {
               identifier = *std::move(resolved);
+              in_schema = true;
             }
           }
 
@@ -152,6 +154,13 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
                       return true;
                     },
                     []() -> absl::StatusOr<bool> { return false; }));
+          }
+          // A name outside the schema is read straight from the document.
+          // Later stages resolve names at parse time, so its column has to
+          // exist before they are parsed.
+          if (!in_schema) {
+            VMSDK_RETURN_IF_ERROR(
+                parameters.MakeReference(identifier, true).status());
           }
           // Intentionally stricter than RediSearch (which keeps the first claim
           // of a name and silently drops the rest): reject a LOAD clause that

@@ -11,6 +11,7 @@
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/match.h"
 #include "ft_search_parser.h"
 #include "src/commands/commands.h"
 #include "src/commands/ft_aggregate_exec.h"
@@ -62,9 +63,9 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
     // via expr::Expression::Compile -- so the column table is a complete list
     // of the names the pipeline references. No stage walking is needed.
     //
-    // Only names that resolve to a declared attribute are loaded. Anything
-    // else is produced by the pipeline itself (an APPLY or REDUCE output, a
-    // chained GROUPBY over a reducer alias) and has no stored value to fetch.
+    // Only names that resolve to a declared attribute are loaded here. Any
+    // other column is a pipeline output, or a LOAD name outside the schema
+    // that the LOAD loop below fetches.
     //
     // An implicit load is never a rename: it is emitted under the attribute
     // name, exactly as if the query had written `@name` in the LOAD clause.
@@ -132,26 +133,31 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
         continue;
       }
       content = true;
-      VMSDK_ASSIGN_OR_RETURN(auto indexer,
-                             params.index_schema->GetIndex(identifier));
-      auto indexer_type = indexer->GetIndexerType();
-      if (indexes::IsVectorIndex(indexer)) {
+      auto indexer = params.index_schema->GetIndex(identifier);
+      if (indexer.ok() && indexes::IsVectorIndex(*indexer)) {
         return absl::InvalidArgumentError(
             absl::StrCat("Loading of vector fields is not supported (field `",
                          identifier, "`)"));
       }
-      auto schema_identifier = params.index_schema->GetIdentifier(identifier);
       size_t record_index;
-      if (schema_identifier.ok()) {
+      if (indexer.ok()) {
+        VMSDK_ASSIGN_OR_RETURN(auto schema_identifier,
+                               params.index_schema->GetIdentifier(identifier));
         params.return_attributes.emplace_back(query::ReturnAttribute{
-            .identifier = vmsdk::MakeUniqueValkeyString(*schema_identifier),
+            .identifier = vmsdk::MakeUniqueValkeyString(schema_identifier),
             .attribute_alias = vmsdk::MakeUniqueValkeyString(identifier),
             .alias = vmsdk::MakeUniqueValkeyString(alias)});
         record_index = params.AddRecordAttribute(
-            *schema_identifier, identifier,
-            renamed ? alias : OutputNameFor(alias, *schema_identifier),
-            indexer_type);
+            schema_identifier, identifier,
+            renamed ? alias : OutputNameFor(alias, schema_identifier),
+            (*indexer)->GetIndexerType());
       } else {
+        // Below 1.3.0 `AS` is read as a field name; keep main's error so the
+        // ignored rename is not silent.
+        if (!options::EnabledInVersion(1, 3, 0) &&
+            absl::EqualsIgnoreCase(identifier, "AS")) {
+          return indexer.status();
+        }
         params.return_attributes.emplace_back(query::ReturnAttribute{
             .identifier = vmsdk::MakeUniqueValkeyString(identifier),
             .attribute_alias = vmsdk::UniqueValkeyString(),

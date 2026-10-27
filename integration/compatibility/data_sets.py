@@ -2105,7 +2105,7 @@ def extract_vocab_by_field_from_text_data(dataset_name, key_type):
 # suffix, fuzzy or wildcard forms), which the scoring path does not implement
 # either.
 
-HYBRID_DATASETS = ["hybrid text"]
+HYBRID_DATASETS = ["hybrid text", "hybrid text extra"]
 
 HYBRID_VECTOR_DIM = 4
 HYBRID_NUM_KEYS = 24
@@ -2241,5 +2241,16 @@ def compute_hybrid_data_sets():
                 },
             ))
         data[name][SETS_KEY(key_type)] = docs
+
+    # The same corpus plus `extra`, a field the schema does not declare. Kept
+    # as its own data set so that no `LOAD *` answer over `hybrid text`
+    # changes.
+    extra = data[name + " extra"] = {}
+    for key_type in ["hash", "json"]:
+        extra[CREATES_KEY(key_type)] = data[name][CREATES_KEY(key_type)]
+        extra[SETS_KEY(key_type)] = [
+            (key, {**fields, "extra": f"e{i:02d}"})
+            for i, (key, fields) in enumerate(data[name][SETS_KEY(key_type)])
+        ]
 
     return data

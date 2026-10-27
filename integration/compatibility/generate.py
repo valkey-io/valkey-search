@@ -928,6 +928,27 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         # Load by JSON path without a rename: emitted under the path.
         self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 2 @__key $.n1")
 
+    def test_aggregate_load_non_schema_field(self, key_type, dialect, vector_data_type):
+        # e1 (numeric) and e2 (string) are on every key but not in the schema.
+        self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
+        e1, e2 = ("@e1", "@e2") if key_type == "hash" else ("$.e1", "$.e2")
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 3 @__key {e1} {e2}")
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 2 @__key e2")
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 4 @__key {e1} as x apply @x*2 as y"
+        )
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 4 @__key {e2} as s apply upper(@s) as u"
+        )
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 3 {e2} as s groupby 1 @s reduce count 0 as c"
+        )
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 4 @__key {e2} as s filter @s=='two'"
+        )
+        # A name no key has loads nothing.
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 2 @__key @nosuch")
+
     def test_aggregate_json_field_names(self, key_type, dialect, vector_data_type):
         """Field names in the reply must be the user-facing name, not the
         schema identifier. Only JSON can distinguish the two (its schema is

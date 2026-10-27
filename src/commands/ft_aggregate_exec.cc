@@ -1062,15 +1062,17 @@ bool ReplyWithValue(ValkeyModuleCtx *ctx,
                     std::string_view name, indexes::IndexerType indexer_type,
                     const expr::Value &value, int dialect) {
   if (value.IsNil()) {
-    // 1.3.0 fix: a field the key never had stays out of the reply, but
-    // something that evaluated to nothing is named with a nil value, which is
-    // what Redisearch does. Before the fix every nil was left out.
+    // Both releases leave out a field the key never had, so it must not tick
+    // the counter.
+    if (value.IsMissing()) {
+      return false;
+    }
+    // 1.3.0 fix: something that evaluated to nothing is named with a nil
+    // value, which is what Redisearch does. Before the fix every nil was left
+    // out.
     return VALKEY_SEARCH_COMPATIBILITY_FIX(
         1, 3, 0, "aggregate_nil_alias_named",
         [&] {
-          if (value.IsMissing()) {
-            return false;
-          }
           ValkeyModule_ReplyWithSimpleString(ctx, name.data());
           ValkeyModule_ReplyWithNull(ctx);
           return true;

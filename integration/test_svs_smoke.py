@@ -908,7 +908,10 @@ class TestSVSVamanaDebugMode(ValkeySearchTestCaseDebugMode):
         assert prefilter_count() == before
         client.execute_command("CONFIG", "SET", ratio, "0.001")
 
-        assert list(prefiltered)[0] == list(in_index)[0] == 3
+        # tag=>[KNN] ranks by the tag's relevance, which ties here (every doc
+        # is red), so compare distances rather than reply order.
+        assert min(prefiltered, key=prefiltered.get) == \
+            min(in_index, key=in_index.get) == 3
         for doc, expected in METRIC_EXPECTED.items():
             assert prefiltered[doc] == pytest.approx(expected, abs=1e-5)
             assert in_index[doc] == pytest.approx(expected, abs=1e-5)

@@ -639,11 +639,17 @@ class TestSVSVamanaSmoke(ValkeySearchTestCaseBase):
 
         client.execute_command("FT.DROPINDEX", "mem_idx")
         client.execute_command("FLUSHALL")
+        # A write still running when DROPINDEX returns holds the index, which
+        # is then freed on the writer thread; wait for it. Allow some
+        # residual, but require it to shrink well below the ingested figure.
+        limit = baseline + (after_ingest - baseline) // 10
+        try:
+            waiters.wait_for_true(
+                lambda: _module_external_memory(client) < limit, timeout=10)
+        except waiters.WaitTimeout:
+            pass  # the assert below reports the figures
         after_drop = _module_external_memory(client)
-        # Allow some residual — index teardown may not free every
-        # allocation synchronously — but require it to shrink well
-        # below the ingested-state figure.
-        assert after_drop < baseline + (after_ingest - baseline) // 10, (
+        assert after_drop < limit, (
             f"external memory not reclaimed after DROPINDEX (baseline="
             f"{baseline}, after_ingest={after_ingest}, after_drop="
             f"{after_drop})"

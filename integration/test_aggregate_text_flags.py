@@ -103,7 +103,7 @@ class TestAggregateTextFlags(ValkeySearchTestCaseBase):
         self._populate(client)
         counters = ("search_compatibility-filter_parser_invalid_utf8_expression",
                     "search_compatibility-ft_search_apostrophe_phrase")
-        query = b"@s:(hel\xfflo world's)"
+        query = b"@s:(hello\xff world's)"
         for flags in ((), ("VERBATIM",), ("INORDER",), ("SLOP", "1")):
             before = client.info("SEARCH")
             client.execute_command(

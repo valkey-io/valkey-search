@@ -222,6 +222,30 @@ The scoring `default` variant avoids it by keeping only words that stem the
 same in both engines (`STEMMING_SCORING_EXTRA_WORDS` in `data_sets.py`), so no
 generator compares it.
 
+### 1.9 Weight on a stemmed term
+
+A stemmed query term scores as the sum of up to three leaves: the exact word,
+the stem root, and the root's other inflections. Redis applies the term's own
+`$weight` to the exact-word leaf only and leaves the root and inflection leaves
+at weight 1. valkey-search applies it to every leaf, so the weight scales
+everything the term matched. A weight on a group scales every leaf in both
+engines.
+
+This is deliberate: the weight is what the user wrote on the term, and a
+document that matches only through stemming should not escape it. BM25STD over
+three documents `running`, `run` and `runs`, query `@text:running`:
+
+```
+document   query                                    Redis   valkey-search
+running    @text:running                            1.45    1.45
+running    (@text:running) => { $weight: 2 }        2.43    2.90
+run        (@text:running) => { $weight: 2 }        0.98    1.96
+runs       (@text:running) => { $weight: 2 }        0.47    0.94
+```
+
+`generate_scoring.py` marks every weighted query on the stemmed `default`
+variant `excluded` (`unsupported_tests.md` §7.1).
+
 ## 2. Where the two reference engines disagree
 
 These are not valkey-search defects. They are places where `redis:latest` and

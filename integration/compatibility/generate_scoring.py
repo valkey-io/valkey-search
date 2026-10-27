@@ -89,6 +89,9 @@ class TestScoringCompatibility(BaseCompatibilityTest):
             assert set(scores) == descriptor["hits"], (
                 f"{shape} query {descriptor['query']!r} matched {sorted(scores)}, "
                 f"predicted {sorted(descriptor['hits'])}")
+            # Stemmed term weights differ by design; see unsupported_tests.md 7.
+            if schema_type == "default" and "$weight" in descriptor["query"]:
+                answer["excluded"] = True
             self.answers.append(answer)
         print(f"{shape}[{key_type}-{schema_type}]: {len(queries)} queries")
 

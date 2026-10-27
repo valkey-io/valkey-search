@@ -201,14 +201,12 @@ ResolvedLeaf QueryContext::ResolveText(const TextPredicate *predicate) const {
   TermLeaf leaf;
 
   // A single-word group; an absent word adds none.
-  auto add_word_group = [&](absl::string_view word, uint64_t field_mask,
-                            float weight) {
+  auto add_word_group = [&](absl::string_view word, uint64_t field_mask) {
     WordPostings found = Lookup(word);
     if (!found.postings) return;
     TermGroup group;
     group.idf = Idf(KeyCount(found));
     group.field_mask = field_mask;
-    group.weight = weight;
     group.words.push_back(std::move(found));
     leaf.groups.push_back(std::move(group));
   };
@@ -218,8 +216,7 @@ ResolvedLeaf QueryContext::ResolveText(const TextPredicate *predicate) const {
   const absl::string_view word = term_pred->GetTextString();
   // Group 1: the exact word.
   add_word_group(word,
-                 ScoringFieldMask(term_pred->GetFieldMask(), num_text_fields),
-                 term_pred->GetWeight());
+                 ScoringFieldMask(term_pred->GetFieldMask(), num_text_fields));
 
   const uint64_t stem_field_mask =
       term_pred->GetFieldMask() & text_index_schema_->GetStemTextFieldMask();
@@ -228,8 +225,8 @@ ResolvedLeaf QueryContext::ResolveText(const TextPredicate *predicate) const {
     auto add_stem_groups = [&](const indexes::text::Rax &stem_tree) {
       // Group 2: the root, when it differs from the word.
       if (stemmed != word) {
-        add_word_group(
-            stemmed, ScoringFieldMask(stem_field_mask, num_text_fields), 1.0f);
+        add_word_group(stemmed,
+                       ScoringFieldMask(stem_field_mask, num_text_fields));
       }
       // Group 3: the root's inflections, with dt the distinct-doc count kept
       // at ingestion (summing the words' dfs would double-count).

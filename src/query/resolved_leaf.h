@@ -41,8 +41,6 @@ struct TermGroup {
   float idf = 0.0f;
   // ~0 when it covers every text field, so probes skip the per-position scan.
   uint64_t field_mask = ~0ULL;
-  // A term's own $weight scales its exact-word group only.
-  float weight = 1.0f;
 };
 
 // Term leaf: the word, its stem root and the root's inflections looked up once

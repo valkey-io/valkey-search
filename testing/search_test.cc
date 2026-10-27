@@ -2152,20 +2152,18 @@ TEST_F(ScoreTextQueryTestBase, StemThreeLeafScoresMatchOracle) {
   EXPECT_GT(*d3, *d2);
 }
 
-// A term's own $weight scales only its exact-word leaf.
-TEST_F(ScoreTextQueryTestBase, StemWeightScalesExactLeafOnly) {
+// $weight multiplies the WHOLE expansion — every leaf of the stemmed term.
+TEST_F(ScoreTextQueryTestBase, StemWeightScalesWholeExpansion) {
   auto schema = BuildTextTagSchema(
       {{"d1", "running", ""}, {"d2", "runs", ""}, {"d3", "run", ""}},
       /*no_stem=*/false);
-  const std::string weighted = "(@text:running) => { $weight: 2; }";
-  auto d1 = Score(*schema, weighted, "d1");
-  auto d2 = Score(*schema, weighted, "d2");
-  auto d3 = Score(*schema, weighted, "d3");
-  ASSERT_TRUE(d1 && d2 && d3);
-  // d1 doubles only its exact leaf; d3 and d2 are unchanged.
-  EXPECT_NEAR(*d1, 2.0f * 0.980829f + 0.470004f, 1e-3f);
-  EXPECT_NEAR(*d3, 0.980829f, 1e-3f);
-  EXPECT_NEAR(*d2, 0.470004f, 1e-3f);
+  // d1 holds the exact word and an inflection, d3 the root, d2 an inflection.
+  for (const char *doc : {"d1", "d2", "d3"}) {
+    auto plain = Score(*schema, "@text:running", doc);
+    auto weighted = Score(*schema, "(@text:running) => { $weight: 2; }", doc);
+    ASSERT_TRUE(plain && weighted) << doc;
+    EXPECT_NEAR(*weighted, 2.0f * *plain, 1e-3f) << doc;
+  }
 }
 
 // The recompute path must match the shard-side extra-step path on a STEMMED

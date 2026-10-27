@@ -238,8 +238,8 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
             1, b"doc:1", [b"content", b"bye"]]
         assert blocked() == before
 
-    def test_non_text_query_does_not_block(self):
-        """Test that non-text queries on index with text field do NOT block."""
+    def test_non_text_nocontent_query_does_not_block(self):
+        """Test that NOCONTENT non-text queries on index with text field do NOT block."""
         client: Valkey = self.server.get_new_client()
 
         client.execute_command(

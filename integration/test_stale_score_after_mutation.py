@@ -84,11 +84,6 @@ class _ParkedMutation:
         return res[0], query()
 
 
-@pytest.mark.skip(reason=(
-    "Defect V4: https://github.com/valkey-io/valkey-search/issues/1415"
-    " -- a `text=>[KNN ...]` reply keeps the pre-mutation BM25 score and the"
-    " pre-mutation rank for a document rewritten mid-query, beside fresh"
-    " content and a freshly recomputed distance."))
 class TestStaleTextScoreOnVectorQuery(_ParkedMutation,
                                       ValkeySearchTestCaseDebugMode):
     """V4. Demonstrated through FT.SEARCH, because no FT.HYBRID arm can be

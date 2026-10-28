@@ -972,6 +972,90 @@ def validate_aggregate_complex_queries(client: Valkey):
         else:
             assert min_price == 2.0, f"Books min_price should be 2.0, got {min_price}"
 
+    # 22. QUANTILE reducer - median (0.5)
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 100]",
+        "LOAD", "1", "price",
+        "GROUPBY", "0",
+        "REDUCE", "QUANTILE", "2", "@price", "0.5", "AS", "median_price"
+    )
+    assert result[0] == 1
+    median = float(result[1][1])
+    assert 49.5 <= median <= 51.5, f"Expected median near 50.5, got {median}"
+
+    # 23. QUANTILE reducer - 99th percentile (0.99)
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 100]",
+        "LOAD", "1", "price",
+        "GROUPBY", "0",
+        "REDUCE", "QUANTILE", "2", "@price", "0.99", "AS", "p99"
+    )
+    assert result[0] == 1
+    p99 = float(result[1][1])
+    assert 98.0 <= p99 <= 100.0, f"Expected p99 near 99, got {p99}"
+
+    # 24. Multiple QUANTILE reducers in same query
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 100]",
+        "LOAD", "1", "price",
+        "GROUPBY", "0",
+        "REDUCE", "QUANTILE", "2", "@price", "0.5", "AS", "median",
+        "REDUCE", "QUANTILE", "2", "@price", "0.99", "AS", "p99",
+        "REDUCE", "QUANTILE", "2", "@price", "0.25", "AS", "q1"
+    )
+    assert result[0] == 1
+    row = dict(zip(result[1][::2], result[1][1::2]))
+    median = float(row[b'median'])
+    p99 = float(row[b'p99'])
+    q1 = float(row[b'q1'])
+    assert 49.5 <= median <= 51.5, f"Expected median near 50.5, got {median}"
+    assert 98.0 <= p99 <= 100.0, f"Expected p99 near 99, got {p99}"
+    assert 24.0 <= q1 <= 27.0, f"Expected q1 near 25.75, got {q1}"
+
+    # 25. QUANTILE with GROUPBY operations
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 100]",
+        "LOAD", "2", "price", "category",
+        "GROUPBY", "1", "@category",
+        "REDUCE", "QUANTILE", "2", "@price", "0.5", "AS", "median_price"
+    )
+    assert result[0] == 2
+    for i in range(1, len(result)):
+        row = dict(zip(result[i][::2], result[i][1::2]))
+        median_price = float(row[b'median_price'])
+        # electronics: odd prices 1..99 (n=50); books: even prices 2..100 (n=50).
+        if row[b'category'] == b'electronics':
+            assert 48.0 <= median_price <= 52.0, f"Expected electronics median near 50, got {median_price}"
+        else:
+            assert 49.0 <= median_price <= 53.0, f"Expected books median near 51, got {median_price}"
+
+    # 26. QUANTILE with numeric fields (rating)
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@rating:[1 100]",
+        "LOAD", "1", "rating",
+        "GROUPBY", "0",
+        "REDUCE", "QUANTILE", "2", "@rating", "0.5", "AS", "median_rating"
+    )
+    assert result[0] == 1
+    median_rating = float(result[1][1])
+    # rating = (i % 100) + 1.0 for i in 0..999 (n=1000), uniform over 1..100.
+    assert 48.5 <= median_rating <= 52.5, f"Expected rating median near 50.5, got {median_rating}"
+
+def validate_quantile_cluster_queries(client: Valkey):
+    """
+        Test FT.AGGREGATE QUANTILE reducer against a sharded dataset.
+    """
+    # Median over the full price range (1..1000), fanned out across shards.
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 1000]",
+        "LOAD", "1", "price",
+        "GROUPBY", "0",
+        "REDUCE", "QUANTILE", "2", "@price", "0.5", "AS", "median_price"
+    )
+    assert result[0] == 1
+    median = float(result[1][1])
+    assert 490.0 <= median <= 510.0, f"Expected median near 500, got {median}"
+
 class TestNonVector(ValkeySearchTestCaseBase):
 
     def test_basic(self):
@@ -1250,6 +1334,8 @@ class TestNonVectorCluster(ValkeySearchClusterTestCase):
         # Test RANDOM_SAMPLE functionality in cluster mode
         validate_random_sample_queries(cluster_client, aggregate_complex_hash_docs)
         validate_random_sample_error_queries(cluster_client)
+        # Test QUANTILE functionality in cluster mode
+        validate_quantile_cluster_queries(cluster_client)
     
     def test_max_search_keys_fetch_limited(self):
         """

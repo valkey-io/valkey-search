@@ -30,6 +30,11 @@ jobs:
     - name: Checkout Code
       uses: actions/checkout@v3
 
-    # Set up Docker to build and run the container
+    # The runner image links Homebrew openssl@4 as the default OpenSSL since
+    # 2026-10-13; gRPC v1.70.1 does not build against OpenSSL 4. openssl@3 stays
+    # installed on the image. https://github.com/actions/runner-images/issues/14856
+    - name: Pin OpenSSL 3
+      run: echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+
     - name: Build Code
       run: ./build.sh

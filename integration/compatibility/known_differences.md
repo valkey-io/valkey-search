@@ -168,6 +168,84 @@ Measured against Redis 8:
   `search.cursor-max-count` / `search.cursor-max-idle-ms` configs; out of range
   values are an error rather than being clamped.
 
+### 1.7 Weight on a group nested in a group of the same operator
+
+The OR and AND cases below are the same known underlying issue: Redis's parser
+flattens a nested OR inside an OR, or a nested AND inside an AND, into one flat
+OR or AND. The inner group's `$weight` then lands on the whole flattened node --
+including legs outside the weighted group. valkey-search keeps the nesting and
+applies the weight only to the group it is written on. Measured on
+`redis:latest`, `SCORER BM25STD`:
+
+```
+OR in OR, a document containing library but neither lamp nor kiwi:
+query                                             Redis    valkey-search
+library                                           7.18     7.18
+((lamp | kiwi) | library)                         9.75     9.75
+((lamp | kiwi) => { $weight: 2.0 } | library)     19.49    12.31
+
+AND in AND, a document containing all three terms:
+lemon                                             0.89     0.89
+(smooth plum)                                     4.02     4.02
+(lemon (smooth plum))                             4.91     4.91
+(lemon (smooth plum) => { $weight: 0.5 })         2.45     2.90
+```
+
+Redis's 19.49 is 2 x 9.75 and its 2.45 is 0.5 x 4.91: the weight scaled
+`library` and `lemon`, which are outside the weighted group. Group wrappers do
+not stop it: `(((lamp | kiwi)) => { $weight: 2.0 } | library)` diverges the same
+way. A weighted group whose parent has the other operator (OR in AND, AND in
+OR), a weighted group on its own, and `$weight: 1.0` all agree.
+
+`scoring_query_builder.py` never weights a group whose operator matches its
+parent's, so the `weight` shape does not compare this case.
+
+### 1.8 English stemming: Snowball version skew
+
+valkey-search vendors Snowball 3.0.1 (`third_party/snowball`); Redis's English
+stemmer is older and maps some ordinary words to different roots. Valkey stems
+from the vendored library; Redis stems from `FT.EXPLAIN` on `redis:latest`
+(8.10.1):
+
+```
+word           valkey-search   Redis
+university     universiti      univers
+organize       organiz         organ
+organization   organiz         organ
+organic        organic         organ
+```
+
+So `organic` matches `organize` on Redis but not on valkey-search, and a
+stemmed term's root and inflection leaves (and their dt) differ wherever the
+roots differ. This affects both recall and scoring on a stemmed English field.
+The scoring `default` variant avoids it by keeping only words that stem the
+same in both engines (`STEMMING_SCORING_EXTRA_WORDS` in `data_sets.py`), so no
+generator compares it.
+
+### 1.9 Weight on a stemmed term
+
+A stemmed query term scores as the sum of up to three leaves: the exact word,
+the stem root, and the root's other inflections. Redis applies the term's own
+`$weight` to the exact-word leaf only and leaves the root and inflection leaves
+at weight 1. valkey-search applies it to every leaf, so the weight scales
+everything the term matched. A weight on a group scales every leaf in both
+engines.
+
+This is deliberate: the weight is what the user wrote on the term, and a
+document that matches only through stemming should not escape it. BM25STD over
+three documents `running`, `run` and `runs`, query `@text:running`:
+
+```
+document   query                                    Redis   valkey-search
+running    @text:running                            1.45    1.45
+running    (@text:running) => { $weight: 2 }        2.43    2.90
+run        (@text:running) => { $weight: 2 }        0.98    1.96
+runs       (@text:running) => { $weight: 2 }        0.47    0.94
+```
+
+`generate_scoring.py` marks every weighted query on the stemmed `default`
+variant `excluded` (`unsupported_tests.md` §7.1).
+
 ## 2. Where the two reference engines disagree
 
 These are not valkey-search defects. They are places where `redis:latest` and

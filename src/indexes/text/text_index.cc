@@ -31,6 +31,7 @@
 #include "rax/rax.h"
 #include "src/valkey_search_options.h"
 #include "string_interning.h"
+#include "vmsdk/src/debug.h"
 namespace valkey_search::indexes::text {
 
 namespace {
@@ -404,6 +405,7 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
     iter.Next();
   }
 
+  BACKGROUND_PAUSEPOINT("delete_key_data_stem_update");
   if ((!empty_words.empty() || !stem_roots.empty()) &&
       (stem_text_field_mask_ != 0u)) {
     absl::WriterMutexLock stem_lock(&stem_tree_mutex_);
@@ -427,6 +429,13 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
           stem_filter ? stem_filter->GetStemRoot(word, min_stem_size_, unit)
                       : word;
       if (stem != word) {
+        {
+          // Another key may have re-added the word concurrently; keep it.
+          absl::ReaderMutexLock tree_read(&text_index_mutex_);
+          if (text_index_->GetPrefix().FindPostingsTarget(word)) {
+            continue;
+          }
+        }
         auto stem_remove_fn = CreateSimpleTargetMutateFn<StemParents>(
             [&word](InvasivePtr<StemParents> existing) {
               // The term may not exist in the stem tree if it was only present
@@ -466,49 +475,13 @@ uint64_t TextIndexSchema::GetTotalTermFrequency() const {
   return metadata_.total_term_frequency.load();
 }
 
-std::string TextIndexSchema::GetAllStemVariants(
-    absl::string_view search_term,
-    absl::InlinedVector<absl::string_view, kStemVariantsInlineCapacity>
-        &words_to_search,
-    uint64_t stem_enabled_mask, bool lock_needed, uint32_t *out_distinct_docs) {
-  // Stem the search term
-  std::string stemmed(search_term);
-  if (auto *stem_filter = language_->GetStemmer()) {
-    stemmed = stem_filter->GetStemRoot(search_term);
-  }
-
-  std::optional<absl::ReaderMutexLock> stem_guard;
-  if (lock_needed) {
-    stem_guard.emplace(&stem_tree_mutex_);
-  }
-
-  auto stem_iter = stem_tree_.GetWordIterator(stemmed);
-  // GetWordIterator positions at the first word with this prefix, check if
-  // exact match
-  if (!stem_iter.Done() && stem_iter.GetWord() == stemmed) {
-    const auto &parents_ptr = stem_iter.GetStemParentsTarget();
-    if (parents_ptr) {
-      const auto &parents = parents_ptr->parents;
-      // The whole group's df, even when max_expansions truncates the words.
-      if (out_distinct_docs != nullptr) {
-        *out_distinct_docs = parents_ptr->distinct_docs;
-      }
-      uint32_t max_expansions = options::GetMaxTermExpansions().GetValue();
-      uint32_t count = 0;
-      for (const auto &parent : parents) {
-        if (++count > max_expansions) {
-          break;  // Limit parent words added
-        }
-        words_to_search.push_back(parent);  // Views to tree-owned strings
-      }
-    }
-  }
-
-  return stemmed;  // Caller owns this and will add view to words_to_search
+std::string TextIndexSchema::StemWord(absl::string_view word) const {
+  auto *stemmer = language_->GetStemmer();
+  return stemmer ? stemmer->GetStemRoot(word) : std::string(word);
 }
 
 const TextIndex *TextIndexSchema::GetPerKeyTextIndex(const Key &key,
-                                                     bool lock) {
+                                                     bool lock) const {
   if (!key) {
     CHECK(false) << "Invalid null key passed to GetPerKeyTextIndex";
   }

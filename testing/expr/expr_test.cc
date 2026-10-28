@@ -332,6 +332,26 @@ TEST_F(RedisearchSemanticsTest, ConversionFailureInAComparison) {
   EXPECT_EQ(Eval("@one < '5'"), Value(true));  // '5' converts
 }
 
+// Operands and arguments are evaluated left to right, and the first missing
+// field or error ends the evaluation: a missing left operand is not outranked
+// by an error on the right, while an error on the left still wins. `&&` reads
+// a missing operand as false.
+TEST_F(RedisearchSemanticsTest, EvaluationIsLeftToRight) {
+  cc.known_attr.insert("gone");
+  record_->attrs["gone"] = Value::Missing();
+  for (absl::string_view expr :
+       {"@gone + (@one < 'abc')", "@gone || (@one < 'abc')",
+        "startswith(@gone, @one < 'abc')", "substr(@gone, @one < 'abc', 1)"}) {
+    EXPECT_TRUE(Eval(expr).IsMissing()) << expr;
+  }
+  for (absl::string_view expr :
+       {"(@one < 'abc') + @gone", "startswith(@one < 'abc', @gone)",
+        "timefmt(@one < 'abc', @gone)"}) {
+    EXPECT_TRUE(Eval(expr).IsError()) << expr;
+  }
+  EXPECT_EQ(Eval("@gone && (@one < 'abc')"), Value(false));
+}
+
 // An error is the result of everything it reaches, except the side of && or
 // || that is never evaluated.
 TEST_F(RedisearchSemanticsTest, ErrorsPropagate) {

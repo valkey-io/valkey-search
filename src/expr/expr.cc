@@ -154,12 +154,11 @@ struct FunctionCall : Expression {
   absl::InlinedVector<ExprPtr, 4> params_;
 };
 
-// An error in any argument is the call's result, ahead of everything else.
-template <typename... Values>
-static const Value *FirstError(const Values &...values) {
-  const Value *error = nullptr;
-  ((error = error ? error : (values.IsError() ? &values : nullptr)), ...);
-  return error;
+// Arguments are evaluated left to right, as Redisearch does, and the first
+// that ends the call is its result: an error, or -- once missing fields
+// propagate -- a missing field. Later arguments are not evaluated.
+static bool EndsCall(const Value &v) {
+  return v.IsError() || (v.IsMissing() && MissingPropagates());
 }
 
 // Redisearch drops a record whose expression reached for a field the key does
@@ -189,12 +188,12 @@ Value DyadicFunctionProxy(Expression::EvalContext &ctx,
                           const absl::InlinedVector<expr::ExprPtr, 4> &params) {
   CHECK(params.size() == 2);
   auto l = params[0]->Evaluate(ctx, record);
-  auto r = params[1]->Evaluate(ctx, record);
-  if (auto error = FirstError(l, r)) {
-    return *error;
+  if (EndsCall(l)) {
+    return l;
   }
-  if ((l.IsMissing() || r.IsMissing()) && MissingPropagates()) {
-    return Value::Missing();
+  auto r = params[1]->Evaluate(ctx, record);
+  if (EndsCall(r)) {
+    return r;
   }
   return (*func2)(l, r);
 };
@@ -205,14 +204,16 @@ Value TriadicFunctionProxy(
     const absl::InlinedVector<expr::ExprPtr, 4> &params) {
   CHECK(params.size() == 3);
   auto l = params[0]->Evaluate(ctx, record);
-  auto m = params[1]->Evaluate(ctx, record);
-  auto r = params[2]->Evaluate(ctx, record);
-  if (auto error = FirstError(l, m, r)) {
-    return *error;
+  if (EndsCall(l)) {
+    return l;
   }
-  if ((l.IsMissing() || m.IsMissing() || r.IsMissing()) &&
-      MissingPropagates()) {
-    return Value::Missing();
+  auto m = params[1]->Evaluate(ctx, record);
+  if (EndsCall(m)) {
+    return m;
+  }
+  auto r = params[2]->Evaluate(ctx, record);
+  if (EndsCall(r)) {
+    return r;
   }
   return (*func3)(l, m, r);
 };
@@ -241,16 +242,16 @@ Value ProxyTimefmt(Expression::EvalContext &ctx,
                    const Expression::Record &record,
                    const absl::InlinedVector<expr::ExprPtr, 4> &params) {
   CHECK(!params.empty());
+  auto value = params[0]->Evaluate(ctx, record);
+  if (EndsCall(value)) {
+    return value;
+  }
   Value fmt("%FT%TZ");
   if (params.size() > 1) {
     fmt = params[1]->Evaluate(ctx, record);
-  }
-  auto value = params[0]->Evaluate(ctx, record);
-  if (auto error = FirstError(value, fmt)) {
-    return *error;
-  }
-  if ((value.IsMissing() || fmt.IsMissing()) && MissingPropagates()) {
-    return Value::Missing();
+    if (EndsCall(fmt)) {
+      return fmt;
+    }
   }
   return FuncTimefmt(value, fmt);
 }
@@ -259,16 +260,16 @@ Value ProxyParsetime(Expression::EvalContext &ctx,
                      const Expression::Record &record,
                      const absl::InlinedVector<expr::ExprPtr, 4> &params) {
   CHECK(!params.empty());
+  auto value = params[0]->Evaluate(ctx, record);
+  if (EndsCall(value)) {
+    return value;
+  }
   Value fmt("%FT%TZ");
   if (params.size() > 1) {
     fmt = params[1]->Evaluate(ctx, record);
-  }
-  auto value = params[0]->Evaluate(ctx, record);
-  if (auto error = FirstError(value, fmt)) {
-    return *error;
-  }
-  if ((value.IsMissing() || fmt.IsMissing()) && MissingPropagates()) {
-    return Value::Missing();
+    if (EndsCall(fmt)) {
+      return fmt;
+    }
   }
   return FuncParsetime(value, fmt);
 }
@@ -376,6 +377,13 @@ struct Dyadic : Expression {
     if (lvalue.IsError()) {
       return lvalue;
     }
+    // Operands are evaluated left to right, as Redisearch does: a missing
+    // left operand ends the evaluation before the right one is looked at, so
+    // an error there cannot outrank it. `&&` is exempt, as below.
+    const bool logical_and = name_ == "&&";
+    if (!logical_and && lvalue.IsMissing() && MissingPropagates()) {
+      return Value::Missing();
+    }
     // Redisearch evaluates the right side of && and || only when the left
     // side does not decide the answer, so an error there goes unnoticed:
     // `0 && (@n < 'abc')` is 0. AsBool always has a result, and reads a nil
@@ -405,9 +413,7 @@ struct Dyadic : Expression {
     // exactly that, because AsBool() already reads a nil as false. Redis 8
     // also truncates the result stream after such a row, which is not
     // reproduced here; see known_differences.md.
-    const bool logical_and = name_ == "&&";
-    if (!logical_and && (lvalue.IsMissing() || rvalue.IsMissing()) &&
-        MissingPropagates()) {
+    if (!logical_and && rvalue.IsMissing() && MissingPropagates()) {
       return Value::Missing();
     }
     return (*func_)(lvalue, rvalue);

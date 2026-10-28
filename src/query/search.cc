@@ -2307,7 +2307,14 @@ ContentProcessing SearchParameters::GetContentProcessing() const {
     return kNoContent;
   }
   // Currently, ContentAvailable isn't detected. Future use case.
-  if (filter_parse_results.query_operations & QueryOperations::kContainsText) {
+  // Revalidation reads the text index to evaluate a text predicate and to
+  // rescore a tag predicate (document length), so either must wait for
+  // in-flight mutations to be indexed.
+  const QueryOperations ops = filter_parse_results.query_operations;
+  const bool rescores_tag =
+      (ops & QueryOperations::kContainsTag) && ScoreIsRelevance();
+  if ((ops & QueryOperations::kContainsText) ||
+      (rescores_tag && index_schema->GetTextIndexSchema())) {
     return kContentionCheckRequired;
   }
   return kContentRequired;

@@ -326,6 +326,15 @@ class IndexSchema : public KeyspaceEventSubscription,
       std::unique_ptr<query::SearchParameters> &&params)
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
 
+  // Blocks until the in-flight mutations of `neighbors` are indexed, or
+  // `deadline` passes (false). For queries that reply synchronously and so
+  // cannot be parked in the mutation queue by PerformKeyContentionCheck.
+  // While the writer pool is suspended for a fork, applies them on the
+  // calling thread instead, taking time_sliced_mutex_ as writer.
+  bool WaitForContendedKeys(const std::vector<indexes::Neighbor> &neighbors,
+                            absl::Time deadline)
+      ABSL_LOCKS_EXCLUDED(mutated_records_mutex_, time_sliced_mutex_);
+
   static absl::Status TextInfoCmd(ValkeyModuleCtx *ctx,
                                   vmsdk::ArgsIterator &itr);
   struct DbKeyInfo {
@@ -663,6 +672,9 @@ class IndexSchema : public KeyspaceEventSubscription,
   FRIEND_TEST(IndexSchemaFriendTest, FlatConsistencyTest);
   FRIEND_TEST(IndexSchemaFriendTest, MutatedAttributes);
   FRIEND_TEST(IndexSchemaFriendTest, WeightedBuffer);
+  FRIEND_TEST(IndexSchemaFriendTest, WaitForContendedKeysWhileSuspended);
+  FRIEND_TEST(IndexSchemaFriendTest, WaitForContendedKeysUntilApplied);
+  FRIEND_TEST(IndexSchemaFriendTest, WaitForContendedKeysDeadlineWhileBlocked);
   FRIEND_TEST(IndexSchemaFriendTest, MutatedAttributesSanity);
   FRIEND_TEST(IndexSchemaFriendTest, InvalidDataDropsKey);
   FRIEND_TEST(IndexSchemaFriendTest,

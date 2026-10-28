@@ -751,9 +751,9 @@ absl::Status PerformMultiSearchFanoutAsync(
         sub->set_slot_fingerprint(node.shard->slots_fingerprint);
       }
     }
-    std::string target_address =
-        absl::StrCat(node.socket_address.primary_endpoint, ":",
-                     coordinator::GetCoordinatorPort(node.socket_address.port));
+    std::string target_address = coordinator::FormatAddressWithPort(
+        node.socket_address.primary_endpoint,
+        coordinator::GetCoordinatorPort(node.socket_address.port));
     if (search_targets.size() >=
             valkey_search::options::GetAsyncFanoutThreshold().GetValue() &&
         thread_pool->Size() > 1) {

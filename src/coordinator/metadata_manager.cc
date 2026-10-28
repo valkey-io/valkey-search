@@ -494,16 +494,17 @@ absl::Status MetadataManager::ReconcileMetadata(const GlobalMetadata &proposed,
                                                 absl::string_view source,
                                                 bool trigger_callbacks,
                                                 bool prefer_incoming) {
-  if (proposed.version_header().top_level_version() > kModuleVersion.ToInt()) {
+  if (proposed.version_header().top_level_min_version() >
+      kModuleVersion.ToInt()) {
     VMSDK_LOG(WARNING, nullptr)
         << "Proposed GlobalMetadata from " << source
         << " requires minimum version "
-        << proposed.version_header().top_level_version()
+        << proposed.version_header().top_level_min_version()
         << ", current version is " << kModuleVersion.ToString();
     return absl::InternalError(absl::StrCat(
         "Proposed GlobalMetadata from ", source, " requires minimum version ",
-        proposed.version_header().top_level_version(), ", current version is ",
-        kModuleVersion.ToString()));
+        proposed.version_header().top_level_min_version(),
+        ", current version is ", kModuleVersion.ToString()));
   }
   // We synthesize the new version in a new variable, so that if we need to
   // fail, the state is unchanged. The new version starts as a copy of the

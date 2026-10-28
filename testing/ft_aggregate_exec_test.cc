@@ -884,6 +884,12 @@ class CreateRecordsFromNeighborsTest : public ValkeySearchTest {
     auto interned = StringInternStore::Intern(std::string(key));
     return indexes::Neighbor(interned, distance);
   }
+
+  indexes::Neighbor MakeNeighbor(absl::string_view key, float distance,
+                                 float score) {
+    auto interned = StringInternStore::Intern(std::string(key));
+    return indexes::Neighbor(interned, distance, score);
+  }
 };
 
 // Single VR predicate, neighbor carries its distance in Neighbor::distance:
@@ -928,6 +934,50 @@ TEST_F(CreateRecordsFromNeighborsTest, UnmatchedVrLeavesFieldNil) {
   auto &rec = records.front();
   auto d1_idx = params->record_indexes_by_alias_.at("d1");
   EXPECT_TRUE(rec->fields_.at(d1_idx).IsNil());
+}
+
+// Vector query: the score column carries Neighbor::distance, not
+// Neighbor::score, even with ADDSCORES set.
+TEST_F(CreateRecordsFromNeighborsTest, VectorQueryScoreColumnUsesDistance) {
+  auto params = MakeParams("__score", "");
+  params->attribute_alias = "vector";
+  params->addscores_ = true;
+
+  std::vector<indexes::Neighbor> neighbors;
+  neighbors.push_back(MakeNeighbor("k1", 1.5f, 7.0f));
+
+  RecordSet records(params.get());
+  VMSDK_EXPECT_OK(
+      CreateRecordsFromNeighbors(neighbors, *params, 0, 1, records));
+
+  ASSERT_EQ(records.size(), 1u);
+  auto &rec = records.front();
+  ASSERT_TRUE(rec->fields_.at(1).IsDouble());
+  EXPECT_FLOAT_EQ(static_cast<float>(*rec->fields_.at(1).AsDouble()), 1.5f);
+}
+
+// Non-vector query with ADDSCORES: the score column carries Neighbor::score
+// while the VR field still carries Neighbor::distance.
+TEST_F(CreateRecordsFromNeighborsTest, AddScoresScoreColumnUsesScore) {
+  auto params = MakeParams("__score", "d1");
+  params->addscores_ = true;
+  // index layout: 0=__key, 1=__score, 2=d1
+
+  std::vector<indexes::Neighbor> neighbors;
+  neighbors.push_back(MakeNeighbor("k1", 1.5f, 7.0f));
+
+  RecordSet records(params.get());
+  VMSDK_EXPECT_OK(
+      CreateRecordsFromNeighbors(neighbors, *params, 0, 1, records));
+
+  ASSERT_EQ(records.size(), 1u);
+  auto &rec = records.front();
+  ASSERT_TRUE(rec->fields_.at(1).IsDouble());
+  EXPECT_FLOAT_EQ(static_cast<float>(*rec->fields_.at(1).AsDouble()), 7.0f);
+  auto d1_idx = params->record_indexes_by_alias_.at("d1");
+  ASSERT_TRUE(rec->fields_.at(d1_idx).IsDouble());
+  EXPECT_FLOAT_EQ(static_cast<float>(*rec->fields_.at(d1_idx).AsDouble()),
+                  1.5f);
 }
 
 TEST_F(AggregateExecTest, FirstValueReducerTest) {

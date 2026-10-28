@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 
+#include "absl/container/flat_hash_set.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "src/commands/filter_parser.h"
@@ -2328,6 +2329,319 @@ INSTANTIATE_TEST_SUITE_P(
     [](const ::testing::TestParamInfo<LegacyMalformedQueryCase>& info) {
       return info.param.test_name;
     });
+
+// =========================================================================
+// INFIELDS unit tests — verify field mask restriction in
+// SetupTextFieldConfiguration()
+// =========================================================================
+
+struct InfieldsFilterTestCase {
+  std::string test_name;
+  std::string filter;
+  absl::flat_hash_set<std::string> infields;
+  bool create_success{false};
+  std::string create_expected_error_message;
+  std::optional<bool> evaluate_success;
+  std::string key{"key1"};
+};
+
+class InfieldsFilterTest
+    : public ValkeySearchTestWithParam<InfieldsFilterTestCase> {};
+
+TEST_P(InfieldsFilterTest, ParseParams) {
+  const InfieldsFilterTestCase& test_case = GetParam();
+  auto index_schema = CreateIndexSchema("index_schema_name").value();
+  InitIndexSchema(index_schema.get());
+  // key1 has identical text in both fields; add a key whose text is only in
+  // text_field2 so that INFIELDS scoping is observable.
+  {
+    auto key = StringInternStore::Intern("key_field2_only");
+    auto field2 = index_schema->GetIndex("text_field2").value();
+    VMSDK_EXPECT_OK(
+        static_cast<indexes::Text*>(field2.get())
+            ->AddRecord(key,
+                        AttributeData(vmsdk::MakeUniqueValkeyString("hello"))));
+    index_schema->GetTextIndexSchema()->CommitKeyData(key);
+  }
+  TextParsingOptions options{
+      .infields = test_case.infields.empty() ? nullptr : &test_case.infields};
+  FilterParser parser(*index_schema, test_case.filter, options);
+  auto parse_results = parser.Parse();
+  EXPECT_EQ(test_case.create_success, parse_results.ok());
+  if (!test_case.create_success) {
+    EXPECT_EQ(parse_results.status().message(),
+              test_case.create_expected_error_message);
+    return;
+  }
+  if (test_case.evaluate_success.has_value()) {
+    auto interned_key = StringInternStore::Intern(test_case.key);
+    if (index_schema->GetTextIndexSchema()) {
+      query::QueryContext query_ctx(
+          *index_schema,
+          indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std));
+      indexes::PrefilterEvaluator evaluator(
+          query_ctx, parse_results.value().query_operations, *index_schema);
+      EXPECT_EQ(test_case.evaluate_success.value(),
+                evaluator.Evaluate(*parse_results.value().root_predicate,
+                                   interned_key));
+    }
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    InfieldsFilterTests, InfieldsFilterTest,
+    ValuesIn<InfieldsFilterTestCase>({
+        {
+            .test_name = "infields_single_valid_text_field_matches",
+            .filter = "hello",
+            .infields = {"text_field1"},
+            .create_success = true,
+            .evaluate_success = true,
+        },
+        {
+            .test_name = "infields_single_valid_text_field_no_match",
+            .filter = "hello",
+            .infields = {"text_field1"},
+            .create_success = true,
+            .evaluate_success = false,
+            .key = "missing_key",
+        },
+        {
+            .test_name = "infields_multiple_valid_text_fields",
+            .filter = "hello",
+            .infields = {"text_field1", "text_field2"},
+            .create_success = true,
+            .evaluate_success = true,
+        },
+        {
+            .test_name = "infields_nonexistent_field_only_error",
+            .filter = "hello",
+            .infields = {"nonexistent_field"},
+            .create_success = false,
+            .create_expected_error_message =
+                "INFIELDS field 'nonexistent_field' does not exist in the "
+                "index",
+        },
+        {
+            .test_name = "infields_non_text_field_only_error",
+            .filter = "hello",
+            .infields = {"num_field_1.5"},
+            .create_success = false,
+            .create_expected_error_message =
+                "INFIELDS field 'num_field_1.5' is not a TEXT field",
+        },
+        {
+            .test_name = "infields_mix_valid_and_nonexistent",
+            .filter = "hello",
+            .infields = {"text_field1", "nonexistent_field"},
+            .create_success = false,
+            .create_expected_error_message =
+                "INFIELDS field 'nonexistent_field' does not exist in the "
+                "index",
+        },
+        {
+            .test_name = "infields_mix_valid_and_non_text",
+            .filter = "hello",
+            .infields = {"text_field1", "num_field_1.5"},
+            .create_success = false,
+            .create_expected_error_message =
+                "INFIELDS field 'num_field_1.5' is not a TEXT field",
+        },
+        {
+            .test_name = "infields_null_uses_all_text_fields",
+            .filter = "hello",
+            .infields = {},
+            .create_success = true,
+            .evaluate_success = true,
+        },
+        // Explicit @field: that is not in INFIELDS set is an error.
+        {
+            .test_name = "infields_explicit_field_not_in_infields_error",
+            .filter = "@text_field1:hello",
+            .infields = {"text_field2"},
+            .create_success = false,
+            .create_expected_error_message =
+                "Field 'text_field1' is not in INFIELDS list",
+        },
+        {
+            .test_name = "infields_explicit_field_in_infields_matches",
+            .filter = "@text_field1:hello",
+            .infields = {"text_field1", "text_field2"},
+            .create_success = true,
+            .evaluate_success = true,
+        },
+        // Prefix query restricted by INFIELDS.
+        {
+            .test_name = "infields_prefix_query",
+            .filter = "hel*",
+            .infields = {"text_field1"},
+            .create_success = true,
+            .evaluate_success = true,
+        },
+        // Suffix query restricted to a field that supports suffix trie.
+        {
+            .test_name = "infields_suffix_query_supported_field",
+            .filter = "*ello",
+            .infields = {"text_field1"},  // has suffix trie
+            .create_success = true,
+            .evaluate_success = true,
+        },
+        // Suffix query restricted to a field without suffix trie.
+        {
+            .test_name = "infields_suffix_query_unsupported_field",
+            .filter = "*ello",
+            .infields = {"text_field2"},  // no suffix trie
+            .create_success = false,
+            .create_expected_error_message =
+                "No INFIELDS field supports suffix search",
+        },
+        // Fuzzy query restricted by INFIELDS.
+        {
+            .test_name = "infields_fuzzy_query",
+            .filter = "%hllo%",
+            .infields = {"text_field1"},
+            .create_success = true,
+            .evaluate_success = true,
+        },
+        // Exact phrase restricted by INFIELDS.
+        {
+            .test_name = "infields_exact_phrase",
+            .filter = "\"hello my name is\"",
+            .infields = {"text_field1"},
+            .create_success = true,
+            .evaluate_success = true,
+        },
+        // Composed AND: both terms restricted by INFIELDS.
+        {
+            .test_name = "infields_composed_and",
+            .filter = "hello name",
+            .infields = {"text_field1"},
+            .create_success = true,
+            .evaluate_success = true,
+        },
+        // Composed OR: both branches restricted by INFIELDS.
+        {
+            .test_name = "infields_composed_or",
+            .filter = "hello|word",
+            .infields = {"text_field1"},
+            .create_success = true,
+            .evaluate_success = true,
+        },
+        // Negation restricted by INFIELDS.
+        {
+            .test_name = "infields_negation",
+            .filter = "-nonexistent hello",
+            .infields = {"text_field1"},
+            .create_success = true,
+            .evaluate_success = true,
+        },
+        // INFIELDS must exclude a field that holds the only occurrence.
+        {
+            .test_name = "infields_excludes_term_only_in_other_field",
+            .filter = "hello",
+            .infields = {"text_field1"},
+            .create_success = true,
+            .evaluate_success = false,
+            .key = "key_field2_only",
+        },
+        {
+            .test_name = "infields_includes_term_in_listed_field",
+            .filter = "hello",
+            .infields = {"text_field2"},
+            .create_success = true,
+            .evaluate_success = true,
+            .key = "key_field2_only",
+        },
+        {
+            .test_name = "infields_prefix_excludes_other_field",
+            .filter = "hel*",
+            .infields = {"text_field1"},
+            .create_success = true,
+            .evaluate_success = false,
+            .key = "key_field2_only",
+        },
+        // Case-sensitive field name: uppercase field name doesn't exist.
+        {
+            .test_name = "infields_case_sensitive_field_name",
+            .filter = "hello",
+            .infields = {"TEXT_FIELD1"},
+            .create_success = false,
+            .create_expected_error_message =
+                "INFIELDS field 'TEXT_FIELD1' does not exist in the index",
+        },
+    }),
+    [](const TestParamInfo<InfieldsFilterTestCase>& info) {
+      return info.param.test_name;
+    });
+
+class InfieldsFilterBoundaryTest : public ValkeySearchTest {};
+
+// Boundary test: INFIELDS naming the 64th text field (field_index 63,
+// mask bit 1ULL<<63) must correctly restrict matching to that field, and
+// only that field's data must be visible to the resulting query.
+TEST_F(InfieldsFilterBoundaryTest, SixtyFourthTextFieldInInfields) {
+  auto index_schema = CreateIndexSchema("boundary_index_schema").value();
+  index_schema->CreateTextIndexSchema();
+  auto text_index_schema = index_schema->GetTextIndexSchema();
+
+  constexpr int kNumTextFields = 64;
+  std::vector<std::shared_ptr<indexes::Text>> text_indexes;
+  text_indexes.reserve(kNumTextFields);
+  for (int i = 0; i < kNumTextFields; ++i) {
+    data_model::TextIndex text_index_proto = CreateTextIndexProto(
+        /*with_suffix_trie=*/false, /*no_stem=*/false, 1.0);
+    auto text_index =
+        std::make_shared<indexes::Text>(text_index_proto, text_index_schema);
+    std::string field_name = "text_field_" + std::to_string(i);
+    VMSDK_EXPECT_OK(index_schema->AddIndex(field_name, field_name, text_index));
+    text_indexes.push_back(text_index);
+  }
+  // The 64th field (index 63) is the only one allocated bit 1ULL<<63.
+  ASSERT_EQ(text_indexes.back()->GetTextFieldNumber(), 63u);
+
+  auto key = StringInternStore::Intern("key1");
+  // Only the 64th field contains "hello"; all others contain unrelated text.
+  for (int i = 0; i < kNumTextFields; ++i) {
+    std::string content = (i == kNumTextFields - 1) ? "hello" : "other";
+    VMSDK_EXPECT_OK(text_indexes[i]->AddRecord(
+        key, AttributeData(vmsdk::MakeUniqueValkeyString(content))));
+  }
+  text_index_schema->CommitKeyData(key);
+
+  absl::flat_hash_set<std::string> infields = {"text_field_63"};
+  TextParsingOptions options{.infields = &infields};
+  FilterParser parser(*index_schema, "hello", options);
+  auto parse_results = parser.Parse();
+  ASSERT_TRUE(parse_results.ok()) << parse_results.status();
+
+  {
+    query::QueryContext query_ctx(
+        *index_schema,
+        indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std));
+    indexes::PrefilterEvaluator evaluator(
+        query_ctx, parse_results.value().query_operations, *index_schema);
+    EXPECT_TRUE(evaluator.Evaluate(*parse_results.value().root_predicate, key));
+  }
+
+  // Naming a different single field (e.g. field 0, which does not contain
+  // "hello") must exclude the match, proving the mask bit for field 63 is
+  // distinct from the others.
+  absl::flat_hash_set<std::string> other_infields = {"text_field_0"};
+  TextParsingOptions other_options{.infields = &other_infields};
+  FilterParser other_parser(*index_schema, "hello", other_options);
+  auto other_parse_results = other_parser.Parse();
+  ASSERT_TRUE(other_parse_results.ok()) << other_parse_results.status();
+  {
+    query::QueryContext other_query_ctx(
+        *index_schema,
+        indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std));
+    indexes::PrefilterEvaluator evaluator(
+        other_query_ctx, other_parse_results.value().query_operations,
+        *index_schema);
+    EXPECT_FALSE(
+        evaluator.Evaluate(*other_parse_results.value().root_predicate, key));
+  }
+}
 
 }  // namespace
 }  // namespace valkey_search

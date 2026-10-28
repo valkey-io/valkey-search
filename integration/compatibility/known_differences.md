@@ -280,6 +280,14 @@ valkey-search's string-function errors name the argument and the expected
 type, but not in Redis's `VALIDATE_ARG__STRING` form. The harness compares only
 that both engines raised.
 
+### 1.15 SORTBY over numbers and non-numeric strings
+
+Redis 8 fails a SORTBY whose column holds both numbers and strings that do
+not convert to numbers ("Error converting string"), as a `<` between them
+would. valkey-search sorts them, comparing such a pair as strings. Nulls
+(`lower()` of a number) and missing values sort the same on both: a null
+first ascending and last descending, a missing value last either way.
+
 ## 2. Where the two reference engines disagree
 
 These are not valkey-search defects. They are places where `redis:latest` and

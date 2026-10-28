@@ -239,8 +239,12 @@ struct SortFunctor {
       // interleaved with the sorted ones. Answering the direction here rather
       // than through the switch below is deliberate -- "missing goes last" is
       // not a smaller-or-larger claim, so DESC must not flip it.
-      const bool l_missing = lvalue.IsNil();
-      const bool r_missing = rvalue.IsNil();
+      //
+      // A null -- lower() of a number -- is a value, not a missing one: it
+      // orders below every other value, first ASC and last DESC, as in
+      // Redisearch.
+      const bool l_missing = lvalue.IsNil() && !lvalue.IsNull();
+      const bool r_missing = rvalue.IsNil() && !rvalue.IsNull();
       if (l_missing != r_missing) {
         return r_missing;
       }
@@ -248,7 +252,8 @@ struct SortFunctor {
         // Both missing: undecided on this key, try the next one.
         continue;
       }
-      auto cmp = expr::Compare(lvalue, rvalue);
+      auto cmp = expr::CompareNulls(lvalue, rvalue)
+                     .value_or(expr::Compare(lvalue, rvalue));
       switch (cmp) {
         case expr::Ordering::kEQUAL:
         case expr::Ordering::kUNORDERED:

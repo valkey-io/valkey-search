@@ -773,7 +773,7 @@ static bool IsGe(Ordering o) { return o != Ordering::kLESS; }
 // The answer to a numeric comparison with an operand that is not a number.
 enum class Mismatch { kError, kFalse, kTrue };
 
-static std::optional<Ordering> CompareNulls(const Value& l, const Value& r) {
+std::optional<Ordering> CompareNulls(const Value& l, const Value& r) {
   if (l.IsNull() && r.IsNull()) {
     return Ordering::kEQUAL;
   }

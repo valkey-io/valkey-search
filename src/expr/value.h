@@ -183,6 +183,10 @@ static inline std::ostream &operator<<(std::ostream &os, Ordering o) {
 }
 
 Ordering Compare(const Value &l, const Value &r);
+// The ordering of a pair in which at least one side is a null (Value::Null):
+// a null orders below every other value and equals another null. Nullopt when
+// neither side is a null.
+std::optional<Ordering> CompareNulls(const Value &l, const Value &r);
 
 // Array operation helper functions
 Value ApplyToElements(const Value::Array vec,

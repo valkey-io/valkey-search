@@ -261,6 +261,53 @@ TEST_F(AggregateExecTest, EvaluationErrorFailsTheStage) {
   VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue(saved));
 }
 
+// A null (lower() of a number) is a value that orders below every other one:
+// first ASC, last DESC. A missing value goes last either way. Measured on
+// Redis 8 with nulls mixed with strings and with numbers.
+TEST_F(AggregateExecTest, SortOrdersNullsFirstAndMissingLast) {
+  struct Case {
+    std::vector<expr::Value> input;
+    std::vector<std::string> asc, desc;  // sort keys, as printed below
+  };
+  auto name = [](const expr::Value &v) -> std::string {
+    if (v.IsNull()) {
+      return "null";
+    }
+    if (v.IsNil()) {
+      return "missing";
+    }
+    return std::string(*v.AsStringView());
+  };
+  std::vector<Case> cases = {
+      {{expr::Value("b"), expr::Value::Null(), expr::Value("a"),
+        expr::Value::Missing(), expr::Value("c"), expr::Value::Null()},
+       {"null", "null", "a", "b", "c", "missing"},
+       {"c", "b", "a", "null", "null", "missing"}},
+      {{expr::Value(3.0), expr::Value::Null(), expr::Value(1.0),
+        expr::Value::Missing(), expr::Value(2.0)},
+       {"null", "1", "2", "3", "missing"},
+       {"3", "2", "1", "null", "missing"}},
+  };
+  for (auto &c : cases) {
+    for (bool asc : {true, false}) {
+      RecordSet records(nullptr);
+      for (auto &v : c.input) {
+        auto rec = std::make_unique<Record>(2);
+        rec->fields_[0] = v;
+        rec->fields_[1] = expr::Value(0.0);
+        records.emplace_back(std::move(rec));
+      }
+      auto param = MakeStages(asc ? "SORTBY 2 @n1 ASC" : "SORTBY 2 @n1 DESC");
+      VMSDK_EXPECT_OK(param->stages_[0]->Execute(records));
+      std::vector<std::string> got;
+      for (auto &r : records) {
+        got.push_back(name(r->fields_[0]));
+      }
+      EXPECT_EQ(got, asc ? c.asc : c.desc);
+    }
+  }
+}
+
 TEST_F(AggregateExecTest, SortTest) {
   struct Testcase {
     std::string text_;

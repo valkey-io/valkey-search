@@ -95,6 +95,17 @@ if(UNIX AND NOT APPLE AND NOT SAN_BUILD)
     TARGET libsearch APPEND PROPERTY LINK_DEPENDS
     ${CMAKE_SOURCE_DIR}/vmsdk/deferred_init.lds)
 
+  # GNU gold cannot parse INSERT. Where it is the default linker, use BFD.
+  include(CheckCXXSourceCompiles)
+  set(CMAKE_REQUIRED_LINK_OPTIONS
+      "LINKER:-T,${CMAKE_SOURCE_DIR}/vmsdk/deferred_init.lds")
+  check_cxx_source_compiles("int main() { return 0; }"
+                            LINKER_SUPPORTS_DEFERRED_INIT_LDS)
+  unset(CMAKE_REQUIRED_LINK_OPTIONS)
+  if(NOT LINKER_SUPPORTS_DEFERRED_INIT_LDS)
+    target_link_options(libsearch PRIVATE -fuse-ld=bfd)
+  endif()
+
   add_custom_command(
     TARGET libsearch
     POST_BUILD
@@ -250,11 +261,21 @@ target_link_libraries(schema_manager PUBLIC coordinator_cc_proto)
 target_link_libraries(schema_manager PUBLIC metadata_manager)
 target_link_libraries(schema_manager PUBLIC valkey_module)
 
+set(SRCS_CURSOR ${CMAKE_CURRENT_LIST_DIR}/cursor.cc
+                ${CMAKE_CURRENT_LIST_DIR}/cursor.h)
+
+valkey_search_add_static_library(cursor "${SRCS_CURSOR}")
+target_include_directories(cursor PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(cursor PUBLIC valkey_search)
+target_link_libraries(cursor PUBLIC vmsdklib)
+target_link_libraries(cursor PUBLIC valkey_module)
+
 set(SRCS_SERVER_EVENTS ${CMAKE_CURRENT_LIST_DIR}/server_events.cc
                        ${CMAKE_CURRENT_LIST_DIR}/server_events.h)
 
 valkey_search_add_static_library(server_events "${SRCS_SERVER_EVENTS}")
 target_include_directories(server_events PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(server_events PUBLIC cursor)
 target_link_libraries(server_events PUBLIC schema_manager)
 target_link_libraries(server_events PUBLIC valkey_search)
 target_link_libraries(server_events PUBLIC metadata_manager)

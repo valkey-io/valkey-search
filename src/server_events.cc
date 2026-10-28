@@ -9,7 +9,9 @@
 
 #include <cstdint>
 
+#include "absl/time/clock.h"
 #include "src/coordinator/metadata_manager.h"
+#include "src/cursor.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
 #include "src/vector_registry.h"
@@ -59,6 +61,9 @@ void OnServerCronCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
         ctx, eid, subevent, data);
   }
   VectorRegistry::Instance().OnServerCronCallback(ctx, eid, subevent, data);
+  if (CursorTable::HasInstance()) {
+    CursorTable::Instance().ExpireIdle(absl::Now());
+  }
 }
 
 void OnShutdownCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
@@ -80,6 +85,10 @@ void OnShutdownCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
   //                                  thread.
   //   6. Destruct                  – cleans up VectorRegistry tracked entries.
   vmsdk::debug::ClearAllPausePoints();
+  // Cursors own query results; destroy them while the pools still run.
+  if (CursorTable::HasInstance()) {
+    CursorTable::Instance().Clear();
+  }
   ValkeySearch::Instance().JoinAllThreadPools();
   vmsdk::MarkAsShuttingDown();
   vmsdk::DrainPendingMainCallbacks();

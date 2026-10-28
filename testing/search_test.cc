@@ -40,6 +40,7 @@
 #include "src/indexes/scoring/scorer.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
+#include "src/indexes/text/rax_wrapper.h"
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
@@ -679,6 +680,56 @@ INSTANTIATE_TEST_SUITE_P(
              std::get<1>(info.param).test_name;
     });
 
+TEST_F(ValkeySearchTest,
+       HybridPolicyTakesPriorityOverInkeysWithAndWithoutFilter) {
+  auto index_schema = CreateIndexSchemaWithMultipleAttributes(
+      indexes::IndexerType::kHNSW, data_model::DISTANCE_METRIC_L2);
+  UnitTestSearchParameters params;
+  params.index_schema_name = kIndexSchemaName;
+  params.index_schema = index_schema;
+  params.attribute_alias = kVectorAttributeAlias;
+  params.score_as = vmsdk::MakeUniqueValkeyString(kScoreAs);
+  params.dialect = kDialect;
+  params.k = 5;
+  std::vector<float> query_vector(kVectorDimensions, 1.0f);
+  params.query = VectorToStr(query_vector);
+  TextParsingOptions options{};
+  FilterParser parser(*index_schema, "@tag:{LT5}", options);
+  params.filter_parse_results = std::move(parser.Parse().value());
+  params.inkeys = absl::flat_hash_set<std::string>{"0", "1"};
+
+  auto expect_inkeys_results = [&]() {
+    ASSERT_EQ(params.search_result.neighbors.size(), 2);
+    for (const auto &neighbor : params.search_result.neighbors) {
+      EXPECT_TRUE(
+          params.inkeys->contains(std::string(neighbor.external_id->Str())));
+    }
+  };
+
+  auto run_policy = [&](query::HybridPolicy policy, bool expect_prefilter) {
+    params.hybrid_policy = policy;
+    auto prefiltering_requests =
+        Metrics::GetStats().query_prefiltering_requests_cnt.load();
+    auto inline_filtering_requests =
+        Metrics::GetStats().query_inline_filtering_requests_cnt.load();
+    VMSDK_EXPECT_OK(Search(params, query::SearchMode::kLocal));
+    expect_inkeys_results();
+    EXPECT_EQ(Metrics::GetStats().query_prefiltering_requests_cnt.load(),
+              prefiltering_requests + expect_prefilter);
+    EXPECT_EQ(Metrics::GetStats().query_inline_filtering_requests_cnt.load(),
+              inline_filtering_requests + !expect_prefilter);
+  };
+
+  for (bool with_filter : {true, false}) {
+    if (!with_filter) {
+      params.filter_parse_results = FilterParseResults{};
+    }
+    run_policy(query::HybridPolicy::kAuto, true);
+    run_policy(query::HybridPolicy::kBatches, false);
+    run_policy(query::HybridPolicy::kAdHocBruteForce, true);
+  }
+}
+
 // A hybrid `text=>[KNN]` query must rank by the text relevance score, not by
 // the vector distance. Both docs contain "cat": "short" is a one-word document
 // (high BM25) but far from the query vector; "long" buries "cat" in a long
@@ -770,6 +821,7 @@ TEST_P(FetchFilteredKeysTest, ParseParams) {
       index_schema->GetIndex(kVectorAttributeAlias)->get());
   const FetchFilteredKeysTestCase &test_case = GetParam();
   UnitTestSearchParameters params;
+  params.index_schema = index_schema;
   TextParsingOptions options{};
   FilterParser parser(*index_schema, test_case.filter, options);
   params.filter_parse_results = std::move(parser.Parse().value());
@@ -783,8 +835,11 @@ TEST_P(FetchFilteredKeysTest, ParseParams) {
     entries_fetchers.push(std::make_unique<TestedNumericEntriesFetcher>(
         entries_range, std::make_pair(key_range.first, key_range.second)));
   }
+  query::QueryContext query_ctx(
+      *index_schema,
+      indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std));
   auto results = CalcBestMatchingPrefilteredKeys(params, entries_fetchers,
-                                                 vector_index, 0);
+                                                 vector_index, 0, query_ctx);
   auto neighbors = vector_index->CreateReply(results).value();
   EXPECT_EQ(neighbors.size(), test_case.expected_keys.size());
   for (auto it = neighbors.begin(); it != neighbors.end(); ++it) {
@@ -816,12 +871,14 @@ INSTANTIATE_TEST_SUITE_P(
             .fetched_key_ranges = {{0, 4}},
             .expected_keys = {"1", "2", "3", "4"},
         },
-        // Cases that should not happen but would still work.
+        // Cases that should not happen. A solved query skips prefilter
+        // evaluation, so a fetcher disagreeing with the predicate drives the
+        // result: key 0 is returned even though it is outside [1 5].
         {
             .test_name = "base_predicate_mismatch_with_fetched_key_range",
             .filter = "@numeric:[1 5]",
             .fetched_key_ranges = {{0, 4}},
-            .expected_keys = {"1", "2", "3", "4"},
+            .expected_keys = {"0", "1", "2", "3", "4"},
         },
     }),
     [](const TestParamInfo<FetchFilteredKeysTestCase> &info) {
@@ -1464,6 +1521,68 @@ INSTANTIATE_TEST_SUITE_P(
           absl::StrCat(distance_metric, "_", std::get<1>(info.param).test_name);
       return test_name;
     });
+// ---------------------------------------------------------------------------
+// GetVrScoreFieldName tests (single-VR model)
+// ---------------------------------------------------------------------------
+
+// Helper: build a UnitTestSearchParameters whose filter_parse_results contains
+// a manually-constructed predicate tree and set has_vector_range accordingly.
+static UnitTestSearchParameters MakeParamsWithVrPredicates(
+    std::unique_ptr<query::Predicate> root) {
+  UnitTestSearchParameters params;
+  params.filter_parse_results.root_predicate = std::move(root);
+  params.has_vector_range =
+      query::CountVectorRangePredicates(
+          params.filter_parse_results.root_predicate.get()) > 0;
+  return params;
+}
+
+class GetVrScoreFieldNameTest : public vmsdk::ValkeyTest {};
+
+// Zero VR predicates → empty string.
+TEST_F(GetVrScoreFieldNameTest, ZeroVrPredicates) {
+  UnitTestSearchParameters params;
+  // No root predicate set; has_vector_range stays false.
+  EXPECT_TRUE(query::GetVrScoreFieldName(params).empty());
+}
+
+// One VR predicate without $yield_distance_as → "" (Redisearch parity: the VR
+// distance is surfaced ONLY under an explicit alias, never a default
+// "__<field>_score"). An empty name suppresses the field everywhere.
+TEST_F(GetVrScoreFieldNameTest, OneVrPredicateNoExplicitAlias) {
+  auto vr = std::make_unique<query::VectorRangePredicate>(
+      "vec1", "vec1_id", 1.0, "blob", std::nullopt, std::nullopt);
+  auto params = MakeParamsWithVrPredicates(std::move(vr));
+
+  EXPECT_TRUE(params.has_vector_range);
+  EXPECT_TRUE(query::GetVrScoreFieldName(params).empty());
+}
+
+// One VR predicate with explicit alias → "my_dist".
+TEST_F(GetVrScoreFieldNameTest, OneVrPredicateWithExplicitAlias) {
+  auto vr = std::make_unique<query::VectorRangePredicate>(
+      "vec1", "vec1_id", 1.0, "blob", std::optional<std::string>("my_dist"),
+      std::nullopt);
+  auto params = MakeParamsWithVrPredicates(std::move(vr));
+
+  EXPECT_EQ(query::GetVrScoreFieldName(params), "my_dist");
+}
+
+// Single VR predicate nested under a compound AND (single-VR compound) →
+// its alias is still found.
+TEST_F(GetVrScoreFieldNameTest, SingleVrUnderComposedAnd) {
+  auto vr = std::make_unique<query::VectorRangePredicate>(
+      "vec1", "vec1_id", 1.0, "blob1", std::optional<std::string>("dist"),
+      std::nullopt);
+  std::vector<std::unique_ptr<query::Predicate>> children;
+  children.push_back(std::move(vr));
+  auto root = std::make_unique<query::ComposedPredicate>(
+      query::LogicalOperator::kAnd, std::move(children));
+
+  auto params = MakeParamsWithVrPredicates(std::move(root));
+  EXPECT_TRUE(params.has_vector_range);
+  EXPECT_EQ(query::GetVrScoreFieldName(params), "dist");
+}
 
 class ScoreTextQueryTestBase : public ValkeySearchTest {
  protected:
@@ -1474,14 +1593,15 @@ class ScoreTextQueryTestBase : public ValkeySearchTest {
   // (ScoreNode's numeric case returns 0 without touching the index).
   std::shared_ptr<MockIndexSchema> BuildTextTagSchema(
       const std::vector<std::tuple<std::string, std::string, std::string>>
-          &docs) {
+          &docs,
+      bool no_stem = true) {
     auto schema = CreateIndexSchema(kIndexSchemaName).value();
     EXPECT_CALL(*schema, GetIdentifier(::testing::_))
         .Times(::testing::AnyNumber());
     schema->CreateTextIndexSchema();
     auto text_schema = schema->GetTextIndexSchema();
     auto text = std::make_shared<indexes::Text>(
-        CreateTextIndexProto(/*with_suffix_trie=*/true, /*no_stem=*/true, 1.0),
+        CreateTextIndexProto(/*with_suffix_trie=*/true, no_stem, 1.0),
         text_schema);
     VMSDK_EXPECT_OK(schema->AddIndex("text", "text", text));
     auto tag = std::make_shared<indexes::Tag>(
@@ -1526,6 +1646,44 @@ class ScoreTextQueryTestBase : public ValkeySearchTest {
     return schema;
   }
 
+  // Schema with two TEXT fields ("title" stems, "body" is NOSTEM) sharing one
+  // posting tree, plus a numeric field "rating" so combined text+numeric
+  // queries parse. Docs are (key, title, body); "" skips that field.
+  std::shared_ptr<MockIndexSchema> BuildTwoTextFieldSchema(
+      const std::vector<std::tuple<std::string, std::string, std::string>>
+          &docs) {
+    auto schema = CreateIndexSchema(kIndexSchemaName).value();
+    EXPECT_CALL(*schema, GetIdentifier(::testing::_))
+        .Times(::testing::AnyNumber());
+    schema->CreateTextIndexSchema();
+    auto text_schema = schema->GetTextIndexSchema();
+    auto title = std::make_shared<indexes::Text>(
+        CreateTextIndexProto(/*with_suffix_trie=*/true, /*no_stem=*/false, 1.0),
+        text_schema);
+    VMSDK_EXPECT_OK(schema->AddIndex("title", "title", title));
+    auto body = std::make_shared<indexes::Text>(
+        CreateTextIndexProto(/*with_suffix_trie=*/true, /*no_stem=*/true, 1.0),
+        text_schema);
+    VMSDK_EXPECT_OK(schema->AddIndex("body", "body", body));
+    auto numeric =
+        std::make_shared<indexes::Numeric>(CreateNumericIndexProto());
+    VMSDK_EXPECT_OK(schema->AddIndex("rating", "rating", numeric));
+    for (const auto &[k, title_text, body_text] : docs) {
+      auto key = StringInternStore::Intern(k);
+      if (!title_text.empty()) {
+        VMSDK_EXPECT_OK(title->AddRecord(
+            key, AttributeData(vmsdk::MakeUniqueValkeyString(title_text))));
+      }
+      if (!body_text.empty()) {
+        VMSDK_EXPECT_OK(body->AddRecord(
+            key, AttributeData(vmsdk::MakeUniqueValkeyString(body_text))));
+      }
+      text_schema->CommitKeyData(key);
+      schema->SetIndexMutationSequenceNumber(key, 0);
+    }
+    return schema;
+  }
+
   // Score `key` against `filter`; nullopt when the predicate did not match.
   std::optional<float> Score(MockIndexSchema &schema, absl::string_view filter,
                              const std::string &key) {
@@ -1535,15 +1693,40 @@ class ScoreTextQueryTestBase : public ValkeySearchTest {
     auto interned = StringInternStore::Intern(key);
     std::vector<indexes::BorrowedNeighbor> cands{
         {BorrowedInternedStringPtr(interned), 0.0f, 0.0f}};
+    const auto *scorer =
+        indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std);
     vmsdk::ReaderMutexLock lock(&schema.GetTimeSlicedMutex());
-    query::ScoreTextQuery(
-        schema, parsed.value().root_predicate.get(),
-        indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std),
-        cands);
+    query::QueryContext query_ctx(schema, scorer);
+    query::ScoreTextQuery(parsed.value().root_predicate.get(), cands,
+                          query_ctx);
     if (cands.empty()) {
       return std::nullopt;
     }
     return cands[0].score;
+  }
+
+  // Main-thread recompute of `key` for `filter`, as VerifyFilter does for a
+  // mutated document: a fresh main-thread context, no time-sliced lock, tag
+  // membership from `record_tags` (field identifier -> tag string).
+  std::optional<float> Recompute(
+      MockIndexSchema &schema, absl::string_view filter, const std::string &key,
+      const std::vector<std::pair<std::string, std::string>> &record_tags =
+          {}) {
+    TextParsingOptions options{};
+    auto parsed = FilterParser(schema, filter, options).Parse();
+    EXPECT_TRUE(parsed.ok()) << parsed.status();
+    const auto *scorer =
+        indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std);
+    query::QueryContext query_ctx(schema, scorer, query::LockMode::kShortLocks);
+    RecordsMap records;
+    for (const auto &[field, value] : record_tags) {
+      records.emplace(field,
+                      RecordsMapValue(vmsdk::MakeUniqueValkeyString(field),
+                                      vmsdk::MakeUniqueValkeyString(value)));
+    }
+    return query::RecomputeDocumentScore(parsed.value().root_predicate.get(),
+                                         StringInternStore::Intern(key),
+                                         query_ctx, records);
   }
 
   // Score `key` for `filter` through the IN-ITERATOR path
@@ -1861,42 +2044,58 @@ TEST_F(ScoreTextQueryTestBase, NaNScoreIsClampedBeforeReachingNeighbor) {
   NaNScorer nan_scorer;
   {
     vmsdk::ReaderMutexLock lock(&schema->GetTimeSlicedMutex());
-    query::ScoreTextQuery(*schema, parsed.value().root_predicate.get(),
-                          &nan_scorer, cands);
+    query::QueryContext query_ctx(*schema, &nan_scorer);
+    query::ScoreTextQuery(parsed.value().root_predicate.get(), cands,
+                          query_ctx);
   }
   ASSERT_EQ(cands.size(), 1u);
   EXPECT_FALSE(indexes::scoring::IsNaN(cands[0].score));
   EXPECT_FLOAT_EQ(cands[0].score, 0.0f);
 }
 
-// The recompute path (SingleDocumentScorer) must land on the same scale as the
-// shard-side extra-step path (ScoreTextQuery) — both walk the same ScoreNode.
-// Pinned at a real NON-ZERO value (text + tag terms) so a magnitude divergence
-// in either path is caught; the numeric clause adds 0 and must not perturb it.
+// The main-thread recompute path must land on the same scale as the shard-side
+// extra-step path (ScoreTextQuery) — both walk the same ScoreNode. Pinned at a
+// real NON-ZERO value (text + tag terms) so a magnitude divergence in either
+// path is caught; the numeric clause adds 0 and must not perturb it.
 TEST_F(ScoreTextQueryTestBase, RecomputePathMatchesExtraStepAtNonZero) {
   auto schema = BuildTextTagSchema({
       {"d1", "hello world", "red"},
       {"d2", "hello there", "blue"},
   });
-  const auto *scorer =
-      indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std);
   const std::string filter = "@text:hello @color:{red} @rating:[0 100]";
 
-  // Extra-step path: Score() takes the reader lock internally.
   auto extra_step = Score(*schema, filter, "d1");
   ASSERT_TRUE(extra_step.has_value());
   EXPECT_GT(*extra_step, 0.0f);
 
-  // Recompute path: SingleDocumentScorer takes the lock itself, so construct
-  // and call it WITHOUT the reader lock held.
-  TextParsingOptions options{};
-  auto parsed = FilterParser(*schema, filter, options).Parse();
-  ASSERT_TRUE(parsed.ok()) << parsed.status();
-  query::SingleDocumentScorer document_scorer(
-      *schema, parsed.value().root_predicate.get(), scorer);
-  auto recomputed = document_scorer.Score(StringInternStore::Intern("d1"));
+  auto recomputed = Recompute(*schema, filter, "d1", {{"color", "red"}});
   ASSERT_TRUE(recomputed.has_value());
   EXPECT_FLOAT_EQ(*recomputed, *extra_step);
+}
+
+// Tag membership on the recompute path comes from the fetched record, not the
+// index: a document whose tags changed is scored on what it carries now.
+TEST_F(ScoreTextQueryTestBase, RecomputeScoresTagsFromRecord) {
+  auto schema = BuildTextTagSchema({
+      {"d1", "hello world", "red"},
+      {"d2", "hello there", "blue"},
+      {"d3", "hello you", "blue"},
+  });
+  const std::string filter = "@text:hello @color:{red|blue} @rating:[0 100]";
+  auto text_only = Score(*schema, "@text:hello @rating:[0 100]", "d1");
+  auto indexed = Score(*schema, filter, "d1");
+  ASSERT_TRUE(text_only && indexed);
+
+  // Record still says red: matches the index.
+  EXPECT_FLOAT_EQ(*Recompute(*schema, filter, "d1", {{"color", "red"}}),
+                  *indexed);
+  // Record now says blue: blue's (lower) IDF is credited instead of red's.
+  auto as_blue = Recompute(*schema, filter, "d1", {{"color", "blue"}});
+  ASSERT_TRUE(as_blue);
+  EXPECT_GT(*as_blue, *text_only);
+  EXPECT_LT(*as_blue, *indexed);
+  // Record dropped the field: the tag leaf contributes nothing.
+  EXPECT_FLOAT_EQ(*Recompute(*schema, filter, "d1"), *text_only);
 }
 
 // A query that omits SCORER picks up the `default-scorer` config.
@@ -1925,6 +2124,210 @@ TEST(ScorerFanoutTest, ScorerRoundTripsThroughGRPCRequest) {
   coordinator::SearchIndexPartitionRequest request;
   EXPECT_EQ(coordinator::ScorerFromGRPC(request.scorer()),
             indexes::scoring::ScorerType::kBm25Std);
+}
+
+// --- Stemmed-term scoring (extra-step path), docs/redis_stemming_scoring.md
+// --- A stemmed query term expands to a UNION of independent BM25 leaves that
+// are SUMMED, each with its own IDF and F: the exact surface term, the stem
+// root literal, and the stem inflection group. Oracle values are pinned
+// identically in the in-iterator path (text_test.cc
+// StemScoringTest.ThreeLeafScores...), so this also guards that the two scoring
+// paths agree.
+TEST_F(ScoreTextQueryTestBase, StemThreeLeafScoresMatchOracle) {
+  auto schema = BuildTextTagSchema(
+      {{"d1", "running", ""}, {"d2", "runs", ""}, {"d3", "run", ""}},
+      /*no_stem=*/false);
+  auto d1 = Score(*schema, "@text:running", "d1");
+  auto d2 = Score(*schema, "@text:running", "d2");
+  auto d3 = Score(*schema, "@text:running", "d3");
+  ASSERT_TRUE(d1 && d2 && d3);
+  // d1 "running": exact leaf (idf 0.98) + stem leaf (idf 0.47, dt=2 distinct).
+  EXPECT_NEAR(*d1, 1.450833f, 1e-3f);
+  // d3 "run": scored only on the stem root literal leaf (its own idf 0.98).
+  EXPECT_NEAR(*d3, 0.980829f, 1e-3f);
+  // d2 "runs": scored only on the stem inflection leaf.
+  EXPECT_NEAR(*d2, 0.470004f, 1e-3f);
+  // Exact-form match outranks the root literal, which outranks the inflection.
+  EXPECT_GT(*d1, *d3);
+  EXPECT_GT(*d3, *d2);
+}
+
+// $weight multiplies the WHOLE expansion — every leaf of the stemmed term.
+TEST_F(ScoreTextQueryTestBase, StemWeightScalesWholeExpansion) {
+  auto schema = BuildTextTagSchema(
+      {{"d1", "running", ""}, {"d2", "runs", ""}, {"d3", "run", ""}},
+      /*no_stem=*/false);
+  // d1 holds the exact word and an inflection, d3 the root, d2 an inflection.
+  for (const char *doc : {"d1", "d2", "d3"}) {
+    auto plain = Score(*schema, "@text:running", doc);
+    auto weighted = Score(*schema, "(@text:running) => { $weight: 2; }", doc);
+    ASSERT_TRUE(plain && weighted) << doc;
+    EXPECT_NEAR(*weighted, 2.0f * *plain, 1e-3f) << doc;
+  }
+}
+
+// The recompute path must match the shard-side extra-step path on a STEMMED
+// query too — both walk the same grouped ScoreNode, so a divergence in the stem
+// split is caught here.
+TEST_F(ScoreTextQueryTestBase, StemRecomputePathMatchesExtraStep) {
+  auto schema = BuildTextTagSchema(
+      {{"d1", "running", ""}, {"d2", "runs", ""}, {"d3", "run", ""}},
+      /*no_stem=*/false);
+  const std::string filter = "@text:running";
+
+  auto extra_step = Score(*schema, filter, "d1");
+  ASSERT_TRUE(extra_step.has_value());
+  EXPECT_GT(*extra_step, 0.0f);
+
+  auto recomputed = Recompute(*schema, filter, "d1");
+  ASSERT_TRUE(recomputed.has_value());
+  EXPECT_FLOAT_EQ(*recomputed, *extra_step);
+}
+
+// A stemmed term under an OR next to a numeric filter is checked one key at a
+// time; a key holding only another form of the word must still match.
+TEST_F(ScoreTextQueryTestBase, StemInflectionMatchesInPerKeyOr) {
+  auto schema = BuildTextTagSchema(
+      {{"d1", "orange", ""}, {"d2", "listening", ""}, {"d3", "orange", ""}},
+      /*no_stem=*/false);
+  auto rating = schema->GetIndex("rating").value();
+  for (const auto &[k, v] : {std::pair{"d1", "100"}, std::pair{"d2", "100"},
+                             std::pair{"d3", "200"}}) {
+    VMSDK_EXPECT_OK(
+        rating->AddRecord(StringInternStore::Intern(k),
+                          AttributeData(vmsdk::MakeUniqueValkeyString(v))));
+  }
+  auto parsed =
+      FilterParser(*schema, "(@text:oranges | @text:listened) @rating:[97 137]",
+                   TextParsingOptions{})
+          .Parse();
+  ASSERT_TRUE(parsed.ok()) << parsed.status();
+  query::QueryContext query_ctx(
+      *schema,
+      indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std));
+  indexes::PrefilterEvaluator evaluator(query_ctx, parsed->query_operations,
+                                        *schema);
+  vmsdk::ReaderMutexLock lock(&schema->GetTimeSlicedMutex());
+  auto matches = [&](const char *k) {
+    return evaluator.Evaluate(*parsed->root_predicate,
+                              StringInternStore::Intern(k));
+  };
+  EXPECT_TRUE(matches("d1"));
+  EXPECT_TRUE(matches("d2"));
+  EXPECT_FALSE(matches("d3"));  // out of the numeric range
+}
+
+// --- Field-scoped extra-step admission ---
+// All TEXT fields share one posting tree, so a key's presence in a term's
+// posting list does not mean the term occurred in the queried field. A doc
+// holding the term only in ANOTHER field must contribute nothing on the
+// extra-step path (the numeric clause forces it; ScoreTextQuery keeps the
+// candidate at score 0 rather than dropping it), matching term.cc's
+// in-iterator gating via ContainsFields.
+TEST_F(ScoreTextQueryTestBase, FieldScopedTermGatesExtraStepAdmission) {
+  auto schema =
+      BuildTwoTextFieldSchema({{"d1", "hello", ""}, {"d2", "", "hello"}});
+  // d1 carries `hello` only in title: the @body leaf must contribute nothing.
+  auto d1 = Score(*schema, "@body:hello @rating:[0 100]", "d1");
+  ASSERT_TRUE(d1.has_value());
+  EXPECT_FLOAT_EQ(*d1, 0.0f);
+  auto d2 = Score(*schema, "@body:hello @rating:[0 100]", "d2");
+  ASSERT_TRUE(d2.has_value());
+  EXPECT_GT(*d2, 0.0f);
+  // Unscoped, the mask covers all fields (the ~0ULL sentinel): both score, and
+  // equally (same tf, doc_len, and df).
+  auto u1 = Score(*schema, "hello @rating:[0 100]", "d1");
+  auto u2 = Score(*schema, "hello @rating:[0 100]", "d2");
+  ASSERT_TRUE(u1 && u2);
+  EXPECT_FLOAT_EQ(*u1, *u2);
+}
+
+// A stemmed field-scoped term must not score a doc whose only inflection lives
+// in a NOSTEM field: the inflection posting exists (d2 put `runs` in the stem
+// tree via the stemming title field), but d3 carries `runs` only in body.
+TEST_F(ScoreTextQueryTestBase, StemVariantInNoStemFieldNotScored) {
+  auto schema = BuildTwoTextFieldSchema(
+      {{"d1", "running", ""}, {"d2", "runs", ""}, {"d3", "", "runs"}});
+  auto d1 = Score(*schema, "@title:running @rating:[0 100]", "d1");
+  auto d2 = Score(*schema, "@title:running @rating:[0 100]", "d2");
+  ASSERT_TRUE(d1 && d2);
+  EXPECT_GT(*d1, *d2);  // exact form outranks the inflection
+  // d3's `runs` is in the shared posting list but only at body positions.
+  auto d3 = Score(*schema, "@title:running @rating:[0 100]", "d3");
+  ASSERT_TRUE(d3.has_value());
+  EXPECT_FLOAT_EQ(*d3, 0.0f);
+}
+
+// Querying `running` also scores the stem root `run` — but only in fields that
+// stem. d3 and d4 both hold `run`, d3 in NOSTEM body and d4 in stemming title,
+// so only d4 may score.
+TEST_F(ScoreTextQueryTestBase, StemRootLiteralInNoStemFieldNotScored) {
+  auto schema = BuildTwoTextFieldSchema({{"d1", "running", ""},
+                                         {"d2", "runs", ""},
+                                         {"d3", "", "run"},
+                                         {"d4", "run", ""}});
+  const std::string filter = "@title:running @rating:[0 100]";
+  auto d3 = Score(*schema, filter, "d3");
+  ASSERT_TRUE(d3.has_value());
+  EXPECT_FLOAT_EQ(*d3, 0.0f);
+  auto d4 = Score(*schema, filter, "d4");
+  ASSERT_TRUE(d4.has_value());
+  EXPECT_GT(*d4, 0.0f);
+  // Searching `run` directly does find d3, so the 0 above is the field gate and
+  // not a missing posting.
+  auto literal = Score(*schema, "@body:run @rating:[0 100]", "d3");
+  ASSERT_TRUE(literal.has_value());
+  EXPECT_GT(*literal, 0.0f);
+  // Pure-text queries score in the iterator instead; same verdict expected.
+  EXPECT_FALSE(ScoreViaIterator(*schema, "@title:running", "d3"));
+  EXPECT_TRUE(ScoreViaIterator(*schema, "@title:running", "d4"));
+}
+
+// A word that is its own stem gets no stem-tree entry (lexer.cc adds a mapping
+// only when the stemmed form differs), so a corpus holding just `run` has no
+// root for `running` to look up. The root literal must still be searched.
+TEST_F(ScoreTextQueryTestBase, StemRootWithoutStemTreeEntryStillMatches) {
+  auto schema = BuildTwoTextFieldSchema({{"d1", "run", ""}});
+  auto score = Score(*schema, "@title:running @rating:[0 100]", "d1");
+  ASSERT_TRUE(score.has_value());
+  EXPECT_GT(*score, 0.0f);
+  EXPECT_TRUE(ScoreViaIterator(*schema, "@title:running", "d1"));
+}
+
+// Same rule with no field named: an unscoped query searches body too, yet
+// stemming stays off there, so `run`/`runs` in body still score nothing. This
+// is the only query shape where "all fields" and "stemming fields" differ.
+TEST_F(ScoreTextQueryTestBase, UnscopedStemDoesNotReachNoStemField) {
+  auto schema = BuildTwoTextFieldSchema({{"d1", "running", ""},
+                                         {"d2", "runs", ""},
+                                         {"d3", "", "run"},
+                                         {"d5", "", "runs"}});
+  const std::string filter = "running @rating:[0 100]";
+  auto d1 = Score(*schema, filter, "d1");
+  ASSERT_TRUE(d1.has_value());
+  EXPECT_GT(*d1, 0.0f);
+  // d3 holds the root `run`, d5 the inflection `runs` -- both in body only.
+  for (const auto &key : {"d3", "d5"}) {
+    auto score = Score(*schema, filter, key);
+    ASSERT_TRUE(score.has_value()) << key;
+    EXPECT_FLOAT_EQ(*score, 0.0f) << key;
+    EXPECT_FALSE(ScoreViaIterator(*schema, "running", key)) << key;
+  }
+}
+
+// The recompute path walks the same grouped ScoreNode, so field-scoped
+// admission must agree with the extra-step path.
+TEST_F(ScoreTextQueryTestBase, FieldScopedRecomputePathAgrees) {
+  auto schema =
+      BuildTwoTextFieldSchema({{"d1", "hello", ""}, {"d2", "", "hello"}});
+  const std::string filter = "@body:hello @rating:[0 100]";
+  // A non-match is nullopt (the caller owns the keep-or-drop decision); the
+  // field-scoped leaf must reject d1.
+  EXPECT_FALSE(Recompute(*schema, filter, "d1"));
+  auto recomputed = Recompute(*schema, filter, "d2");
+  auto extra_step = Score(*schema, filter, "d2");
+  ASSERT_TRUE(recomputed && extra_step);
+  EXPECT_FLOAT_EQ(*recomputed, *extra_step);
 }
 
 // --- Prefix / suffix / fuzzy expansion scoring (in-iterator path) ------------
@@ -2082,6 +2485,380 @@ TEST_F(ScoreTextQueryTestBase, ExtraStepPrefixInCombinedQueryScored) {
   ASSERT_TRUE(combined && prefix_only);
   EXPECT_GT(*combined, 0.0f);
   EXPECT_FLOAT_EQ(*combined, *prefix_only);
+}
+
+// A field-scoped expansion must represent a doc by a term it carries in THAT
+// field. d1 holds alxta in title and alzta in body, so `@body:al*` may only
+// score it on alzta -- even though alxta sorts first among the matched terms.
+// The two terms have different doc counts, so the wrong pick is visible.
+TEST_F(ScoreTextQueryTestBase, ExpansionFieldScopePicksTermInQueriedField) {
+  auto schema = BuildTwoTextFieldSchema({{"d1", "alxta", "alzta"},
+                                         {"d2", "alxta", ""},
+                                         {"d3", "alxta", ""},
+                                         {"d4", "alxta", ""}});
+  auto alzta = Score(*schema, "@body:alzta @rating:[0 100]", "d1");
+  auto alxta = Score(*schema, "@title:alxta @rating:[0 100]", "d1");
+  ASSERT_TRUE(alzta && alxta);
+  ASSERT_GT(*alzta, *alxta) << "fixture must give the two terms distinct IDFs";
+  // Prefix, suffix and fuzzy all expand to both terms; all must pick alzta.
+  for (const auto &pattern : {"@body:al*", "@body:*ta", "@body:%alata%"}) {
+    auto scoped =
+        Score(*schema, absl::StrCat(pattern, " @rating:[0 100]"), "d1");
+    ASSERT_TRUE(scoped.has_value()) << pattern;
+    EXPECT_FLOAT_EQ(*scoped, *alzta) << pattern;
+    // Pure-text queries score in the iterator instead; same pick expected.
+    auto in_iter = ScoreViaIterator(*schema, pattern, "d1");
+    ASSERT_TRUE(in_iter.has_value()) << pattern;
+    EXPECT_FLOAT_EQ(*in_iter, *alzta) << pattern;
+  }
+}
+
+// --- Expansion representative (QueryContext) ----------------------------
+//
+// An expansion leaf caches one representative term: the most common match a
+// scored document has offered so far. A document carrying it is scored by one
+// probe; one that does not walks its own tree for a match and offers that,
+// promoting it if more common. Either route scores the document's own term,
+// never 0.
+
+// Parses `filter` once and scores `keys` in order through one shared context,
+// as a query does. Returns the per-key scores (nullopt = filter did not match)
+// and exposes the context for inspection.
+struct SharedCacheScorer {
+  SharedCacheScorer(MockIndexSchema &schema, absl::string_view filter)
+      : schema(schema),
+        parsed(FilterParser(schema, filter, TextParsingOptions{}).Parse()),
+        query_ctx(schema, scorer) {
+    EXPECT_TRUE(parsed.ok()) << parsed.status();
+  }
+  std::optional<float> Score(const std::string &key) {
+    auto interned = StringInternStore::Intern(key);
+    std::vector<indexes::BorrowedNeighbor> cands{
+        {BorrowedInternedStringPtr(interned), 0.0f, 0.0f}};
+    vmsdk::ReaderMutexLock lock(&schema.GetTimeSlicedMutex());
+    query::ScoreTextQuery(parsed->root_predicate.get(), cands, query_ctx);
+    return cands.empty() ? std::nullopt : std::optional(cands[0].score);
+  }
+  // The first expansion leaf's representative, or null. Background-mode
+  // leaves carry no word, so tests identify it by postings via
+  // RepresentativeIs.
+  const query::ExpansionLeaf::Term *Representative() {
+    const query::Predicate *leaf = parsed->root_predicate.get();
+    if (leaf->GetType() == query::PredicateType::kComposedAnd) {
+      leaf = static_cast<const query::ComposedPredicate *>(leaf)
+                 ->GetChildren()[0]
+                 .get();
+    }
+    auto *expansion =
+        std::get_if<query::ExpansionLeaf>(&query_ctx.GetOrResolve(leaf));
+    if (expansion == nullptr || !expansion->representative) return nullptr;
+    return &*expansion->representative;
+  }
+  bool RepresentativeIs(absl::string_view word) {
+    const auto *rep = Representative();
+    return rep != nullptr &&
+           rep->term.postings == schema.GetTextIndexSchema()
+                                     ->GetTextIndex()
+                                     ->GetPrefix()
+                                     .FindPostingsTarget(word);
+  }
+
+  MockIndexSchema &schema;
+  const indexes::scoring::Scorer *scorer =
+      indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std);
+  absl::StatusOr<FilterParseResults> parsed;
+  query::QueryContext query_ctx;
+};
+
+TEST_F(ScoreTextQueryTestBase, ExpansionRepresentativePromotesMostCommonTerm) {
+  auto schema = BuildTextTagSchema({
+      {"d_cats", "cats", ""},
+      {"d_cat1", "cat", ""},
+      {"d_cat2", "cat", ""},
+      {"d_cat3", "cat", ""},
+  });
+  SharedCacheScorer prefix(*schema, "@text:cat* @rating:[0 100]");
+  EXPECT_EQ(prefix.Representative(), nullptr);
+
+  // First document: nothing cached, its own walk finds `cats`.
+  auto cats = prefix.Score("d_cats");
+  EXPECT_TRUE(prefix.RepresentativeIs("cats"));
+  // A document without `cats` misses the probe, walks, and promotes `cat`.
+  auto cat1 = prefix.Score("d_cat1");
+  EXPECT_TRUE(prefix.RepresentativeIs("cat"));
+  // Later `cat` documents are answered by the probe; the representative holds.
+  auto cat2 = prefix.Score("d_cat2");
+  EXPECT_TRUE(prefix.RepresentativeIs("cat"));
+  // A `cats` document now misses and is still scored on its own term.
+  auto cats_again = prefix.Score("d_cats");
+  EXPECT_TRUE(prefix.RepresentativeIs("cat"));
+
+  ASSERT_TRUE(cats && cat1 && cat2 && cats_again);
+  EXPECT_FLOAT_EQ(*cats,
+                  *Score(*schema, "@text:cats @rating:[0 100]", "d_cats"));
+  EXPECT_FLOAT_EQ(*cats, *cats_again);
+  EXPECT_FLOAT_EQ(*cat1,
+                  *Score(*schema, "@text:cat @rating:[0 100]", "d_cat1"));
+  EXPECT_FLOAT_EQ(*cat1, *cat2);
+}
+
+// A document carrying several matches is scored on the first its tree yields
+// and the walk stops there; the context still keeps the more common term if a
+// later document offers it.
+TEST_F(ScoreTextQueryTestBase, ExpansionFallbackTakesFirstMatch) {
+  auto schema = BuildTextTagSchema({
+      {"d_both", "cab cat", ""},
+      {"d_cat1", "cat", ""},
+      {"d_cat2", "cat", ""},
+  });
+  SharedCacheScorer prefix(*schema, "@text:ca* @rating:[0 100]");
+  auto both = prefix.Score("d_both");
+  EXPECT_TRUE(prefix.RepresentativeIs("cab"));
+  ASSERT_TRUE(both);
+  EXPECT_FLOAT_EQ(*both,
+                  *Score(*schema, "@text:cab @rating:[0 100]", "d_both"));
+  prefix.Score("d_cat1");
+  EXPECT_TRUE(prefix.RepresentativeIs("cat"));
+}
+
+// The representative probe is field-gated: a document carrying the
+// representative only outside the queried field must fall back to a term it
+// carries inside it.
+TEST_F(ScoreTextQueryTestBase, ExpansionRepresentativeProbeIsFieldGated) {
+  auto schema = BuildTwoTextFieldSchema({{"d0", "", "alxta"},
+                                         {"d1", "alxta", "alzta"},
+                                         {"d2", "alxta", ""},
+                                         {"d3", "alxta", ""}});
+  SharedCacheScorer body_prefix(*schema, "@body:al* @rating:[0 100]");
+  auto d0 = body_prefix.Score("d0");
+  ASSERT_TRUE(body_prefix.RepresentativeIs("alxta"));
+  auto d1 = body_prefix.Score("d1");
+  ASSERT_TRUE(d0 && d1);
+  EXPECT_FLOAT_EQ(*d1, *Score(*schema, "@body:alzta @rating:[0 100]", "d1"));
+  EXPECT_NE(*d1, *d0);
+}
+
+// Suffix and fuzzy leaves share the mechanism.
+TEST_F(ScoreTextQueryTestBase, ExpansionRepresentativeSuffixAndFuzzy) {
+  auto schema = BuildTextTagSchema({
+      {"d_run", "running", ""},
+      {"d_jog1", "jogging", ""},
+      {"d_jog2", "jogging", ""},
+      {"d_cat", "cat", ""},
+      {"d_bat1", "bat", ""},
+      {"d_bat2", "bat", ""},
+  });
+  SharedCacheScorer suffix(*schema, "@text:*ing @rating:[0 100]");
+  auto run = suffix.Score("d_run");
+  EXPECT_TRUE(suffix.RepresentativeIs("running"));
+  auto jog = suffix.Score("d_jog1");
+  EXPECT_TRUE(suffix.RepresentativeIs("jogging"));
+  ASSERT_TRUE(run && jog);
+  EXPECT_FLOAT_EQ(*run,
+                  *Score(*schema, "@text:running @rating:[0 100]", "d_run"));
+  EXPECT_FLOAT_EQ(*jog,
+                  *Score(*schema, "@text:jogging @rating:[0 100]", "d_jog1"));
+
+  SharedCacheScorer fuzzy(*schema, "@text:%cat% @rating:[0 100]");
+  auto cat = fuzzy.Score("d_cat");
+  EXPECT_TRUE(fuzzy.RepresentativeIs("cat"));
+  auto bat = fuzzy.Score("d_bat1");
+  EXPECT_TRUE(fuzzy.RepresentativeIs("bat"));
+  ASSERT_TRUE(cat && bat);
+  EXPECT_FLOAT_EQ(*cat, *Score(*schema, "@text:cat @rating:[0 100]", "d_cat"));
+  EXPECT_FLOAT_EQ(*bat, *Score(*schema, "@text:bat @rating:[0 100]", "d_bat1"));
+}
+
+// The point of the context: filtering and scoring together walk the trees once
+// per term leaf per query, however many candidates there are. Stemming is on so
+// the leaf carries every group kind, and the negation makes the prefilter
+// evaluate the text child instead of trusting the entries fetcher.
+TEST_F(ScoreTextQueryTestBase, TermLeavesWalkTreesOncePerQuery) {
+  std::vector<std::tuple<std::string, std::string, std::string>> docs;
+  for (int i = 0; i < 100; ++i) {
+    docs.push_back({absl::StrCat("d", i),
+                    i % 2 ? "running fast" : "she runs the race", ""});
+  }
+  auto schema = BuildTextTagSchema(docs, /*no_stem=*/false);
+  const auto *scorer =
+      indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std);
+  const std::string filter = "-@rating:[500 600] @text:running @text:race";
+  auto parsed = FilterParser(*schema, filter, TextParsingOptions{}).Parse();
+  ASSERT_TRUE(parsed.ok()) << parsed.status();
+
+  auto walks_for = [&](int candidates) {
+    query::QueryContext query_ctx(*schema, scorer);
+    indexes::PrefilterEvaluator evaluator(query_ctx, parsed->query_operations,
+                                          *schema);
+    std::vector<InternedStringPtr> keys;
+    std::vector<indexes::BorrowedNeighbor> matched;
+    vmsdk::ReaderMutexLock lock(&schema->GetTimeSlicedMutex());
+    const long long before = indexes::text::rax_walks.Get();
+    for (int i = 0; i < candidates; ++i) {
+      keys.push_back(StringInternStore::Intern(absl::StrCat("d", i)));
+      if (evaluator.Evaluate(*parsed->root_predicate, keys.back())) {
+        matched.push_back({BorrowedInternedStringPtr(keys.back()), 0.0f, 0.0f});
+      }
+    }
+    query::ScoreTextQuery(parsed->root_predicate.get(), matched, query_ctx);
+    return indexes::text::rax_walks.Get() - before;
+  };
+  const long long one = walks_for(1);
+  EXPECT_GT(one, 0);
+  EXPECT_EQ(walks_for(100), one);
+}
+
+// A hoisted evaluator fetches the per-key tree lazily, so both entry points
+// must drop the previous key's tree. Only an expansion leaf reaches that
+// tree, and a leftover tree is wrong only when the key matches through a word
+// the previous key lacks: d0 has no gam* word, so d1 evaluated against d0's
+// tree misses "gamma".
+TEST_F(ScoreTextQueryTestBase, EvaluateFullRefetchesPerKeyTreeForEachKey) {
+  auto schema = BuildTextTagSchema(
+      {{"d0", "alpha beta", ""}, {"d1", "alpha beta gamma", ""}});
+  const auto *scorer =
+      indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std);
+  const std::string filter = "-@text:gam*";
+  auto parsed = FilterParser(*schema, filter, TextParsingOptions{}).Parse();
+  ASSERT_TRUE(parsed.ok()) << parsed.status();
+  query::QueryContext query_ctx(*schema, scorer);
+  indexes::PrefilterEvaluator evaluator(query_ctx, parsed->query_operations,
+                                        *schema);
+  const auto d0 = StringInternStore::Intern("d0");
+  const auto d1 = StringInternStore::Intern("d1");
+  vmsdk::ReaderMutexLock lock(&schema->GetTimeSlicedMutex());
+  for (int round = 0; round < 2; ++round) {
+    EXPECT_TRUE(evaluator.EvaluateFull(*parsed->root_predicate, d0).matches);
+    EXPECT_FALSE(evaluator.EvaluateFull(*parsed->root_predicate, d1).matches);
+    EXPECT_TRUE(evaluator.Evaluate(*parsed->root_predicate, d0));
+    EXPECT_FALSE(evaluator.Evaluate(*parsed->root_predicate, d1));
+  }
+}
+
+// The tag analogue: an exact-only tag predicate looks each value up once per
+// query and answers every candidate from the cached bag, for filtering and
+// scoring alike.
+TEST_F(ScoreTextQueryTestBase, TagValuesLookedUpOncePerQuery) {
+  std::vector<std::tuple<std::string, std::string, std::string>> docs;
+  for (int i = 0; i < 100; ++i) {
+    docs.push_back({absl::StrCat("d", i), "hello", i % 2 ? "red" : "blue"});
+  }
+  auto schema = BuildTextTagSchema(docs);
+  const auto *scorer =
+      indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std);
+  const std::string filter = "@color:{red|green} @text:hello";
+  auto parsed = FilterParser(*schema, filter, TextParsingOptions{}).Parse();
+  ASSERT_TRUE(parsed.ok()) << parsed.status();
+
+  auto lookups_for = [&](int candidates) {
+    query::QueryContext query_ctx(*schema, scorer);
+    indexes::PrefilterEvaluator evaluator(query_ctx, parsed->query_operations,
+                                          *schema);
+    std::vector<InternedStringPtr> keys;
+    std::vector<indexes::BorrowedNeighbor> matched;
+    vmsdk::ReaderMutexLock lock(&schema->GetTimeSlicedMutex());
+    const long long before = indexes::tag_value_lookups.Get();
+    for (int i = 0; i < candidates; ++i) {
+      keys.push_back(StringInternStore::Intern(absl::StrCat("d", i)));
+      if (evaluator.Evaluate(*parsed->root_predicate, keys.back())) {
+        matched.push_back({BorrowedInternedStringPtr(keys.back()), 0.0f, 0.0f});
+      }
+    }
+    EXPECT_EQ(matched.size(), candidates / 2);
+    query::ScoreTextQuery(parsed->root_predicate.get(), matched, query_ctx);
+    return indexes::tag_value_lookups.Get() - before;
+  };
+  EXPECT_EQ(lookups_for(2), 2);  // red, green
+  EXPECT_EQ(lookups_for(100), 2);
+}
+
+// A main-thread context resolves from the same global trees under the writers'
+// own short locks rather than the time-sliced mutex, so filtering verdicts and
+// scores must match the background context exactly.
+TEST_F(ScoreTextQueryTestBase, MainThreadLockModesMatchBackground) {
+  auto schema = BuildTextTagSchema(
+      {
+          {"d1", "running fast races", "red"},
+          {"d2", "she runs the race", "blue"},
+          {"d3", "cats run", "red,green"},
+          {"d4", "the cat ran fast", ""},
+      },
+      /*no_stem=*/false);
+  // Tag leaves are excluded: main-thread tag membership comes from the fetched
+  // record, exercised through VerifyFilter. The numeric index holds no records,
+  // so the negated range is what lets the verdict be true. INORDER and SLOP
+  // make every text leaf positional, so they also cover the per-key position
+  // merge on both paths.
+  const TextParsingOptions plain{};
+  const TextParsingOptions inorder{.inorder = true};
+  const TextParsingOptions slop0{.slop = 0};
+  const TextParsingOptions slop2{.slop = 2};
+  const std::vector<std::pair<std::string, TextParsingOptions>> filters = {
+      {"-@rating:[500 600] @text:running", plain},
+      {"-@rating:[500 600] @text:run", plain},
+      {"-@rating:[500 600] @text:cat*", plain},
+      {"-@rating:[500 600] @text:*ing", plain},
+      {"-@rating:[500 600] @text:%cat%", plain},
+      {"-@rating:[500 600] @text:\"cat ran\"", plain},
+      {"-@rating:[500 600] @text:\"ran cat\"", plain},
+      {"-@rating:[500 600] @text:(cat ran)", inorder},
+      {"-@rating:[500 600] @text:(ran cat)", inorder},
+      {"-@rating:[500 600] @text:(cat fast)", slop0},
+      {"-@rating:[500 600] @text:(cat fast)", slop2},
+      {"-@rating:[500 600] @text:(run* fast)", inorder},
+      {"-@rating:[500 600] @text:(*ing fast)", inorder},
+      {"-@rating:[500 600] @text:(%cat% fast)", slop2},
+      {"-@rating:[500 600] @text:(running | ran)", inorder},
+  };
+  // Every selectable scorer, so a per-document input a new scorer reads is
+  // checked on both paths too.
+  for (const auto &[name, type] : *indexes::scoring::kScorerByStr) {
+    SCOPED_TRACE(name);
+    const auto *scorer = indexes::scoring::GetScorer(type);
+    for (const auto &[filter, options] : filters) {
+      auto parsed = FilterParser(*schema, filter, options).Parse();
+      ASSERT_TRUE(parsed.ok()) << parsed.status();
+      query::QueryContext background(*schema, scorer);
+      query::QueryContext main(*schema, scorer, query::LockMode::kShortLocks);
+      indexes::PrefilterEvaluator bg_eval(background, parsed->query_operations,
+                                          *schema);
+      indexes::PrefilterEvaluator main_eval(main, parsed->query_operations,
+                                            *schema);
+      for (const auto &k : {"d1", "d2", "d3", "d4"}) {
+        auto key = StringInternStore::Intern(k);
+        std::vector<indexes::BorrowedNeighbor> bg_cands{
+            {BorrowedInternedStringPtr(key), 0.0f, 0.0f}};
+        auto main_cands = bg_cands;
+        bool bg_match, main_match;
+        {
+          vmsdk::ReaderMutexLock lock(&schema->GetTimeSlicedMutex());
+          bg_match = bg_eval.Evaluate(*parsed->root_predicate, key);
+          query::ScoreTextQuery(parsed->root_predicate.get(), bg_cands,
+                                background);
+        }
+        main_match = main_eval.Evaluate(*parsed->root_predicate, key);
+        query::ScoreTextQuery(parsed->root_predicate.get(), main_cands, main);
+        EXPECT_EQ(main_match, bg_match) << filter << " " << k;
+        EXPECT_FLOAT_EQ(main_cands[0].score, bg_cands[0].score)
+            << filter << " " << k;
+      }
+    }
+  }
+}
+
+// A match-all query has no predicate, so nothing is ever resolved.
+TEST_F(ScoreTextQueryTestBase, MatchAllLeavesCacheUntouched) {
+  auto schema = BuildTextTagSchema({{"d1", "hello", ""}});
+  const auto *scorer =
+      indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std);
+  query::QueryContext query_ctx(*schema, scorer);
+  auto interned = StringInternStore::Intern("d1");
+  std::vector<indexes::BorrowedNeighbor> cands{
+      {BorrowedInternedStringPtr(interned), 0.0f, 0.0f}};
+  vmsdk::ReaderMutexLock lock(&schema->GetTimeSlicedMutex());
+  query::ScoreTextQuery(nullptr, cands, query_ctx);
+  EXPECT_GT(cands[0].score, 0.0f);
+  EXPECT_EQ(query_ctx.Size(), 0);
 }
 
 // --- Tag prefix expansion scoring (extra-step path) --------------------------

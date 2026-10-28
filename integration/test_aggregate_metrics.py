@@ -91,11 +91,15 @@ class TestAggregateMetrics(ValkeySearchTestCaseBase):
         initial_sortby = int(info["search_agg_sort_by_stages"])
         
         # Test SORTBY stage with default max (should limit to 10)
+        #
+        # The sort keeps its parse-time bound here. ResolveSortByBounds would
+        # raise it from the adjacent LIMIT, but that is gated at 1.3.0 and this
+        # server runs at the default release.
         client.execute_command("FT.AGGREGATE", "products", "@rating:[-inf inf]", "SORTBY", "1", "@category", "LIMIT", "0", "5")
         info = client.info("SEARCH")
         assert int(info["search_agg_sort_by_stages"]) == initial_sortby + 1
         assert int(info["search_agg_limit_stages"]) == initial_limit + 1
-        assert int(info["search_agg_limit_input_records"]) == initial_limit_input + 10  # SORTBY limits to 10
+        assert int(info["search_agg_limit_input_records"]) == initial_limit_input + 10
         assert int(info["search_agg_limit_output_records"]) == initial_limit_output + 5
         assert int(info["search_agg_input_records"]) == initial_input_records + 20
         assert int(info["search_agg_output_records"]) == initial_output_records + 5

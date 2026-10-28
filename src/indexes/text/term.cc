@@ -15,46 +15,51 @@
 
 namespace valkey_search::indexes::text {
 
-TermIterator::TermIterator(
-    absl::InlinedVector<Postings::KeyIterator, kWordExpansionInlineCapacity>&&
-        key_iterators,
-    const FieldMaskPredicate query_field_mask, const bool require_positions,
-    const FieldMaskPredicate stem_field_mask, bool has_original,
-    float leaf_weight, uint32_t num_doc_contain_term,
-    const TextIndexSchema* text_index_schema, const scoring::Scorer* scorer,
-    absl::InlinedVector<uint32_t, kWordExpansionInlineCapacity> per_term_dt)
+TermIterator::TermIterator(KeyIterators&& key_iterators,
+                           const FieldMaskPredicate query_field_mask,
+                           const bool require_positions,
+                           const FieldMaskPredicate stem_field_mask,
+                           bool has_original, const TermScoringParams& scoring)
     : query_field_mask_(query_field_mask),
       stem_field_mask_(stem_field_mask),
       key_iterators_(std::move(key_iterators)),
-      current_position_(std::nullopt),
-      current_field_mask_(0ULL),
+      positions_(query_field_mask),
       require_positions_(require_positions),
       has_original_(has_original),
-      leaf_weight_(leaf_weight),
-      num_doc_contain_term_(num_doc_contain_term),
-      text_index_schema_(text_index_schema) {
+      has_root_(scoring.has_root),
+      leaf_weight_(scoring.leaf_weight),
+      num_doc_contain_term_(scoring.num_doc_contain_term),
+      text_index_schema_(scoring.text_index_schema) {
   // Derive the query-invariant corpus stats from the schema and precompute the
   // per-term IDF once, so GetScore() avoids a per-document log call. A null
   // schema/scorer or empty corpus disables scoring (constant-stub fallback).
-  if (text_index_schema_ != nullptr && scorer != nullptr) {
+  if (text_index_schema_ != nullptr && scoring.scorer != nullptr) {
     const auto stats = text_index_schema_->GetIndexScoringStats();
     if (stats.total_docs > 0) {
-      scorer_ = scorer;
+      scorer_ = scoring.scorer;
       avg_doc_len_ = stats.avg_doc_len;
       // total_docs and the doc counts come from separate, independently-locked
       // counters and can be transiently out of sync, so clamp to keep
-      // dt <= total_docs (matches ResolveLeaves in search.cc).
-      if (!per_term_dt.empty()) {
+      // dt <= total_docs (matches QueryContext).
+      if (!scoring.per_term_dt.empty()) {
         // Expansion mode (prefix/suffix/fuzzy): one IDF per matched term.
-        per_term_idf_.reserve(per_term_dt.size());
-        for (uint32_t dt : per_term_dt) {
+        per_term_idf_.reserve(scoring.per_term_dt.size());
+        for (uint32_t dt : scoring.per_term_dt) {
           per_term_idf_.push_back(scorer_->PrecomputeIDF(
               {stats.total_docs, std::min(dt, stats.total_docs)}));
         }
       } else {
+        // Term mode: the exact word, plus the stem root literal and the stem
+        // inflection group when the query stems.
         idf_ = scorer_->PrecomputeIDF(
             {stats.total_docs,
              std::min(num_doc_contain_term_, stats.total_docs)});
+        idf_stem_ = scorer_->PrecomputeIDF(
+            {stats.total_docs,
+             std::min(scoring.stem_num_doc_contain_term, stats.total_docs)});
+        idf_root_ = scorer_->PrecomputeIDF(
+            {stats.total_docs,
+             std::min(scoring.root_num_doc_contain_term, stats.total_docs)});
       }
     }
   }
@@ -89,11 +94,23 @@ float TermIterator::GetScore() const {
                                leaf_weight_});
   }
 
-  // F is document-wide: sum the term frequency across every word/field
-  // iterator currently positioned on this key
-  uint32_t term_frequency = 0;
+  // Term mode: sum three separate BM25 leaves per the industry standard: exact
+  // word (idx 0), stem root literal (next iterator), and the stem inflection
+  // group. Within each leaf F is document-wide, so sum the term frequency
+  // across every word/field iterator of that leaf on this key.
+  const size_t root_index = has_original_ ? 1 : 0;
+  uint32_t exact_tf = 0;
+  uint32_t root_tf = 0;
+  uint32_t stem_tf = 0;
   for (size_t idx : current_key_indices_) {
-    term_frequency += key_iterators_[idx].GetTermFrequency();
+    const uint32_t tf = key_iterators_[idx].GetTermFrequency();
+    if (idx == 0 && has_original_) {
+      exact_tf += tf;
+    } else if (has_root_ && idx == root_index) {
+      root_tf += tf;
+    } else {
+      stem_tf += tf;
+    }
   }
 
   // doc_len is co-located in the posting entry the merge already visited (same
@@ -102,10 +119,21 @@ float TermIterator::GetScore() const {
   const uint32_t doc_len =
       key_iterators_[current_key_indices_.front()].GetDocLen();
 
-  // idf_ and avg_doc_len_ are precomputed at construction, so only the
-  // per-document term frequency and doc_len vary here.
-  return scorer_->ScoreLeaf(
-      {idf_, term_frequency, doc_len, avg_doc_len_, leaf_weight_});
+  // idfs and avg_doc_len_ are precomputed; only tf and doc_len vary here.
+  float score = 0.0f;
+  if (exact_tf > 0) {
+    score += scorer_->ScoreLeaf(
+        {idf_, exact_tf, doc_len, avg_doc_len_, leaf_weight_});
+  }
+  if (root_tf > 0) {
+    score += scorer_->ScoreLeaf(
+        {idf_root_, root_tf, doc_len, avg_doc_len_, leaf_weight_});
+  }
+  if (stem_tf > 0) {
+    score += scorer_->ScoreLeaf(
+        {idf_stem_, stem_tf, doc_len, avg_doc_len_, leaf_weight_});
+  }
+  return score;
 }
 
 FieldMaskPredicate TermIterator::QueryFieldMask() const {
@@ -169,13 +197,11 @@ bool TermIterator::FindMinimumValidKey() {
   }
   // 4. Initialize position iteration for the specific new key if required.
   if (require_positions_) {
-    ClearPositionState();
-    for (size_t idx : current_key_indices_) {
-      pos_iterators_.emplace_back(key_iterators_[idx].GetPositionIterator());
-      // Populate the position heap.
-      InsertValidPositionIterator(pos_iterators_.size() - 1);
-    }
-    TermIterator::NextPosition();
+    positions_.Reset(*current_key_, [this](auto&& fn) {
+      for (size_t idx : current_key_indices_) {
+        fn(key_iterators_[idx].GetPositionMap());
+      }
+    });
   }
   return true;
 }
@@ -212,18 +238,13 @@ bool TermIterator::SeekForwardKey(const InternedStringPtr& target_key) {
   return FindMinimumValidKey();
 }
 
-bool TermIterator::DonePositions() const {
-  return !current_position_.has_value();
-}
-
-const PositionRange& TermIterator::CurrentPosition() const {
-  CHECK(current_position_.has_value());
-  return current_position_.value();
-}
+SingleKeyTermIterator::SingleKeyTermIterator(
+    FieldMaskPredicate query_field_mask)
+    : query_field_mask_(query_field_mask) {}
 
 // Helper function to advance position iterators and populate the heap with
 // valid iterators for the new position.
-void TermIterator::InsertValidPositionIterator(size_t idx) {
+void SingleKeyTermIterator::InsertValidPositionIterator(size_t idx) {
   auto& pos_iter = pos_iterators_[idx];
   // Skip positions that don't match the query field mask.
   while (pos_iter.IsValid() &&
@@ -236,7 +257,7 @@ void TermIterator::InsertValidPositionIterator(size_t idx) {
 }
 
 // Position Logic follows the same Heap pattern as Key logic.
-bool TermIterator::FindMinimumValidPosition() {
+bool SingleKeyTermIterator::FindMinimumValidPosition() {
   // 1. If the heap is empty, we have exhausted all positions for the current
   // key.
   // Note: This can be due to three cases:
@@ -273,7 +294,7 @@ bool TermIterator::FindMinimumValidPosition() {
   return true;
 }
 
-bool TermIterator::NextPosition() {
+bool SingleKeyTermIterator::NextPosition() {
   if (current_position_.has_value()) {
     for (size_t idx : current_pos_indices_) {
       pos_iterators_[idx].NextPosition();
@@ -284,7 +305,7 @@ bool TermIterator::NextPosition() {
   return FindMinimumValidPosition();
 }
 
-bool TermIterator::SeekForwardPosition(Position target_position) {
+bool SingleKeyTermIterator::SeekForwardPosition(Position target_position) {
   if (current_position_.has_value() &&
       current_position_.value().start >= target_position) {
     return true;
@@ -307,19 +328,16 @@ bool TermIterator::SeekForwardPosition(Position target_position) {
   return FindMinimumValidPosition();
 }
 
-FieldMaskPredicate TermIterator::CurrentFieldMask() const {
-  CHECK(current_field_mask_ != 0ULL);
-  return current_field_mask_;
-}
-
 void TermIterator::ClearKeyState() {
   current_key_ = nullptr;
   key_set_.clear();
   current_key_indices_.clear();
-  ClearPositionState();
+  if (require_positions_) {
+    positions_.NextKey();
+  }
 }
 
-void TermIterator::ClearPositionState() {
+void SingleKeyTermIterator::ClearPositionState() {
   pos_iterators_.clear();
   pos_set_.clear();
   current_pos_indices_.clear();

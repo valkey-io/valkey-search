@@ -15,7 +15,7 @@ from valkey_search_test_case import (
 
 
 PAUSEPOINT = "background_search_completing"
-HOLD_SECONDS = 0.2
+HOLD_SECONDS = 0.02
 COMMANDS = ("FT.SEARCH", "FT.AGGREGATE")
 
 

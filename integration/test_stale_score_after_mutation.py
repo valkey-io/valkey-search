@@ -98,7 +98,7 @@ class TestStaleTextScoreOnVectorQuery(_ParkedMutation,
     def setup_index(self, client: Valkey) -> None:
         client.execute_command(
             "FT.CREATE", self.INDEX, "ON", "HASH", "PREFIX", "1", "p:",
-            "SCHEMA", "title", "TEXT", "NOSTEM",
+            "SCHEMA", "title", "TEXT", "NOSTEM", "n", "NUMERIC",
             "vec", "VECTOR", "HNSW", "6",
             "TYPE", "FLOAT32", "DIM", "4", "DISTANCE_METRIC", "L2")
         # Ranked by BM25: p:1 has the most `hello`, p:3 the fewest in the
@@ -172,6 +172,30 @@ class TestStaleTextScoreOnVectorQuery(_ParkedMutation,
         assert parked_scores == pytest.approx(fresh_scores), (
             f"stale BM25 scores across the mutation: parked {parked_scores} "
             f"vs settled {fresh_scores}")
+
+    def test_bm25_scores_follow_the_mutation_with_numeric_return(self):
+        # p:2 and p:3 have n, so `RETURN 1 n` could be answered from the
+        # numeric index without reading the document. p:1 has no n and must be
+        # read. Rewriting p:1 changes the corpus statistics, so all three
+        # scores have to be recomputed, not just p:1's.
+        client: Valkey = self.server.get_new_client()
+        self.setup_index(client)
+        client.execute_command("HSET", "p:2", "n", "2")
+        client.execute_command("HSET", "p:3", "n", "3")
+        IndexingTestHelper.wait_for_indexing_complete_on_node(
+            client, self.INDEX)
+
+        def scores():
+            result = self.server.get_new_client().execute_command(
+                "FT.SEARCH", self.INDEX, "@title:hello=>[KNN 3 @vec $q]",
+                "WITHSCORES", "RETURN", "1", "n",
+                "DIALECT", "2", "PARAMS", "2", "q", self.Q)
+            return {result[i]: float(result[i + 1])
+                    for i in range(1, len(result), 3)}
+
+        parked, fresh = self._run_across_mutation(
+            client, scores, ("HSET", "p:1", "title", "hello " + _words("f", 40)))
+        assert parked == pytest.approx(fresh)
 
 
 @pytest.mark.skip(reason=(

@@ -651,8 +651,11 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
   // reconstructible from the indexed attributes alone. Serving the named
   // subset here would populate attribute_contents and make the main-thread
   // fetch skip the neighbor entirely, dropping the rest of the record.
+  // A query revalidated on the main thread must fetch every local result, or
+  // the ones served from the index skip the revalidation and rescore.
   if (parameters.no_content || parameters.all_content ||
-      parameters.return_attributes.empty()) {
+      parameters.return_attributes.empty() ||
+      parameters.GetContentProcessing() == kContentionCheckRequired) {
     return results;
   }
   struct AttributeInfo {

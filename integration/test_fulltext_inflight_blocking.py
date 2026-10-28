@@ -1,8 +1,11 @@
 """Integration tests for full-text query blocking on in-flight mutations."""
 
 import struct
+
+import pytest
 import time
 from valkey.client import Valkey
+from valkey.exceptions import ResponseError
 from valkey.cluster import ValkeyCluster
 from valkey_search_test_case import (
     ValkeySearchTestCaseDebugMode,
@@ -160,8 +163,83 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
         result = search_res[0]
         assert result[0] == 0
 
-    def test_non_text_query_does_not_block(self):
-        """Test that non-text queries on index with text field do NOT block."""
+    def test_sync_query_with_inflight_mutation(self):
+        """FT.SEARCH inside MULTI/EXEC and EVAL replies on the main thread, so
+        it blocks until in-flight result keys are indexed, bounded by its
+        TIMEOUT (issue #1602)."""
+        client: Valkey = self.server.get_new_client()
+        client.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:",
+            "SCHEMA", "content", "TEXT"
+        )
+        client.execute_command("HSET", "doc:1", "content", "hello world")
+        IndexingTestHelper.wait_for_indexing_complete_on_node(client, "idx")
+
+        client.execute_command("FT._DEBUG PAUSEPOINT SET mutation_processing")
+        hset_thread, _, hset_err = run_in_thread(
+            lambda: self.server.get_new_client().execute_command(
+                "HSET", "doc:1", "content", "bye"
+            )
+        )
+        waiters.wait_for_true(
+            lambda: client.execute_command(
+                "FT._DEBUG PAUSEPOINT TEST mutation_processing") > 0
+        )
+
+        def multi_search(query, timeout_ms=1000):
+            pipe = client.pipeline(transaction=True)
+            pipe.execute_command("FT.SEARCH", "idx", query, "TIMEOUT", timeout_ms)
+            return pipe.execute(raise_on_error=False)[0]
+
+        def multi_aggregate(query, timeout_ms=1000):
+            # Without LOAD nothing is revalidated and the wait is skipped.
+            pipe = client.pipeline(transaction=True)
+            pipe.execute_command("FT.AGGREGATE", "idx", query, "LOAD", "1",
+                                 "content", "TIMEOUT", timeout_ms)
+            return pipe.execute(raise_on_error=False)[0]
+
+        def lua_search(query, timeout_ms=1000):
+            return client.eval(
+                "return redis.call('FT.SEARCH', 'idx', ARGV[1], 'TIMEOUT', ARGV[2])",
+                0, query, timeout_ms,
+            )
+
+        blocked = lambda: client.info("SEARCH")["search_text_query_blocked_count"]
+        # Term and prefix: the prefix walk reads the per-key tree the paused
+        # writer is about to free.
+        # The blocked count is what proves the wait was reached: a search
+        # that times out before it would raise the same error without it.
+        for query in ("@content:hello", "@content:hel*"):
+            before = blocked()
+            multi_res = multi_search(query)
+            assert isinstance(multi_res, ResponseError), multi_res
+            assert "timeout" in str(multi_res).lower()
+            with pytest.raises(ResponseError, match="(?i)timeout"):
+                lua_search(query)
+            agg_res = multi_aggregate(query)
+            assert isinstance(agg_res, ResponseError), agg_res
+            assert "timeout" in str(agg_res).lower()
+            assert blocked() == before + 3
+
+        # Release the writer inside the transaction. The search that follows
+        # either finds the mutation applied or sees the stale index and waits
+        # for it; it must reply fresh either way.
+        pipe = client.pipeline(transaction=True)
+        pipe.execute_command("FT._DEBUG", "PAUSEPOINT", "RESET", "mutation_processing")
+        pipe.execute_command("FT.SEARCH", "idx", "@content:hello", "TIMEOUT", 10000)
+        assert pipe.execute()[1] == [0]
+        hset_thread.join()
+        assert hset_err[0] is None
+        IndexingTestHelper.wait_for_indexing_complete_on_node(client, "idx")
+
+        before = blocked()
+        assert multi_search("@content:hello", timeout_ms=10000) == [0]
+        assert lua_search("@content:bye", timeout_ms=10000) == [
+            1, b"doc:1", [b"content", b"bye"]]
+        assert blocked() == before
+
+    def test_non_text_nocontent_query_does_not_block(self):
+        """Test that NOCONTENT non-text queries on index with text field do NOT block."""
         client: Valkey = self.server.get_new_client()
 
         client.execute_command(
@@ -183,13 +261,84 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
             lambda: client.execute_command("FT._DEBUG PAUSEPOINT TEST mutation_processing") > 0
         )
 
-        # TAG-only query should NOT block even though index has TEXT field
-        result = client.execute_command("FT.SEARCH", "idx", "@category:{news}")
+        # A TAG-only query on an index with a TEXT field blocks, since its rescore
+        # reads the text index. NOCONTENT skips the rescore, so it does not block.
+        result = client.execute_command("FT.SEARCH", "idx", "@category:{news}", "NOCONTENT")
         assert result is not None
         assert client.info("SEARCH")["search_text_query_blocked_count"] == 0
 
         client.execute_command("FT._DEBUG PAUSEPOINT RESET mutation_processing")
         hset_thread.join()
+
+    def test_revalidation_complex_text_queries_match_steady_state(self):
+        """Revalidation must return the same results and scores as a normal
+        search for positional (INORDER, SLOP, OR + INORDER), expansion (prefix,
+        suffix, fuzzy) and stem queries. Each shape runs alone, where the
+        background answers from the text iterator, and under an AND with a
+        tag, where the background evaluates the predicate per candidate."""
+        client: Valkey = self.server.get_new_client()
+        client.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:",
+            "SCHEMA", "content", "TEXT", "WITHSUFFIXTRIE", "kind", "TAG"
+        )
+        original = "hello world running fast"
+        client.execute_command("HSET", "doc:1", "content", original, "kind", "a")
+        client.execute_command("HSET", "doc:2", "content", "world hello runner", "kind", "a")
+        client.execute_command("HSET", "doc:3", "content", "hello big wide world runs", "kind", "a")
+        IndexingTestHelper.wait_for_indexing_complete_on_node(client, "idx")
+
+        # doc:1 keeps matching the OR, the expansions and the stem, and stops
+        # matching the ordered and adjacent phrases.
+        mutated = "world then hello runs"
+        text_queries = [
+            ["@content:(hello|world)", "INORDER"],
+            ["@content:(hello world)", "INORDER"],
+            ["@content:(hello world)", "SLOP", "0"],
+            ["@content:(hello world)", "SLOP", "2"],
+            ["@content:(hel*|wor*)", "INORDER"],
+            ["@content:(*llo|*rld)"],
+            ["@content:(%helo%|%wrld%)"],
+            ["@content:running"],
+        ]
+        queries = text_queries + [
+            ["@kind:{a} " + q[0], *q[1:]] for q in text_queries
+        ]
+        # NOCONTENT (and RETURN 0) skip revalidation, so fetch one field.
+        reply_args = ["WITHSCORES", "RETURN", "1", "content"]
+
+        def by_key(reply):
+            # [count, key, score, fields, key, score, fields, ...]
+            return {reply[i]: float(reply[i + 1]) for i in range(1, len(reply), 3)}
+
+        for query in queries:
+            client.execute_command("HSET", "doc:1", "content", original)
+            IndexingTestHelper.wait_for_indexing_complete_on_node(client, "idx")
+            assert b"doc:1" in by_key(client.execute_command("FT.SEARCH", "idx", *query, *reply_args))
+
+            before = int(client.info("SEARCH")["search_predicate_revalidation"])
+            client.execute_command("FT._DEBUG PAUSEPOINT SET background_search_completing")
+            search_thread, search_res, search_err = run_in_thread(
+                lambda: self.server.get_new_client().execute_command(
+                    "FT.SEARCH", "idx", *query, *reply_args
+                )
+            )
+            waiters.wait_for_true(
+                lambda: client.execute_command("FT._DEBUG PAUSEPOINT TEST background_search_completing") > 0
+            )
+            client.execute_command("HSET", "doc:1", "content", mutated)
+            IndexingTestHelper.wait_for_indexing_complete_on_node(client, "idx")
+            client.execute_command("FT._DEBUG PAUSEPOINT RESET background_search_completing")
+            search_thread.join()
+            assert search_err[0] is None, query
+            assert int(client.info("SEARCH")["search_predicate_revalidation"]) > before, query
+
+            revalidated = by_key(search_res[0])
+            steady = by_key(client.execute_command("FT.SEARCH", "idx", *query, *reply_args))
+            assert revalidated.keys() == steady.keys(), query
+            # Only the mutated document is rescored; the others keep the score
+            # computed over the corpus as it was.
+            if b"doc:1" in steady:
+                assert revalidated[b"doc:1"] == pytest.approx(steady[b"doc:1"], abs=1e-4), query
 
     def test_dropindex_with_blocked_queries(self):
         """

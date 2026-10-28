@@ -9,18 +9,18 @@ extend-exclude = [
     "src/indexes/text/languages/**",
     "testing/snowball_language_test.cc",
     "testing/snowball_stem_test.cc",
-    "integration/compatibility/data_sets.py",
+    "integration/compatibility/**",
     "rfc/multi-language-support.md"
 ]
 
 [default]
 extend-ignore-re = [
-    "grea.*",
-    "Grea.*",
+    "grea",
     "opposit",
     "uniqu",
-    "worl*",
-    ".*unning"
+    # Wildcard query terms in test data: gam*, *ing, *ell*
+    "\\*[A-Za-z]+",
+    "[A-Za-z]+\\*"
 ]
 [default.extend-words]
 continuent = "continuent"

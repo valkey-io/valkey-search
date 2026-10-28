@@ -340,9 +340,12 @@ absl::StatusOr<RecordsMap> GetContent(
       // long as the module does.
       static const vmsdk::UniqueValkeyString kJsonRootElementQueryString =
           vmsdk::MakeUniqueValkeyString(kJsonRootElementQuery);
+      // Retained, not moved: a field defined on `$` itself is looked up
+      // in `content` again below.
       return_content.emplace(kJsonRootElementQuery,
                              RecordsMapValue(kJsonRootElementQueryString.get(),
-                                             std::move(itr->second.value)));
+                                             vmsdk::RetainUniqueValkeyString(
+                                                 itr->second.value.get())));
     }
   }
   for (auto &return_attribute : parameters.return_attributes) {

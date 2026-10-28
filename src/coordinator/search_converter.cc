@@ -365,9 +365,11 @@ absl::Status GRPCSearchRequestToParameters(
   parameters->hybrid_policy = HybridPolicyFromGRPC(request.hybrid_policy());
   // A sender that predates `all_content` spelled a whole-record request as
   // "no_content is off and nothing was named", so read that encoding back
-  // here. A current sender never produces that combination: when it wants
-  // nothing it sets no_content, and when it wants the whole record it sets
-  // all_content, so the derivation cannot misread one of those.
+  // here. A current sender produces that combination in one case only: a
+  // cluster FT.HYBRID whose LOAD needs no fields, which cannot set no_content
+  // (see ApplyAggregateProjection in fanout.cc). The shard then fetches the
+  // whole record and the coordinator drops it -- wasted work, not a wrong
+  // answer.
   parameters->all_content =
       request.all_content() ||
       (!request.no_content() && parameters->return_attributes.empty());

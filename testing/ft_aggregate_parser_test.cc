@@ -606,17 +606,28 @@ TEST_F(AggregateTest, GetSerializationRange_OtherStagesBeforeLimit) {
 }
 
 TEST_F(AggregateTest, ExpressionDepthAtLimit) {
-  auto limit = options::GetQueryStringDepth().GetValue();
+  // A smaller limit than the default keeps the parser's recursion within the
+  // stack under ASAN.
+  auto &depth = options::GetQueryStringDepth();
+  auto original = depth.GetValue();
+  VMSDK_EXPECT_OK(depth.SetValue(500));
+  auto limit = depth.GetValue();
   std::string deep_expr(limit - 1, '(');
   deep_expr += "1";
   deep_expr += std::string(limit - 1, ')');
 
   AggregateParameters params(0);
   EXPECT_TRUE(expr::Expression::Compile(params, deep_expr).ok());
+  VMSDK_EXPECT_OK(depth.SetValue(original));
 }
 
 TEST_F(AggregateTest, ExpressionDepthExceedsLimit) {
-  auto limit = options::GetQueryStringDepth().GetValue();
+  // A smaller limit than the default keeps the parser's recursion within the
+  // stack under ASAN.
+  auto &depth = options::GetQueryStringDepth();
+  auto original = depth.GetValue();
+  VMSDK_EXPECT_OK(depth.SetValue(500));
+  auto limit = depth.GetValue();
   std::string deep_expr(limit, '(');
   deep_expr += "1";
   deep_expr += std::string(limit, ')');
@@ -625,6 +636,7 @@ TEST_F(AggregateTest, ExpressionDepthExceedsLimit) {
   auto result = expr::Expression::Compile(params, deep_expr);
   EXPECT_FALSE(result.ok());
   EXPECT_TRUE(absl::IsInvalidArgument(result.status()));
+  VMSDK_EXPECT_OK(depth.SetValue(original));
 }
 
 // ---------------------------------------------------------------------------

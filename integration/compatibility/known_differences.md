@@ -288,6 +288,13 @@ would. valkey-search sorts them, comparing such a pair as strings. Nulls
 (`lower()` of a number) and missing values sort the same on both: a null
 first ascending and last descending, a missing value last either way.
 
+### 1.16 Parameters in expressions
+
+Redis 8 rejects a `$param` inside an APPLY, FILTER or SORTBY expression
+("Unknown symbol"). valkey-search accepts it: a parameter whose text is a
+number is a number, any other is a string, as the text would be if written in
+place unquoted.
+
 ## 2. Where the two reference engines disagree
 
 These are not valkey-search defects. They are places where `redis:latest` and

@@ -62,8 +62,11 @@ struct Parameter : Expression {
   Value Evaluate(EvalContext &ctx, const Record &record) const override {
     return value_;
   }
-  // PARAMS values always arrive as strings.
-  Type GetResultType() const override { return Type::kString; }
+  // PARAMS values arrive as strings; ParseParameter turns one that is a
+  // number into a number.
+  Type GetResultType() const override {
+    return value_.IsDouble() ? Type::kNumber : Type::kString;
+  }
   void Dump(std::ostream &os) const override {
     os << "$" << name_ << "(" << value_ << ")";
   }
@@ -533,6 +536,18 @@ struct Compiler {
       param_name += s_.NextByte();
     }
     VMSDK_ASSIGN_OR_RETURN(auto param_value, ctx.GetParam(param_name));
+    // A parameter is text written out of line, so it reads as that text
+    // would written in place unquoted: a number when it is one, otherwise a
+    // string. `substr(@t, $off, 2)` then gets the number it needs. Redis has
+    // no parameters in expressions, so there is no reference to match.
+    if (param_value.IsString() &&
+        VALKEY_SEARCH_COMPATIBILITY_FIX(
+            1, 3, 0, "expr_numeric_params", [] { return true; },
+            [] { return false; })) {
+      if (auto number = param_value.AsDouble()) {
+        param_value = Value(*number);
+      }
+    }
     return std::make_unique<Parameter>(std::move(param_name),
                                        std::move(param_value));
   }

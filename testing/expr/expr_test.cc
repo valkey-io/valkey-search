@@ -51,8 +51,8 @@ class ExprTest : public vmsdk::ValkeyTest {
     // comparison from the runtime one.
     std::map<std::string, Expression::Type> attr_types{
         {"s10", Expression::Type::kString}, {"d10", Expression::Type::kString}};
-    absl::flat_hash_map<std::string, std::string> params{{"one", "1"},
-                                                         {"two", "2"}};
+    absl::flat_hash_map<std::string, std::string> params{
+        {"one", "1"}, {"two", "2"}, {"word", "abc"}};
     absl::StatusOr<std::unique_ptr<Expression::AttributeReference>>
     MakeReference(const absl::string_view s, bool create) override {
       auto itr = known_attr.find(std::string(s));
@@ -380,6 +380,21 @@ TEST_F(RedisearchSemanticsTest, StringFunctionsRejectNumbers) {
   EXPECT_EQ(Eval("lower(@s10)"), Value("10"));
 }
 
+// A parameter that is a number becomes one, so `substr(@t, $off, 1)` works
+// and `@s10 < $two` compares numbers; any other parameter is a string.
+TEST_F(RedisearchSemanticsTest, ParametersThatAreNumbersAreNumbers) {
+  for (auto [expr, type] : {std::pair{"$one", Expression::Type::kNumber},
+                            std::pair{"$word", Expression::Type::kString}}) {
+    auto e = Expression::Compile(cc, expr);
+    ASSERT_TRUE(e.ok()) << expr << ": " << e.status();
+    EXPECT_EQ((*e)->GetResultType(), type) << expr;
+  }
+  EXPECT_EQ(Eval("substr(@s10, $one, 1)"), Value("0"));
+  EXPECT_EQ(Eval("@s10 < $two"), Value(false));  // 10 < 2
+  EXPECT_EQ(Eval("@s10 < $word"), Value(true));  // "10" < "abc"
+  EXPECT_EQ(Eval("$one + $two"), Value(3.0));
+}
+
 // lower() and upper() of a number give a null, which orders below every other
 // value, equals another null, and exists.
 TEST_F(RedisearchSemanticsTest, NullOrdersFirst) {
@@ -403,7 +418,9 @@ TEST_F(RedisearchSemanticsTest, FollowsEmulateRelease) {
   EXPECT_EQ(Eval("@one < 'abc'"), Value(true));  // "1" < "abc"
   EXPECT_EQ(Eval("strlen(@one)"), Value(1.0));
   EXPECT_FALSE(Eval("lower(5)").IsNull());
+  EXPECT_EQ(Eval("@s10 < $two"), Value(true));  // "10" < "2"
   VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue({1, 3, 0}));
+  EXPECT_EQ(Eval("@s10 < $two"), Value(false));  // 10 < 2
   EXPECT_TRUE(Eval("@one < 'abc'").IsError());
   EXPECT_TRUE(Eval("strlen(@one)").IsError());
   EXPECT_TRUE(Eval("lower(5)").IsNull());

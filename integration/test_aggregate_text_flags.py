@@ -14,7 +14,6 @@ from utils import IndexingTestHelper
 
 FIX_RELEASE = "1.3.0"
 LEGACY_RELEASE = "1.0.0"
-COUNTER = "search_compatibility-ft_aggregate_nooffsets_inorder_slop"
 
 
 def _vec(*values):
@@ -68,10 +67,6 @@ class TestAggregateTextFlags(ValkeySearchTestCaseBase):
             client.execute_command("HSET", key, "s", text, "v", _vec(float(i), 0.0))
         IndexingTestHelper.wait_for_indexing_complete_on_node(client, "idx")
 
-    def _counter(self, client: Valkey) -> int:
-        # The INFO field appears with the first ignored INORDER / SLOP.
-        return client.info("SEARCH").get(COUNTER, 0)
-
     def test_flags_match_ft_search(self):
         for release in (LEGACY_RELEASE, FIX_RELEASE):
             client = self._client(release)
@@ -88,7 +83,6 @@ class TestAggregateTextFlags(ValkeySearchTestCaseBase):
                 # One for the aggregate, one for the search.
                 assert client.info("SEARCH")[
                     "search_nonvector_requests_count"] == requests + 2
-            assert self._counter(client) == 0
 
     def test_flag_applies_without_load(self):
         client = self._client()
@@ -136,52 +130,25 @@ class TestAggregateTextFlags(ValkeySearchTestCaseBase):
         assert agg_keys(reply) == {"d:2"}
         assert dict(zip(reply[1][::2], reply[1][1::2]))[b"dist"] == b"1"
 
-    def test_inorder_and_slop_need_offsets(self):
-        client = self._client(FIX_RELEASE)
-        self._populate(client, "NOOFFSETS")
-        for flags in (("INORDER",), ("SLOP", "1")):
-            with pytest.raises(ResponseError, match="Index does not support offsets"):
+    def test_inorder_and_slop_ignored_without_offsets(self):
+        for release in (LEGACY_RELEASE, FIX_RELEASE):
+            client = self._client(release)
+            self._populate(client, "NOOFFSETS")
+            for query, flags, expected in (
+                ("@s:(hello world)", ("INORDER",), {"d:1", "d:2", "d:3"}),
+                ("@s:(hello world)", ("SLOP", "1"), {"d:1", "d:2", "d:3"}),
+                ("@s:(hello world)", ("INORDER", "SLOP", "1"),
+                 {"d:1", "d:2", "d:3"}),
+                ("@s:worlds", ("VERBATIM", "INORDER"), {"d:4"}),
+                ("@s:worlds", ("VERBATIM",), {"d:4"}),
+            ):
+                assert agg_keys(client.execute_command(
+                    "FT.AGGREGATE", "idx", query, *flags,
+                    "LOAD", "1", "@__key")) == expected, (release, flags)
+            with pytest.raises(ResponseError, match="Dialects"):
                 client.execute_command(
-                    "FT.AGGREGATE", "idx", "@s:(hello world)", *flags,
-                    "LOAD", "1", "@__key")
-        assert agg_keys(client.execute_command(
-            "FT.AGGREGATE", "idx", "@s:worlds", "VERBATIM",
-            "LOAD", "1", "@__key")) == {"d:4"}
-
-    def test_legacy_release_ignores_inorder_and_slop_without_offsets(self):
-        client = self._client(LEGACY_RELEASE)
-        self._populate(client, "NOOFFSETS")
-        for flags in (("INORDER",), ("SLOP", "1"), ("INORDER", "SLOP", "1")):
-            before = self._counter(client)
-            assert agg_keys(client.execute_command(
-                "FT.AGGREGATE", "idx", "@s:(hello world)", *flags,
-                "LOAD", "1", "@__key")) == {"d:1", "d:2", "d:3"}, flags
-            assert self._counter(client) - before == 1, flags
-        before = self._counter(client)
-        assert agg_keys(client.execute_command(
-            "FT.AGGREGATE", "idx", "@s:worlds", "VERBATIM", "INORDER",
-            "LOAD", "1", "@__key")) == {"d:4"}
-        assert self._counter(client) - before == 1
-        before = self._counter(client)
-        assert agg_keys(client.execute_command(
-            "FT.AGGREGATE", "idx", "@s:worlds", "VERBATIM",
-            "LOAD", "1", "@__key")) == {"d:4"}
-        assert agg_keys(client.execute_command(
-            "FT.AGGREGATE", "idx", "@s:(hello world)",
-            "LOAD", "1", "@__key")) == {"d:1", "d:2", "d:3"}
-        with pytest.raises(ResponseError, match="Dialects"):
-            client.execute_command(
-                "FT.AGGREGATE", "idx", "@s:(hello world)", "INORDER",
-                "DIALECT", "1", "LOAD", "1", "@__key")
-        assert self._counter(client) == before
-
-        assert client.execute_command(
-            "CONFIG", "SET", "search.emulate-release", FIX_RELEASE) == b"OK"
-        with pytest.raises(ResponseError, match="Index does not support offsets"):
-            client.execute_command(
-                "FT.AGGREGATE", "idx", "@s:(hello world)", "INORDER",
-                "LOAD", "1", "@__key")
-        assert self._counter(client) == before
+                    "FT.AGGREGATE", "idx", "@s:(hello world)", "INORDER",
+                    "DIALECT", "1", "LOAD", "1", "@__key")
 
 
 class TestAggregateTextFlagsMetrics(ValkeySearchTestCaseDebugMode):

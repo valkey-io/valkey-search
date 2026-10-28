@@ -114,13 +114,13 @@ This section describes areas where Valkey Search intentionally diverges from Red
 
 **Migration impact.** Applications that check for `nan` scores should expect `0` instead.
 
-### `INORDER` and `SLOP` on an index without offsets
+### Word-position queries on an index without offsets
 
-**What differs.** On an index created with `NOOFFSETS`, Valkey Search rejects `INORDER` and `SLOP` with `Index does not support offsets`: `FT.SEARCH` always, and `FT.AGGREGATE` from `search.emulate-release` 1.3.0. Redisearch accepts both arguments and ignores them, returning the rows of the same query without them.
+**What differs.** On an index created with `NOOFFSETS`, Valkey Search rejects a quoted phrase of two or more words (`FT.SEARCH` and `FT.AGGREGATE`) and the `INORDER` and `SLOP` arguments (`FT.SEARCH`) with `Index does not support offsets`. Redisearch answers these queries: a quoted phrase matches documents that contain all its words in any order and at any distance, and `INORDER` and `SLOP` are ignored. `FT.AGGREGATE` already ignores `INORDER` and `SLOP` on such an index, as Redisearch does.
 
-**Why.** Such an index stores no word positions, so neither argument can be applied; an error is preferred over a reply that looks like the arguments were honoured.
+**Why.** Such an index stores no word positions, so word order and distance cannot be checked. This is a known defect, not a design choice; it will be removed when the queries are answered as Redisearch answers them.
 
-**Migration impact.** Remove `INORDER` and `SLOP` from queries against `NOOFFSETS` indexes, or create the index with offsets.
+**Migration impact.** Until then, remove quotes and `INORDER` / `SLOP` from queries against `NOOFFSETS` indexes, or create the index with offsets.
 
 ## Extensions
 
@@ -219,4 +219,3 @@ A list of the compatibility issues that have been fixed.
 | 1.3.0   | `compatibility-fuzzy_code_point_distance` | On an English index, fuzzy (`%term%`) edit distance counts bytes, so replacing `é` with `è` costs 2 edits and `%hola%` does not match `¡hola`. | Edit distance counts characters (Unicode code points), so `é` to `è` costs 1 edit and `%hola%` matches `¡hola`. Non-English languages always count characters. Whether the result differs depends on the indexed words, so the INFO field counts every fuzzy term searched on an English index under the old behavior. |
 | 1.3.0   | `compatibility-filter_parser_invalid_utf8_expression` | A query expression containing malformed UTF-8 is accepted. In text terms each malformed sequence is replaced with U+FFFD, so the term matches only documents that contain U+FFFD; `TAG` values keep their raw bytes and match a tag stored with the same bytes. | The query is rejected with `Invalid UTF-8 in query expression`, matching how ingestion rejects malformed text. |
 | 1.3.0   | `compatibility-tag_rejects_non_utf8` | A `TAG` field value containing malformed UTF-8 is indexed with its raw bytes and matches a tag query with the same bytes. | The value is rejected as invalid data, matching Redisearch, and counted in `hash_indexing_failures`; with `compatibility-invalid_data_drops_key` the whole key is dropped from the index. The setting applies when a document is indexed, so documents indexed before the change stay indexed until they are re-indexed. |
-| 1.3.0   | `compatibility-ft_aggregate_nooffsets_inorder_slop` | On an index created with `NOOFFSETS`, `FT.AGGREGATE` accepts `INORDER` and `SLOP` and ignores them. | `FT.AGGREGATE` rejects `INORDER` and `SLOP` on such an index with `Index does not support offsets`, as `FT.SEARCH` does; Redisearch ignores both on such an index (see [`INORDER` and `SLOP` on an index without offsets](#inorder-and-slop-on-an-index-without-offsets)). |

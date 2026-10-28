@@ -948,6 +948,10 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         )
         # A name no key has loads nothing.
         self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 2 @__key @nosuch")
+        # A LOAD after GROUPBY is rejected.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * groupby 1 @t3 reduce count 0 as c load 1 {e2}"
+        )
 
     def test_aggregate_load_non_schema_field_on_some_keys(self, key_type, dialect, vector_data_type):
         # x is on every other key only.

@@ -89,6 +89,11 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
         // would overwrite the earlier entry's output name -- so it gets a
         // column of its own reading the same field.
         absl::flat_hash_set<size_t> claimed_columns;
+        const bool after_groupby = std::any_of(
+            parameters.stages_.begin(), parameters.stages_.end(),
+            [](const auto &stage) {
+              return dynamic_cast<const GroupBy *>(stage.get()) != nullptr;
+            });
         while (consumed < cnt) {
           std::string load;
           VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, load));
@@ -158,7 +163,7 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
           // A name outside the schema is read straight from the document.
           // Later stages resolve names at parse time, so its column has to
           // exist before they are parsed.
-          if (!in_schema) {
+          if (!in_schema && !after_groupby) {
             VMSDK_RETURN_IF_ERROR(
                 parameters.MakeReference(identifier, true).status());
           }
@@ -195,7 +200,8 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
           parameters.loads_.emplace_back(
               LoadField{.identifier = std::move(identifier),
                         .alias = std::move(alias),
-                        .renamed = renamed});
+                        .renamed = renamed,
+                        .after_groupby = after_groupby});
         }
         return absl::OkStatus();
       });

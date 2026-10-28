@@ -472,6 +472,7 @@ TEST_F(AggregateTest, NonSchemaLoadIsVisibleToLaterStagesOnly) {
            {"LOAD 1 @extra FILTER @extra=='x'", true},
            {"APPLY upper(@extra) AS u LOAD 1 @extra", false},
            {"GROUPBY 1 @extra", false},
+           {"GROUPBY 1 @n1 LOAD 1 @extra APPLY upper(@extra) AS u", false},
        }) {
     auto argv = vmsdk::ToValkeyStringVector(test_case);
     vmsdk::ArgsIterator itr(argv.data(), argv.size());

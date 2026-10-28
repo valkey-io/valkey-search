@@ -64,6 +64,9 @@ struct LoadField {
   // from `alias != identifier`, which no longer implies a rename now that a
   // resolved JSON path leaves the two legitimately different.
   bool renamed{false};
+  // After a GROUPBY each record is a group, not a document, so there is no
+  // field to fetch.
+  bool after_groupby{false};
 };
 
 struct IndexInterface {

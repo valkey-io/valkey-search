@@ -165,6 +165,9 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
             index_interface->GetFieldType(identifier).ok()) {
           return indexer.status();
         }
+        if (load.after_groupby) {
+          return indexer.status();
+        }
         params.return_attributes.emplace_back(query::ReturnAttribute{
             .identifier = vmsdk::MakeUniqueValkeyString(identifier),
             .attribute_alias = vmsdk::UniqueValkeyString(),
@@ -176,6 +179,22 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
       if (renamed) {
         apply_rename(record_index);
       }
+    }
+    // Checked after the loop so that only a command that is otherwise valid
+    // reaches the counter.
+    const bool schema_load_after_groupby = std::any_of(
+        params.loads_.begin(), params.loads_.end(), [&](const LoadField &f) {
+          return f.after_groupby &&
+                 params.index_schema->GetIndex(f.identifier).ok();
+        });
+    if (schema_load_after_groupby) {
+      VMSDK_RETURN_IF_ERROR(VALKEY_SEARCH_COMPATIBILITY_FIX(
+          1, 3, 0, "ft_aggregate_load_after_groupby",
+          [] {
+            return absl::InvalidArgumentError(
+                "LOAD cannot be applied after GROUPBY");
+          },
+          [] { return absl::OkStatus(); }));
     }
   }
   params.no_content = !content;

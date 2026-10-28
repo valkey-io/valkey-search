@@ -81,7 +81,7 @@
 /* ========================= MurmurHash64A ================================= */
 
 /* MurmurHash2, 64 bit version. Modified for endian neutrality. */
-static uint64_t MurmurHash64A(const void *key, int len, unsigned int seed) {
+static uint64_t MurmurHash64A(const void *key, size_t len, unsigned int seed) {
   const uint64_t m = 0xc6a4a7935bd1e995ULL;
   const int r = 47;
   uint64_t h = seed ^ ((uint64_t)len * m);
@@ -146,7 +146,7 @@ static int hllPatLen(const unsigned char *ele, size_t elesize, uint64_t seed,
   uint64_t hash, index;
   int count;
 
-  hash = MurmurHash64A(ele, (int)elesize, seed);
+  hash = MurmurHash64A(ele, elesize, seed);
   index = hash & HLL_P_MASK;
   hash >>= HLL_P;
   hash |= ((uint64_t)1 << HLL_Q);

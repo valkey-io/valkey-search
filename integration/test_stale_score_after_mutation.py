@@ -179,10 +179,6 @@ class TestStaleTextScoreOnVectorQuery(_ParkedMutation,
             f"vs settled {fresh_scores}")
 
 
-@pytest.mark.skip(reason=(
-    "Defect V5: https://github.com/valkey-io/valkey-search/issues/1416"
-    " -- a match-all (`*`) FT.HYBRID SEARCH arm keeps the pre-mutation score"
-    " for a document rewritten mid-query, which moves the fused RRF order."))
 class TestStaleMatchAllScore(_ParkedMutation, ValkeySearchTestCaseDebugMode):
     """V5, through the FT.HYBRID `SEARCH "*"` arm: RRF ranks positionally, so
     one stale row in an arm corrupts the whole fused ranking."""

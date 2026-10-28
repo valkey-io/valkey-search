@@ -181,9 +181,12 @@ FilterVerification VerifyFilter(const query::SearchParameters &parameters,
                                 const RecordsMap &records,
                                 const indexes::Neighbor &n,
                                 std::unique_ptr<QueryContext> &query_ctx,
-                                std::optional<bool> recompute_score_override) {
+                                std::optional<bool> recompute_score_override,
+                                bool rescore_unchanged) {
   auto predicate = parameters.filter_parse_results.root_predicate.get();
-  if (predicate == nullptr) {
+  // Match-all has nothing to re-evaluate, but its score still follows the
+  // corpus, so it is rescored when the caller asks.
+  if (predicate == nullptr && !rescore_unchanged) {
     return {true, std::nullopt};
   }
   auto db_seq =
@@ -197,10 +200,13 @@ FilterVerification VerifyFilter(const query::SearchParameters &parameters,
     // so it does not match and the caller drops it.
     return {false, std::nullopt};
   }
-  if (*db_seq == n.sequence_number) {
+  const bool mutated = *db_seq != n.sequence_number;
+  if (!mutated && !rescore_unchanged) {
     return {true, std::nullopt};
   }
-  predicate_revalidation.Increment();
+  if (mutated) {
+    predicate_revalidation.Increment();
+  }
 
   const IndexSchema &index_schema = *parameters.index_schema;
   // One context per reply: leaves resolve on the first mutated document and are
@@ -213,7 +219,9 @@ FilterVerification VerifyFilter(const query::SearchParameters &parameters,
   PredicateEvaluator evaluator(records, n.external_id, *query_ctx,
                                parameters.filter_parse_results.query_operations,
                                index_schema);
-  EvaluationResult result = predicate->Evaluate(evaluator);
+  EvaluationResult result = predicate != nullptr
+                                ? predicate->Evaluate(evaluator)
+                                : EvaluationResult(true);
 
   // The document changed between shard-side scoring and this content fetch, so
   // its carried Neighbor.score is stale; recompute it through the same Scorer

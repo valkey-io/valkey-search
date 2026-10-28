@@ -7,9 +7,9 @@
 
 #include "src/query/multi_search.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <memory>
 #include <utility>
 
@@ -152,6 +152,7 @@ absl::Status PerformMultiSearchLocalAsync(
   // observed a null token; this is the first opportunity to fix that up
   // before any arm executes.
   cancel::Token shared_token = parameters->cancellation_token;
+  const uint32_t window = parameters->fusion.window;
   // Move arms out of parameters before constructing the tracker. After this
   // point, parameters->arms is left at the same size (tracker reads
   // parameters_->arms.size() to size per_arm_results) but the unique_ptrs
@@ -196,18 +197,16 @@ absl::Status PerformMultiSearchLocalAsync(
     // GetContentProcessing() returns kNoContent and the arm completes on the
     // background thread without a per-arm ResolveContent.
     arms[i]->no_content = true;
-    // Uncap each arm pre-fusion. Not because fusion needs the whole match set:
-    // it reads only each arm's top `window` entries (see the `cap` in
-    // rank_fusion.cc), and the "both arms or neither" guarantee comes from
-    // ArmGate and RevalidateArmsBeforeFusion re-checking every arm together
-    // after they report, not from the size of an arm. The cap is simply not
-    // applied here yet. Capping to `window` is a pending optimization and
-    // needs some care, because revalidation can drop entries, so a cap of
-    // exactly `window` could leave an arm short of the candidates fusion is
-    // entitled to. The aggregate-pipeline LIMIT (post-fusion) bounds the final
-    // reply size either way.
+    // Fusion reads only each arm's top `window` entries (see the `cap` in
+    // rank_fusion.cc), so cap each arm there, as the cluster fanout caps each
+    // shard. TrimResults keeps search-result-buffer-multiplier times that,
+    // which is the margin for entries revalidation drops. ArmGate and
+    // RevalidateArmsBeforeFusion visit every entry of every arm on the main
+    // thread, so their cost scales with `window`, not with the match set.
     arms[i]->limit.first_index = 0;
-    arms[i]->limit.number = std::numeric_limits<uint64_t>::max();
+    arms[i]->limit.number = arms[i]->IsNonVectorQuery()
+                                ? window
+                                : std::max<uint64_t>(arms[i]->k, window);
     auto status =
         SearchAsync(std::move(arms[i]), reader_pool, SearchMode::kLocal);
     if (!status.ok()) {

@@ -15,7 +15,8 @@ Two markers are used, and they mean different things:
   been closed, and both the marker and the entry here should be removed.
 
 Sections 1-4 and 6 cover the text-search suite (`generate_text.py`); section 5
-covers the FT.HYBRID suite (`generate_hybrid.py`).
+covers the FT.HYBRID suite (`generate_hybrid.py`); section 7 covers the scoring
+suite (`generate_scoring.py`).
 
 ## 1. Exact Phrase Query
 
@@ -656,3 +657,15 @@ each is described, with the measured Redis behavior, in `known_differences.md`
   punctuation (§4.2).
 - `test_multilang_turkish_uppercase` — Redis applies no Turkish casing, so
   `IŞIK` does not match `ışık` (§4.4).
+
+## 7. Scoring
+
+### 7.1. A `$weight` over a stemmed term — excluded
+
+On the `default` index variant, which stems its text fields, every query
+containing `$weight` is marked `excluded`. valkey-search applies a term's
+weight to all of its stem leaves, Redis to the exact word only
+(`known_differences.md` §1.9). This covers the `weight` shape and any
+`text_numeric_tag`, `text_vector` or `text_numeric_tag_vector` query whose text
+part was drawn from it. Weighted queries on the `NOSTEM` variants (`nostem`,
+`docscore`, `stopwords`) are compared normally.

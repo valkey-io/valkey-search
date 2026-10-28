@@ -290,7 +290,7 @@ void GetAclViewFromCallReplyImpl(
 }
 
 bool IsKeyPrefixCheckSupported() {
-  return ValkeyModule_ACLCheckKeyPrefixPermissions != nullptr;
+  return false;
 }
 
 }  // namespace

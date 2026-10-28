@@ -140,7 +140,8 @@ std::vector<indexes::Neighbor> BuildFusedNeighbors(
     CHECK(fn != nullptr) << "kFunction fusion without a compiled expression";
     fused = rank_fusion::Function(
         std::move(arm_inputs),
-        [fn](const std::vector<std::optional<double>> &per_arm) -> double {
+        [fn,
+         &params](const std::vector<std::optional<double>> &per_arm) -> double {
           ArmScoreRecord rec;
           rec.scores.reserve(per_arm.size());
           for (const auto &s : per_arm) {
@@ -149,6 +150,10 @@ std::vector<indexes::Neighbor> BuildFusedNeighbors(
           }
           expr::Expression::EvalContext eval_ctx;
           expr::Value v = fn->Evaluate(eval_ctx, rec);
+          if (v.IsError() && params.combine_error.ok()) {
+            params.combine_error =
+                absl::InvalidArgumentError(v.GetNil().GetReason());
+          }
           auto d = v.AsDouble();
           return d.has_value() ? *d : 0.0;
         });
@@ -168,6 +173,11 @@ std::vector<indexes::Neighbor> BuildFusedNeighbors(
 void RunAggregateReply(ValkeyModuleCtx *ctx, MultiSearchParameters &params) {
   // FT.HYBRID is new in 1.3.0: every compatibility fix applies.
   options::ScopedLatestRelease latest;
+  if (!params.combine_error.ok()) {
+    ++Metrics::GetStats().query_failed_requests_cnt;
+    ValkeyModule_ReplyWithError(ctx, params.combine_error.message().data());
+    return;
+  }
   if (params.agg == nullptr) {
     ValkeyModule_ReplyWithArray(ctx, 1);
     ValkeyModule_ReplyWithLongLong(ctx, 0);

@@ -79,6 +79,11 @@ class Expression {
     // resulting kUNORDERED as equal for == and as not-less for >=, and so
     // would answer such a comparison true.
     virtual bool UseFilterComparisonSemantics() const = 0;
+    // True to reject at compile time a function argument whose type is known
+    // to be wrong -- a number where a string function needs a string. Off by
+    // default: APPLY and FILTER fail only when a row is evaluated, as
+    // Redisearch does, so a query that evaluates no row still succeeds.
+    virtual bool RejectsArgumentTypeErrors() const { return false; }
   };
 
   // The two basic operations for Expression(s).

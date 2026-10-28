@@ -285,6 +285,9 @@ struct FunctionTableEntry {
   // The function as Redisearch has it, when that differs: it never turns a
   // number argument into a string.
   Func typed_function = nullptr;
+  // What typed_function requires of each argument: 's' a string, 'n' a
+  // number. Checked at compile time when the context asks for it.
+  absl::string_view arg_types = "";
 };
 
 constexpr auto kNum = Expression::Type::kNumber;
@@ -304,7 +307,7 @@ static std::map<std::string, FunctionTableEntry> function_table{
 
     {"startswith",
      {2, 2, &DyadicFunctionProxy<FuncStartswith>, kNum,
-      &DyadicFunctionProxy<FuncStartswithTyped>}},
+      &DyadicFunctionProxy<FuncStartswithTyped>, "ss"}},
     {"lower",
      {1, 1, &MonadicFunctionProxy<FuncLower>, kStr,
       &MonadicFunctionProxy<FuncLowerTyped>}},
@@ -313,13 +316,13 @@ static std::map<std::string, FunctionTableEntry> function_table{
       &MonadicFunctionProxy<FuncUpperTyped>}},
     {"strlen",
      {1, 1, &MonadicFunctionProxy<FuncStrlen>, kNum,
-      &MonadicFunctionProxy<FuncStrlenTyped>}},
+      &MonadicFunctionProxy<FuncStrlenTyped>, "s"}},
     {"substr",
      {3, 3, &TriadicFunctionProxy<FuncSubstr>, kStr,
-      &TriadicFunctionProxy<FuncSubstrTyped>}},
+      &TriadicFunctionProxy<FuncSubstrTyped>, "snn"}},
     {"contains",
      {2, 2, &DyadicFunctionProxy<FuncContains>, kNum,
-      &DyadicFunctionProxy<FuncContainsTyped>}},
+      &DyadicFunctionProxy<FuncContainsTyped>, "ss"}},
     {"concat", {0, 50, &ProxyConcat, kStr}},
 
     {"dayofweek", {1, 1, &MonadicFunctionProxy<FuncDayofweek>, kNum}},
@@ -642,6 +645,19 @@ struct Compiler {
         VMSDK_ASSIGN_OR_RETURN(auto entry,
                                FunctionCall::LookUpAndValidate(name, params));
         DBG << "After function call: '" << s_.GetUnscanned() << "'\n";
+        if (ctx.RejectsArgumentTypeErrors()) {
+          for (size_t i = 0; i < params.size() && i < entry->arg_types.size();
+               ++i) {
+            const bool want_string = entry->arg_types[i] == 's';
+            const auto have = params[i]->GetResultType();
+            if (have == (want_string ? Expression::Type::kNumber
+                                     : Expression::Type::kString)) {
+              return absl::InvalidArgumentError(
+                  absl::StrCat("Argument ", i, " of ", name, " must be a ",
+                               want_string ? "string" : "number"));
+            }
+          }
+        }
         auto func = entry->function;
         if (entry->typed_function &&
             VALKEY_SEARCH_COMPATIBILITY_FIX(

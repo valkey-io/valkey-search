@@ -84,6 +84,9 @@ class CombineFunctionContext : public expr::Expression::CompileContext {
   // the filter one, which would answer false and make an arm a document is
   // absent from look like an arm it scored zero in.
   bool UseFilterComparisonSemantics() const override { return false; }
+  // COMBINE FUNCTION is valkey-search's own, and has no "a query that
+  // evaluates no row succeeds" rule to keep: catch what is knowable now.
+  bool RejectsArgumentTypeErrors() const override { return true; }
 };
 
 }  // namespace valkey_search::query

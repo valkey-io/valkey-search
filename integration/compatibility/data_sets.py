@@ -756,6 +756,7 @@ def compute_data_sets(vector_data_type="FLOAT32"):
 
     data["hard numbers"] = {}
     data["sortable numbers"] = {}
+    data["non-schema field"] = {}
     data["reverse vector numbers"] = {}
     data["bad numbers"] = {}
     data["missing numbers"] = {}
@@ -858,6 +859,14 @@ def compute_data_sets(vector_data_type="FLOAT32"):
                 },
             )
             for i in range(len(sortable_numbers))
+        ]
+        # The same keys plus `x`, a field the schema does not declare, on every
+        # other key, in an order unlike the key order. Its own data set so that
+        # no answer over "sortable numbers" changes.
+        data["non-schema field"][CREATES_KEY(key_type)] = data["sortable numbers"][CREATES_KEY(key_type)]
+        data["non-schema field"][SETS_KEY(key_type)] = [
+            (key, {**fields, "x": f"x{(i * 7) % 15:02d}"} if i % 2 == 0 else fields)
+            for i, (key, fields) in enumerate(data["sortable numbers"][SETS_KEY(key_type)])
         ]
         #
         # Sortable numbers, designed so that sorted keys for this index don't have any duplications

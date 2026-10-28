@@ -152,10 +152,17 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
             renamed ? alias : OutputNameFor(alias, schema_identifier),
             (*indexer)->GetIndexerType());
       } else {
-        // Below 1.3.0 `AS` is read as a field name; keep main's error so the
-        // ignored rename is not silent.
+        // Below 1.3.0 `AS` is read as a field name; keep the unknown-field
+        // error so the ignored rename is not silent.
         if (!options::EnabledInVersion(1, 3, 0) &&
-            absl::EqualsIgnoreCase(identifier, "AS")) {
+            absl::EqualsIgnoreCase(identifier, kAsParam)) {
+          return indexer.status();
+        }
+        // An FT.HYBRID per-arm score alias passes the parser's lookup but is
+        // not a document field; keep the unknown-field error for it.
+        const auto *index_interface = params.parse_vars_.index_interface_;
+        if (index_interface != nullptr &&
+            index_interface->GetFieldType(identifier).ok()) {
           return indexer.status();
         }
         params.return_attributes.emplace_back(query::ReturnAttribute{

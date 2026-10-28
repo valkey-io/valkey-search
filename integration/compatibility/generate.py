@@ -949,6 +949,18 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         # A name no key has loads nothing.
         self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 2 @__key @nosuch")
 
+    def test_aggregate_load_non_schema_field_on_some_keys(self, key_type, dialect, vector_data_type):
+        # x is on every other key only.
+        self.setup_data("non-schema field", key_type, vector_data_type=vector_data_type)
+        x = "@x" if key_type == "hash" else "$.x"
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 2 @__key {x}")
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 4 @__key {x} as s sortby 4 @s asc @__key asc"
+        )
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 4 @__key {x} as s sortby 4 @s desc @__key asc"
+        )
+
     def test_aggregate_json_field_names(self, key_type, dialect, vector_data_type):
         """Field names in the reply must be the user-facing name, not the
         schema identifier. Only JSON can distinguish the two (its schema is

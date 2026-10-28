@@ -186,10 +186,27 @@ config::Number &GetVectorUnshareBatchSize();
 /// See COMPATIBILITY.md for the semantics.
 config::Version &GetEmulateRelease();
 
-/// Return true if search.emulate-release >= version. Use this at sites that
-/// gate the compatible vs legacy behavior of a fix described in
-/// COMPATIBILITY.md.
+/// Return true if search.emulate-release >= version, or a ScopedLatestRelease
+/// is alive on this thread. Use this at sites that gate the compatible vs
+/// legacy behavior of a fix described in COMPATIBILITY.md.
 bool EnabledInVersion(vmsdk::ValkeyVersion version);
+
+/// While one is alive on this thread, every compatibility fix is enabled,
+/// whatever search.emulate-release says: the code running belongs to a command
+/// new in 1.3.0 (FT.CREATE FILTER, FT.HYBRID), which has no older release to
+/// emulate. Open one around compiling and evaluating such a command's
+/// expressions and around writing its reply.
+class ScopedLatestRelease {
+ public:
+  ScopedLatestRelease() { ++depth_; }
+  ~ScopedLatestRelease() { --depth_; }
+  ScopedLatestRelease(const ScopedLatestRelease &) = delete;
+  ScopedLatestRelease &operator=(const ScopedLatestRelease &) = delete;
+  static bool Active() { return depth_ > 0; }
+
+ private:
+  static thread_local int depth_;
+};
 
 /// Convenience overload — the constexpr ValkeyVersion ctor lets the compiler
 /// fold the comparand at every call site.

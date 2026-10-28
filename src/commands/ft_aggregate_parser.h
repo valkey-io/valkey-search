@@ -110,9 +110,9 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   bool UseFilterComparisonSemantics() const override { return false; }
 
   // Set by FT.HYBRID, which embeds these parameters for its pipeline. Unlike
-  // FT.AGGREGATE it is new in 1.3.0, so it has no older release to emulate.
+  // FT.AGGREGATE it is new in 1.3.0, so it has no older release to emulate:
+  // its reply is written under an options::ScopedLatestRelease.
   bool hybrid_{false};
-  bool HonorsEmulateRelease() const override { return !hybrid_; }
 
   absl::StatusOr<expr::Value> GetParam(
       const absl::string_view s) const override {

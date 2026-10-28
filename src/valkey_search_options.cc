@@ -904,8 +904,11 @@ config::Version &GetEmulateRelease() {
   return dynamic_cast<config::Version &>(*emulate_release_config);
 }
 
+thread_local int ScopedLatestRelease::depth_ = 0;
+
 bool EnabledInVersion(vmsdk::ValkeyVersion version) {
-  return GetEmulateRelease().GetValue() >= version;
+  return ScopedLatestRelease::Active() ||
+         GetEmulateRelease().GetValue() >= version;
 }
 
 }  // namespace options

@@ -500,10 +500,9 @@ struct Compiler {
                                    rvalue->GetResultType());
             const bool short_circuit =
                 (op.name == "&&" || op.name == "||") &&
-                (!ctx.HonorsEmulateRelease() ||
-                 VALKEY_SEARCH_COMPATIBILITY_FIX(
-                     1, 3, 0, "expr_short_circuit", [] { return true; },
-                     [] { return false; }));
+                VALKEY_SEARCH_COMPATIBILITY_FIX(
+                    1, 3, 0, "expr_short_circuit", [] { return true; },
+                    [] { return false; });
             lvalue =
                 std::make_unique<Dyadic>(std::move(lvalue), std::move(rvalue),
                                          func, op.name, short_circuit);
@@ -624,10 +623,9 @@ struct Compiler {
         DBG << "After function call: '" << s_.GetUnscanned() << "'\n";
         auto func = entry->function;
         if (entry->typed_function &&
-            (!ctx.HonorsEmulateRelease() ||
-             VALKEY_SEARCH_COMPATIBILITY_FIX(
-                 1, 3, 0, "expr_string_fn_types", [] { return true; },
-                 [] { return false; }))) {
+            VALKEY_SEARCH_COMPATIBILITY_FIX(
+                1, 3, 0, "expr_string_fn_types", [] { return true; },
+                [] { return false; })) {
           func = entry->typed_function;
         }
         return std::make_unique<FunctionCall>(std::move(name), func,
@@ -734,10 +732,9 @@ struct Compiler {
     if (ctx.UseFilterComparisonSemantics()) {
       return DoDyadic(ctx, &Compiler::AddOp, filter_ops);
     }
-    const bool typed = !ctx.HonorsEmulateRelease() ||
-                       VALKEY_SEARCH_COMPATIBILITY_FIX(
-                           1, 3, 0, "expr_typed_comparison",
-                           [] { return true; }, [] { return false; });
+    const bool typed = VALKEY_SEARCH_COMPATIBILITY_FIX(
+        1, 3, 0, "expr_typed_comparison", [] { return true; },
+        [] { return false; });
     return DoDyadic(ctx, &Compiler::AddOp,
                     typed ? apply_ops : legacy_apply_ops);
   }

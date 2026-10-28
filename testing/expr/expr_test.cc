@@ -7,6 +7,7 @@
 #include "src/expr/expr.h"
 
 #include <map>
+#include <optional>
 #include <set>
 
 #include "absl/container/flat_hash_map.h"
@@ -75,12 +76,6 @@ class ExprTest : public vmsdk::ValkeyTest {
       }
     }
     bool UseFilterComparisonSemantics() const override { return false; }
-    // Off by default: the rest of these tests pin the current behavior,
-    // whatever search.emulate-release says.
-    bool honors_emulate_release = false;
-    bool HonorsEmulateRelease() const override {
-      return honors_emulate_release;
-    }
   } cc;
   std::unique_ptr<Record> record_;
 
@@ -247,6 +242,7 @@ TEST_F(ExprTest, ResultTypes) {
 // number operand makes it numeric, otherwise a string operand makes it a
 // string comparison. @d10 is declared a string but holds the number 10.
 TEST_F(ExprTest, ComparisonTypeIsChosenAtCompileTime) {
+  options::ScopedLatestRelease latest;
   std::vector<std::pair<absl::string_view, Value>> cases = {
       {"@s10 < 9", Value(false)},     // 10 < 9
       {"@s10 < '9'", Value(true)},    // "10" < "9"
@@ -265,7 +261,8 @@ TEST_F(ExprTest, ComparisonTypeIsChosenAtCompileTime) {
 }
 
 // A command that predates 1.3.0 keeps the runtime choice of comparison when
-// search.emulate-release names an older release.
+// search.emulate-release names an older release; one new in 1.3.0 runs under
+// a ScopedLatestRelease and always gets the typed comparison.
 TEST_F(ExprTest, TypedComparisonFollowsEmulateRelease) {
   auto eval = [&](absl::string_view expr) {
     auto e = Expression::Compile(cc, expr);
@@ -274,23 +271,43 @@ TEST_F(ExprTest, TypedComparisonFollowsEmulateRelease) {
     return (*e)->Evaluate(ec, *record_);
   };
   const auto saved = options::GetEmulateRelease().GetValue();
-  cc.honors_emulate_release = true;
-
   VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue({1, 2, 0}));
   EXPECT_EQ(eval("@d10 < '9'"), Value(false));  // 10 < 9, from the runtime
+  {
+    options::ScopedLatestRelease latest;
+    EXPECT_EQ(eval("@d10 < '9'"), Value(true));  // "10" < "9"
+  }
   VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue({1, 3, 0}));
-  EXPECT_EQ(eval("@d10 < '9'"), Value(true));  // "10" < "9"
-
-  // A command new in 1.3.0 always compiles the typed comparison.
-  cc.honors_emulate_release = false;
-  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue({1, 2, 0}));
   EXPECT_EQ(eval("@d10 < '9'"), Value(true));
   VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue(saved));
 }
 
+// Every 1.3.0 fix applies under a ScopedLatestRelease, not only the typed
+// comparisons: here the `&&`-over-`||` precedence, whatever
+// search.emulate-release says.
+TEST_F(ExprTest, ScopedLatestReleaseEnablesEveryFix) {
+  auto eval = [&](absl::string_view expr) {
+    auto e = Expression::Compile(cc, expr);
+    EXPECT_TRUE(e.ok()) << expr << ": " << e.status();
+    Expression::EvalContext ec;
+    return (*e)->Evaluate(ec, *record_);
+  };
+  const auto saved = options::GetEmulateRelease().GetValue();
+  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue({1, 0, 0}));
+  EXPECT_EQ(eval("1 || 0 && 0"), Value(false));  // (1 || 0) && 0
+  {
+    options::ScopedLatestRelease latest;
+    EXPECT_EQ(eval("1 || 0 && 0"), Value(true));  // 1 || (0 && 0)
+  }
+  EXPECT_EQ(eval("1 || 0 && 0"), Value(false));
+  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue(saved));
+}
+
 // Behaviors measured on Redis 8, where a number is never turned into a string.
+// They run as a command new in 1.3.0 would, under a ScopedLatestRelease.
 class RedisearchSemanticsTest : public ExprTest {
  protected:
+  std::optional<options::ScopedLatestRelease> latest_{std::in_place};
   Value Eval(absl::string_view expr) {
     auto e = Expression::Compile(cc, expr);
     EXPECT_TRUE(e.ok()) << expr << ": " << e.status();
@@ -361,7 +378,7 @@ TEST_F(RedisearchSemanticsTest, NullOrdersFirst) {
 // release before 1.3.0.
 TEST_F(RedisearchSemanticsTest, FollowsEmulateRelease) {
   const auto saved = options::GetEmulateRelease().GetValue();
-  cc.honors_emulate_release = true;
+  latest_.reset();
   VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue({1, 2, 0}));
   EXPECT_EQ(Eval("@one < 'abc'"), Value(true));  // "1" < "abc"
   EXPECT_EQ(Eval("strlen(@one)"), Value(1.0));
@@ -385,6 +402,8 @@ TEST_F(RedisearchSemanticsTest, FollowsEmulateRelease) {
 // ---------------------------------------------------------------------------
 class FilterExprTest : public ExprTest {
  protected:
+  // FT.CREATE FILTER is new in 1.3.0 and compiles and evaluates under one.
+  options::ScopedLatestRelease latest_;
   struct FilterCompileContext : public CompileContext {
     bool UseFilterComparisonSemantics() const override { return true; }
   } fcc;

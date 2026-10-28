@@ -79,10 +79,6 @@ class Expression {
     // resulting kUNORDERED as equal for == and as not-less for >=, and so
     // would answer such a comparison true.
     virtual bool UseFilterComparisonSemantics() const = 0;
-    // True for a command that shipped before 1.3.0, whose expressions must
-    // reproduce the release search.emulate-release names. Commands new in
-    // 1.3.0 (FT.CREATE FILTER, FT.HYBRID) have no older behavior to keep.
-    virtual bool HonorsEmulateRelease() const = 0;
   };
 
   // The two basic operations for Expression(s).

@@ -1341,6 +1341,12 @@ class CursorAggregateResult : public Cursor {
 // Replies [count, row...] with the first `count` records, removing them.
 void AggregateParameters::ReplyRecords(ValkeyModuleCtx *ctx, RecordSet &records,
                                        size_t count) {
+  // An FT.HYBRID reply, including a later FT.CURSOR READ of one, is written
+  // with every compatibility fix: FT.HYBRID is new in 1.3.0.
+  std::optional<options::ScopedLatestRelease> latest;
+  if (hybrid_) {
+    latest.emplace();
+  }
   auto &parameters = *this;
   ValkeyModule_ReplyWithArray(ctx, 1 + count);
   ValkeyModule_ReplyWithLongLong(ctx, static_cast<long long>(count));

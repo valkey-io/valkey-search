@@ -84,8 +84,6 @@ class CombineFunctionContext : public expr::Expression::CompileContext {
   // the filter one, which would answer false and make an arm a document is
   // absent from look like an arm it scored zero in.
   bool UseFilterComparisonSemantics() const override { return false; }
-  // FT.HYBRID is new in 1.3.0.
-  bool HonorsEmulateRelease() const override { return false; }
 };
 
 }  // namespace valkey_search::query

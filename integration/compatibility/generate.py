@@ -822,8 +822,12 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         # arbitrary slice, since nothing has ordered the rows yet; the
         # SORTBY-then-LIMIT case below covers a real truncation.
         self.check(dialect, f"ft.aggregate {key_type}_idx1 * load * limit 0 100")
-        # SORTBY on a field only `LOAD *` brings in.
-        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load * sortby 2 @n1 asc")
+        # SORTBY on a field only `LOAD *` brings in. Excluded on HASH: Redis
+        # sorts a `LOAD *` HASH field as a string even when it is declared
+        # NUMERIC, so -1 comes before -5; valkey-search sorts it as a number.
+        # See unsupported_tests.md 8.1.
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load * sortby 2 @n1 asc",
+                   excluded=(key_type == "hash"))
         # SORTBY on a tag field, so the name survives a string stage too.
         self.check(dialect, f"ft.aggregate {key_type}_idx1 * load * sortby 2 @t1 asc")
 
@@ -849,8 +853,11 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         )
         # SORTBY then LIMIT: a real truncation, made deterministic by the sort
         # in front of it.
+        # Excluded on HASH for the same reason as the single-stage SORTBY on
+        # @n1 above (unsupported_tests.md 8.1).
         self.check(dialect,
-            f"ft.aggregate {key_type}_idx1 * load * sortby 2 @n1 asc limit 0 5"
+            f"ft.aggregate {key_type}_idx1 * load * sortby 2 @n1 asc limit 0 5",
+            excluded=(key_type == "hash"),
         )
         # GROUPBY then APPLY: the reducer argument is a second field that
         # `LOAD *` has to bring in, and the APPLY re-reads the reducer's own

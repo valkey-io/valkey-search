@@ -308,16 +308,20 @@ absl::StatusOr<RecordsMap> GetContent(
                          attribute_data_type.FetchAllAttributes(
                              ctx, vector_identifier, key_obj.get(),
                              neighbor.external_id->Str(), identifiers));
-  if (parameters.filter_parse_results.filter_identifiers.empty()) {
-    return content;
+  if (!parameters.filter_parse_results.filter_identifiers.empty()) {
+    auto verification = VerifyFilter(parameters, content, neighbor, query_ctx);
+    if (!verification.matches) {
+      return absl::NotFoundError("Verify filter failed");
+    }
+    if (out_recomputed_score != nullptr && verification.recomputed_score) {
+      *out_recomputed_score = verification.recomputed_score;
+    }
   }
-  auto verification = VerifyFilter(parameters, content, neighbor, query_ctx);
-  if (!verification.matches) {
-    return absl::NotFoundError("Verify filter failed");
-  }
-  if (out_recomputed_score != nullptr && verification.recomputed_score) {
-    *out_recomputed_score = verification.recomputed_score;
-  }
+  // Every other fetch is projected below, filter or not. `content` cannot be
+  // handed back as it is: a JSON fetch keys it by views of the identifiers it
+  // was asked for, and `sortby_identifier` dies with this function. The
+  // projection also re-keys the sortby field under its alias, where sorting
+  // looks for it.
   if (fetch_whole_hash) {
     // The whole hash was fetched, and the whole hash is what was asked for.
     return content;

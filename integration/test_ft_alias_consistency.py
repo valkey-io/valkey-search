@@ -247,3 +247,49 @@ class TestFTAliasCollision(AliasClusterTestCase):
         _wait_for_aliaslist_on_all_nodes(self._all_primaries(), [])
         _wait_for_alias_on_all_nodes(
             self._all_primaries(), "p1", expect_present=False)
+
+
+class TestFTAliasNameCollisionConsistency(AliasClusterTestCase):
+    """
+    An alias named like a real index must still wait for every node to
+    learn the alias.
+    """
+
+    def test_aliasadd_name_collision_does_not_skip_consistency_check(self):
+        """FT.ALIASADD <existing index name> <other index> must not return OK
+        while a paused node still lacks the alias."""
+        self._create_indexes(CREATE_TAG_INDEX, CREATE_TAG_INDEX_2)
+        node0 = self.new_client_for_primary(0)
+        node1 = self.new_client_for_primary(1)
+
+        assert node1.execute_command(
+            "FT._DEBUG CONTROLLED_VARIABLE SET PauseHandleClusterMessage yes"
+        ) == b"OK"
+
+        # node1 is paused, so a correct fanout cannot finish inside 2s
+        # (deadline is ~5s); finishing early means node1 was never checked.
+        quick_result = None
+        with ThreadPoolExecutor() as executor:
+            future_cmd = executor.submit(
+                _execute, node0, "FT.ALIASADD", INDEX_NAME, INDEX_NAME_2)
+            try:
+                waiters.wait_for_true(future_cmd.done, timeout=2)
+                quick_result = future_cmd.result()
+            except waiters.WaitTimeout:
+                pass
+            finally:
+                _resume_cluster_messages(node1)
+            cmd_result = future_cmd.result()
+
+        assert quick_result is None, (
+            "FT.ALIASADD completed with a same-named real index while node1 "
+            f"was still paused and unreachable: {quick_result!r}. The "
+            "consistency check must not be satisfiable without contacting "
+            "node1.")
+        if isinstance(cmd_result, ResponseError):
+            _assert_timed_out(cmd_result)
+        else:
+            assert cmd_result == b"OK", cmd_result
+        _wait_for_aliaslist_on_all_nodes(
+            self._all_primaries(),
+            [INDEX_NAME.encode(), INDEX_NAME_2.encode()])

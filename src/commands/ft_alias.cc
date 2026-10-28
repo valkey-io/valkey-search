@@ -50,6 +50,7 @@ class AliasExistsConsistencyCheckFanoutOperation
     coordinator::InfoIndexPartitionRequest req;
     req.set_db_num(db_num_);
     req.set_index_name(index_name_);
+    req.set_name_lookup(coordinator::NAME_LOOKUP_ALIAS_ONLY);
     *req.mutable_index_fingerprint_version() = expected_ifv_;
     return req;
   }
@@ -167,12 +168,15 @@ absl::Status FanoutAliasExists(ValkeyModuleCtx *ctx, absl::string_view alias,
       // passing it from CreateEntry because the index already exists and
       // concurrent modifications could bump its version, causing the
       // exact-match consistency check to retry until timeout.
-      auto schema_or = SchemaManager::Instance().GetIndexSchema(
+      // GetAliasOwner, not GetIndexSchema(alias): a same-named real index
+      // would shadow the alias and supply the wrong IFV.
+      auto owner = SchemaManager::Instance().GetAliasOwner(
           ValkeyModule_GetSelectedDb(ctx), alias);
-      // A concurrent update may have repointed the alias; a same-named real
-      // index always resolves to itself.
-      if (schema_or.ok() && ((*schema_or)->GetName() == expected_index_name ||
-                             (*schema_or)->GetName() == alias)) {
+      auto schema_or = owner == expected_index_name
+                           ? SchemaManager::Instance().GetIndexSchema(
+                                 ValkeyModule_GetSelectedDb(ctx), *owner)
+                           : absl::NotFoundError(owner.value_or("no owner"));
+      if (schema_or.ok()) {
         coordinator::IndexFingerprintVersion ifv;
         ifv.set_fingerprint((*schema_or)->GetFingerprint());
         ifv.set_version((*schema_or)->GetVersion());
@@ -185,11 +189,9 @@ absl::Status FanoutAliasExists(ValkeyModuleCtx *ctx, absl::string_view alias,
       }
       // The alias was just committed on this node, so failing to resolve it
       // means the change did not take effect; never report that as success.
-      return absl::InternalError(
-          absl::StrCat("Alias '", alias, "' did not resolve to '",
-                       expected_index_name, "' after the update: ",
-                       schema_or.ok() ? (*schema_or)->GetName()
-                                      : schema_or.status().message()));
+      return absl::InternalError(absl::StrCat(
+          "Alias '", alias, "' did not resolve to '", expected_index_name,
+          "' after the update: ", schema_or.status().message()));
     }
   }
   ValkeyModule_ReplyWithSimpleString(ctx, "OK");

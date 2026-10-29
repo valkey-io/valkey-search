@@ -12,7 +12,7 @@ Single-client runs measure time until replies arrive. Pipelined runs measure thr
 
 For `MULTI`, one `HSET`, `EXEC`, then another `HSET`, average p50 reply latency changes by at most 2.0%. Average p99 changes between −3.2% and +10.9%.
 
-Tracked `HSET` throughput changes between −0.6% and +1.4%. Deleting eight untracked STRING keys is 4.6 to 5.0 times faster. Other HASH workloads vary by schema count.
+Regular `HSET` p50 reply latency changes between −2.2% and +0.2%. Its p99 increases 7.1% with two schemas. Tracked `HSET` throughput changes between −0.6% and +1.4%. Deleting eight untracked STRING keys is 4.6 to 5.0 times faster. Other HASH workloads vary by schema count.
 
 `JSON.SET` throughput falls 7.2% with five schemas and 3.6% with ten. The cause remains unresolved. The final implementation improves untracked deletion but does not improve every workload.
 
@@ -77,6 +77,19 @@ The primary comparison has 680 timed trials, 68 workload-and-schema comparisons,
 Release builds use `-O3 -DNDEBUG`, four writer threads, and two reader threads. The ARM64 host has 32 logical CPUs. Servers use CPUs 0 through 5. The generator uses CPUs 6 through 13. Persistence is disabled. Module arguments are loaded through temporary configuration files.
 
 Each trial starts after backfill completes and the mutation queues empty. Validation checks exact replies, final HASH and JSON values, deletion counts, document counts in each schema, searchable final-update markers, and empty final queues. Optional blocked-client INFO metrics were unavailable.
+
+## HSET reply latency
+
+One `HSET <key> content <value>` updates an existing indexed HASH. Values are average per-run latency in µs. Before is pre-PR. After is the final PR.
+
+| Schemas | Before p50 | After p50 | Before p99 | After p99 |
+|---:|---:|---:|---:|---:|
+| 1 | 51.86 | 51.96 | 63.59 | 62.18 |
+| 2 | 58.78 | 58.42 | 74.17 | 79.43 |
+| 5 | 78.64 | 78.51 | 97.01 | 97.06 |
+| 10 | 114.90 | 112.39 | 147.18 | 138.14 |
+
+p50 changes little. p99 increases 7.1% with two schemas and decreases 6.1% with ten.
 
 ## MULTI/EXEC followed by HSET
 
@@ -577,6 +590,8 @@ The immutable builds are recorded below:
 | Final renamed Release | `.audit/pr1640-client-blocking-context-libsearch.so` | `a96f17ffb1d7e0f65c0fbce8e1e538a0f2127e5f66afab45db536142d407d30d` |
 
 The pre-PR parent is `6d1eb2667d214c4841a8c5c59b249b02bbbdd7b8`. No builds or style checks ran during measurement.
+
+The branch later merged `main` at `d4d8ce3`. These measurements and test counts describe the builds before that merge. This report does not remeasure the merged branch.
 
 The full sweep, including both intermediate comparisons, contains 1,450 trials, 145 workload-and-schema comparisons, and 39,731,200 validated operations with zero benchmark errors. The JSON diagnostic experiment is separate.
 

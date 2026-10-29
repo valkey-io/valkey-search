@@ -1701,3 +1701,18 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         )
 
 
+    # COUNT_DISTINCTISH uses HyperLogLog: ours is P=14 with MurmurHash64A,
+    # Redis's is P=8 with FNV, so estimates diverge at larger cardinalities.
+    # Only tiny cardinalities, where both estimate exactly, are compared here.
+    # Functional testing is covered in integration/test_non_vector.py.
+    def test_count_distinctish_close_doubles(self, key_type, dialect, vector_data_type):
+        """Doubles that differ beyond 12 significant digits stay distinct."""
+        self.setup_data("sortable numbers", key_type)
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * "
+            f"load 2 @n2 @t3 "
+            f"apply 1+(@n2>0)*0.0000000000001 as close "
+            f"groupby 1 @t3 "
+            f"reduce count_distinctish 1 @close as approx "
+            f"reduce count_distinct 1 @close as exact"
+        )

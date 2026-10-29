@@ -189,30 +189,6 @@ class TestAggregateLoadAs(ValkeySearchTestCaseDebugMode):
             # qty == price's value (10), NOT the schema qty (5); r == 110.
             assert result[0] == {"qty": b"10", "r": b"110"}
 
-    def test_duplicate_output_name_errors(self):
-        """Intentionally stricter than RediSearch (which keeps the first claim of
-        an output name and drops the rest): a LOAD clause that names the same
-        output twice is a syntax error whenever an AS rename is involved."""
-        collisions = [
-            # Two AS clauses targeting the same alias.
-            ("LOAD", "6", "@price", "AS", "x", "@qty", "AS", "x"),
-            # A rename onto the name of a field loaded earlier in the clause.
-            ("LOAD", "4", "@qty", "@price", "AS", "qty"),
-            # ... and the same collision in the opposite order.
-            ("LOAD", "4", "@price", "AS", "qty", "@qty"),
-            # A rename onto the key field when the key is also loaded.
-            ("LOAD", "4", "@__key", "@price", "AS", "__key"),
-        ]
-        for make, idx in ((self._make_hash, "idx_hash"), (self._make_json, "idx_json")):
-            client = self._client()
-            client.execute_command("FLUSHALL", "SYNC")
-            make(client)
-            for load in collisions:
-                with pytest.raises(valkey.exceptions.ResponseError, match="Duplicate"):
-                    client.execute_command(
-                        "FT.AGGREGATE", idx, "@price:[-inf inf]", *load,
-                    )
-
     def test_plain_duplicate_load_is_deduplicated(self):
         """Loading the same field twice without a rename is not an error."""
         client = self._client()

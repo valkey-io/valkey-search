@@ -722,6 +722,7 @@ class TestHybridCompatibility(BaseCompatibilityTest):
             (NO_LOAD, ["LOAD", "*"]),
             (NO_LOAD, ["LOAD", "1", "@__key"]),
             (LOAD_ALL, ["LOAD", "1", "@price"]),
+            (NO_LOAD, ["LOAD", "3", "@color", "AS", "hue"]),
         ]:
             self.hybrid(key_type, "@title:alpha", load=load,
                         tail=[*groupby, *late, *sortby])

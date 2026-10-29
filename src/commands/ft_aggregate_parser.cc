@@ -77,6 +77,9 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
         if (vmsdk::ToStringView(count_string) == "*") {
           parameters.loadall_ = true;
           parameters.loadall_after_groupby_ |= after_groupby;
+          for (auto &earlier : parameters.loads_) {
+            earlier.before_loadall = true;
+          }
           return absl::OkStatus();
         }
         uint32_t cnt{0};
@@ -85,11 +88,7 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
         // followed by `AS <alias>`; the `AS` keyword and its alias count
         // against the budget (matching RediSearch).
         uint32_t consumed = 0;
-        // Output names claimed so far by this clause, mapped to whether the
-        // claim came from an `AS` rename. A name claimed twice is rejected when
-        // a rename is involved (see below); two plain loads of the same field
-        // keep their long-standing de-duplicating behavior.
-        absl::flat_hash_map<std::string, bool> claimed_names;
+        const size_t clause_start = parameters.loads_.size();
         // Columns this LOAD clause has already assigned an output name to. A
         // later entry naming the same field cannot reuse one of these -- it
         // would overwrite the earlier entry's output name -- so it gets a
@@ -181,10 +180,33 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
                             .alias = std::move(alias),
                             .renamed = true,
                             .after_groupby = after_groupby,
-                            .before_loadall = !parameters.loadall_,
                             .yields_to_score = true});
               continue;
             }
+          }
+          // Redisearch keeps the first claim of an output name and drops the
+          // rest. Two plain loads of one field already collapse into one
+          // column, so only a claim involving a rename is dropped here.
+          auto earlier = std::find_if(
+              parameters.loads_.begin(), parameters.loads_.end(),
+              [&](const LoadField &f) {
+                return f.alias == alias && !f.yields_to_score && !f.duplicate &&
+                       !f.after_groupby && (renamed || f.renamed);
+              });
+          if (earlier != parameters.loads_.end()) {
+            // Measured on Redisearch: under `LOAD *`, a name claimed in two
+            // different clauses shows the stored field instead.
+            if (earlier - parameters.loads_.begin() <
+                static_cast<std::ptrdiff_t>(clause_start)) {
+              earlier->claimed_again = true;
+            }
+            parameters.loads_.emplace_back(
+                LoadField{.identifier = std::move(identifier),
+                          .alias = std::move(alias),
+                          .renamed = renamed,
+                          .after_groupby = after_groupby,
+                          .duplicate = true});
+            continue;
           }
           // A name outside the schema is read straight from the document.
           // Later stages resolve names at parse time, so its column has to
@@ -193,17 +215,9 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
             VMSDK_RETURN_IF_ERROR(
                 parameters.MakeReference(identifier, true).status());
           }
-          // Intentionally stricter than RediSearch (which keeps the first claim
-          // of a name and silently drops the rest): reject a LOAD clause that
-          // names the same output twice when an `AS` rename is involved. Left
-          // to itself such a collision aliases two entries onto one record
-          // column, so the emitted value would depend on fetch order.
-          if (auto [it, inserted] = claimed_names.emplace(alias, renamed);
-              !inserted && (renamed || it->second)) {
-            return absl::InvalidArgumentError(absl::StrCat(
-                "Duplicate `AS` alias `", alias, "` in LOAD clause"));
-          }
-          if (renamed) {
+          // FT.HYBRID ignores a LOAD after GROUPBY, so its rename must not
+          // reach the group's columns either.
+          if (renamed && !(after_groupby && parameters.embedded_in_hybrid_)) {
             // LOAD precedes APPLY/SORTBY/FILTER in the command, so register
             // the rename now to make `@alias` resolvable in those later
             // stages. Entries that can't be resolved against the index here
@@ -227,8 +241,7 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
               LoadField{.identifier = std::move(identifier),
                         .alias = std::move(alias),
                         .renamed = renamed,
-                        .after_groupby = after_groupby,
-                        .before_loadall = !parameters.loadall_});
+                        .after_groupby = after_groupby});
         }
         return absl::OkStatus();
       });

@@ -67,13 +67,19 @@ struct LoadField {
   // After a GROUPBY each record is a group, not a document, so there is no
   // field to fetch.
   bool after_groupby{false};
-  // Whether the entry precedes the command's `LOAD *`. Clauses apply in
-  // command order, so a later `LOAD *` overwrites this entry's output column
-  // with the stored field of the same name.
+  // Whether a `LOAD *` follows the entry. Clauses apply in command order, so
+  // that `LOAD *` overwrites this entry's output column with the stored field
+  // of the same name.
   bool before_loadall{false};
   // A rename onto the score's own name. Redisearch keeps the score there and
   // drops the entry; it stays in the list only for the after-GROUPBY check.
   bool yields_to_score{false};
+  // A later claim of an output name already taken; Redisearch drops it. Kept
+  // in the list only for the after-GROUPBY check.
+  bool duplicate{false};
+  // The output name is claimed again by a later LOAD clause. Under `LOAD *`
+  // Redisearch then shows the stored field of that name.
+  bool claimed_again{false};
 };
 
 struct IndexInterface {

@@ -989,6 +989,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
             "load 3 @e2 as t2 load *",
             "load * load 3 @n1 as t1",
             "load 3 @e1 as y load * apply @y*2 as z",
+            "load * load 3 @n1 as t2 load *",
         ]:
             self.check(dialect, f"ft.aggregate {idx} * load 1 @__key {loads}")
 
@@ -1007,6 +1008,25 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
             "load 3 @n1 as x load *",
         ]:
             self.check(dialect, f"ft.aggregate {idx} * load 1 @__key {loads}")
+
+    def test_aggregate_load_duplicate_output_names(self, key_type, dialect, vector_data_type):
+        # Redisearch keeps the first claim of an output name and drops the
+        # rest, within one LOAD clause and across clauses.
+        self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
+        idx = f"{key_type}_idx1"
+        for loads in [
+            "load 7 @__key @t1 as x @t2 as x",
+            "load 5 @__key @t1 @t2 as t1",
+            "load 5 @__key @t2 as t1 @t1",
+            "load 4 @__key @t1 as __key",
+            "load 1 @__key load 3 @t1 as x load 3 @t2 as x",
+            "load 1 @__key load 1 @t1 load 3 @t2 as t1",
+        ]:
+            self.check(dialect, f"ft.aggregate {idx} * {loads}")
+        if key_type == "hash":
+            # Under LOAD *, a name claimed in two clauses shows the stored field.
+            self.check(dialect, f"ft.aggregate {idx} * load 1 @__key load * "
+                       "load 3 @t1 as e2 load 3 @t2 as e2")
 
     def test_aggregate_load_as_and_knn_score(self, key_type, dialect, vector_data_type):
         # Redisearch keeps a vector query's score under its own name: a rename

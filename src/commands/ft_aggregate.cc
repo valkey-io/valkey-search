@@ -71,7 +71,7 @@ absl::Status CheckLoadAfterGroupby(const AggregateParameters &params) {
 absl::Status ResolveLoadsUnderLoadAll(AggregateParameters &params) {
   const bool reply_differs = std::any_of(
       params.loads_.begin(), params.loads_.end(), [](const LoadField &f) {
-        return !f.after_groupby && !f.yields_to_score &&
+        return !f.after_groupby && !f.yields_to_score && !f.duplicate &&
                (f.renamed || f.identifier == "__key");
       });
   if (!reply_differs) {
@@ -84,13 +84,13 @@ absl::Status ResolveLoadsUnderLoadAll(AggregateParameters &params) {
     return absl::OkStatus();
   }
   for (const auto &load : params.loads_) {
-    if (load.after_groupby || load.yields_to_score) {
+    if (load.after_groupby || load.yields_to_score || load.duplicate) {
       continue;
     }
     if (load.identifier == "__key") {
       params.load_key = true;
     }
-    if (!load.renamed || !load.before_loadall) {
+    if (!load.renamed || !(load.before_loadall || load.claimed_again)) {
       continue;
     }
     auto it = params.record_indexes_by_alias_.find(load.alias);
@@ -117,7 +117,7 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
     std::vector<LoadField> loads_to_process;
     for (const auto &load : params.loads_) {
       if (!(load.after_groupby && params.embedded_in_hybrid_) &&
-          !load.yields_to_score) {
+          !load.yields_to_score && !load.duplicate) {
         loads_to_process.push_back(load);
       }
     }

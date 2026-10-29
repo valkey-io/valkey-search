@@ -40,7 +40,9 @@
 #include "src/indexes/numeric.h"
 #include "src/indexes/scoring/scorer.h"
 #include "src/indexes/tag.h"
+#include "src/indexes/text/text_index.h"
 #include "src/query/predicate.h"
+#include "src/query/query_context.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
@@ -145,19 +147,42 @@ std::vector<char> NormalizeVector(absl::string_view record,
   }
 }
 
+PrefilterEvaluator::PrefilterEvaluator(query::QueryContext &query_ctx,
+                                       QueryOperations query_operations,
+                                       const IndexSchema &index_schema)
+    : query::Evaluator(query_operations),
+      query_ctx_(query_ctx),
+      index_schema_(index_schema) {}
+
 bool PrefilterEvaluator::Evaluate(const query::Predicate &predicate,
                                   const InternedStringPtr &key) {
+  return EvaluateFull(predicate, key).matches;
+}
+
+query::EvaluationResult PrefilterEvaluator::EvaluateFull(
+    const query::Predicate &predicate, const InternedStringPtr &key) {
   key_ = &key;
+  // The evaluator outlives the key loop, so the lazily fetched per-key tree
+  // must be dropped here or the next key would evaluate against this one's.
+  per_key_index_fetched_ = false;
   auto res = predicate.Evaluate(*this);
   key_ = nullptr;
-  return res.matches;
+  return res;
+}
+
+const text::TextIndex *PrefilterEvaluator::PerKeyTextIndex() {
+  if (!per_key_index_fetched_) {
+    per_key_index_fetched_ = true;
+    per_key_index_ = query_ctx_.PerKeyTextIndex(*key_);
+  }
+  return per_key_index_;
 }
 
 query::EvaluationResult PrefilterEvaluator::EvaluateTags(
     const query::TagPredicate &predicate) {
-  bool case_sensitive = true;
-  auto tags = predicate.GetIndex()->GetValue(*key_, case_sensitive);
-  return predicate.Evaluate(tags ? &*tags : nullptr, case_sensitive);
+  CHECK(key_);
+  return predicate.Evaluate(
+      std::get<query::TagLeaf>(query_ctx_.GetOrResolve(&predicate)), *key_);
 }
 
 query::EvaluationResult PrefilterEvaluator::EvaluateNumeric(
@@ -170,18 +195,9 @@ query::EvaluationResult PrefilterEvaluator::EvaluateNumeric(
 query::EvaluationResult PrefilterEvaluator::EvaluateText(
     const query::TextPredicate &predicate, bool require_positions) {
   CHECK(key_);
-  if (!text_index_) {
-    return query::EvaluationResult(false);
-  }
-  return predicate.Evaluate(*text_index_, *key_, require_positions);
-}
-
-query::EvaluationResult PrefilterEvaluator::EvaluateFull(
-    const query::Predicate &predicate, const InternedStringPtr &key) {
-  key_ = &key;
-  auto res = predicate.Evaluate(*this);
-  key_ = nullptr;
-  return res;
+  return query::EvaluateTextLeaf(query_ctx_, predicate, *key_,
+                                 require_positions,
+                                 [this] { return PerKeyTextIndex(); });
 }
 
 query::EvaluationResult PrefilterEvaluator::EvaluateVectorRange(
@@ -191,13 +207,7 @@ query::EvaluationResult PrefilterEvaluator::EvaluateVectorRange(
   if (query_vector.empty()) {
     return query::EvaluationResult(false);
   }
-  DCHECK(index_schema_)
-      << "PrefilterEvaluator requires a non-null index_schema "
-         "to evaluate VectorRange predicates";
-  if (!index_schema_) {
-    return query::EvaluationResult(false);
-  }
-  auto index = index_schema_->GetIndex(predicate.GetAlias());
+  auto index = index_schema_.GetIndex(predicate.GetAlias());
   if (!index.ok()) {
     return query::EvaluationResult(false);
   }

@@ -681,6 +681,47 @@ class TestVectorRange(ValkeySearchTestCaseBase):
         keys = parse_result_keys(result)
         assert keys == {"doc:0", "doc:2"}
 
+    def test_vector_range_and_prefix(self):
+        """
+        Vector Range AND a prefix. One evaluator handles every candidate and
+        fetches each key's own text tree lazily; a prefix is answered from
+        that tree, where a term is answered from the shared postings. Each
+        candidate matches through a different word, so a tree left over from
+        the previous key gets the later ones wrong. The negated form is the
+        one that reaches the evaluator; without the negation the AND trusts
+        the prefix fetcher.
+        """
+        client = self.server.get_new_client()
+        self._create_hnsw_index(client, extra_fields=["body", "TEXT"])
+        extra = {
+            "doc:0": {"body": "alpha beta"},
+            "doc:1": {"body": "alpha gamma"},
+            "doc:2": {"body": "beta gamut"},
+            "doc:3": {"body": "alpha"},
+            "doc:4": {"body": "gamble"},
+        }
+        self._load_vector_data(client, extra_data=extra)
+
+        query_blob = float_to_bytes(QUERY_VEC)
+        # radius=5 matches doc:0,1,2; gam* matches doc:1,2,4.
+        result = self._search(
+            client, "idx",
+            "@vec:[VECTOR_RANGE 5 $blob] @body:gam*",
+            "PARAMS", "2", "blob", query_blob,
+            "NOCONTENT",
+        )
+        assert result[0] == 2, result
+        assert parse_result_keys(result) == {"doc:1", "doc:2"}
+
+        result = self._search(
+            client, "idx",
+            "@vec:[VECTOR_RANGE 5 $blob] -@body:gam*",
+            "PARAMS", "2", "blob", query_blob,
+            "NOCONTENT",
+        )
+        assert result[0] == 1, result
+        assert parse_result_keys(result) == {"doc:0"}
+
     # =================================================================
     # 6. Vector Range AND numeric filter
     # =================================================================

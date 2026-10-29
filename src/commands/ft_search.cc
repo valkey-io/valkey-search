@@ -64,11 +64,6 @@ void ReplyAvailNeighbors(ValkeyModuleCtx *ctx,
 
 void ReplyScoreTopLevel(ValkeyModuleCtx *ctx, float score);
 
-bool HasTextRelevance(const SearchCommand &parameters) {
-  return parameters.IsNonVectorQuery() ||
-         query::QueryHasTextPredicate(parameters);
-}
-
 void ReplyScore(ValkeyModuleCtx *ctx, ValkeyModuleString &score_as,
                 const indexes::Neighbor &neighbor) {
   ValkeyModule_ReplyWithString(ctx, &score_as);
@@ -353,7 +348,7 @@ class CursorSearchResult : public Cursor {
 
 SearchCommand::RowFormat SearchCommand::GetRowFormat() const {
   RowFormat format;
-  format.has_relevance = HasTextRelevance(*this);
+  format.has_relevance = ScoreIsRelevance();
   // The vector-distance sort key is numeric ('#').
   format.sort_by_vec_score =
       !IsNonVectorQuery() && sortby_parameter.has_value() && score_as &&

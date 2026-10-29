@@ -184,17 +184,18 @@ INSTANTIATE_TEST_SUITE_P(
             .parse_success = false,
             .expected_error_substr = "Unsupported QMA attribute",
         },
-        // Invalid weight values are rejected
         {
             .test_name = "weight_zero",
             .filter = "(@title:{dogs}) => { $weight: 0; }",
-            .parse_success = false,
-            .expected_error_substr = "positive",
+            .parse_success = true,
+            .expected_weight = 0.0f,
         },
+        // Invalid weight values are rejected
         {
             .test_name = "weight_negative",
             .filter = "(@title:{dogs}) => { $weight: -1.0; }",
             .parse_success = false,
+            .expected_error_substr = "non-negative",
         },
         {
             .test_name = "weight_non_numeric_abc",

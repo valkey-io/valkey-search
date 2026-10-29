@@ -384,7 +384,9 @@ TEST_F(SearchConverterTest, VectorRangeOutOfRangeEpsilonSearchesExactly) {
     params.has_vector_range =
         query::CountVectorRangePredicates(
             params.filter_parse_results.root_predicate.get()) > 0;
-    auto neighbors = query::SearchVectorRangeQuery(params);
+    query::QueryContext query_ctx(*index_schema_,
+                                  indexes::scoring::GetScorer(params.scorer));
+    auto neighbors = query::SearchVectorRangeQuery(params, query_ctx);
     ASSERT_TRUE(neighbors.ok()) << neighbors.status();
     std::vector<std::string> keys;
     for (const auto& neighbor : *neighbors) {

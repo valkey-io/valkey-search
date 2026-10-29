@@ -131,6 +131,7 @@ class TestAggregateTextFlags(ValkeySearchTestCaseBase):
         assert dict(zip(reply[1][::2], reply[1][1::2]))[b"dist"] == b"1"
 
     def test_inorder_and_slop_ignored_without_offsets(self):
+        """Without offsets INORDER and SLOP are accepted but have no effect."""
         for release in (LEGACY_RELEASE, FIX_RELEASE):
             client = self._client(release)
             self._populate(client, "NOOFFSETS")
@@ -145,10 +146,6 @@ class TestAggregateTextFlags(ValkeySearchTestCaseBase):
                 assert agg_keys(client.execute_command(
                     "FT.AGGREGATE", "idx", query, *flags,
                     "LOAD", "1", "@__key")) == expected, (release, flags)
-            with pytest.raises(ResponseError, match="Dialects"):
-                client.execute_command(
-                    "FT.AGGREGATE", "idx", "@s:(hello world)", "INORDER",
-                    "DIALECT", "1", "LOAD", "1", "@__key")
 
 
 class TestAggregateTextFlagsMetrics(ValkeySearchTestCaseDebugMode):

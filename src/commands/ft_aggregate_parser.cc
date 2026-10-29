@@ -69,8 +69,14 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
          vmsdk::ArgsIterator &itr) -> absl::Status {
         VMSDK_ASSIGN_OR_RETURN(auto count_string, itr.Get());
         itr.Next();
+        const bool after_groupby = std::any_of(
+            parameters.stages_.begin(), parameters.stages_.end(),
+            [](const auto &stage) {
+              return dynamic_cast<const GroupBy *>(stage.get()) != nullptr;
+            });
         if (vmsdk::ToStringView(count_string) == "*") {
           parameters.loadall_ = true;
+          parameters.loadall_after_groupby_ |= after_groupby;
           return absl::OkStatus();
         }
         uint32_t cnt{0};
@@ -89,11 +95,6 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
         // would overwrite the earlier entry's output name -- so it gets a
         // column of its own reading the same field.
         absl::flat_hash_set<size_t> claimed_columns;
-        const bool after_groupby = std::any_of(
-            parameters.stages_.begin(), parameters.stages_.end(),
-            [](const auto &stage) {
-              return dynamic_cast<const GroupBy *>(stage.get()) != nullptr;
-            });
         while (consumed < cnt) {
           std::string load;
           VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, load));
@@ -201,7 +202,8 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
               LoadField{.identifier = std::move(identifier),
                         .alias = std::move(alias),
                         .renamed = renamed,
-                        .after_groupby = after_groupby});
+                        .after_groupby = after_groupby,
+                        .before_loadall = !parameters.loadall_});
         }
         return absl::OkStatus();
       });

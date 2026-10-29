@@ -710,6 +710,36 @@ class TestHybridCompatibility(BaseCompatibilityTest):
         for load, tail in cases:
             self.hybrid(key_type, "@title:alpha", load=load, tail=tail)
 
+    # Unlike FT.AGGREGATE, which rejects it, FT.HYBRID accepts a LOAD after
+    # GROUPBY and ignores it.
+    def test_load_after_groupby(self, key_type):
+        super().setup_data("hybrid text extra", key_type)
+        groupby = ["GROUPBY", "1", "@color", "REDUCE", "COUNT", "0", "AS", "cnt"]
+        sortby = ["SORTBY", "2", "@color", "ASC"]
+        for load, late in [
+            (NO_LOAD, ["LOAD", "1", "@price"]),
+            (NO_LOAD, ["LOAD", "1", "@extra"]),
+            (NO_LOAD, ["LOAD", "*"]),
+            (NO_LOAD, ["LOAD", "1", "@__key"]),
+            (LOAD_ALL, ["LOAD", "1", "@price"]),
+        ]:
+            self.hybrid(key_type, "@title:alpha", load=load,
+                        tail=[*groupby, *late, *sortby])
+
+    # Under `LOAD *` a rename adds a column next to the field it reads, and a
+    # later clause overwrites an earlier one of the same output name.
+    def test_loadall_with_named_loads(self, key_type):
+        super().setup_data("hybrid text extra", key_type)
+        for load in [
+            ["LOAD", "*", "LOAD", "3", "@extra", "AS", "x"],
+            ["LOAD", "3", "@extra", "AS", "x", "LOAD", "*"],
+            ["LOAD", "3", "@extra", "AS", "price", "LOAD", "*"],
+            ["LOAD", "*", "LOAD", "3", "@extra", "AS", "price"],
+            ["LOAD", "*", "LOAD", "3", "@price", "AS", "p"],
+            ["LOAD", "*", "LOAD", "1", "@__key"],
+        ]:
+            self.hybrid(key_type, "@title:alpha", load=load)
+
     # -----------------------------------------------------------------
     # Defaults. These are the cases the sweeps above deliberately pin, so
     # that a disagreement about a default shows up here and only here.

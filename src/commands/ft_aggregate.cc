@@ -40,6 +40,69 @@ struct RealIndexInterface : public IndexInterface {
   RealIndexInterface(std::shared_ptr<IndexSchema> schema) : schema_(schema) {}
 };
 
+namespace {
+
+// After GROUPBY each record is a group, so a later LOAD has nothing to read.
+// RediSearch rejects it in FT.AGGREGATE and ignores it in FT.HYBRID.
+absl::Status CheckLoadAfterGroupby(const AggregateParameters &params) {
+  if (params.embedded_in_hybrid_) {
+    return absl::OkStatus();
+  }
+  const bool late_load =
+      params.loadall_after_groupby_ ||
+      std::any_of(params.loads_.begin(), params.loads_.end(),
+                  [](const LoadField &f) { return f.after_groupby; });
+  if (!late_load) {
+    return absl::OkStatus();
+  }
+  return VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 3, 0, "ft_aggregate_load_after_groupby",
+      [] {
+        return absl::InvalidArgumentError(
+            "LOAD cannot be applied after GROUPBY");
+      },
+      [] { return absl::OkStatus(); });
+}
+
+// Under `LOAD *` RediSearch applies the LOAD clauses in command order, each
+// writing the column of its output name, so a rename adds a column instead of
+// hiding the field it reads. Only a rename or `__key` makes the reply differ
+// from the legacy one, so only those commands reach the counter.
+absl::Status ResolveLoadsUnderLoadAll(AggregateParameters &params) {
+  const bool reply_differs = std::any_of(
+      params.loads_.begin(), params.loads_.end(), [](const LoadField &f) {
+        return !f.after_groupby && (f.renamed || f.identifier == "__key");
+      });
+  if (!reply_differs) {
+    return absl::OkStatus();
+  }
+  params.loadall_named_loads_ = VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 3, 0, "ft_aggregate_loadall_named_loads", [] { return true; },
+      [] { return false; });
+  if (!params.loadall_named_loads_) {
+    return absl::OkStatus();
+  }
+  for (const auto &load : params.loads_) {
+    if (load.after_groupby) {
+      continue;
+    }
+    if (load.identifier == "__key") {
+      params.load_key = true;
+    }
+    if (!load.renamed || !load.before_loadall) {
+      continue;
+    }
+    auto it = params.record_indexes_by_alias_.find(load.alias);
+    if (it != params.record_indexes_by_alias_.end() &&
+        params.record_info_by_index_[it->second].output_name_ == load.alias) {
+      params.record_info_by_index_[it->second].yields_to_loadall_ = true;
+    }
+  }
+  return absl::OkStatus();
+}
+
+}  // namespace
+
 absl::Status ManipulateReturnsClause(AggregateParameters &params) {
   // Figure out what fields actually need to be returned by the aggregation
   // operation. And modify the common search returns list accordingly
@@ -47,9 +110,15 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
   bool content = false;
   if (params.loadall_) {
     CHECK(params.return_attributes.empty());
-    return absl::OkStatus();
+    VMSDK_RETURN_IF_ERROR(CheckLoadAfterGroupby(params));
+    return ResolveLoadsUnderLoadAll(params);
   } else {
-    std::vector<LoadField> loads_to_process = params.loads_;
+    std::vector<LoadField> loads_to_process;
+    for (const auto &load : params.loads_) {
+      if (!(load.after_groupby && params.embedded_in_hybrid_)) {
+        loads_to_process.push_back(load);
+      }
+    }
 
     // A field named by a pipeline stage but absent from the LOAD clause still
     // has to be fetched. Redisearch loads such fields implicitly; without that
@@ -182,20 +251,7 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
     }
     // Checked after the loop so that only a command that is otherwise valid
     // reaches the counter.
-    const bool schema_load_after_groupby = std::any_of(
-        params.loads_.begin(), params.loads_.end(), [&](const LoadField &f) {
-          return f.after_groupby &&
-                 params.index_schema->GetIndex(f.identifier).ok();
-        });
-    if (schema_load_after_groupby) {
-      VMSDK_RETURN_IF_ERROR(VALKEY_SEARCH_COMPATIBILITY_FIX(
-          1, 3, 0, "ft_aggregate_load_after_groupby",
-          [] {
-            return absl::InvalidArgumentError(
-                "LOAD cannot be applied after GROUPBY");
-          },
-          [] { return absl::OkStatus(); }));
-    }
+    VMSDK_RETURN_IF_ERROR(CheckLoadAfterGroupby(params));
   }
   params.no_content = !content;
   return absl::OkStatus();

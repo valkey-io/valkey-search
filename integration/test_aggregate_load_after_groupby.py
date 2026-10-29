@@ -1,10 +1,14 @@
 """A LOAD clause after GROUPBY: each record is then a group, not a document,
-so there is nothing to load. A field outside the schema is rejected at every
-release, as before; a declared attribute is rejected from 1.3.0 on (see
-COMPATIBILITY.md) and silently ignored below."""
+so there is nothing to load. FT.AGGREGATE rejects it from 1.3.0 on (see
+COMPATIBILITY.md) and silently ignores it below, except a field outside the
+schema, which was always rejected unless the command also has `LOAD *`.
+FT.HYBRID ignores it at every release, as RediSearch does."""
+
+import struct
 
 import pytest
 import valkey
+from utils import IndexingTestHelper
 from valkey.client import Valkey
 from valkey_search_test_case import ValkeySearchTestCaseDebugMode
 from valkeytestframework.conftest import resource_port_tracker
@@ -56,6 +60,69 @@ class TestAggregateLoadAfterGroupby(ValkeySearchTestCaseDebugMode):
         client = self._client("1.3.0")
         assert self._ticks(client, *GROUPBY, "LOAD", "2", "@n", "@g") == (
             "LOAD cannot be applied after GROUPBY", 0)
+
+    def test_loadall_and_key_follow_the_schema_field_rule(self):
+        late_loads = [
+            [*GROUPBY, "LOAD", "*"],
+            ["LOAD", "*", *GROUPBY, "LOAD", "1", "@n"],
+            ["LOAD", "*", *GROUPBY, "LOAD", "1", "@extra"],
+            [*GROUPBY, "LOAD", "1", "@__key"],
+            [*GROUPBY, "LOAD", "*", "LOAD", "1", "@n"],
+        ]
+        sortby = ["SORTBY", "2", "@g", "ASC"]
+        groups = [2, [b"g", b"a", b"c", b"1"], [b"g", b"b", b"c", b"1"]]
+        for late in late_loads:
+            client = self._client("1.0.0")
+            assert self._ticks(client, *late, *sortby) == (groups, 1), late
+            client = self._client("1.3.0")
+            assert self._ticks(client, *late, *sortby) == (
+                "LOAD cannot be applied after GROUPBY", 0), late
+
+    def test_counter_ticks_once_per_command_across_cursor_pages(self):
+        client = self._client("1.0.0")
+        before = client.info("SEARCH").get(COUNTER, 0)
+        reply, cursor = client.execute_command(
+            "FT.AGGREGATE", "idx", "*", *GROUPBY, "LOAD", "1", "@n",
+            "WITHCURSOR", "COUNT", "1")
+        pages = 1
+        while cursor:
+            reply, cursor = client.execute_command(
+                "FT.CURSOR", "READ", "idx", cursor)
+            pages += 1
+        assert pages > 1
+        assert client.info("SEARCH").get(COUNTER, 0) - before == 1
+
+    def test_hybrid_ignores_a_load_after_groupby_at_every_release(self):
+        client = self._client("1.0.0")
+        client.execute_command(
+            "FT.CREATE", "h", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA",
+            "title", "TEXT", "price", "NUMERIC", "color", "TAG",
+            "vec", "VECTOR", "FLAT", "6", "TYPE", "FLOAT32", "DIM", "2",
+            "DISTANCE_METRIC", "L2")
+        for i in range(4):
+            client.execute_command(
+                "HSET", f"doc:{i}", "title", "alpha", "price", str(i),
+                "color", "red" if i < 2 else "blue", "extra", f"e{i}",
+                "vec", struct.pack("<2f", float(i), 0.0))
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "h")
+
+        def hybrid(*tail):
+            return client.execute_command(
+                "FT.HYBRID", "h", "SEARCH", "@title:alpha",
+                "VSIM", "@vec", "$q", "KNN", "2", "K", "10",
+                "GROUPBY", "1", "@color", "REDUCE", "COUNT", "0", "AS", "cnt",
+                *tail, "SORTBY", "2", "@color", "ASC",
+                "PARAMS", "2", "q", struct.pack("<2f", 0.0, 0.0))
+
+        for release in ("1.0.0", "1.3.0"):
+            client.execute_command(
+                "CONFIG", "SET", "search.emulate-release", release)
+            expected = hybrid()
+            for late in (["LOAD", "1", "@price"], ["LOAD", "1", "@extra"],
+                         ["LOAD", "*"], ["LOAD", "1", "@__key"]):
+                before = client.info("SEARCH").get(COUNTER, 0)
+                assert hybrid(*late) == expected, (release, late)
+                assert client.info("SEARCH").get(COUNTER, 0) == before
 
     def test_load_after_other_stages_still_loads(self):
         client = self._client("1.3.0")

@@ -40,6 +40,8 @@ FT.AGGREGATE <index-name> <query>
 
   Each `<field>` may be a declared attribute name (`@price`), the name of a field the index does not declare (`@color`), or, for a JSON index, a JSON path (`$.price`). A JSON path that resolves to a declared attribute is loaded as that attribute. A field that is not declared is read from the key; a key that does not have it gets no such field in its record.
 
+  `LOAD *` may be combined with named `LOAD` clauses. They apply in command order: every stored field is loaded under its own name (on a JSON index, `LOAD *` loads the whole document as one `$` field), a renamed field adds a column, and a later clause replaces an earlier one with the same output name. A `LOAD` after `GROUPBY` is rejected, since each record is then a group rather than a key.
+
   `AS <alias>` renames the loaded field: it is emitted under `<alias>` in the result and is referenced as `@<alias>` by later stages. Without an `AS` clause the field is emitted under the name given in the `LOAD` clause. An alias may reuse the name of a declared attribute, in which case it hides that attribute for the remainder of the pipeline. A single `LOAD` clause must not produce the same output name twice; doing so is an error.
 
   Honoring `AS` in the `LOAD` clause is a compatibility fix gated on `search.emulate-release` being `1.3.0` or greater; under an emulated release below that, `AS` is treated as an ordinary field name. Accepting a JSON path, or a field the index does not declare, as `<field>` is not gated, since before it was supported such a load simply failed. See [COMPATIBILITY.md](../../COMPATIBILITY.md) for details.

@@ -1,5 +1,7 @@
 """Command-wide blocking while multi-key writes update an index."""
 
+import os
+
 import pytest
 
 from valkey_search_test_case import ValkeySearchTestCaseDebugMode
@@ -8,10 +10,13 @@ from utils import IndexingTestHelper, run_in_thread
 
 
 class TestMultiKeyMutationBlocking(ValkeySearchTestCaseDebugMode):
-    def append_startup_args(self, args: dict[str, str]) -> dict[str, str]:
-        args = super().append_startup_args(args)
-        args["search.writer-threads"] = "1"
-        return args
+    def get_config_file_lines(self, testdir, port):
+        lines = super().get_config_file_lines(testdir, port)
+        search_module = f"loadmodule {os.environ['MODULE_PATH']}"
+        return [
+            line + " --writer-threads 1" if line.startswith(search_module) else line
+            for line in lines
+        ]
 
     @pytest.mark.parametrize(
         "command, expected_reply, remaining_documents",
@@ -80,10 +85,13 @@ class TestMultiKeyMutationBlocking(ValkeySearchTestCaseDebugMode):
 
 
 class TestPendingTransactionMutationBlocking(ValkeySearchTestCaseDebugMode):
-    def append_startup_args(self, args: dict[str, str]) -> dict[str, str]:
-        args = super().append_startup_args(args)
-        args["search.writer-threads"] = "2"
-        return args
+    def get_config_file_lines(self, testdir, port):
+        lines = super().get_config_file_lines(testdir, port)
+        search_module = f"loadmodule {os.environ['MODULE_PATH']}"
+        return [
+            line + " --writer-threads 2" if line.startswith(search_module) else line
+            for line in lines
+        ]
 
     def test_normal_write_waits_when_overwriting_pending_transaction(self):
         client = self.server.get_new_client()

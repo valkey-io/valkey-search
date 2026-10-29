@@ -175,7 +175,7 @@ absl::Status FanoutAliasExists(ValkeyModuleCtx *ctx, absl::string_view alias,
       auto schema_or = owner == expected_index_name
                            ? SchemaManager::Instance().GetIndexSchema(
                                  ValkeyModule_GetSelectedDb(ctx), *owner)
-                           : absl::NotFoundError(owner.value_or("no owner"));
+                           : absl::NotFoundError("");
       if (schema_or.ok()) {
         coordinator::IndexFingerprintVersion ifv;
         ifv.set_fingerprint((*schema_or)->GetFingerprint());
@@ -189,9 +189,9 @@ absl::Status FanoutAliasExists(ValkeyModuleCtx *ctx, absl::string_view alias,
       }
       // The alias was just committed on this node, so failing to resolve it
       // means the change did not take effect; never report that as success.
-      return absl::InternalError(absl::StrCat(
-          "Alias '", alias, "' did not resolve to '", expected_index_name,
-          "' after the update: ", schema_or.status().message()));
+      return absl::InternalError(absl::StrCat("Alias '", alias,
+                                              "' did not resolve to '",
+                                              expected_index_name, "'"));
     }
   }
   ValkeyModule_ReplyWithSimpleString(ctx, "OK");

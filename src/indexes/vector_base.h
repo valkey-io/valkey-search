@@ -663,6 +663,7 @@ class VectorBase : public IndexBase {
 
   int db_num_;
   int dimensions_;
+  uint32_t initial_cap_{0};
   std::string attribute_identifier_;
   InternedStringPtr interned_attribute_identifier_;
   bool normalize_{false};

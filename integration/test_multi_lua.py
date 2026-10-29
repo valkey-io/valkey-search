@@ -18,6 +18,12 @@ INDEX = "idx"
 OK = b"OK"
 QUEUED = b"QUEUED"
 FANOUT_NOT_SUPPORTED_ERR = "MULTI/EXEC or Lua script are not supported in CME mode unless the query targets a single-slot index on the local node."
+ALIAS_WRITE_NOT_SUPPORTED_ERR = "MULTI/EXEC or Lua script are not supported in CME mode."
+ALIAS_WRITES = [
+    ("FT.ALIASADD", "alias1", INDEX),
+    ("FT.ALIASUPDATE", "alias1", INDEX),
+    ("FT.ALIASDEL", "alias1"),
+]
 
 
 def _lua_call(cmd: str, *args: str) -> str:
@@ -192,6 +198,14 @@ class TestMultiLuaCME(ValkeySearchClusterTestCase):
         results = client.execute_command("EXEC")
         assert results[1] == [1, key2.encode(), [b'price', b'77']]
 
+        # Alias writes need the consistency fanout, so they are REJECTED
+        for args in ALIAS_WRITES:
+            assert client.execute_command("MULTI") == OK
+            assert client.execute_command(*args) == QUEUED
+            results = client.execute_command("EXEC")
+            assert isinstance(results[0], ResponseError) and ALIAS_WRITE_NOT_SUPPORTED_ERR in str(results[0])
+        assert client.execute_command("FT.ALIASLIST") == []
+
         # FT.DROPINDEX in MULTI/EXEC
         assert client.execute_command("MULTI") == OK
         assert client.execute_command("FT.DROPINDEX", INDEX) == QUEUED
@@ -275,6 +289,13 @@ class TestMultiLuaCME(ValkeySearchClusterTestCase):
         script = "redis.call('HSET', KEYS[1], ARGV[1], ARGV[2]) return redis.call('FT.SEARCH', ARGV[3], ARGV[4], 'LOCALONLY')"
         result = client.execute_command("EVAL", script, "1", key2, "price", "88", INDEX, "@price:[88 88]")
         assert result == [1, key2.encode(), [b'price', b'88']]
+
+        # Alias writes in Lua are REJECTED
+        for args in ALIAS_WRITES:
+            with pytest.raises(ResponseError) as exc_info:
+                client.execute_command("EVAL", _lua_call(*args), "0")
+            assert ALIAS_WRITE_NOT_SUPPORTED_ERR in str(exc_info.value)
+        assert client.execute_command("FT.ALIASLIST") == []
 
         # FT.DROPINDEX in Lua (skips fanout, succeeds)
         assert client.execute_command("EVAL", _lua_call("FT.DROPINDEX", INDEX), "0") == OK

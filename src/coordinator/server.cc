@@ -245,13 +245,10 @@ void Service::SearchOneArm(grpc::CallbackServerContext *context,
         request, context, search_operation.get()));
     search_operation->multi_arm = multi_arm;
 
-    // perform index consistency check (index fingerprint/version), required
-    auto schema = SchemaManager::Instance()
-                      .GetIndexSchema(search_operation->db_num,
-                                      search_operation->index_schema_name)
-                      .value();
+    // Reuse the already-resolved schema; re-resolving a repointed alias here
+    // could crash via .value().
     VMSDK_RETURN_IF_ERROR(ToAbslStatus(PerformIndexConsistencyCheck(
-        request.index_fingerprint_version(), schema)));
+        request.index_fingerprint_version(), search_operation->index_schema)));
 
     if (request.enable_consistency()) {
       // Perform slot consistency check
@@ -400,7 +397,31 @@ Service::GenerateInfoResponse(
     return std::make_pair(error_status, response);
   }
   auto status_or_schema =
-      SchemaManager::Instance().GetIndexSchema(db_num, index_name);
+      [&]() -> absl::StatusOr<std::shared_ptr<IndexSchema>> {
+    switch (request.name_lookup()) {
+      case coordinator::NAME_LOOKUP_ALIAS_ONLY: {
+        auto owner =
+            SchemaManager::Instance().GetAliasOwner(db_num, index_name);
+        if (!owner.has_value()) {
+          return absl::NotFoundError(
+              absl::StrCat("Alias ", index_name, " not found"));
+        }
+        return SchemaManager::Instance().GetIndexSchema(db_num, *owner);
+      }
+      case coordinator::NAME_LOOKUP_INDEX_ONLY: {
+        auto schema =
+            SchemaManager::Instance().GetIndexSchema(db_num, index_name);
+        // A real index always takes the name over an alias.
+        if (schema.ok() && (*schema)->GetName() != index_name) {
+          return absl::NotFoundError(
+              absl::StrCat("Index ", index_name, " not found"));
+        }
+        return schema;
+      }
+      default:
+        return SchemaManager::Instance().GetIndexSchema(db_num, index_name);
+    }
+  }();
   if (!status_or_schema.ok()) {
     response.set_exists(false);
     response.set_index_name(index_name);

@@ -19,6 +19,7 @@
 #include "google/protobuf/text_format.h"
 #include "gtest/gtest.h"
 #include "src/coordinator/metadata_manager.h"
+#include "src/version.h"
 #include "testing/common.h"
 #include "testing/coordinator/common.h"
 #include "vmsdk/src/testing_infra/module.h"
@@ -346,7 +347,7 @@ TEST_F(SchemaManagerTest, TestSaveIndexesBeforeRDB) {
       CreateIndexSchema(index_name_, &fake_ctx_, nullptr, {}, db_num_).value();
   ValkeyModuleIO *fake_rdb = reinterpret_cast<ValkeyModuleIO *>(0xDEADBEEF);
   EXPECT_CALL(*kMockValkeyModule, SaveUnsigned(fake_rdb, testing::_)).Times(0);
-  EXPECT_CALL(*schema, RDBSave(testing::_)).Times(0);
+  EXPECT_CALL(*schema, RDBSave(testing::_, testing::_)).Times(0);
   SafeRDB fake_safe_rdb(fake_rdb);
   VMSDK_EXPECT_OK(SchemaManager::Instance().SaveIndexes(
       &fake_ctx_, &fake_safe_rdb, VALKEYMODULE_AUX_BEFORE_RDB));
@@ -358,7 +359,7 @@ TEST_F(SchemaManagerTest, TestSaveIndexesAfterRDB) {
   auto schema =
       CreateIndexSchema(index_name_, &fake_ctx_, nullptr, {}, db_num_).value();
   ValkeyModuleIO *fake_rdb = reinterpret_cast<ValkeyModuleIO *>(0xDEADBEEF);
-  EXPECT_CALL(*schema, RDBSave(testing::_))
+  EXPECT_CALL(*schema, RDBSave(testing::_, testing::_))
       .WillOnce(testing::Return(absl::OkStatus()));
   SafeRDB fake_safe_rdb(fake_rdb);
   VMSDK_EXPECT_OK(SchemaManager::Instance().SaveIndexes(
@@ -678,6 +679,23 @@ TEST_P(OnSwapDBCallbackTest, OnSwapDBCallback) {
   EXPECT_EQ(test_index_schema->db_num_, expected_dbnum != -1
                                             ? expected_dbnum
                                             : test_case.index_schema_db_num);
+}
+
+TEST_F(SchemaManagerTest, GetMinVersionReflectsAliases) {
+  SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
+      &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/false));
+  VMSDK_EXPECT_OK(SchemaManager::Instance()
+                      .CreateIndexSchema(&fake_ctx_, test_index_schema_proto_)
+                      .status());
+  auto min_version_before = SchemaManager::Instance().GetMinVersion();
+  VMSDK_EXPECT_OK(min_version_before);
+  EXPECT_NE(*min_version_before, kRelease13);
+
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(db_num_, "idx_alias", index_name_));
+  auto min_version_after = SchemaManager::Instance().GetMinVersion();
+  VMSDK_EXPECT_OK(min_version_after);
+  EXPECT_EQ(*min_version_after, kRelease13);
 }
 
 }  // namespace valkey_search

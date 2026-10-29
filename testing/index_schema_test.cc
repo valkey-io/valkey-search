@@ -1416,7 +1416,7 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
     VMSDK_EXPECT_OK(
         index_schema->AddIndex("tag_attribute", "tag_identifier", tag_index));
 
-    VMSDK_EXPECT_OK(index_schema->RDBSave(&rdb_stream));
+    VMSDK_EXPECT_OK(index_schema->RDBSave(&rdb_stream, {}));
   }
 
   // Load the saved index schema and validate
@@ -1556,7 +1556,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
                                              interned_key, std::move(data));
     }
 
-    VMSDK_EXPECT_OK(index_schema->RDBSave(&rdb_stream));
+    VMSDK_EXPECT_OK(index_schema->RDBSave(&rdb_stream, {}));
   }
 
   // Load the saved index schema and validate with vector sharing active
@@ -1667,7 +1667,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
       EXPECT_EQ(result.value(), indexes::RecordResult::kAdded);
     }
 
-    VMSDK_EXPECT_OK(index_schema->RDBSave(&rdb_stream));
+    VMSDK_EXPECT_OK(index_schema->RDBSave(&rdb_stream, {}));
   }
 
   // Load the saved index schema and validate text index restoration
@@ -2642,7 +2642,7 @@ TEST_F(IndexSchemaRDBTest, DrainMutationQueueOnSaveEnabled) {
   std::thread rdb_saver_thread(
       [index_schema, &rdb_stream, &rdb_save_started, &rdb_save_completed]() {
         rdb_save_started.store(true);
-        auto save_result = index_schema->RDBSave(&rdb_stream);
+        auto save_result = index_schema->RDBSave(&rdb_stream, {});
         rdb_save_completed.store(save_result.ok());
       });
 
@@ -2714,7 +2714,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
                                              interned_key, std::move(data));
     }
     EXPECT_EQ(hnsw_index->GetTrackedKeyCount(), num_vectors);
-    VMSDK_EXPECT_OK(index_schema->RDBSave(&rdb_stream_step1));
+    VMSDK_EXPECT_OK(index_schema->RDBSave(&rdb_stream_step1, {}));
     LOG(INFO) << "✓ Step 1 completed - saved " << num_vectors
               << " vectors to RDB";
   }
@@ -2940,7 +2940,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
     }
 
     EXPECT_EQ(hnsw_index->GetTrackedKeyCount(), num_vectors);
-    VMSDK_EXPECT_OK(index_schema->RDBSave(&rdb_stream_step4));
+    VMSDK_EXPECT_OK(index_schema->RDBSave(&rdb_stream_step4, {}));
     LOG(INFO) << "✓ Step 4 completed - saved mixed index with " << num_vectors
               << " records";
   }
@@ -3214,7 +3214,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
     EXPECT_EQ(hnsw_index2->GetTrackedKeyCount(), additional_index_vectors);
     EXPECT_EQ(flat_index->GetTrackedKeyCount(), additional_index_vectors);
 
-    VMSDK_EXPECT_OK(index_schema->RDBSave(&rdb_stream_multi));
+    VMSDK_EXPECT_OK(index_schema->RDBSave(&rdb_stream_multi, {}));
     LOG(INFO) << "✓ Steps 6-7 completed - saved 3 indexes with "
               << additional_index_vectors << " vectors each";
   }
@@ -3871,6 +3871,21 @@ TEST(IndexSchemaMinVersionTest, LowPrecisionDominatesOtherContributors) {
   attr->set_alias("t");
   attr->set_identifier("t");
   attr->mutable_index()->mutable_text_index();
+  EXPECT_EQ(MinVersionOf(schema), kRelease13);
+}
+
+// An index with an alias requires 1.3.0, same as a FILTER: an older module
+// does not know the aliases field, so it would silently drop them on load.
+TEST(IndexSchemaMinVersionTest, AliasRequires13) {
+  data_model::IndexSchema schema;
+  schema.set_name("idx");
+  auto *attr = schema.add_attributes();
+  attr->set_alias("t");
+  attr->set_identifier("t");
+  attr->mutable_index()->mutable_text_index();
+  auto *alias = schema.add_aliases();
+  alias->set_name("idx_alias");
+  alias->set_epoch(1);
   EXPECT_EQ(MinVersionOf(schema), kRelease13);
 }
 

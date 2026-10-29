@@ -62,6 +62,7 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::Create(
                           attribute_identifier, attribute_data_type, db_num),
         vmsdk::DestructByMainThread<VectorFlat<T>>{});
     index->Init(vector_index_proto.distance_metric());
+    index->initial_cap_ = vector_index_proto.initial_cap();
     index->algo_ =
         std::make_unique<FlatIndex>(index->space_.get(), index->normalize_,
                                     vector_index_proto.initial_cap());
@@ -109,6 +110,7 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::LoadFromRDB(
                           db_num),
         vmsdk::DestructByMainThread<VectorFlat<T>>{});
     index->Init(vector_index_proto.distance_metric());
+    index->initial_cap_ = vector_index_proto.initial_cap();
     index->algo_ =
         std::make_unique<FlatIndex>(index->space_.get(), index->normalize_);
     RDBChunkInputStream input(std::move(iter));

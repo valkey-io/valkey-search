@@ -66,6 +66,7 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::Create(
                           attribute_identifier, attribute_data_type, db_num),
         vmsdk::DestructByMainThread<VectorHNSW<T>>{});
     index->Init(vector_index_proto.distance_metric());
+    index->initial_cap_ = vector_index_proto.initial_cap();
     const auto &hnsw_proto = vector_index_proto.hnsw_algorithm();
 
     index->algo_ = std::make_unique<HNSWIndex>(
@@ -105,6 +106,7 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
                           db_num),
         vmsdk::DestructByMainThread<VectorHNSW<T>>{});
     index->Init(vector_index_proto.distance_metric());
+    index->initial_cap_ = vector_index_proto.initial_cap();
 
     index->algo_ = std::make_unique<HNSWIndex>();
     // initial_cap needs to be provided to retain the original initial_cap if

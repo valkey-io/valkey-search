@@ -531,7 +531,7 @@ std::unique_ptr<data_model::Index> VectorBase::ToProto() const {
   vector_index->set_normalize(normalize_);
   vector_index->set_distance_metric(distance_metric_);
   vector_index->set_dimension_count(dimensions_);
-  vector_index->set_initial_cap(GetCapacity());
+  vector_index->set_initial_cap(initial_cap_);
   ToProtoImpl(vector_index.get());
   index_proto->set_allocated_vector_index(vector_index.release());
   return index_proto;

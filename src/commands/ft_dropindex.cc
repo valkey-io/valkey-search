@@ -49,6 +49,7 @@ class DropConsistencyCheckFanoutOperation
     coordinator::InfoIndexPartitionRequest req;
     req.set_db_num(db_num_);
     req.set_index_name(index_name_);
+    req.set_name_lookup(coordinator::NAME_LOOKUP_INDEX_ONLY);
     *req.mutable_index_fingerprint_version() = expected_fingerprint_version_;
     return req;
   }
@@ -118,8 +119,11 @@ absl::Status FTDropIndexCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
   VMSDK_RETURN_IF_ERROR(AclPrefixCheck(ctx, acl::KeyAccess::kWrite,
                                        index_schema->GetKeyPrefixes()));
 
+  // Use the resolved real name so that dropping via an alias works correctly
+  // and alias cleanup in RemoveIndexSchemaInternal matches by real name.
+  const std::string real_name(index_schema->GetName());
   VMSDK_RETURN_IF_ERROR(SchemaManager::Instance().RemoveIndexSchema(
-      ValkeyModule_GetSelectedDb(ctx), index_schema_name));
+      ValkeyModule_GetSelectedDb(ctx), real_name));
 
   // directly handle reply in standalone mode
   // let fanout operation handle reply in cluster mode
@@ -130,9 +134,10 @@ absl::Status FTDropIndexCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
       ValkeySearch::Instance().UsingCoordinator() && !is_loading &&
       !inside_multi_exec) {
     unsigned timeout_ms = options::GetFTInfoTimeoutMs().GetValue();
+    // Use the resolved real name so the fanout reaches other nodes correctly
+    // even when the user supplied an alias.
     auto op = new DropConsistencyCheckFanoutOperation(
-        ValkeyModule_GetSelectedDb(ctx), std::string(index_schema_name),
-        timeout_ms);
+        ValkeyModule_GetSelectedDb(ctx), real_name, timeout_ms);
     op->StartOperation(ctx);
   } else {
     if (is_loading || inside_multi_exec) {

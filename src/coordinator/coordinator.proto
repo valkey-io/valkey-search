@@ -292,6 +292,15 @@ message InfoIndexPartitionRequest {
   bool require_consistency = 3;
   IndexFingerprintVersion index_fingerprint_version = 4;
   uint64 slot_fingerprint = 5;
+  NameLookup name_lookup = 6;
+}
+
+// How InfoIndexPartitionRequest.index_name resolves when an alias shares its
+// name with an index.
+enum NameLookup {
+  NAME_LOOKUP_ANY = 0;
+  NAME_LOOKUP_INDEX_ONLY = 1;
+  NAME_LOOKUP_ALIAS_ONLY = 2;
 }
 
 enum FanoutErrorType {

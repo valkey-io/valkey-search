@@ -70,24 +70,28 @@ struct TermScoringParams {
 // score through QueryContext::Probe.
 class SingleKeyTermIterator final : public TextIterator {
  public:
+  // A word's position map and the field mask it was admitted under.
+  struct PositionMap {
+    const FlatPositionMap* map;
+    FieldMaskPredicate mask;
+  };
   using PositionMaps =
-      absl::InlinedVector<const FlatPositionMap*, kWordExpansionInlineCapacity>;
+      absl::InlinedVector<PositionMap, kWordExpansionInlineCapacity>;
 
   // Primes at the first position of `key` that falls in `query_field_mask`.
   // `key` must outlive the iterator; `maps` is only read.
-  SingleKeyTermIterator(const Key& key,
-                        absl::Span<const FlatPositionMap* const> maps,
+  SingleKeyTermIterator(const Key& key, absl::Span<const PositionMap> maps,
                         FieldMaskPredicate query_field_mask)
       : query_field_mask_(query_field_mask) {
     Reset(key, [maps](auto&& fn) {
-      for (const FlatPositionMap* map : maps) fn(*map);
+      for (const PositionMap& entry : maps) fn(*entry.map, entry.mask);
     });
   }
   // Empty iterator for embedding; Reset() before use.
   explicit SingleKeyTermIterator(FieldMaskPredicate query_field_mask);
 
   // Re-targets the iterator at `key`. `for_each_map(fn)` must call
-  // `fn(const FlatPositionMap&)` once per word on `key`; a template so the
+  // `fn(map, admitted_mask)` once per word on `key`; a template so the
   // entries-fetcher hot path passes a lambda over its active cursors with no
   // intermediate array and no indirect call. Reuses the inlined storage, so a
   // reset allocates only when the word expansion exceeds the inline capacity.
@@ -96,8 +100,9 @@ class SingleKeyTermIterator final : public TextIterator {
     ClearPositionState();
     key_ = &key;
     done_ = false;
-    for_each_map([this](const FlatPositionMap& map) {
+    for_each_map([this](const FlatPositionMap& map, FieldMaskPredicate mask) {
       pos_iterators_.emplace_back(map);
+      admitted_masks_.push_back(mask);
       // Populate the position heap.
       InsertValidPositionIterator(pos_iterators_.size() - 1);
     });
@@ -152,6 +157,9 @@ class SingleKeyTermIterator final : public TextIterator {
   bool done_{true};
   absl::InlinedVector<PositionIterator, kWordExpansionInlineCapacity>
       pos_iterators_;
+  // Index-aligned with pos_iterators_.
+  absl::InlinedVector<FieldMaskPredicate, kWordExpansionInlineCapacity>
+      admitted_masks_;
   std::optional<PositionRange> current_position_;
   FieldMaskPredicate current_field_mask_{0ULL};
   // Pending queue: heap of valid iterators not currently being processed.
@@ -267,6 +275,11 @@ class TermIterator : public TextIterator {
   bool FindMinimumValidKey();
   void InsertValidKeyIterator(size_t idx);
   void ClearKeyState();
+  FieldMaskPredicate WordFieldMask(size_t idx) const {
+    return ((idx == 0 && has_original_) || stem_field_mask_ == 0)
+               ? query_field_mask_
+               : stem_field_mask_;
+  }
 };
 
 }  // namespace valkey_search::indexes::text

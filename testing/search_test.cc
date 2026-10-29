@@ -2315,6 +2315,63 @@ TEST_F(ScoreTextQueryTestBase, UnscopedStemDoesNotReachNoStemField) {
   }
 }
 
+// "runs" is in stemmed title and NOSTEM body; only title may satisfy "run".
+TEST_F(ScoreTextQueryTestBase,
+       StemInflectionPositionsDoNotLeakFromNoStemField) {
+  auto schema = BuildTwoTextFieldSchema({
+      {"d1", "he runs", "runs fast"},
+      {"d2", "he runs fast", ""},
+      {"d3", "runs slow", "runs fast"},
+  });
+  const auto *scorer =
+      indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std);
+  auto matches = [&](const std::string &key, const TextParsingOptions &opts) {
+    // The negated range makes the prefilter evaluate the text children.
+    const std::string filter = "-@rating:[500 600] (run fast)";
+    auto parsed = FilterParser(*schema, filter, opts).Parse();
+    EXPECT_TRUE(parsed.ok()) << parsed.status();
+    query::QueryContext query_ctx(*schema, scorer);
+    indexes::PrefilterEvaluator evaluator(query_ctx, parsed->query_operations,
+                                          *schema);
+    vmsdk::ReaderMutexLock lock(&schema->GetTimeSlicedMutex());
+    return evaluator.Evaluate(*parsed->root_predicate,
+                              StringInternStore::Intern(key));
+  };
+  const TextParsingOptions slop0{.slop = 0};
+  const TextParsingOptions inorder{.inorder = true};
+  EXPECT_FALSE(matches("d1", slop0));
+  EXPECT_FALSE(matches("d1", inorder));
+  EXPECT_TRUE(matches("d2", slop0));
+  EXPECT_TRUE(matches("d2", inorder));
+  EXPECT_FALSE(matches("d3", slop0));
+  EXPECT_FALSE(matches("d3", inorder));
+}
+
+TEST_F(ScoreTextQueryTestBase, StemInflectionIteratorSkipsNoStemPositions) {
+  auto schema = BuildTwoTextFieldSchema(
+      {{"d1", "he runs", "runs fast"}, {"d2", "runs slow", "runs fast"}});
+  TextParsingOptions options{};
+  auto parsed = FilterParser(*schema, "run", options).Parse();
+  ASSERT_TRUE(parsed.ok()) << parsed.status();
+  auto *text_pred =
+      dynamic_cast<query::TextPredicate *>(parsed->root_predicate.get());
+  ASSERT_NE(text_pred, nullptr);
+  vmsdk::ReaderMutexLock lock(&schema->GetTimeSlicedMutex());
+  const FieldMaskPredicate title_mask =
+      schema->GetTextIndexSchema()->GetStemTextFieldMask();
+  for (const char *key : {"d1", "d2"}) {
+    auto iter = text_pred->BuildTextIterator(
+        schema->GetTextIndexSchema()->GetTextIndex(), text_pred->GetFieldMask(),
+        /*require_positions=*/true, /*or_weight_multiplier=*/1.0f);
+    ASSERT_TRUE(iter->SeekForwardKey(StringInternStore::Intern(key))) << key;
+    std::vector<FieldMaskPredicate> masks;
+    for (; !iter->DonePositions(); iter->NextPosition()) {
+      masks.push_back(iter->CurrentFieldMask());
+    }
+    EXPECT_THAT(masks, ::testing::ElementsAre(title_mask)) << key;
+  }
+}
+
 // The recompute path walks the same grouped ScoreNode, so field-scoped
 // admission must agree with the extra-step path.
 TEST_F(ScoreTextQueryTestBase, FieldScopedRecomputePathAgrees) {

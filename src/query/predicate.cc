@@ -82,7 +82,7 @@ bool ProbePostings(const indexes::text::TextIndexSchema &schema,
   };
   auto value = lock_word ? schema.WithWordLock(*lock_word, get) : get();
   if (!value) return false;
-  if (require_positions) maps.push_back(value->map);
+  if (require_positions) maps.push_back({value->map, field_mask});
   return true;
 }
 

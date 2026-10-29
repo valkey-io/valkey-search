@@ -1,4 +1,4 @@
-import itertools, valkey, json, struct, random
+import itertools, math, valkey, json, struct, random
 
 ### Reusable Data ###
 #
@@ -17,6 +17,48 @@ TEXT_SCHEMA = {
     'tag': ['color'],
     'numeric': ['price']
 }
+
+# Scoring compatibility configuration
+SCORING_SCHEMA = {
+    'text': ['title', 'body'],
+    'tag': ['t1'],
+    'numeric': ['n1'],
+    'vector': ['v1'],
+}
+
+SCORING_DATASETS = {
+    'scoring': {'schema': SCORING_SCHEMA},
+}
+
+SCORING_NUM_DOCS = 500
+
+# dt as a share of N so it tracks N; rounded dt values must stay distinct
+SCORING_DT_SHARES = [(6, 0.90), (10, 0.50), (14, 0.25), (18, 0.12),
+                     (22, 0.06), (26, 0.03), (30, 0.014), (34, 0.006)]
+# (term count, exact dt) per tier; must sum to the pool size
+SCORING_DT_TIERS = [(count, round(share * SCORING_NUM_DOCS))
+                    for count, share in SCORING_DT_SHARES] + [(40, 1)]
+
+# weighted low, since the BM25 TF term saturates and the high end buys little
+SCORING_TF_CHOICES = [1, 1, 1, 2, 2, 3, 4, 6]
+# doc_len floor, skewed so short docs exist; planted terms may already exceed it
+SCORING_DOC_LEN_CHOICES = [10, 10, 16, 16, 25, 40, 70, 140]
+# per-doc sampling bias: spreads pool terms per doc, and so doc_len and the norm
+SCORING_DOC_WEIGHTS = [0.2, 0.4, 0.7, 1.0, 1.5, 2.5, 4.0]
+SCORING_FILLER_TERMS = 60
+# default English stop list, shared by both engines; "stopwords" mixes it into filler
+SCORING_STOPWORDS = [
+    "a", "is", "the", "an", "and", "are", "as", "at", "be", "but", "by", "for",
+    "if", "in", "into", "it", "no", "not", "of", "on", "or", "such", "that",
+    "their", "then", "there", "these", "they", "this", "to", "was", "will", "with",
+]
+SCORING_CROSS_FIELD_RATE = 0.2
+# planted frequencies, summing to N
+SCORING_TAG_FREQS = {"amber": 180, "azure": 105, "cerise": 80, "cobalt": 55,
+                     "indigo": 40, "ochre": 25, "sepia": 12, "teal": 3}
+SCORING_VECTOR_CLUSTERS = 8
+# cycled per doc; None omits the field, "abc" is unparsable as a score
+SCORING_BOOSTS = [2.0, 0.25, -1.0, None, "abc"]
 
 TEXT_DATASETS = {
     'pure text': {
@@ -112,6 +154,28 @@ TEXT_DATASETS = {
         }
     },
     # ,.<>{}[]"':;!@#$%^&*()-+=~
+    # Words joined by a Unicode (non-ASCII) whitespace character. Querying one
+    # half tells whether the engine splits on that character.
+    'unicode whitespace': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                'apple\u00a0banana',   # U+00A0 NO-BREAK SPACE
+                'chair\u00a0desk',
+                'music\u2009movie',    # U+2009 THIN SPACE
+                'river\u202fmountain', # U+202F NARROW NO-BREAK SPACE
+                'castle\u3000garden',  # U+3000 IDEOGRAPHIC SPACE
+                'winter\u2028summer',  # U+2028 LINE SEPARATOR
+            ],
+            'body': [
+                'bright\u00a0morning',
+                'silver\u2009coin',
+                'green\u3000forest',
+            ],
+            'color': ['red', 'blue', 'green'],
+            'price': (0, 10)
+        }
+    },
     'punctuation': {
         'schema': TEXT_SCHEMA,
         'field_values': {
@@ -178,6 +242,451 @@ TEXT_DATASETS = {
     }
 }
 
+# Multi-language text datasets for compatibility testing.
+#
+# These datasets are used by the compat suite to generate random queries that
+# should produce identical results between Valkey Search and RediSearch. To
+# achieve this, the vocabulary is curated to avoid known behavioral differences:
+#
+# Divergences handled at the vocab level:
+#
+# 1. Snowball 3.0.1 vs 2.1.0 (Dutch here; English differs too, see
+#    known_differences.md 1.8)
+#    Valkey uses Kraaij-Pohlmann which strips ge-/be-/ver- prefixes. RediSearch
+#    is observed to use Porter-style stemming which does not strip these.
+#    Excluded specific Dutch terms whose K-P stems collide with other dataset
+#    terms (e.g. geschilderd, schilder, gebouwd).
+#
+# 2. CaseMap::utf8Fold decomposition (affects all languages)
+#    Valkey's ICU case folding converts ß→ss, ﬁ→fi, and similar. RediSearch is
+#    observed to use simple lowercasing which preserves these characters. Avoided
+#    characters like ß and ligatures in all language datasets.
+#
+# 3. Default stop words (affects all languages)
+#    Valkey applies per-language Lucene stop words by default. RediSearch is
+#    observed to only filter English stop words. Avoided any term that appears
+#    in the language's Lucene stop word list.
+#
+# 4. NOSTEM query-time stemming bypass (affects all languages)
+#    When running bare (non-field) queries against RediSearch on NOSTEM fields,
+#    stemmed matches are observed (suggesting query-time stemming bypasses
+#    NOSTEM). Valkey strictly enforces NOSTEM at both index and query time.
+#    Avoided vocab pairs where stem(term_A) == term_B within the same dataset
+#    (e.g. kekuatan stems to kuat in Indonesian).
+#
+# 5. Fuzzy search over stemmed forms (affects all languages, handled at generation time)
+#    When running fuzzy queries against RediSearch, matches are observed against
+#    stemmed forms of indexed terms in addition to originals. Valkey only matches
+#    against original forms. The fuzzy generator filters vocab at generation time
+#    to words whose 1-char mutations cannot land within edit-distance 1 of any
+#    stem (see _compute_safe_fuzzy_vocab in generate_text.py).
+#
+# Each dataset includes vocabulary that exercises language-specific features:
+# - Diacritics and special characters for normalization/case-folding
+# - Inflected forms to exercise Snowball stemming
+# - Script-specific characters where applicable
+# Word lists are ~30 words per field, organized by semantic category,
+# with no overlap between title and body fields.
+TEXT_DATASETS_MULTILANG = {
+    'french text': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                # food/drink — accents, cedilla
+                'café', 'crème', 'gâteau', 'pâtisserie', 'bière', 'fromage',
+                # places — circumflex, accents
+                'château', 'hôpital', 'forêt', 'île', 'cathédrale', 'musée',
+                # people/roles — accents, ligature
+                'médecin', 'employé', 'étudiant', 'professeur', 'ingénieur', 'boulanger',
+                # nature
+                'rivière', 'montagne', 'lumière', 'étoile', 'nuage', 'tempête',
+                # verbs (inflected — exercises stemmer)
+                'mangeons', 'travaillé', 'chercher', 'finissent', 'commencé', 'découvrir',
+            ],
+            'body': [
+                # objects — accents
+                'fenêtre', 'clé', 'vélo', 'échelle', 'réfrigérateur', 'bibliothèque',
+                # animals
+                'chèvre', 'léopard', 'hérisson', 'écureuil', 'pélican', 'girafe',
+                # abstract — accents, circumflex
+                'liberté', 'égalité', 'fraternité', 'intérêt', 'beauté', 'vérité',
+                # actions (inflected)
+                'courir', 'nager', 'réfléchir', 'construire', 'détruire', 'répondre',
+                # descriptors — accents
+                'rapide', 'lent', 'bruyant', 'silencieux', 'chaud', 'froid',
+            ],
+            'color': ['rouge', 'bleu', 'vert', 'jaune', 'noir',
+                      'blanc', 'violet', 'orange', 'rose', 'brun'],
+            'price': (0, 50)
+        }
+    },
+    'german text': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                # places/buildings — umlauts, compounds
+                'Gebäude', 'Brücke', 'Universität', 'Küche', 'Bücherei', 'Rathaus',
+                # transport — umlauts, compounds
+                'Flughafen', 'Führerschein', 'Fahrrad', 'Schiff', 'Eisenbahn', 'Autobahn',
+                # people — umlauts
+                'Mädchen', 'Ärzte', 'Schüler', 'Händler', 'Bäcker', 'Künstler',
+                # nature — umlauts
+                'Vögel', 'Bäume', 'Flüsse', 'Gärten', 'Wälder', 'Blüten',
+                # verbs (inflected)
+                'arbeiten', 'geöffnet', 'verstehen', 'gewünscht', 'übersetzen', 'anfangen',
+            ],
+            'body': [
+                # objects — umlauts
+                'Schlüssel', 'Kühlschrank', 'Gemälde', 'Rätsel', 'Bücher', 'Möbel',
+                # food
+                'Käse', 'Brötchen', 'Würstchen', 'Knödel', 'Gemüse', 'Lebkuchen',
+                # abstract — umlauts
+                'Stärke', 'Schönheit', 'Fähigkeit', 'Höflichkeit', 'Gemütlichkeit', 'Freiheit',
+                # actions (inflected)
+                'laufen', 'schwimmen', 'gekämpft', 'geändert', 'zerstört', 'gefahren',
+                # descriptors — umlauts
+                'schnell', 'langsam', 'böse', 'schön', 'grün', 'müde',
+            ],
+            'color': ['rot', 'blau', 'grün', 'gelb', 'schwarz',
+                      'lila', 'orange', 'rosa', 'braun', 'golden'],
+            'price': (0, 50)
+        }
+    },
+    'spanish text': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                # places — tildes, accents
+                'ciudad', 'montaña', 'señal', 'estación', 'río', 'jardín',
+                # people — ñ, accents
+                'niño', 'señor', 'compañero', 'médico', 'músico', 'capitán',
+                # food
+                'manzana', 'plátano', 'piña', 'limón', 'naranja', 'cereza',
+                # nature — accents
+                'pájaro', 'corazón', 'árbol', 'océano', 'volcán', 'relámpago',
+                # verbs (inflected — exercises stemmer)
+                'corriendo', 'trabajaron', 'comiendo', 'vivieron', 'pensando', 'escribió',
+            ],
+            'body': [
+                # objects — accents
+                'teléfono', 'lámpara', 'vehículo', 'periódico', 'cámara', 'máquina',
+                # animals — accents
+                'águila', 'murciélago', 'pingüino', 'delfín', 'tiburón', 'camaleón',
+                # abstract — accents
+                'información', 'educación', 'solución', 'dirección', 'tradición', 'comunicación',
+                # actions (inflected)
+                'construir', 'destruir', 'nadar', 'conducir', 'resolver', 'descubrir',
+                # descriptors — accents
+                'rápido', 'difícil', 'fácil', 'débil', 'útil', 'ágil',
+            ],
+            'color': ['rojo', 'azul', 'verde', 'amarillo', 'negro',
+                      'blanco', 'morado', 'naranja', 'rosa', 'marrón'],
+            'price': (0, 50)
+        }
+    },
+    'italian text': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                # places — accented finals
+                'città', 'università', 'caffè', 'stazione', 'piazza', 'mercato',
+                # people
+                'ragazzo', 'dottore', 'professore', 'musicista', 'pittore', 'giornalista',
+                # food
+                'formaggio', 'pomodoro', 'arancia', 'ciliegia', 'limone', 'fragola',
+                # nature — accents
+                'montagna', 'temporale', 'fiore', 'albero', 'farfalla', 'nuvola',
+                # verbs (inflected — exercises stemmer)
+                'mangiando', 'lavorato', 'correre', 'dormire', 'scrivendo', 'costruito',
+            ],
+            'body': [
+                # objects — accents
+                'tavolo', 'finestra', 'specchio', 'orologio', 'chiave', 'quaderno',
+                # animals
+                'gatto', 'cavallo', 'aquila', 'squalo', 'tigre', 'tartaruga',
+                # abstract — accents
+                'libertà', 'felicità', 'verità', 'società', 'qualità', 'possibilità',
+                # actions (inflected)
+                'nuotare', 'saltare', 'guidare', 'volare', 'dipingere', 'scoprire',
+                # descriptors
+                'veloce', 'lento', 'forte', 'debole', 'caldo', 'freddo',
+            ],
+            'color': ['rosso', 'blu', 'verde', 'giallo', 'nero',
+                      'bianco', 'viola', 'arancione', 'rosa', 'marrone'],
+            'price': (0, 50)
+        }
+    },
+    'portuguese text': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                # places — cedilla, tildes, accents
+                'estação', 'coração', 'ação', 'praça', 'palácio', 'ição',
+                # people — tildes, accents
+                'capitão', 'irmão', 'médico', 'músico', 'engenheiro', 'professor',
+                # food — accents
+                'maçã', 'limão', 'pêssego', 'abacaxi', 'morango', 'melão',
+                # nature — tildes, accents
+                'trovão', 'relâmpago', 'vulcão', 'montanha', 'floresta', 'oceano',
+                # verbs (inflected — exercises stemmer)
+                'trabalhando', 'correram', 'comendo', 'escreveu', 'construído', 'descobrir',
+            ],
+            'body': [
+                # objects — cedilla, accents
+                'televisão', 'geração', 'informação', 'câmera', 'computador', 'relógio',
+                # animals — accents
+                'tubarão', 'falcão', 'leão', 'camaleão', 'golfinho', 'tartaruga',
+                # abstract — tildes, accents
+                'educação', 'comunicação', 'tradição', 'solução', 'evolução', 'proteção',
+                # actions (inflected)
+                'nadar', 'correr', 'voar', 'construir', 'destruir', 'resolver',
+                # descriptors — accents
+                'rápido', 'difícil', 'fácil', 'possível', 'útil', 'agradável',
+            ],
+            'color': ['vermelho', 'azul', 'verde', 'amarelo', 'preto',
+                      'branco', 'roxo', 'laranja', 'rosa', 'marrom'],
+            'price': (0, 50)
+        }
+    },
+    'russian text': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                # places — Cyrillic
+                'город', 'деревня', 'площадь', 'станция', 'библиотека', 'больница',
+                # people
+                'учитель', 'студент', 'инженер', 'художник', 'музыкант', 'писатель',
+                # food
+                'яблоко', 'молоко', 'хлеб', 'масло', 'сахар', 'картофель',
+                # nature
+                'дерево', 'река', 'гора', 'облако', 'звезда', 'цветок',
+                # verbs (inflected — exercises stemmer)
+                'работает', 'бежали', 'читает', 'построил', 'написала', 'открывать',
+            ],
+            'body': [
+                # objects
+                'стол', 'окно', 'дверь', 'книга', 'лампа', 'зеркало',
+                # animals
+                'кошка', 'собака', 'лошадь', 'медведь', 'орёл', 'волк',
+                # abstract
+                'свобода', 'правда', 'счастье', 'красота', 'мудрость', 'справедливость',
+                # actions (inflected)
+                'плавать', 'летать', 'строить', 'бегать', 'прыгать', 'водить',
+                # descriptors
+                'быстрый', 'медленный', 'тихий', 'громкий', 'тёплый', 'холодный',
+            ],
+            'color': ['красный', 'синий', 'зелёный', 'жёлтый', 'чёрный',
+                      'белый', 'фиолетовый', 'оранжевый', 'розовый', 'коричневый'],
+            'price': (0, 50)
+        }
+    },
+    'swedish text': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                # places — Å, Ä, Ö
+                'sjukhus', 'järnväg', 'övergång', 'flygplats', 'bibliotek', 'slöjd',
+                # people — Ö
+                'läkare', 'lärare', 'ingenjör', 'författare', 'konstnär', 'hantverkare',
+                # food — Ä, Ö
+                'äpple', 'smörgås', 'köttbulle', 'räkmacka', 'grädde', 'knäckebröd',
+                # nature — Å, Ö
+                'ångbåt', 'blåbär', 'björk', 'öken', 'sjö', 'ström',
+                # verbs (inflected — exercises stemmer)
+                'arbetar', 'öppnade', 'stängde', 'förstår', 'översatte', 'byggde',
+            ],
+            'body': [
+                # objects — Ö, Ä
+                'nyckel', 'möbel', 'dörr', 'fönster', 'vägg', 'spegel',
+                # animals — Ö
+                'häst', 'fågel', 'björn', 'älg', 'räv', 'varg',
+                # abstract — Ö, Ä
+                'förändring', 'möjlighet', 'rättvisa', 'skönhet', 'säkerhet', 'gemenskap',
+                # actions (inflected)
+                'simma', 'springa', 'flyga', 'köra', 'bygga', 'måla',
+                # descriptors — Å, Ä
+                'snabb', 'långsam', 'stark', 'svår', 'varm', 'kall',
+            ],
+            'color': ['röd', 'blå', 'grön', 'gul', 'svart',
+                      'vit', 'lila', 'orange', 'rosa', 'brun'],
+            'price': (0, 50)
+        }
+    },
+    'turkish text': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                # places — ş, ç, ğ, ö, ü, ı (dotless i is key for case-fold testing)
+                'şehir', 'hastane', 'üniversite', 'köprü', 'çarşı', 'müze',
+                # people — ö, ü, ç
+                'öğretmen', 'mühendis', 'doçent', 'müdür', 'çiftçi', 'öğrenci',
+                # food — ö, ü, ş
+                'börek', 'çiçek', 'şeftali', 'üzüm', 'portakal', 'kiraz',
+                # nature — dotless ı, ğ, ö
+                'ışık', 'dağ', 'göl', 'nehir', 'orman', 'çiçek',
+                # verbs (inflected — exercises stemmer + Turkish ı/İ)
+                'çalışmak', 'öğrenmek', 'başlamak', 'değiştirmek', 'yürümek', 'düşünmek',
+            ],
+            'body': [
+                # objects — ü, ö, ş, ç
+                'anahtar', 'dolap', 'pencere', 'köşe', 'süpürge', 'çamaşır',
+                # animals — ş, ç
+                'kuş', 'kaplumbağa', 'kelebek', 'karınca', 'köpek', 'maymun',
+                # abstract — ö, ü, ğ
+                'özgürlük', 'güzellik', 'doğruluk', 'büyüklük', 'güçlülük', 'mutluluk',
+                # actions (inflected) — dotless ı testing
+                'yüzmek', 'koşmak', 'uçmak', 'sürmek', 'gitmek', 'bulmak',
+                # descriptors — ı, ş
+                'hızlı', 'yavaş', 'güçlü', 'sessiz', 'sıcak', 'soğuk',
+            ],
+            'color': ['kırmızı', 'mavi', 'yeşil', 'sarı', 'siyah',
+                      'beyaz', 'mor', 'turuncu', 'pembe', 'kahverengi'],
+            'price': (0, 50)
+        }
+    },
+    'dutch text': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                # places — IJ digraph, compounds
+                'ziekenhuis', 'universiteit', 'bibliotheek', 'vliegveld', 'station', 'wijk',
+                # people
+                'leraar', 'ingenieur', 'schrijver', 'kunstenaar', 'bakker', 'timmerman',
+                # food
+                'kaas', 'brood', 'appel', 'sinaasappel', 'citroen', 'aardbei',
+                # nature — IJ, compounds
+                'ijsbeer', 'rivier', 'bos', 'woestijn', 'bloem', 'storm',
+                # verbs (inflected)
+                'werken', 'lopen', 'spreken', 'zingen', 'dansen', 'lezen',
+            ],
+            'body': [
+                # objects — compounds
+                'sleutel', 'koelkast', 'spiegel', 'boekenkast', 'fiets', 'klok',
+                # animals
+                'paard', 'vogel', 'vlinder', 'schildpad', 'dolfijn', 'adelaar',
+                # abstract
+                'vrijheid', 'gelijkheid', 'schoonheid', 'mogelijkheid', 'veiligheid', 'waarheid',
+                # actions (inflected)
+                'zwemmen', 'rennen', 'vliegen', 'rijden', 'tekenen', 'wandelen',
+                # descriptors
+                'snel', 'langzaam', 'sterk', 'zwak', 'warm', 'koud',
+            ],
+            'color': ['rood', 'blauw', 'groen', 'geel', 'zwart',
+                      'wit', 'paars', 'oranje', 'roze', 'bruin'],
+            'price': (0, 50)
+        }
+    },
+    'indonesian text': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                # places — agglutinative prefixes/suffixes
+                'perpustakaan', 'universitas', 'pelabuhan', 'bandara', 'pertokoan', 'perumahan',
+                # people — prefixes
+                'pelajar', 'pengajar', 'pekerja', 'penulis', 'pelukis', 'penyanyi',
+                # food
+                'mangga', 'jeruk', 'pisang', 'anggur', 'semangka', 'nanas',
+                # nature
+                'gunung', 'sungai', 'hutan', 'pantai', 'danau', 'lembah',
+                # verbs (inflected — exercises stemmer with me-/ber-/pe- prefixes)
+                'membangun', 'berenang', 'berlari', 'menulis', 'membaca', 'memahami',
+            ],
+            'body': [
+                # objects
+                'kunci', 'jendela', 'pintu', 'cermin', 'kursi', 'lemari',
+                # animals
+                'kucing', 'burung', 'kuda', 'harimau', 'elang', 'lumba',
+                # abstract — agglutinative suffixes (-an, -kan)
+                'keindahan', 'kemerdekaan', 'kebahagiaan', 'kebenaran', 'kesehatan', 'keadilan',
+                # actions (inflected)
+                'berenang', 'terbang', 'mengemudi', 'melompat', 'memanjat', 'menyelam',
+                # descriptors
+                'cepat', 'lambat', 'kuat', 'lemah', 'panas', 'dingin',
+            ],
+            'color': ['merah', 'biru', 'hijau', 'kuning', 'hitam',
+                      'putih', 'ungu', 'jingga', 'merah muda', 'cokelat'],
+            'price': (0, 50)
+        }
+    },
+    'arabic text': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                # places — Arabic script, various letter forms
+                'مدرسة', 'جامعة', 'مستشفى', 'مطار', 'مكتبة', 'متحف',
+                # people
+                'معلم', 'طبيب', 'مهندس', 'كاتب', 'رسام', 'موسيقي',
+                # food
+                'تفاحة', 'برتقال', 'عنب', 'ليمون', 'موز', 'فراولة',
+                # nature
+                'جبل', 'نهر', 'بحر', 'صحراء', 'غابة', 'شجرة',
+                # verbs (various forms — tests Arabic morphology)
+                'يعمل', 'يكتب', 'يقرأ', 'يبني', 'يفهم', 'يتعلم',
+            ],
+            'body': [
+                # objects
+                'مفتاح', 'نافذة', 'باب', 'كتاب', 'مصباح', 'مرآة',
+                # animals
+                'قطة', 'حصان', 'نسر', 'نمر', 'دلفين', 'سلحفاة',
+                # abstract
+                'حرية', 'عدالة', 'سعادة', 'جمال', 'حقيقة', 'قوة',
+                # actions
+                'يسبح', 'يطير', 'يركض', 'يقود', 'يقفز', 'يبحث',
+                # descriptors
+                'سريع', 'بطيء', 'قوي', 'ضعيف', 'حار', 'بارد',
+            ],
+            'color': ['أحمر', 'أزرق', 'أخضر', 'أصفر', 'أسود',
+                      'أبيض', 'بنفسجي', 'برتقالي', 'وردي', 'بني'],
+            'price': (0, 50)
+        }
+    },
+}
+
+# Multi-language punctuation datasets — mirrors the English 'punctuation' dataset
+# but uses non-ASCII punctuation characters from each language's configured punct
+# set (e.g. French guillemets «», em-dash —, curly quotes).  Title field has
+# unescaped values (punct splits tokens); body field has backslash-escaped values
+# (punct kept inside tokens).
+TEXT_DATASETS_MULTILANG_PUNCTUATION = {
+    # French typographic punctuation: « » – — … ' ' " "
+    'french punctuation': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                # Unescaped — these split into multiple tokens
+                'liberté«égalité',
+                'fraternité»justice',
+                'château–village',
+                'musée—galerie',
+                'forêt…prairie',
+                'médecin\u2018chirurgien',
+                'professeur\u2019étudiant',
+                'boulanger\u201cpâtissier',
+                'ingénieur\u201darchitecte',
+            ],
+            'body': [
+                # Backslash-escaped — punct kept inside token
+                'liberté\\«égalité',
+                'fraternité\\»justice',
+                'château\\–village',
+                'musée\\—galerie',
+                'forêt\\…prairie',
+                'médecin\\\u2018chirurgien',
+                'professeur\\\u2019étudiant',
+                'boulanger\\\u201cpâtissier',
+                'ingénieur\\\u201darchitecte',
+            ],
+            'color': ['rouge', 'bleu', 'vert'],
+            'price': (0, 10)
+        }
+    },
+}
+
+TEXT_DATASETS_MULTILANG.update(TEXT_DATASETS_MULTILANG_PUNCTUATION)
+
+# Merge multilang datasets into TEXT_DATASETS so existing code paths work unchanged
+TEXT_DATASETS.update(TEXT_DATASETS_MULTILANG)
+
 # Schema flags per field type and schema variant.
 # For field types with multiple variants (like "text"), use a dict keyed by schema_type.
 # For simple field types, use a plain string (empty string if no extra flags needed).
@@ -188,6 +697,30 @@ SCHEMA_FLAGS = {
     },
     "tag": "",
     "numeric": "",
+}
+
+# Scoring's own copy of SCHEMA_FLAGS. Separate because the text suite's entries
+# must keep WITHSUFFIXTRIE (its suffix queries CHECK-fail without the trie),
+# while scoring has no use for it: the trie is perf-only and the
+# prefix/suffix/fuzzy shapes are out of scope.
+#
+# "default" stems both text fields; mixing in NOSTEM diverges from the reference
+SCORING_SCHEMA_FLAGS = {
+    "text": {"nostem": "NOSTEM", "docscore": "NOSTEM", "default": "", "stopwords": "NOSTEM"},
+    "tag": "",
+    "numeric": "",
+    "vector": f"FLAT 6 TYPE FLOAT32 DIM {VECTOR_DIM} DISTANCE_METRIC L2",
+}
+
+# Index-level attributes per scoring schema variant. JSON requires the JSONPath
+# form of SCORE_FIELD: the reference engine accepts the bare attribute name and
+# silently ignores it, leaving every document on the index-level SCORE.
+SCHEMA_INDEX_ATTRS = {
+    "nostem": {"hash": "", "json": ""},
+    "docscore": {"hash": "SCORE 0.5 SCORE_FIELD boost",
+                 "json": "SCORE 0.5 SCORE_FIELD $.boost"},
+    "default": {"hash": "", "json": ""},
+    "stopwords": {"hash": "", "json": ""},
 }
 
 def _build_field_schema(field: str, field_type: str, schema_type: str, for_json: bool = False) -> str:
@@ -205,6 +738,28 @@ def _build_field_schema(field: str, field_type: str, schema_type: str, for_json:
     if for_json:
         return f"$.{field} AS {field_def}"
     return field_def
+
+def _build_scoring_field(field: str, field_type: str, schema_type: str, for_json: bool) -> str:
+    """One field's schema string, using the scoring suite's own flag table."""
+    flags = SCORING_SCHEMA_FLAGS[field_type]
+    if isinstance(flags, dict):
+        flags = flags[schema_type]
+    field_def = f"{field} {field_type.upper()} {flags}".strip()
+    return f"$.{field} AS {field_def}" if for_json else field_def
+
+def _build_scoring_create(key_type: str, schema_type: str) -> str:
+    """Build the FT.CREATE for one scoring schema variant."""
+    parts = [
+        _build_scoring_field(field, field_type, schema_type, for_json=(key_type == "json"))
+        for field_type in ("text", "tag", "numeric", "vector")
+        for field in SCORING_SCHEMA[field_type]
+    ]
+    on = "HASH" if key_type == "hash" else "JSON"
+    # STOPWORDS 0 except on "stopwords", which compares the default list
+    stopwords = "" if schema_type == "stopwords" else "STOPWORDS 0"
+    head = f"FT.CREATE {key_type}_idx1 ON {on} PREFIX 1 {key_type}: {stopwords}".strip()
+    attrs = SCHEMA_INDEX_ATTRS[schema_type][key_type]
+    return " ".join(p for p in [head, attrs, "SCHEMA", *parts] if p)
 
 def unbytes(b):
     if isinstance(b, bytes):
@@ -672,6 +1227,56 @@ def compute_data_sets(vector_data_type="FLOAT32"):
                     for z in vector_points
                 ]
 
+    #
+    # Two-vector dataset: designed for multi-VR predicate compatibility tests.
+    # Has two vector fields (v1 and v2) with asymmetric values so that distance
+    # ordering on v1 differs from v2.  Also includes numeric and tag fields.
+    #
+    data["two vectors"] = {}
+    two_vec_create_cmds = {
+        "hash": (
+            "FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: SCHEMA "
+            "v1 VECTOR FLAT 6 DIM 3 TYPE FLOAT32 DISTANCE_METRIC L2 "
+            "v2 VECTOR FLAT 6 DIM 3 TYPE FLOAT32 DISTANCE_METRIC L2 "
+            "n1 NUMERIC t1 TAG"
+        ),
+        "json": (
+            "FT.CREATE json_idx1 ON JSON PREFIX 1 json: SCHEMA "
+            "$.v1 AS v1 VECTOR FLAT 6 DIM 3 TYPE FLOAT32 DISTANCE_METRIC L2 "
+            "$.v2 AS v2 VECTOR FLAT 6 DIM 3 TYPE FLOAT32 DISTANCE_METRIC L2 "
+            "$.n1 AS n1 NUMERIC $.t1 AS t1 TAG"
+        ),
+    }
+    # 6 documents with asymmetric v1/v2 placements:
+    #   doc:0  v1=(0,0,0)  v2=(0,0,0)   -- origin for both
+    #   doc:1  v1=(1,0,0)  v2=(3,0,0)   -- close on v1, far on v2
+    #   doc:2  v1=(3,0,0)  v2=(1,0,0)   -- far on v1, close on v2
+    #   doc:3  v1=(2,0,0)  v2=(2,0,0)   -- moderate both
+    #   doc:4  v1=(5,0,0)  v2=(5,0,0)   -- far both
+    #   doc:5  v1=(10,0,0) v2=(10,0,0)  -- very far both
+    two_vec_docs_template = [
+        ("0", [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], 0, "A"),
+        ("1", [1.0, 0.0, 0.0], [3.0, 0.0, 0.0], 1, "B"),
+        ("2", [3.0, 0.0, 0.0], [1.0, 0.0, 0.0], 2, "A"),
+        ("3", [2.0, 0.0, 0.0], [2.0, 0.0, 0.0], 3, "B"),
+        ("4", [5.0, 0.0, 0.0], [5.0, 0.0, 0.0], 4, "A"),
+        ("5", [10.0, 0.0, 0.0], [10.0, 0.0, 0.0], 5, "B"),
+    ]
+    for key_type in ["hash", "json"]:
+        data["two vectors"][CREATES_KEY(key_type)] = [two_vec_create_cmds[key_type]]
+        data["two vectors"][SETS_KEY(key_type)] = [
+            (
+                f"{key_type}:{doc_id}",
+                {
+                    "v1": array_encode(key_type, v1),
+                    "v2": array_encode(key_type, v2),
+                    "n1": n1,
+                    "t1": t1,
+                },
+            )
+            for doc_id, v1, v2, n1, t1 in two_vec_docs_template
+        ]
+
     # Tag special characters data set. Comma separator so } and | are literal;
     # avoid '-' etc. (query operators) or the reference engine rejects the query.
     tag_special_base_tags = ["a}b", "a|b", "normal", "x}y}z",
@@ -707,18 +1312,48 @@ def compute_data_sets(vector_data_type="FLOAT32"):
 
     return data
 
-def compute_text_data_sets(dataset_name, seed=123, schema_type="default"):
+# Mapping from dataset name to the LANGUAGE parameter value for FT.CREATE.
+# English datasets (original) use "english"; multilang datasets use their language.
+DATASET_LANGUAGE_MAP = {
+    'pure text': 'english',
+    'pure text small': 'english',
+    'numeric text': 'english',
+    'punctuation': 'english',
+    'unicode whitespace': 'english',
+    'french text': 'french',
+    'german text': 'german',
+    'spanish text': 'spanish',
+    'italian text': 'italian',
+    'portuguese text': 'portuguese',
+    'russian text': 'russian',
+    'swedish text': 'swedish',
+    'turkish text': 'turkish',
+    'dutch text': 'dutch',
+    'indonesian text': 'indonesian',
+    'arabic text': 'arabic',
+    'french punctuation': 'french',
+}
+
+
+def compute_text_data_sets(dataset_name, seed=123, schema_type="default", language=None):
     """Generate random documents for a specific dataset.
     
     Args:
-        dataset_name: Name of dataset (e.g., "pure text", "pure text small")
+        dataset_name: Name of dataset (e.g., "pure text", "french text")
         seed: Random seed for reproducibility
+        schema_type: Schema variant ("default" or "nostem")
+        language: Language for FT.CREATE LANGUAGE option. If None, auto-detected
+                  from DATASET_LANGUAGE_MAP (defaults to "english").
     
     Returns:
         dict with structure: {dataset_name: {"hash creates": [...], "hash sets": [...], ...}}
     """
     if dataset_name not in TEXT_DATASETS:
         raise ValueError(f"Unknown dataset: {dataset_name}. Available: {list(TEXT_DATASETS.keys())}")
+    
+    # Auto-detect language from dataset name if not explicitly provided
+    if language is None:
+        language = DATASET_LANGUAGE_MAP.get(dataset_name, 'english')
     
     config = TEXT_DATASETS[dataset_name]
     field_values = config['field_values']
@@ -733,10 +1368,11 @@ def compute_text_data_sets(dataset_name, seed=123, schema_type="default"):
     tag_fields = schema.get('tag', [])
     numeric_fields = schema.get('numeric', [])
     
-    # Build create commands for both hash and json
+    # Build create commands for both hash and json, with LANGUAGE option
+    language_clause = f"LANGUAGE {language} " if language != "english" else ""
     create_cmds = {
-        "hash": "FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: SCHEMA {}",
-        "json": "FT.CREATE json_idx1 ON JSON PREFIX 1 json: SCHEMA {}",
+        "hash": f"FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: {language_clause}SCHEMA {{}}",
+        "json": f"FT.CREATE json_idx1 ON JSON PREFIX 1 json: {language_clause}SCHEMA {{}}",
     }
     
     # Build schema strings using the shared helper
@@ -1248,6 +1884,9 @@ def compute_filter_data_sets(dataset_name):
 # future JSON variant: add SETS/CREATES "json" entries here.
 SORTKEY_PREFIX_DATA_SET = "sortkey prefix"
 
+# Absent-sort-key cases: nsk3 lacks p; the 'solo' tag isolates one document.
+SORTKEY_NIL_DATA_SET = "sortkey nil"
+
 
 def compute_sortkey_data_sets():
     schema = ("m TAG z TEXT SORTABLE t TAG n NUMERIC f NUMERIC "
@@ -1266,19 +1905,316 @@ def compute_sortkey_data_sets():
             CREATES_KEY("hash"): [
                 f"FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: SCHEMA {schema}"
             ],
+        },
+        SORTKEY_NIL_DATA_SET: {
+            SETS_KEY("hash"): [
+                ("hash:nsk1", {"m": "all,solo", "p": "10",
+                               "vec": b"AAAAAAAA"}),
+                ("hash:nsk2", {"m": "all", "p": "20", "vec": b"BBBBBBBB"}),
+                ("hash:nsk3", {"m": "all", "vec": b"CCCCCCCC"}),
+            ],
+            CREATES_KEY("hash"): [
+                "FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: SCHEMA "
+                "m TAG p NUMERIC SORTABLE "
+                "vec VECTOR FLAT 6 TYPE FLOAT32 DIM 2 DISTANCE_METRIC L2"
+            ],
+        },
+    }
+
+
+### RETURN clause data set (issue #1353, item 7) ###
+#
+# Fixture for the repeated-RETURN-clause cases (generate_return.py). One
+# document, no SORTBY in any query to avoid hitting other #1353 divergence
+RETURN_CLAUSE_DATA_SET = "return clause"
+
+
+def compute_return_data_sets():
+    docs = [
+        ("hash:rc1", {"m": "all", "p": "10", "title": "hello world"}),
+    ]
+    return {
+        RETURN_CLAUSE_DATA_SET: {
+            SETS_KEY("hash"): docs,
+            CREATES_KEY("hash"): [
+                "FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: "
+                "SCHEMA m TAG p NUMERIC title TEXT"
+            ],
         }
     }
 
 
-def load_data(client, data_set, key_type, data_source=None, schema_type="default", vector_data_type="FLOAT32"):
+### VR + text (BM-25) scoring data set ###
+#
+# Fixture for the single-VR + text compound scoring cases
+# (generate.py test_vector_range_text_bm25_scoring). A schema with both a TEXT
+# field and a vector field lets us exercise `@body:text @vec:[VECTOR_RANGE...]`
+# with WITHSCORES and confirm whether/how the VR distance affects the BM-25
+# relevance score, matching the reference engine.
+VR_TEXT_DATA_SET = "vr text"
+
+
+def compute_vr_text_data_sets():
+    # Vectors chosen so distances to the [0,0,0] query vector differ per doc,
+    # while the text field drives the BM-25 score. VECTOR_DIM == 3.
+    def vec(x, y, z):
+        return struct.pack(f"<{VECTOR_DIM}f", x, y, z).hex()
+
+    docs = [
+        ("hash:vt1", {"body": "hello world", "v1": bytes.fromhex(vec(0.1, 0.0, 0.0))}),
+        ("hash:vt2", {"body": "hello there", "v1": bytes.fromhex(vec(0.2, 0.0, 0.0))}),
+        ("hash:vt3", {"body": "hello hello world", "v1": bytes.fromhex(vec(0.3, 0.0, 0.0))}),
+        ("hash:vt4", {"body": "goodbye world", "v1": bytes.fromhex(vec(0.4, 0.0, 0.0))}),
+    ]
+    return {
+        VR_TEXT_DATA_SET: {
+            SETS_KEY("hash"): docs,
+            CREATES_KEY("hash"): [
+                f"FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: "
+                f"SCHEMA body TEXT v1 vector HNSW 6 DIM {VECTOR_DIM} "
+                f"TYPE FLOAT32 DISTANCE_METRIC L2"
+            ],
+        }
+    }
+
+
+def _make_scoring_terms(count, lead):
+    """`count` distinct alpha terms under `lead`; the text suite has only 75."""
+    combos = (f"{lead}{c}{v}{d}" for c in "bcdfgklmnprstvz"
+              for v in "aeiou" for d in "bcdfgklmnprstvz")
+    terms = list(itertools.islice(combos, count))
+    assert len(terms) == count, f"only {len(terms)} terms available under {lead!r}"
+    return terms
+
+# real words topping the text suite's 60 up to the pool size; none may be filler
+SCORING_EXTRA_WORDS = [
+    'wolf', 'bear', 'fox', 'rabbit', 'deer', 'owl', 'whale', 'dolphin', 'snake', 'frog',
+    'lion', 'zebra', 'camel', 'goat', 'sheep', 'mouse', 'duck', 'goose', 'parrot', 'turtle',
+    'mountain', 'valley', 'island', 'beach', 'harbor', 'castle', 'bridge', 'garden', 'market', 'school',
+    'library', 'museum', 'temple', 'tower', 'canyon', 'meadow', 'lake', 'cave', 'farm', 'station',
+    'hammer', 'needle', 'bottle', 'basket', 'candle', 'mirror', 'ladder', 'pillow', 'blanket', 'bucket',
+    'kettle', 'wallet', 'pencil', 'rocket', 'anchor', 'compass', 'helmet', 'lantern', 'jacket', 'violin',
+    'bread', 'butter', 'cheese', 'honey', 'pepper', 'garlic', 'ginger', 'rice', 'bean', 'corn',
+    'pumpkin', 'walnut', 'almond', 'cookie', 'pasta', 'soup', 'salad', 'coffee', 'sugar', 'olive',
+    'cloud', 'storm', 'thunder', 'rain', 'snow', 'wind', 'sunrise', 'shadow', 'stone', 'pebble',
+    'crystal', 'flame', 'frost', 'breeze', 'leaf', 'branch', 'root', 'seed', 'blossom', 'petal',
+    'climb', 'dance', 'sing', 'read', 'write', 'paint', 'cook', 'carry', 'throw', 'catch',
+    'push', 'pull', 'dig', 'sail', 'hunt', 'shine', 'wander', 'whisper', 'gather', 'travel',
+    'gentle', 'brave', 'calm', 'clever', 'fierce', 'humble', 'narrow', 'wide', 'ancient', 'modern',
+    'hollow', 'golden', 'rusty', 'fragile', 'sturdy', 'bitter', 'sweet', 'rough', 'tiny', 'giant',
+]
+
+# Extra words for "default": each stems the same in both engines; order sets dt tier
+STEMMING_SCORING_EXTRA_WORDS = [
+    # plurals
+    'apples', 'bananas', 'oranges', 'grapes', 'cherries', 'mangoes', 'mangos', 'pears', 'peaches', 'plums',
+    'melons', 'kiwis', 'lemons', 'tables', 'chairs', 'desks', 'lamps', 'windows', 'doors', 'movies',
+    'books', 'stories', 'games', 'puzzles', 'potatoes', 'tomatoes', 'lettuces', 'onions', 'carrots', 'dogs',
+    'cats', 'horses', 'tigers', 'eagles', 'sharks', 'cities', 'villages', 'forests', 'deserts', 'oceans',
+    'rivers', 'bookings', 'buildings', 'paintings', 'heavies', 'colds',
+    # third person
+    'runs', 'jumps', 'swims', 'drives', 'flies', 'builds', 'fasts', 'slows', 'warms', 'quiets',
+    'smooths', 'dances', 'creates', 'arrives', 'paints', 'travels', 'listens',
+    # -ing
+    'running', 'jumping', 'swimming', 'driving', 'flying', 'building', 'fasting', 'slowing', 'warming', 'booking',
+    'gaming', 'puzzling', 'tabling', 'chairing', 'smoothing', 'quieting', 'deserting', 'windowing', 'dogging', 'horsing',
+    'dancing', 'creating', 'arriving', 'painting', 'traveling', 'travelling', 'listening',
+    # -ed
+    'jumped', 'booked', 'gamed', 'puzzled', 'tabled', 'chaired', 'smoothed', 'quieted', 'slowed', 'warmed',
+    'fasted', 'deserted', 'storied', 'forested', 'dogged', 'windowed', 'danced', 'created', 'arrived', 'painted',
+    'traveled', 'travelled', 'listened',
+    # -ly, -ness
+    'quickly', 'brightly', 'silently', 'smoothly', 'loudly', 'quietly', 'warmly', 'coldly', 'musically',
+    'quickness', 'brightness', 'heaviness', 'smoothness', 'sharpness', 'slowness', 'loudness', 'quietness', 'coldness', 'warmness',
+    # other derivations, and base forms that stem
+    'musical', 'oceanic', 'villager', 'listener', 'arrival', 'dance', 'create', 'arrive',
+]
+
+# Stem -> "default" pool words sharing it; the query builder predicts hits from it
+STEMMING_SCORING_STEMS = {
+    'appl': ['apple', 'apples'],
+    'arriv': ['arrives', 'arriving', 'arrived', 'arrival', 'arrive'],
+    'banana': ['banana', 'bananas'],
+    'book': ['book', 'books', 'bookings', 'booking', 'booked'],
+    'bright': ['bright', 'brightly', 'brightness'],
+    'build': ['build', 'buildings', 'builds', 'building'],
+    'carrot': ['carrot', 'carrots'],
+    'cat': ['cat', 'cats'],
+    'chair': ['chair', 'chairs', 'chairing', 'chaired'],
+    'cherri': ['cherry', 'cherries'],
+    'citi': ['city', 'cities'],
+    'cold': ['cold', 'colds', 'coldly', 'coldness'],
+    'creat': ['creates', 'creating', 'created', 'create'],
+    'danc': ['dances', 'dancing', 'danced', 'dance'],
+    'desert': ['desert', 'deserts', 'deserting', 'deserted'],
+    'desk': ['desk', 'desks'],
+    'dog': ['dog', 'dogs', 'dogging', 'dogged'],
+    'door': ['door', 'doors'],
+    'drive': ['drive', 'drives', 'driving'],
+    'eagl': ['eagle', 'eagles'],
+    'fast': ['fast', 'fasts', 'fasting', 'fasted'],
+    'fli': ['fly', 'flies', 'flying'],
+    'forest': ['forest', 'forests', 'forested'],
+    'game': ['game', 'games', 'gaming', 'gamed'],
+    'grape': ['grape', 'grapes'],
+    'heavi': ['heavy', 'heavies', 'heaviness'],
+    'hors': ['horse', 'horses', 'horsing'],
+    'jump': ['jump', 'jumps', 'jumping', 'jumped'],
+    'kiwi': ['kiwi', 'kiwis'],
+    'lamp': ['lamp', 'lamps'],
+    'lemon': ['lemon', 'lemons'],
+    'lettuc': ['lettuce', 'lettuces'],
+    'listen': ['listens', 'listening', 'listened', 'listener'],
+    'loud': ['loud', 'loudly', 'loudness'],
+    'mango': ['mango', 'mangoes', 'mangos'],
+    'melon': ['melon', 'melons'],
+    'movi': ['movie', 'movies'],
+    'music': ['music', 'musically', 'musical'],
+    'ocean': ['ocean', 'oceans', 'oceanic'],
+    'onion': ['onion', 'onions'],
+    'orang': ['orange', 'oranges'],
+    'paint': ['paintings', 'paints', 'painting', 'painted'],
+    'peach': ['peach', 'peaches'],
+    'pear': ['pear', 'pears'],
+    'plum': ['plum', 'plums'],
+    'potato': ['potato', 'potatoes'],
+    'puzzl': ['puzzle', 'puzzles', 'puzzling', 'puzzled'],
+    'quick': ['quick', 'quickly', 'quickness'],
+    'quiet': ['quiet', 'quiets', 'quieting', 'quieted', 'quietly', 'quietness'],
+    'river': ['river', 'rivers'],
+    'run': ['run', 'runs', 'running'],
+    'shark': ['shark', 'sharks'],
+    'sharp': ['sharp', 'sharpness'],
+    'silent': ['silent', 'silently'],
+    'slow': ['slow', 'slows', 'slowing', 'slowed', 'slowness'],
+    'smooth': ['smooth', 'smooths', 'smoothing', 'smoothed', 'smoothly', 'smoothness'],
+    'stori': ['story', 'stories', 'storied'],
+    'swim': ['swim', 'swims', 'swimming'],
+    'tabl': ['table', 'tables', 'tabling', 'tabled'],
+    'tiger': ['tiger', 'tigers'],
+    'tomato': ['tomato', 'tomatoes'],
+    'travel': ['travels', 'traveling', 'travelling', 'traveled', 'travelled'],
+    'villag': ['village', 'villages', 'villager'],
+    'warm': ['warm', 'warms', 'warming', 'warmed', 'warmly', 'warmness'],
+    'window': ['window', 'windows', 'windowing', 'windowed'],
+}
+# Shorter words are indexed unstemmed; query words always stem
+SCORING_MIN_STEM_LEN = 4
+
+def _scoring_vocab(schema_type):
+    """Pool terms, sized by the dt tiers, and the filler that pads doc_len."""
+    text = TEXT_DATASETS['pure text']['field_values']
+    extra = STEMMING_SCORING_EXTRA_WORDS if schema_type == "default" else SCORING_EXTRA_WORDS
+    pool = text['title'] + text['body'] + extra
+    filler = _make_scoring_terms(SCORING_FILLER_TERMS, "w")
+    if schema_type == "stopwords":
+        filler += SCORING_STOPWORDS
+    return pool, filler
+
+def compute_scoring_corpus(seed=123, schema_type="nostem"):
+    """Build the scoring corpus from a term -> doc incidence matrix.
+
+    Returns (docs, terms). docs maps doc id to field values, text fields as word
+    lists. terms maps term to {doc id: doc-wide TF}, so queries can be built with
+    exact expected hits: len(terms[t]) is that term's dt.
+    """
+    rng = random.Random(seed)
+    words, fillers = _scoring_vocab(schema_type)
+    assert len(words) == sum(n for n, _ in SCORING_DT_TIERS), \
+        "SCORING_DT_TIERS must cover every pool word exactly once"
+    pool = iter(words)
+    docs = {i: {"title": [], "body": []} for i in range(SCORING_NUM_DOCS)}
+    weights = [SCORING_DOC_WEIGHTS[i % len(SCORING_DOC_WEIGHTS)]
+               for i in range(SCORING_NUM_DOCS)]
+
+    def sample_docs(dt):
+        """`dt` distinct docs, biased by SCORING_DOC_WEIGHTS; dt stays exact."""
+        return sorted(docs,
+                      key=lambda d: -math.log(rng.random()) / weights[d])[:dt]
+
+    terms = {}
+    for count, dt in SCORING_DT_TIERS:
+        for term in itertools.islice(pool, count):
+            terms[term] = {}
+            for doc in sample_docs(dt):
+                tf = rng.choice(SCORING_TF_CHOICES)
+                # cross-field pairs sit in both fields, doubling doc-wide TF
+                fields = (["title", "body"]
+                          if rng.random() < SCORING_CROSS_FIELD_RATE
+                          else [rng.choice(["title", "body"])])
+                for field in fields:
+                    docs[doc][field] += [term] * tf
+                terms[term][doc] = tf * len(fields)
+
+    tags = [v for v, n in SCORING_TAG_FREQS.items() for _ in range(n)]
+    rng.shuffle(tags)
+
+    for doc, fields in docs.items():
+        planted = len(fields["title"]) + len(fields["body"])
+        # filler repeats freely: only the queried term's dt feeds IDF, so filler
+        # dt is never read - filler moves doc_len and avg_doc_len, nothing else
+        for _ in range(max(0, rng.choice(SCORING_DOC_LEN_CHOICES) - planted)):
+            fields[rng.choice(["title", "body"])].append(rng.choice(fillers))
+        rng.shuffle(fields["title"])
+        rng.shuffle(fields["body"])
+        fields["t1"] = tags[doc]
+        # n1 == doc id, so any @n1:[a b] range has a count of exactly b - a + 1
+        fields["n1"] = doc
+        # one cluster per doc id residue; probe [c, c, c] returns that residue's docs
+        cluster = doc % SCORING_VECTOR_CLUSTERS
+        fields["v1"] = [cluster + doc / 10000.0] * VECTOR_DIM
+        fields["boost"] = SCORING_BOOSTS[doc % len(SCORING_BOOSTS)]
+
+    return docs, terms
+
+def compute_scoring_data_sets(dataset_name, schema_type="nostem"):
+    """Build the scoring index and documents for each key type."""
+    if dataset_name not in SCORING_DATASETS:
+        raise ValueError(f"Unknown dataset: {dataset_name}. "
+                         f"Available: {list(SCORING_DATASETS.keys())}")
+    if schema_type not in SCHEMA_INDEX_ATTRS:
+        raise ValueError(f"Unknown scoring schema type: {schema_type}. "
+                         f"Available: {list(SCHEMA_INDEX_ATTRS.keys())}")
+
+    corpus, _ = compute_scoring_corpus(schema_type=schema_type)
+    data = {dataset_name: {}}
+    for key_type in ["hash", "json"]:
+        sets = []
+        for doc, fields in corpus.items():
+            values = {
+                "title": " ".join(fields["title"]),
+                "body": " ".join(fields["body"]),
+                "t1": fields["t1"],
+                "n1": fields["n1"],
+                "v1": array_encode(key_type, fields["v1"]),
+            }
+            if fields["boost"] is not None:
+                values["boost"] = fields["boost"]
+            sets.append((f"{key_type}:{doc:03d}", values))
+        data[dataset_name][CREATES_KEY(key_type)] = [
+            _build_scoring_create(key_type, schema_type)
+        ]
+        data[dataset_name][SETS_KEY(key_type)] = sets
+    return data
+
+
+def load_data(client, data_set, key_type, data_source=None, schema_type="default", language=None, vector_data_type="FLOAT32"):
     # Auto-detect data source based on data_set name
     if data_source is None:
-        if data_set in TEXT_DATASETS:
+        if data_set in SCORING_DATASETS:
+            data_source = "scoring"
+        elif data_set in HYBRID_DATASETS:
+            data_source = "hybrid"
+        elif data_set in TEXT_DATASETS:
             data_source = "text"
         elif data_set in FILTER_DATASETS:
             data_source = "filter"
-        elif data_set == SORTKEY_PREFIX_DATA_SET:
+        elif data_set in (SORTKEY_PREFIX_DATA_SET, SORTKEY_NIL_DATA_SET):
             data_source = "sortkey"
+        elif data_set == RETURN_CLAUSE_DATA_SET:
+            data_source = "return"
+        elif data_set == VR_TEXT_DATA_SET:
+            data_source = "vr_text"
         else:
             data_source = "vector"
 
@@ -1286,11 +2222,19 @@ def load_data(client, data_set, key_type, data_source=None, schema_type="default
         case "vector":
             data = compute_data_sets(vector_data_type=vector_data_type)
         case "text":
-            data = compute_text_data_sets(data_set, schema_type=schema_type)
+            data = compute_text_data_sets(data_set, schema_type=schema_type, language=language)
+        case "scoring":
+            data = compute_scoring_data_sets(data_set, schema_type=schema_type)
+        case "hybrid":
+            data = compute_hybrid_data_sets()
         case "filter":
             data = compute_filter_data_sets(data_set)
         case "sortkey":
             data = compute_sortkey_data_sets()
+        case "return":
+            data = compute_return_data_sets()
+        case "vr_text":
+            data = compute_vr_text_data_sets()
         case _:
             raise ValueError(f"Unknown data source: {data_source}")
     load_list = data[data_set][SETS_KEY(key_type)]
@@ -1325,14 +2269,54 @@ def load_data(client, data_set, key_type, data_source=None, schema_type="default
         for s in range(0, len(load_list)):
             k = client.execute_command(*["JSON.GET", load_list[s][0], "$"])
             print(f"{s}:{load_list[s][0]}:  ", k)
-    return len(load_list)
+    return load_list
 
-def load_data_cluster(cluster_client, test_case, data_set, key_type, vector_data_type="FLOAT32"):
-    data = compute_data_sets(vector_data_type=vector_data_type)
+def load_data_cluster(cluster_client, test_case, data_set, key_type, data_source=None, schema_type="default", vector_data_type="FLOAT32"):
+    # Auto-detect data source based on data_set name (mirrors load_data). Without
+    # this, every dataset fell through to compute_data_sets(), which only knows
+    # the vector datasets — so a non-vector dataset (hybrid, vr_text, text,
+    # filter, sortkey, return) replayed in cluster mode raised KeyError on
+    # data[data_set].
+    if data_source is None:
+        if data_set in HYBRID_DATASETS:
+            data_source = "hybrid"
+        elif data_set in TEXT_DATASETS:
+            data_source = "text"
+        elif data_set in FILTER_DATASETS:
+            data_source = "filter"
+        elif data_set == SORTKEY_PREFIX_DATA_SET:
+            data_source = "sortkey"
+        elif data_set == RETURN_CLAUSE_DATA_SET:
+            data_source = "return"
+        elif data_set == VR_TEXT_DATA_SET:
+            data_source = "vr_text"
+        else:
+            data_source = "vector"
+
+    match data_source:
+        case "vector":
+            data = compute_data_sets(vector_data_type=vector_data_type)
+        case "text":
+            data = compute_text_data_sets(data_set, schema_type=schema_type)
+        case "hybrid":
+            data = compute_hybrid_data_sets()
+        case "filter":
+            data = compute_filter_data_sets(data_set)
+        case "sortkey":
+            data = compute_sortkey_data_sets()
+        case "return":
+            data = compute_return_data_sets()
+        case "vr_text":
+            data = compute_vr_text_data_sets()
+        case _:
+            raise ValueError(f"Unknown data source: {data_source}")
 
     primary0 = test_case.new_client_for_primary(0)
     for create_cmd in data[data_set][CREATES_KEY(key_type)]:
-        primary0.execute_command(create_cmd)
+        if isinstance(create_cmd, (list, tuple)):
+            primary0.execute_command(*create_cmd)
+        else:
+            primary0.execute_command(create_cmd)
 
     for key, fields in data[data_set][SETS_KEY(key_type)]:
         if key_type == "hash":
@@ -1404,3 +2388,171 @@ def extract_vocab_by_field_from_text_data(dataset_name, key_type):
             vocab_by_field[field] = field_values[field]
     
     return vocab_by_field
+
+
+### FT.HYBRID data sets ###
+#
+# FT.HYBRID needs a corpus that is simultaneously a *text* corpus (so the
+# SEARCH arm produces interesting BM25 scores) and a *vector* corpus (so the
+# VSIM arm produces a ranking that is genuinely different from the text
+# ranking -- otherwise fusion is indistinguishable from either arm alone).
+#
+# The corpus is built constructively rather than randomly so every BM25 input
+# is auditable from the code:
+#
+#   * IDF spread   -- each signal term occupies a different slice of the
+#                     corpus, from `alpha` (most documents) down to `epsilon`
+#                     (a single document).
+#   * TF spread    -- `alpha` is repeated 0..3 times within a title, `stone`
+#                     1..3 times within a body.
+#   * Length norm  -- every document is padded with filler to a length no
+#                     other document shares, so documents that match the same
+#                     terms still differ in BM25's length normalization.
+#
+# Giving every document a distinct length is also what keeps the corpus free of
+# BM25 ties. A tie would leave the fused ranking to each engine's tie-break,
+# which is not something this suite should be pinning down.
+#
+# Text fields are indexed NOSTEM: the FT.HYBRID scoring path does not yet
+# implement stemming, and every query term below is a plain word (no prefix,
+# suffix, fuzzy or wildcard forms), which the scoring path does not implement
+# either.
+
+HYBRID_DATASETS = ["hybrid text"]
+
+HYBRID_VECTOR_DIM = 4
+HYBRID_NUM_KEYS = 24
+
+# Signal terms for the `title` field, in decreasing document frequency. The
+# divisor is the stride at which the term appears, so `alpha` lands in most
+# documents and `epsilon` in exactly one.
+HYBRID_TITLE_TERMS = [
+    ("beta", 2),      # every 2nd document
+    ("gamma", 3),     # every 3rd
+    ("delta", 5),     # every 5th
+    ("epsilon", 24),  # document 0 only
+]
+
+# Filler words, used only to vary document length. They are deliberately
+# outside the query vocabulary so they move BM25 length normalization without
+# adding matches.
+HYBRID_FILLER = ["lorem", "ipsum", "dolor", "amet"]
+
+# Signal terms for the `body` field, as (term, stride, offset). The offsets
+# shift each term off the `title` strides, so `@body:<term>` selects a
+# different document set than any `@title:<term>` -- without that, an
+# intersection like `@title:beta @body:river` would degenerate to one of its
+# operands.
+HYBRID_BODY_TERMS = [
+    ("river", 2, 1),
+    ("mountain", 3, 1),
+    ("forest", 4, 2),
+    ("canyon", 7, 3),
+]
+
+HYBRID_COLORS = ["red", "green", "blue", "amber"]
+
+
+def _pad_to_length(words, target):
+    """Pad `words` with filler until it is exactly `target` words long.
+
+    Every document gets a different target, which is what keeps BM25 scores
+    distinct: for a single-term query the score is a function of the term
+    frequency and the document length alone, so two documents of equal length
+    carrying the term the same number of times would score identically and
+    leave the fused ranking to each engine's tie-break.
+    """
+    filler = [HYBRID_FILLER[j % len(HYBRID_FILLER)]
+              for j in range(max(0, target - len(words)))]
+    return words + filler
+
+
+def _hybrid_title(i):
+    """Title for document i: `alpha` repeated 0..3 times, then the signal terms
+    whose stride divides i, padded out to a length unique to this document."""
+    words = ["alpha"] * (i % 4)
+    words += [term for term, stride in HYBRID_TITLE_TERMS if i % stride == 0]
+    if not words:
+        # Keep every document non-empty so it is indexed and can be reached by
+        # the vector arm even when it matches no query term.
+        words = ["omega"]
+    return " ".join(_pad_to_length(words, i + 8))
+
+
+def _hybrid_body(i):
+    """Body for document i: `stone` repeated 1..3 times plus the body signal
+    terms whose stride divides i, padded to a length unique to this document."""
+    words = ["stone"] * (1 + (i % 3))
+    words += [term for term, stride, offset in HYBRID_BODY_TERMS
+              if (i + offset) % stride == 0]
+    return " ".join(_pad_to_length(words, i + 5))
+
+
+def _hybrid_vector(i):
+    """Vector for document i.
+
+    Documents are placed along a diagonal ramp so L2 distance from the query
+    vector (1, 0, 0, 0) grows with i, while `title` term matches are keyed on
+    divisibility of i. The two rankings therefore disagree, which is what makes
+    fusion observable: neither arm's order survives into the fused order.
+    """
+    return [1.0 + i * 0.25, i * 0.5, 0.0, 0.0]
+
+
+def compute_hybrid_data_sets():
+    """Build the FT.HYBRID text+vector data set (both hash and json variants).
+
+    Returns the same {dataset: {"<kt> creates": [...], "<kt> sets": [...]}}
+    shape as compute_data_sets() / compute_text_data_sets().
+    """
+    name = "hybrid text"
+    data = {name: {}}
+
+    create_cmds = {
+        "hash": "FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: SCHEMA {}",
+        "json": "FT.CREATE json_idx1 ON JSON PREFIX 1 json: SCHEMA {}",
+    }
+    def vector_def(metric):
+        return (f"VECTOR HNSW 6 TYPE FLOAT32 DIM {HYBRID_VECTOR_DIM} "
+                f"DISTANCE_METRIC {metric}")
+
+    # Three vector fields over the same vectors, one per distance metric. The
+    # similarity a vector arm reports is a different function of the distance
+    # for each, so a sweep that only ever used one metric could not see two of
+    # the three formulas. `vec` keeps its name and its place, so every existing
+    # answer is unaffected.
+    # NOSTEM is required: see the module comment above.
+    field_defs = [
+        ("title", "TEXT NOSTEM"),
+        ("body", "TEXT NOSTEM"),
+        ("color", "TAG"),
+        ("price", "NUMERIC"),
+        ("vec", vector_def("L2")),
+        ("vec_ip", vector_def("IP")),
+        ("vec_cos", vector_def("COSINE")),
+    ]
+
+    for key_type in ["hash", "json"]:
+        if key_type == "hash":
+            schema = " ".join(f"{f} {d}" for f, d in field_defs)
+        else:
+            schema = " ".join(f"$.{f} AS {f} {d}" for f, d in field_defs)
+        data[name][CREATES_KEY(key_type)] = [create_cmds[key_type].format(schema)]
+
+        docs = []
+        for i in range(HYBRID_NUM_KEYS):
+            docs.append((
+                f"{key_type}:{i:02d}",
+                {
+                    "title": _hybrid_title(i),
+                    "body": _hybrid_body(i),
+                    "color": HYBRID_COLORS[i % len(HYBRID_COLORS)],
+                    "price": (i * 7) % 53,
+                    "vec": array_encode(key_type, _hybrid_vector(i)),
+                    "vec_ip": array_encode(key_type, _hybrid_vector(i)),
+                    "vec_cos": array_encode(key_type, _hybrid_vector(i)),
+                },
+            ))
+        data[name][SETS_KEY(key_type)] = docs
+
+    return data

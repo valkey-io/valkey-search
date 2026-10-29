@@ -13,6 +13,7 @@ from indexes import *
 import pytest
 import logging
 from util import waiters
+from utils import run_in_thread
 import threading
 from ft_info_parser import FTInfoParser
 from typing import Any, List
@@ -76,10 +77,19 @@ def load_data(client: Valkey.client):
         index.write_data(client, i, records[i])
     return len(records)
 
-def verify_data(client: Valkey.client, this_index: Index):
+def verify_data(client: Valkey.client, this_index: Index, expected_keys=None):
     '''
     Do query operations against each index to ensure that all keys are present
     '''
+    if expected_keys is not None:
+        if this_index.has_field("n"):
+            res = do_search(client, this_index, "@n:[0 100]")
+            check_keys(res.keys(), expected_keys)
+        if this_index.has_field("t"):
+            res = do_search(client, this_index, "@t:{Tag*}")
+            check_keys(res.keys(), expected_keys)
+        return
+
     if this_index.has_field("n"):
         res = do_search(client, this_index, "@n:[0 100]")
         check_keys(res.keys(), full_key_names + [index.keyname(NUM_VECTORS+0).encode(), index.keyname(NUM_VECTORS+2).encode()])
@@ -293,10 +303,76 @@ class TestZeroLengthKeySaveRestore(ValkeySearchTestCaseDebugMode):
         assert result[1] == b""
 
 
+class TestFlatLabelsAfterLoad(ValkeySearchTestCaseDebugMode):
+    """
+    A key added to a FLAT index after an RDB load must not take the internal
+    label of a loaded key. Otherwise the new vector replaces the loaded one,
+    and deleting the new key crashes the next query or update that reads the
+    loaded key's vector.
+    """
+
+    def search(self, query: str) -> dict[bytes, float]:
+        res = self.client.execute_command(
+            "FT.SEARCH", "idx", query, "RETURN", "1", "d",
+            "PARAMS", "2", "B", float_to_bytes([1.0, 0.0]), "DIALECT", "2",
+        )
+        return {res[i]: float(res[i + 1][1]) for i in range(1, len(res), 2)}
+
+    def index_idle(self) -> bool:
+        info = FTInfoParser(self.client.execute_command("FT.INFO", "idx"))
+        return info.is_backfill_complete() and info.mutation_queue_size == 0
+
+    def wait_for_index_idle(self):
+        waiters.wait_for_true(self.index_idle)
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            pytest.param(
+                "@v:[VECTOR_RANGE 1000000 $B]=>{$yield_distance_as: d}",
+                id="vector_range"),
+            pytest.param("*=>[KNN 10 @v $B AS d]", id="knn"),
+            pytest.param("(@t:{x})=>[KNN 10 @v $B AS d]", id="filtered_knn"),
+        ],
+    )
+    def test_new_key_after_debug_reload(self, query):
+        self.client.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "k:",
+            "SCHEMA", "t", "TAG",
+            "v", "VECTOR", "FLAT", "6", "TYPE", "FLOAT32", "DIM", "2",
+            "DISTANCE_METRIC", "L2",
+        )
+        for i in range(4):
+            self.client.hset(
+                f"k:{i}", mapping={"v": float_to_bytes([float(i), 0.0]), "t": "x"})
+        self.wait_for_index_idle()
+        loaded = {b"k:0": 1.0, b"k:1": 0.0, b"k:2": 1.0, b"k:3": 4.0}
+        assert self.search(query) == loaded
+
+        self.client.execute_command("DEBUG", "RELOAD")
+        self.wait_for_index_idle()
+        assert self.search(query) == loaded
+
+        self.client.hset(
+            "k:new", mapping={"v": float_to_bytes([100.0, 100.0]), "t": "x"})
+        self.wait_for_index_idle()
+        assert self.search(query) == {**loaded, b"k:new": 19801.0}
+
+        self.client.delete("k:new")
+        self.wait_for_index_idle()
+        assert self.search(query) == loaded
+
+        # An update compares against the stored vector of the loaded key.
+        self.client.hset("k:1", mapping={"v": float_to_bytes([1.0, 1.0])})
+        self.wait_for_index_idle()
+        assert self.search(query) == {**loaded, b"k:1": 1.0}
+
+
 class TestMutationQueue(ValkeySearchTestCaseDebugMode):
     def append_startup_args(self, args):
         args["search.rdb_write_v2"] = "yes"
         args["search.rdb_read_v2"] = "yes"
+        args["search.writer-threads"] = "20"
         return args
     
     def mutation_queue_size(self):
@@ -354,9 +430,9 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
     def test_multi_exec_queue(self):
         self.client.execute_command("ft._debug PAUSEPOINT SET block_mutation_queue")
         self.client.execute_command("CONFIG SET search.info-developer-visible yes")
-        self.client.execute_command("config set search.writer-threads 20")
         index.create(self.client, True)
-        records = make_data()
+        records = make_data()[:3]
+        expected_keys = [index.keyname(i).encode() for i in range(len(records))]
         #
         # Now, load the data as a multi/exec... But this won't block us.
         #
@@ -373,10 +449,10 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
 
         i = self.client.info("search")
         assert i["search_rdb_save_multi_exec_entries"] == len(records)
-        verify_data(self.client, index)
+        verify_data(self.client, index, expected_keys)
         os.environ["SKIPLOGCLEAN"] = "1"
         self.server.restart(remove_rdb=False)
-        verify_data(self.client, index)
+        verify_data(self.client, index, expected_keys)
         self.client.execute_command("CONFIG SET search.info-developer-visible yes")
         i = self.client.info("search")
         print("Info: ", i)
@@ -384,6 +460,90 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
             i["search_rdb_load_multi_exec_entries"],
         ]
         assert reads == [len(records)]
+
+    def test_multi_exec_orphan_key_skipped_still_searchable(self):
+        self.client.execute_command("CONFIG SET search.info-developer-visible yes")
+        index.create(self.client, True)
+        records = make_data()[:3]
+        expected_keys = [index.keyname(i).encode() for i in range(len(records))]
+
+        # Persist a consistent queue so reload can create the orphan.
+        self.client.execute_command("ft._debug PAUSEPOINT SET block_mutation_queue")
+        self.client.execute_command("MULTI")
+        for i in range(len(records)):
+            index.write_data(self.client, i, records[i])
+        self.client.execute_command("EXEC")
+        self.client.execute_command("save")
+        assert self.client.info("search")["search_rdb_save_multi_exec_entries"] == len(records)
+        self.client.execute_command("ft._debug pausepoint reset block_mutation_queue")
+        while self.get_pausepoint("block_mutation_queue") > 0:
+            time.sleep(0.1)
+
+        # Reload drains the mutation map but restores the queued keys.
+        os.environ["SKIPLOGCLEAN"] = "1"
+        self.server.restart(remove_rdb=False)
+        self.client.execute_command("CONFIG SET search.info-developer-visible yes")
+        assert self.client.info("search")["search_rdb_load_multi_exec_entries"] == len(records)
+        # Let reload mutations drain so the queued keys are orphaned.
+        waiters.wait_for_true(lambda: self.mutation_queue_size() == 0)
+
+        # The orphan must be skipped and the rewritten RDB must remain readable.
+        self.client.execute_command("save")
+        assert self.client.ping()
+        i = self.client.info("search")
+        assert i["search_rdb_save_multi_exec_orphans_skipped"] == len(records)
+        assert i["search_rdb_save_multi_exec_entries"] == 0
+
+        # The serialized key list keeps the records searchable.
+        verify_data(self.client, index, expected_keys)
+        self.server.restart(remove_rdb=False)
+        verify_data(self.client, index, expected_keys)
+
+    def test_multi_exec_orphan_key_saved_on_first_save(self):
+        self.client.execute_command("CONFIG SET search.info-developer-visible yes")
+        self.client.execute_command("CONFIG SET search.writer-threads 2")
+        non_vector_index.create(self.client, True)
+
+        key = non_vector_index.keyname(0)
+        initial_data = non_vector_index.make_data(0)
+        updated_data = non_vector_index.make_data(0)
+        updated_data["n"] = "1"
+
+        # Keep the queued key below the two-worker drain threshold.
+        self.client.execute_command("FT._DEBUG PAUSEPOINT SET block_mutation_queue")
+        writer_client = self.server.get_new_client()
+        writer_thread, _, writer_error = run_in_thread(
+            lambda: non_vector_index.write_data(writer_client, 0, initial_data)
+        )
+
+        waiters.wait_for_true(
+            lambda: self.get_pausepoint("block_mutation_queue") > 0
+        )
+
+        # MULTI/EXEC merges into the tracked record and leaves K queued.
+        self.client.execute_command("MULTI")
+        non_vector_index.write_data(self.client, 0, updated_data)
+        self.client.execute_command("EXEC")
+
+        # The worker now erases K from the map while the queue retains it.
+        self.client.execute_command("FT._DEBUG PAUSEPOINT RESET block_mutation_queue")
+        writer_thread.join()
+        assert writer_error[0] is None
+
+        # The first SAVE must skip the orphan instead of aborting.
+        self.client.execute_command("SAVE")
+        assert self.client.ping()
+        info = self.client.info("search")
+        assert info["search_rdb_save_multi_exec_orphans_skipped"] == 1
+        assert info["search_rdb_save_multi_exec_entries"] == 0
+        assert self.client.exists(key)
+
+        self.server.restart(remove_rdb=False)
+        waiters.wait_for_true(
+            lambda: non_vector_index.backfill_complete(self.client)
+        )
+        search_results = do_search(self.client, non_vector_index, "@n:[1 1]")
+        assert key.encode() in search_results
 
     def test_saverestore_backfill(self):
         #
@@ -432,7 +592,6 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
         #
         # test that overwrites of keys that are marked as backfilling properly get converted to non-backfills
         #
-        self.client.execute_command("config set search.writer-threads 20")
         self.client.execute_command("CONFIG SET search.info-developer-visible yes")
         self.client.execute_command("ft._debug PAUSEPOINT SET block_mutation_queue")
         load_data(self.client)

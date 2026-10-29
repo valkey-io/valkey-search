@@ -30,13 +30,16 @@
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "src/attribute_data_type.h"
+#include "src/index_schema.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/bfloat16.h"
 #include "src/indexes/fp16.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
+#include "src/indexes/text/text_index.h"
 #include "src/query/predicate.h"
+#include "src/query/query_context.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
@@ -141,19 +144,42 @@ std::vector<char> NormalizeVector(absl::string_view record,
   }
 }
 
+PrefilterEvaluator::PrefilterEvaluator(query::QueryContext &query_ctx,
+                                       QueryOperations query_operations,
+                                       const IndexSchema &index_schema)
+    : query::Evaluator(query_operations),
+      query_ctx_(query_ctx),
+      index_schema_(index_schema) {}
+
 bool PrefilterEvaluator::Evaluate(const query::Predicate &predicate,
                                   const InternedStringPtr &key) {
+  return EvaluateFull(predicate, key).matches;
+}
+
+query::EvaluationResult PrefilterEvaluator::EvaluateFull(
+    const query::Predicate &predicate, const InternedStringPtr &key) {
   key_ = &key;
+  // The evaluator outlives the key loop, so the lazily fetched per-key tree
+  // must be dropped here or the next key would evaluate against this one's.
+  per_key_index_fetched_ = false;
   auto res = predicate.Evaluate(*this);
   key_ = nullptr;
-  return res.matches;
+  return res;
+}
+
+const text::TextIndex *PrefilterEvaluator::PerKeyTextIndex() {
+  if (!per_key_index_fetched_) {
+    per_key_index_fetched_ = true;
+    per_key_index_ = query_ctx_.PerKeyTextIndex(*key_);
+  }
+  return per_key_index_;
 }
 
 query::EvaluationResult PrefilterEvaluator::EvaluateTags(
     const query::TagPredicate &predicate) {
-  bool case_sensitive = true;
-  auto tags = predicate.GetIndex()->GetValue(*key_, case_sensitive);
-  return predicate.Evaluate(tags ? &*tags : nullptr, case_sensitive);
+  CHECK(key_);
+  return predicate.Evaluate(
+      std::get<query::TagLeaf>(query_ctx_.GetOrResolve(&predicate)), *key_);
 }
 
 query::EvaluationResult PrefilterEvaluator::EvaluateNumeric(
@@ -166,10 +192,41 @@ query::EvaluationResult PrefilterEvaluator::EvaluateNumeric(
 query::EvaluationResult PrefilterEvaluator::EvaluateText(
     const query::TextPredicate &predicate, bool require_positions) {
   CHECK(key_);
-  if (!text_index_) {
+  return query::EvaluateTextLeaf(query_ctx_, predicate, *key_,
+                                 require_positions,
+                                 [this] { return PerKeyTextIndex(); });
+}
+
+query::EvaluationResult PrefilterEvaluator::EvaluateVectorRange(
+    const query::VectorRangePredicate &predicate) {
+  CHECK(key_);
+  auto query_vector = predicate.GetQueryVector();
+  if (query_vector.empty()) {
     return query::EvaluationResult(false);
   }
-  return predicate.Evaluate(*text_index_, *key_, require_positions);
+  auto index = index_schema_.GetIndex(predicate.GetAlias());
+  if (!index.ok()) {
+    return query::EvaluationResult(false);
+  }
+  auto *vector_index = dynamic_cast<VectorBase *>(index->get());
+  if (!vector_index) {
+    return query::EvaluationResult(false);
+  }
+  auto within = vector_index->IsWithinVectorRange(
+      *key_, query_vector, static_cast<float>(predicate.GetRadius()));
+  if (!within.ok() || !within->has_value()) {
+    return query::EvaluationResult(false);
+  }
+  return query::EvaluationResult(true, within->value());
+}
+
+// ComputeDistanceFromRecord without query_magnitude — used by VR search path.
+absl::StatusOr<std::pair<float, hnswlib::labeltype>>
+VectorBase::ComputeDistanceFromRecord(const InternedStringPtr &key,
+                                      absl::string_view query) const {
+  float query_magnitude =
+      normalize_ ? CalcReciprocalMagnitude(query, GetVectorDataType()) : 1.0f;
+  return ComputeDistanceFromRecord(key, query, query_magnitude);
 }
 
 VectorBase::~VectorBase() {
@@ -185,7 +242,7 @@ absl::StatusOr<RecordResult> VectorBase::AddRecord(const InternedStringPtr &key,
     return RecordResult::kInvalidData;
   }
   auto vector_record = data.ConsumeVector();
-  float magnitude = 1.0f / vector_record->GetReciprocalMagnitude();
+  float magnitude = 1.0f / vector_record.GetReciprocalMagnitude();
   VMSDK_ASSIGN_OR_RETURN(auto internal_id, TrackKey(key, magnitude));
   absl::Status add_result =
       AddRecordImpl(internal_id, std::move(vector_record));
@@ -217,11 +274,10 @@ absl::StatusOr<uint64_t> VectorBase::GetInternalIdDuringSearch(
 
 absl::StatusOr<InternedStringPtr> VectorBase::GetKeyDuringSearch(
     uint64_t internal_id) const {
-  auto it = key_by_internal_id_.find(internal_id);
-  if (it == key_by_internal_id_.end()) {
-    return absl::InvalidArgumentError("Record was not found");
+  if (const auto *key = FindKeyDuringSearch(internal_id)) {
+    return *key;
   }
-  return it->second;
+  return absl::InvalidArgumentError("Record was not found");
 }
 
 absl::StatusOr<RecordResult> VectorBase::ModifyRecord(
@@ -233,10 +289,10 @@ absl::StatusOr<RecordResult> VectorBase::ModifyRecord(
     return RecordResult::kInvalidData;
   }
   auto vector_record = data.ConsumeVector();
-  float magnitude = 1.0f / vector_record->GetReciprocalMagnitude();
+  float magnitude = 1.0f / vector_record.GetReciprocalMagnitude();
   VMSDK_ASSIGN_OR_RETURN(auto internal_id, GetInternalId(key));
-  VMSDK_ASSIGN_OR_RETURN(
-      bool res, IsVectorUnchanged(key, magnitude, vector_record.get()));
+  VMSDK_ASSIGN_OR_RETURN(bool res,
+                         IsVectorUnchanged(key, magnitude, vector_record));
   if (res) {
     return RecordResult::kMissing;
   }
@@ -281,7 +337,7 @@ absl::StatusOr<std::vector<char>> VectorBase::GetVectorDuringSearch(
   if (!vector_record) {
     return absl::NotFoundError("Record was not found");
   }
-  const char *value = vector_record->GetRawVector();
+  const char *value = vector_record.GetRawVector();
   result.assign(value, value + GetVectorDataSize());
   return result;
 }
@@ -353,9 +409,9 @@ absl::StatusOr<uint64_t> VectorBase::TrackKey(const InternedStringPtr &key,
 
 absl::StatusOr<bool> VectorBase::IsVectorUnchanged(
     const InternedStringPtr &key, float magnitude,
-    const VectorRecord *vector_record) {
+    const VectorRecord &vector_record) {
   absl::ReaderMutexLock lock(&resize_mutex_);
-  const VectorRecord *stored_record;
+  VectorRecord stored_record;
   {
     absl::WriterMutexLock lock(&key_to_metadata_mutex_);
     auto it = tracked_metadata_by_key_.find(key);
@@ -368,14 +424,14 @@ absl::StatusOr<bool> VectorBase::IsVectorUnchanged(
     if (!stored_ptr) {
       return false;  // No stored record, so vectors are not matching
     }
-    stored_record = stored_ptr.get();
+    stored_record = stored_ptr;
   }
   if (stored_record == vector_record) {
     return true;  // Fast path: shared VectorRegistry record, definitely
                   // matching
   }
-  return (std::memcmp(stored_record->GetRawVector(),
-                      vector_record->GetRawVector(), GetVectorDataSize()) == 0);
+  return (std::memcmp(stored_record.GetRawVector(),
+                      vector_record.GetRawVector(), GetVectorDataSize()) == 0);
 }
 
 int VectorBase::RespondWithInfo(ValkeyModuleCtx *ctx) const {
@@ -464,7 +520,6 @@ absl::Status VectorBase::LoadTrackedKeys(
     auto &save_vector = GetVectorLockFree(tracked_key_metadata.internal_id());
     save_vector = std::move(vector_record_with_size.vector_record);
   }
-  // Use max label from label_lookup_
   inc_id_ = GetMaxLoadedLabel() + 1;
   return absl::OkStatus();
 }
@@ -497,11 +552,33 @@ VectorBase::ComputeDistanceFromRecord(const InternedStringPtr &key,
         absl::StrCat("Couldn't find internal id: ", internal_id));
   }
   if (normalize_) {
-    query_magnitude *= vector_record->GetReciprocalMagnitude();
+    query_magnitude *= vector_record.GetReciprocalMagnitude();
   }
   return (std::pair<float, hnswlib::labeltype>){
-      ComputeDistance(query, vector_record.get(), query_magnitude),
-      internal_id};
+      ComputeDistance(query, vector_record, query_magnitude), internal_id};
+}
+
+absl::StatusOr<float> VectorBase::RecomputeDistance(
+    absl::string_view record, absl::string_view query) const {
+  if (!IsValidSizeVector(record)) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Vector record of size ", record.size(),
+                     " does not match the index dimensions"));
+  }
+  // Built with the default allocator rather than the index's own: this runs on
+  // the main thread while writers may be using that allocator, and one record
+  // per mutated key is not worth sharing.
+  auto vector_record = VectorRecord::Construct(
+      record, ComputeReciprocalMagnitude(record), nullptr);
+  if (!vector_record) {
+    return absl::InternalError("Could not construct a vector record");
+  }
+  float query_magnitude = kDefaultMagnitude;
+  if (normalize_) {
+    query_magnitude = CalcReciprocalMagnitude(query, GetVectorDataType()) *
+                      vector_record.GetReciprocalMagnitude();
+  }
+  return ComputeDistance(query, vector_record, query_magnitude);
 }
 
 bool VectorBase::AddPrefilteredKey(
@@ -559,6 +636,34 @@ absl::Status VectorBase::ForEachUnTrackedKey(
   return absl::OkStatus();
 }
 
+std::vector<Neighbor> VectorBase::SearchRangeExhaustive(
+    absl::string_view query, float radius, cancel::Token &cancellation_token,
+    hnswlib::BaseFilterFunctor *filter) const {
+  auto nq = NormalizeQueryIfNeeded(query);
+  const float query_magnitude =
+      normalize_ ? CalcReciprocalMagnitude(nq.view, GetVectorDataType())
+                 : kDefaultMagnitude;
+  std::vector<Neighbor> neighbors;
+  neighbors.reserve(kRangeReserve);
+  for (const auto &[key, metadata] : tracked_metadata_by_key_) {
+    if (cancellation_token->IsCancelled()) {
+      break;
+    }
+    if (filter && !(*filter)(metadata.internal_id)) {
+      continue;
+    }
+    const auto &vector_record = GetVectorLockFree(metadata.internal_id);
+    if (!vector_record) {
+      continue;
+    }
+    float distance = RangeDistance(nq.view, query_magnitude, vector_record);
+    if (distance <= radius) {
+      neighbors.emplace_back(key, distance);
+    }
+  }
+  return neighbors;
+}
+
 template absl::StatusOr<std::vector<Neighbor>> VectorBase::CreateReply<float>(
     std::priority_queue<std::pair<float, hnswlib::labeltype>> &knn_res);
 
@@ -601,27 +706,18 @@ void InitSimsimdDispatch() {
   simsimd_l2sq_bf16(bf16, bf16, 1, &distance);
 }
 
-std::shared_ptr<VectorRecord> VectorRecord::Construct(
-    absl::string_view vector, float reciprocal_magnitude,
-    Allocator *allocator) {
-  size_t total_size = sizeof(VectorRecord) + vector.size();
-  void *mem =
-      allocator ? allocator->Allocate(total_size) : ::operator new(total_size);
-  VectorRecord *ptr = new (mem) VectorRecord(vector, reciprocal_magnitude);
-  return {ptr, [allocator_used = (allocator != nullptr)](VectorRecord *p) {
-            p->~VectorRecord();
-            if (allocator_used) {
-              Allocator::Free(reinterpret_cast<char *>(p));
-            } else {
-              ::operator delete(p);
-            }
-          }};
-}
-
-VectorRecord::VectorRecord(absl::string_view vector, float reciprocal_magnitude)
-    : reciprocal_magnitude_(
-          reciprocal_magnitude == 0.0f ? 1.0f : reciprocal_magnitude) {
-  std::memcpy(data_, vector.data(), vector.size());
+VectorRecord VectorRecord::Construct(absl::string_view vector,
+                                     float reciprocal_magnitude,
+                                     Allocator *allocator) {
+  size_t total_size = sizeof(VectorRecord::Header) + vector.size();
+  void *mem = allocator ? allocator->Allocate(allocator->ChunkSize())
+                        : ::operator new(total_size);
+  float mag = reciprocal_magnitude == 0.0f ? 1.0f : reciprocal_magnitude;
+  new (mem)
+      VectorRecord::Header{/*ref_count_=*/{1}, /*reciprocal_magnitude_=*/mag};
+  char *data = reinterpret_cast<char *>(mem) + sizeof(VectorRecord::Header);
+  std::memcpy(data, vector.data(), vector.size());
+  return VectorRecord(static_cast<const char *>(data));
 }
 }  // namespace indexes
 

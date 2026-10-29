@@ -170,8 +170,13 @@ fi
 #
 LIBSTDCXX=$(gcc -print-file-name=libstdc++.so.6 2>/dev/null || true)
 if [ -n "${LIBSTDCXX}" ] && [ -f "${LIBSTDCXX}" ]; then
+    # _init and _fini are excluded: musl's crti.o defines them with default
+    # visibility (glibc's hides them), so every DSO on musl exports both. The
+    # loader calls them through DT_INIT/DT_FINI, never by name, so the shared
+    # names are harmless.
     CLASHES=$(comm -12 <(exported_syms "${MODULE_SO}") \
-                       <(exported_syms "${LIBSTDCXX}"))
+                       <(exported_syms "${LIBSTDCXX}") |
+              grep -vxE '_init|_fini' || true)
     if [ -n "${CLASHES}" ]; then
         NCLASH=$(echo "${CLASHES}" | wc -l)
         echo "FAIL: ${MODULE_SO} exports ${NCLASH} symbol(s) that" >&2
@@ -195,12 +200,8 @@ fi
 # free(), handing a libc pointer to ValkeyModule_Free.
 #
 # memory_allocation_c_api.cc handles every such function the module references
-# today -- strdup is reimplemented, realpath and getcwd abort. If a new one
-# appears, it must be handled there before this check will pass.
-#
-# Note that __realpath_chk is absent from this list on purpose: it is the
-# fortified form taking a caller-provided buffer, which does not allocate. ICU's
-# uprv_tzname uses it legitimately.
+# today -- strdup, realpath and getcwd are reimplemented. If a new one appears,
+# it must be handled there before this check will pass.
 #
 # Both the public names and the glibc-internal aliases the compiler actually
 # emits: <stdio.h> turns getline() into __getdelim(), for instance.
@@ -239,11 +240,20 @@ done
 #               i2d_* family with a null output pointer) must be released with
 #               OPENSSL_free, which is CRYPTO_free inside libcrypto -- so both
 #               the allocation and the free happen on the far side of the
-#               boundary, as with getaddrinfo/freeaddrinfo.
+#               boundary, as with getaddrinfo/freeaddrinfo. OpenSSL 1.1
+#               (libssl.so.1.1, libcrypto.so.1.1) also imports the legacy
+#               HMAC_CTX_new, EC_KEY_new_by_curve_name, EVP_PKEY_new and
+#               PEM_read_bio_RSAPrivateKey, each paired with its free function
+#               likewise; SHA256_* and HMAC_* write into caller buffers.
+#   libpthread, Split out of libc before glibc 2.34. Only threads, locks,
+#   librt,      TLS keys, clock_gettime and dlopen/dlsym/dlclose are imported;
+#   libdl       none returns memory for the caller to free.
 #   libm,       No allocation.
 #   libmvec
 #   libgcc_s    Unwinder only.
 #   ld-linux    dlopen/dlsym only.
+#   libc.musl   musl (Alpine): libc and the dynamic loader in one DSO. Same
+#               as libc.so.6 above.
 #
 # A new entry here means a boundary nobody has looked at, so it fails the build
 # until someone does. Note that OpenSSL is deliberately dynamic: linking it
@@ -255,7 +265,9 @@ done
 # libstdc++.so.6.
 #
 ALLOWED_NEEDED="libc.so.6 libm.so.6 libmvec.so.1 libgcc_s.so.1
-                libssl.so.3 libcrypto.so.3 libsystemd.so.0"
+                libssl.so.3 libcrypto.so.3 libsystemd.so.0
+                libssl.so.1.1 libcrypto.so.1.1
+                libpthread.so.0 librt.so.1 libdl.so.2"
 
 # Unquoted, so that the newlines and indentation above collapse to single
 # spaces; the match below relies on every entry being space-delimited.
@@ -264,9 +276,10 @@ ALLOWED_NEEDED=$(echo ${ALLOWED_NEEDED})
 NEEDED=$(readelf -d "${MODULE_SO}" 2>/dev/null |
          sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p')
 for lib in ${NEEDED}; do
-    # The dynamic loader's own name is architecture-specific.
+    # The dynamic loader's own name, and musl's libc, are architecture-specific.
     case "${lib}" in
         ld-linux-*.so.*) continue ;;
+        libc.musl-*.so.1) continue ;;
     esac
     case " ${ALLOWED_NEEDED} " in
         *" ${lib} "*) continue ;;

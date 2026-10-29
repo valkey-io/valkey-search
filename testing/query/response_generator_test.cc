@@ -7,9 +7,11 @@
 
 #include "src/query/response_generator.h"
 
+#include <cmath>
 #include <cstddef>
 #include <deque>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -18,17 +20,24 @@
 #include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "src/attribute_data_type.h"
+#include "src/commands/filter_parser.h"
+#include "src/indexes/tag.h"
+#include "src/indexes/text.h"
 #include "src/indexes/vector_base.h"
+#include "src/indexes/vector_flat.h"
 #include "src/metrics.h"
 #include "src/query/predicate.h"
 #include "src/query/search.h"
 #include "src/utils/string_interning.h"
 #include "testing/common.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/time_sliced_mrmw_mutex.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
@@ -302,12 +311,12 @@ TEST_F(ResponseGeneratorTest, ProcessNeighborsForReplyContentLimits) {
 // When a document mutates between shard-side scoring and content fetch
 // (db_seq != sequence_number), VerifyFilter recomputes its relevance score
 // through the same Scorer seam ScoreTextQuery uses (search.cc
-// SingleDocumentScorer) and ProcessNeighborsForReply writes it to
+// RecomputeDocumentScore) and ProcessNeighborsForReply writes it to
 // Neighbor.score, then re-ranks the survivors. These tests exercise that
 // wiring end-to-end with weight leaves; the per-leaf scoring math (including
 // text via Scorer::ScoreLeaf and AND/OR composition) is covered by
-// ScoreNodeTest in search_test.cc, and SingleDocumentScorer reuses that exact
-// ScoreNode walk, so a matched leaf recomputes to the same value here.
+// ScoreNodeTest in search_test.cc, and RecomputeDocumentScore reuses that
+// exact ScoreNode walk, so a matched leaf recomputes to the same value here.
 
 namespace {
 // Builds a single-neighbor scenario, runs ProcessNeighborsForReply, and returns
@@ -334,7 +343,7 @@ void RunSingleNeighborRecompute(
   neighbors.push_back(indexes::Neighbor(id, initial_neighbor_score));
   neighbors.back().sequence_number = 0;
   // index_key_info_ must contain the key so GetIndexKeyInfoSize() (the corpus
-  // size SingleDocumentScorer sources) is non-zero, matching ScoreTextQuery.
+  // size the recompute sources) is non-zero, matching ScoreTextQuery.
   parameters.index_schema->SetIndexMutationSequenceNumber(id, 0);
   parameters.index_schema->SetDbMutationSequenceNumber(id, mutated ? 1 : 0);
 
@@ -380,9 +389,12 @@ TEST_F(ResponseGeneratorTest, NoRecomputeWhenNeighborNotMutated) {
   EXPECT_FLOAT_EQ(neighbors[0].score, 7.0f);
 }
 
-// A vector (KNN) query is never rescored — Neighbor.score there is a distance
-// and must be preserved even when the document mutated.
-TEST_F(ResponseGeneratorTest, VectorQueryNeverRescoredOnMutation) {
+// A vector query's Neighbor.score is a KNN distance, so the Scorer must never
+// be turned loose on it: the relevance recompute is for non-vector queries
+// only. Here the schema carries no index under the alias, so the distance
+// cannot be recomputed either and the carried one has to survive untouched.
+// The case where it CAN be recomputed is below.
+TEST_F(ResponseGeneratorTest, VectorQueryIsNeverRelevanceRescored) {
   ValkeyModuleCtx fake_ctx;
   EXPECT_CALL(*kMockValkeyModule, GetExpire(testing::_))
       .WillRepeatedly(testing::Return(VALKEYMODULE_NO_EXPIRE));
@@ -401,6 +413,609 @@ TEST_F(ResponseGeneratorTest, VectorQueryNeverRescoredOnMutation) {
   // The KNN distance-as-score is preserved, not recomputed.
   EXPECT_FLOAT_EQ(neighbors[0].score, 0.5f);
 }
+
+// The other half: with the vector index reachable, a mutated document's
+// distance IS refreshed against the vector it now holds, and the reply is put
+// back in order. The arithmetic across every storage type and metric is
+// covered by RecomputeDistanceTest in vector_test.cc; this is about the
+// plumbing -- that the reply path notices the mutation, finds the bytes, and
+// re-sorts on the result.
+TEST_F(ResponseGeneratorTest, VectorQueryDistanceRecomputedAndReordered) {
+  ValkeyModuleCtx fake_ctx;
+  EXPECT_CALL(*kMockValkeyModule, GetExpire(testing::_))
+      .WillRepeatedly(testing::Return(VALKEYMODULE_NO_EXPIRE));
+
+  auto floats = [](std::vector<float> v) {
+    return std::string(reinterpret_cast<const char *>(v.data()),
+                       v.size() * sizeof(float));
+  };
+  // The origin, so a distance is the squared length of the stored vector.
+  const std::string query = floats({0.0f, 0.0f, 0.0f, 0.0f});
+  // k1 is rewritten to sit far away; k2 is not touched.
+  const std::string k1_now = floats({9.0f, 0.0f, 0.0f, 0.0f});
+  const std::string k2_now = floats({2.0f, 0.0f, 0.0f, 0.0f});
+
+  UnitTestSearchParameters parameters;
+  parameters.index_schema = CreateIndexSchema("index").value();
+  parameters.attribute_alias = "vec";
+  parameters.query = query;
+  auto vector_index = indexes::VectorFlat<float>::Create(
+      CreateFlatVectorIndexProto(4, data_model::DISTANCE_METRIC_L2, 10, 10),
+      "vec", data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
+  ASSERT_TRUE(vector_index.ok());
+  VMSDK_EXPECT_OK(
+      parameters.index_schema->AddIndex("vec", "vec", vector_index.value()));
+
+  // k1 carries the distance its old vector earned, which put it first.
+  std::vector<indexes::Neighbor> neighbors;
+  auto k1 = StringInternStore::Intern("k1");
+  auto k2 = StringInternStore::Intern("k2");
+  neighbors.push_back(indexes::Neighbor(k1, 1.0f));
+  neighbors.push_back(indexes::Neighbor(k2, 4.0f));
+  for (auto &n : neighbors) {
+    n.sequence_number = 0;
+    parameters.index_schema->SetIndexMutationSequenceNumber(n.external_id, 0);
+  }
+  // Only k1 was rewritten.
+  parameters.index_schema->SetDbMutationSequenceNumber(k1, 1);
+  parameters.index_schema->SetDbMutationSequenceNumber(k2, 0);
+
+  MockAttributeDataType data_type;
+  EXPECT_CALL(data_type, ToProto())
+      .WillRepeatedly(testing::Return(
+          data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH));
+  EXPECT_CALL(data_type, FetchAllAttributes(&fake_ctx, testing::_, testing::_,
+                                            testing::_, testing::_))
+      .WillRepeatedly([&k1_now, &k2_now](
+                          ValkeyModuleCtx *, const std::optional<std::string> &,
+                          ValkeyModuleKey *, absl::string_view key,
+                          const absl::flat_hash_set<absl::string_view> &)
+                          -> absl::StatusOr<RecordsMap> {
+        RecordsMap m;
+        m.emplace("vec", RecordsMapValue(vmsdk::MakeUniqueValkeyString("vec"),
+                                         vmsdk::MakeUniqueValkeyString(
+                                             key == "k1" ? k1_now : k2_now)));
+        return m;
+      });
+
+  ProcessNeighborsForReply(&fake_ctx, data_type, neighbors, parameters,
+                           std::make_optional<std::string>("vec"));
+
+  ASSERT_EQ(neighbors.size(), 2);
+  // k1 now sits at 81 and therefore last; k2 keeps the 4 it came in with.
+  EXPECT_EQ(neighbors[0].external_id->Str(), "k2");
+  EXPECT_FLOAT_EQ(neighbors[0].distance, 4.0f);
+  EXPECT_EQ(neighbors[1].external_id->Str(), "k1");
+  EXPECT_FLOAT_EQ(neighbors[1].distance, 81.0f);
+  // A query ranked on its distance reports the same number as its score.
+  EXPECT_FLOAT_EQ(neighbors[1].score, 81.0f);
+}
+
+// A VSIM arm carrying a text FILTER. The FT.HYBRID parser rewrites it into
+// `(<filter>)=>[KNN ...]`, so on the wire it carries a text predicate and is
+// shaped exactly like a `text=>[KNN ...]` hybrid query -- but its filter only
+// decides membership, so Neighbor::score stays the KNN distance. That is what
+// SearchParameters::vector_score_only says, and in a cluster it only reaches
+// the shard because coordinator.proto now serializes it.
+//
+// Without the flag consulted here, the refreshed distance lands in
+// Neighbor::distance while Neighbor::score keeps the stale pre-mutation
+// distance, and the arm is left in its stale order.
+TEST_F(ResponseGeneratorTest, VectorScoreOnlyArmRefreshesScoreWithDistance) {
+  ValkeyModuleCtx fake_ctx;
+  EXPECT_CALL(*kMockValkeyModule, GetExpire(testing::_))
+      .WillRepeatedly(testing::Return(VALKEYMODULE_NO_EXPIRE));
+
+  auto floats = [](std::vector<float> v) {
+    return std::string(reinterpret_cast<const char *>(v.data()),
+                       v.size() * sizeof(float));
+  };
+  const std::string query = floats({0.0f, 0.0f, 0.0f, 0.0f});
+  const std::string k1_now = floats({9.0f, 0.0f, 0.0f, 0.0f});
+  const std::string k2_now = floats({2.0f, 0.0f, 0.0f, 0.0f});
+
+  UnitTestSearchParameters parameters;
+  parameters.index_schema = CreateIndexSchema("index").value();
+  parameters.attribute_alias = "vec";
+  parameters.query = query;
+  // The two things that together describe the arm: it carries a text predicate,
+  // and its score is nonetheless the raw distance.
+  parameters.filter_parse_results.query_operations =
+      QueryOperations::kContainsText;
+  parameters.vector_score_only = true;
+  ASSERT_FALSE(parameters.ScoreIsRelevance());
+
+  auto vector_index = indexes::VectorFlat<float>::Create(
+      CreateFlatVectorIndexProto(4, data_model::DISTANCE_METRIC_L2, 10, 10),
+      "vec", data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
+  ASSERT_TRUE(vector_index.ok());
+  VMSDK_EXPECT_OK(
+      parameters.index_schema->AddIndex("vec", "vec", vector_index.value()));
+
+  // As they arrive from the shard-side search: score == distance, because
+  // ApplyHybridTextScore skips a vector_score_only arm.
+  std::vector<indexes::Neighbor> neighbors;
+  auto k1 = StringInternStore::Intern("k1");
+  auto k2 = StringInternStore::Intern("k2");
+  neighbors.push_back(indexes::Neighbor(k1, 1.0f));
+  neighbors.push_back(indexes::Neighbor(k2, 4.0f));
+  for (auto &n : neighbors) {
+    n.sequence_number = 0;
+    parameters.index_schema->SetIndexMutationSequenceNumber(n.external_id, 0);
+  }
+  // Only k1 was rewritten between the search and this reply.
+  parameters.index_schema->SetDbMutationSequenceNumber(k1, 1);
+  parameters.index_schema->SetDbMutationSequenceNumber(k2, 0);
+
+  MockAttributeDataType data_type;
+  EXPECT_CALL(data_type, ToProto())
+      .WillRepeatedly(testing::Return(
+          data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH));
+  EXPECT_CALL(data_type, FetchAllAttributes(&fake_ctx, testing::_, testing::_,
+                                            testing::_, testing::_))
+      .WillRepeatedly([&k1_now, &k2_now](
+                          ValkeyModuleCtx *, const std::optional<std::string> &,
+                          ValkeyModuleKey *, absl::string_view key,
+                          const absl::flat_hash_set<absl::string_view> &)
+                          -> absl::StatusOr<RecordsMap> {
+        RecordsMap m;
+        m.emplace("vec", RecordsMapValue(vmsdk::MakeUniqueValkeyString("vec"),
+                                         vmsdk::MakeUniqueValkeyString(
+                                             key == "k1" ? k1_now : k2_now)));
+        return m;
+      });
+
+  ProcessNeighborsForReply(&fake_ctx, data_type, neighbors, parameters,
+                           std::make_optional<std::string>("vec"));
+
+  ASSERT_EQ(neighbors.size(), 2);
+  // Re-sorted distance-ascending: k1 moved from 1 to 81.
+  EXPECT_EQ(neighbors[0].external_id->Str(), "k2");
+  EXPECT_EQ(neighbors[1].external_id->Str(), "k1");
+  EXPECT_FLOAT_EQ(neighbors[1].distance, 81.0f);
+  // The invariant this arm shape must hold everywhere: the score the shard
+  // serializes is the distance, refreshed included -- never the stale 1.0f.
+  for (const auto &n : neighbors) {
+    EXPECT_FLOAT_EQ(n.score, n.distance) << n.external_id->Str();
+  }
+}
+
+// --- Text revalidation on the main-thread content-fetch path ---
+//
+// A document that mutated between shard-side scoring and content fetch is
+// re-checked by VerifyFilter, and a text predicate is re-checked against the
+// text index rather than the fetched records, through a main-thread
+// QueryContext that takes the writers' own short locks and never the
+// time-sliced mutex.
+
+namespace {
+// A schema with one TEXT field carrying a single document, ready for the reply
+// path: the key is registered in index_key_info_ (so the corpus size the
+// scorer sources is non-zero) and its db sequence number is set to make the
+// document look mutated, or not.
+std::shared_ptr<MockIndexSchema> BuildSingleTextDocSchema(
+    const std::string &key, const std::string &content, bool mutated) {
+  auto schema = CreateIndexSchema("index").value();
+  EXPECT_CALL(*schema, GetIdentifier(testing::_)).Times(testing::AnyNumber());
+  schema->CreateTextIndexSchema();
+  auto text_schema = schema->GetTextIndexSchema();
+  auto text = std::make_shared<indexes::Text>(
+      CreateTextIndexProto(/*with_suffix_trie=*/true, /*no_stem=*/true, 1.0),
+      text_schema);
+  EXPECT_TRUE(schema->AddIndex("text", "text", text).ok());
+
+  auto interned = StringInternStore::Intern(key);
+  EXPECT_TRUE(
+      text->AddRecord(interned,
+                      AttributeData(vmsdk::MakeUniqueValkeyString(content)))
+          .ok());
+  text_schema->CommitKeyData(interned);
+  schema->SetIndexMutationSequenceNumber(interned, 0);
+  schema->SetDbMutationSequenceNumber(interned, mutated ? 1 : 0);
+  return schema;
+}
+
+// Runs the reply path for one neighbor of that schema against `filter`.
+// Non-vector (no attribute alias, no vector identifier), so a surviving
+// mutated document also gets its relevance score recomputed.
+void RunTextReplyPath(ValkeyModuleCtx *fake_ctx,
+                      UnitTestSearchParameters &parameters,
+                      MockAttributeDataType &data_type, const std::string &key,
+                      const std::string &content, const std::string &filter,
+                      bool mutated, float initial_neighbor_score,
+                      std::vector<indexes::Neighbor> &neighbors,
+                      bool reuse_schema = false) {
+  if (!reuse_schema) {
+    parameters.index_schema = BuildSingleTextDocSchema(key, content, mutated);
+  }
+  ASSERT_NE(parameters.index_schema->GetTextIndexSchema(), nullptr);
+
+  auto interned = StringInternStore::Intern(key);
+  // The branch under test needs this to exist; without it the evaluation would
+  // silently fall back to "no match" and the assertions below would be vacuous.
+  ASSERT_NE(parameters.index_schema->GetTextIndexSchema()->GetPerKeyTextIndex(
+                interned, /*lock=*/true),
+            nullptr);
+
+  TextParsingOptions options{};
+  FilterParser parser(*parameters.index_schema, filter, options);
+  auto parsed = parser.Parse();
+  ASSERT_TRUE(parsed.ok()) << parsed.status();
+  parameters.filter_parse_results = std::move(parsed).value();
+  ASSERT_TRUE(parameters.filter_parse_results.query_operations &
+              QueryOperations::kContainsText);
+
+  neighbors.push_back(indexes::Neighbor(interned, initial_neighbor_score));
+  neighbors.back().sequence_number = 0;
+
+  EXPECT_CALL(data_type, ToProto())
+      .WillRepeatedly(testing::Return(
+          data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH));
+  EXPECT_CALL(data_type, FetchAllAttributes(fake_ctx, testing::_, testing::_,
+                                            testing::_, testing::_))
+      .WillRepeatedly([&content](ValkeyModuleCtx *,
+                                 const std::optional<std::string> &,
+                                 ValkeyModuleKey *, absl::string_view,
+                                 const absl::flat_hash_set<absl::string_view> &)
+                          -> absl::StatusOr<RecordsMap> {
+        RecordsMap m;
+        m.emplace("text",
+                  RecordsMapValue(vmsdk::MakeUniqueValkeyString("text"),
+                                  vmsdk::MakeUniqueValkeyString(content)));
+        return m;
+      });
+
+  query::ProcessNeighborsForReply(fake_ctx, data_type, neighbors, parameters,
+                                  /*vector_identifier=*/std::nullopt);
+}
+}  // namespace
+
+// The matching half: a mutated document whose text predicate still matches
+// survives the revalidation and comes out with a freshly recomputed relevance
+// score. A match can only be produced by the text branch, so this also says the
+// evaluator was handed a context.
+TEST_F(ResponseGeneratorTest, MutatedTextDocumentRevalidatedAndRescored) {
+  ValkeyModuleCtx fake_ctx;
+  EXPECT_CALL(*kMockValkeyModule, GetExpire(testing::_))
+      .WillRepeatedly(testing::Return(VALKEYMODULE_NO_EXPIRE));
+
+  UnitTestSearchParameters parameters;
+  MockAttributeDataType data_type;
+  std::vector<indexes::Neighbor> neighbors;
+  RunTextReplyPath(&fake_ctx, parameters, data_type, "k1", "hello world",
+                   "@text:hello", /*mutated=*/true,
+                   /*initial_neighbor_score=*/7.0f, neighbors);
+
+  ASSERT_EQ(neighbors.size(), 1u);
+  EXPECT_EQ(neighbors[0].external_id->Str(), "k1");
+  // Rescored: the stale 7.0 the shard carried is gone.
+  EXPECT_NE(neighbors[0].score, 7.0f);
+  EXPECT_GT(neighbors[0].score, 0.0f);
+}
+
+// The reply path runs on the main thread and must never wait on the
+// time-sliced mutex: here the revalidation and rescore complete while a writer
+// holds it for the whole call, which would deadlock the old lock protocol.
+TEST_F(ResponseGeneratorTest, MutatedTextDocumentRevalidatedUnderWriterLock) {
+  ValkeyModuleCtx fake_ctx;
+  EXPECT_CALL(*kMockValkeyModule, GetExpire(testing::_))
+      .WillRepeatedly(testing::Return(VALKEYMODULE_NO_EXPIRE));
+
+  UnitTestSearchParameters parameters;
+  MockAttributeDataType data_type;
+  std::vector<indexes::Neighbor> neighbors;
+  parameters.index_schema = BuildSingleTextDocSchema("k1", "hello world",
+                                                     /*mutated=*/true);
+  vmsdk::WriterMutexLock writer(&parameters.index_schema->GetTimeSlicedMutex());
+  RunTextReplyPath(&fake_ctx, parameters, data_type, "k1", "hello world",
+                   "@text:hello", /*mutated=*/true,
+                   /*initial_neighbor_score=*/7.0f, neighbors,
+                   /*reuse_schema=*/true);
+
+  ASSERT_EQ(neighbors.size(), 1u);
+  EXPECT_NE(neighbors[0].score, 7.0f);
+  EXPECT_GT(neighbors[0].score, 0.0f);
+}
+
+// A mutated document's tags are read from the fetched record on both the
+// membership check and the rescore: a record that dropped the queried value is
+// dropped even though the index still lists it, and one that still carries it
+// is rescored from the record.
+TEST_F(ResponseGeneratorTest, MutatedTagDocumentFollowsRecord) {
+  ValkeyModuleCtx fake_ctx;
+  EXPECT_CALL(*kMockValkeyModule, GetExpire(testing::_))
+      .WillRepeatedly(testing::Return(VALKEYMODULE_NO_EXPIRE));
+
+  auto schema = BuildSingleTextDocSchema("k1", "hello world", /*mutated=*/true);
+  auto tag = std::make_shared<indexes::Tag>(
+      CreateTagIndexProto(/*separator=*/",", /*case_sensitive=*/false));
+  ASSERT_TRUE(schema->AddIndex("color", "color", tag).ok());
+  auto interned = StringInternStore::Intern("k1");
+  ASSERT_TRUE(
+      tag->AddRecord(interned,
+                     AttributeData(vmsdk::MakeUniqueValkeyString("red")))
+          .ok());
+
+  auto run = [&](const std::string &filter, const std::string &record_color) {
+    UnitTestSearchParameters parameters;
+    parameters.index_schema = schema;
+    auto parsed = FilterParser(*schema, filter, TextParsingOptions{}).Parse();
+    EXPECT_TRUE(parsed.ok()) << parsed.status();
+    parameters.filter_parse_results = std::move(parsed).value();
+
+    std::vector<indexes::Neighbor> neighbors;
+    neighbors.push_back(indexes::Neighbor(interned, 7.0f));
+    neighbors.back().sequence_number = 0;
+    MockAttributeDataType data_type;
+    EXPECT_CALL(data_type, ToProto())
+        .WillRepeatedly(testing::Return(
+            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH));
+    EXPECT_CALL(data_type, FetchAllAttributes(&fake_ctx, testing::_, testing::_,
+                                              testing::_, testing::_))
+        .WillRepeatedly([&record_color](
+                            ValkeyModuleCtx *,
+                            const std::optional<std::string> &,
+                            ValkeyModuleKey *, absl::string_view,
+                            const absl::flat_hash_set<absl::string_view> &)
+                            -> absl::StatusOr<RecordsMap> {
+          RecordsMap m;
+          m.emplace("text", RecordsMapValue(
+                                vmsdk::MakeUniqueValkeyString("text"),
+                                vmsdk::MakeUniqueValkeyString("hello world")));
+          m.emplace("color", RecordsMapValue(
+                                 vmsdk::MakeUniqueValkeyString("color"),
+                                 vmsdk::MakeUniqueValkeyString(record_color)));
+          return m;
+        });
+    query::ProcessNeighborsForReply(&fake_ctx, data_type, neighbors, parameters,
+                                    /*vector_identifier=*/std::nullopt);
+    return neighbors;
+  };
+
+  auto still_red = run("@text:hello @color:{red}", "red");
+  ASSERT_EQ(still_red.size(), 1u);
+  EXPECT_GT(still_red[0].score, 0.0f);
+  EXPECT_NE(still_red[0].score, 7.0f);
+  // The index still says red, but the record is authoritative.
+  EXPECT_TRUE(run("@text:hello @color:{red}", "blue").empty());
+
+  // Under an OR the filter stops at the text match and never parses the tags;
+  // the rescore must still credit the tag from the record.
+  auto or_red = run("@text:hello | @color:{red}", "red");
+  auto or_blue = run("@text:hello | @color:{red}", "blue");
+  ASSERT_EQ(or_red.size(), 1u);
+  ASSERT_EQ(or_blue.size(), 1u);
+  EXPECT_GT(or_red[0].score, or_blue[0].score);
+}
+
+// The non-matching half, and the teeth of the pair: the same mutated document
+// against a word it does not contain is dropped. That verdict can only come
+// from evaluating the predicate against the text index, so the text
+// branch is provably executed rather than skipped.
+TEST_F(ResponseGeneratorTest, MutatedTextDocumentDroppedWhenItNoLongerMatches) {
+  ValkeyModuleCtx fake_ctx;
+  EXPECT_CALL(*kMockValkeyModule, GetExpire(testing::_))
+      .WillRepeatedly(testing::Return(VALKEYMODULE_NO_EXPIRE));
+
+  UnitTestSearchParameters parameters;
+  MockAttributeDataType data_type;
+  std::vector<indexes::Neighbor> neighbors;
+  RunTextReplyPath(&fake_ctx, parameters, data_type, "k1", "hello world",
+                   "@text:zebra", /*mutated=*/true,
+                   /*initial_neighbor_score=*/7.0f, neighbors);
+
+  EXPECT_TRUE(neighbors.empty());
+}
+
+// The control: the identical non-matching filter on an UNmutated document
+// keeps it, because the sequence-number fast path returns before any of this.
+// This is what makes the drop above attributable to the revalidation branch --
+// and it is also why the lock costs nothing on the common path.
+TEST_F(ResponseGeneratorTest, UnmutatedTextDocumentSkipsRevalidation) {
+  ValkeyModuleCtx fake_ctx;
+  EXPECT_CALL(*kMockValkeyModule, GetExpire(testing::_))
+      .WillRepeatedly(testing::Return(VALKEYMODULE_NO_EXPIRE));
+
+  UnitTestSearchParameters parameters;
+  MockAttributeDataType data_type;
+  std::vector<indexes::Neighbor> neighbors;
+  RunTextReplyPath(&fake_ctx, parameters, data_type, "k1", "hello world",
+                   "@text:zebra", /*mutated=*/false,
+                   /*initial_neighbor_score=*/7.0f, neighbors);
+
+  ASSERT_EQ(neighbors.size(), 1u);
+  EXPECT_FLOAT_EQ(neighbors[0].score, 7.0f);
+}
+
+// The reader lock VerifyFilter takes must be gone by the time the reply path
+// returns -- a leaked or unbalanced reader would leave the schema mutex stuck
+// in read mode and starve every ingestion worker. Taking the writer lock here
+// would block forever if that happened.
+TEST_F(ResponseGeneratorTest, TextRevalidationLeavesSchemaMutexFree) {
+  ValkeyModuleCtx fake_ctx;
+  EXPECT_CALL(*kMockValkeyModule, GetExpire(testing::_))
+      .WillRepeatedly(testing::Return(VALKEYMODULE_NO_EXPIRE));
+
+  UnitTestSearchParameters parameters;
+  MockAttributeDataType data_type;
+  std::vector<indexes::Neighbor> neighbors;
+  RunTextReplyPath(&fake_ctx, parameters, data_type, "k1", "hello world",
+                   "@text:hello", /*mutated=*/true,
+                   /*initial_neighbor_score=*/7.0f, neighbors);
+  ASSERT_EQ(neighbors.size(), 1u);
+
+  vmsdk::WriterMutexLock lock(&parameters.index_schema->GetTimeSlicedMutex());
+}
+
+// --- VECTOR_RANGE revalidation on the main-thread content-fetch path ---
+//
+// A mutated document's VR predicate is re-checked against the vector the
+// document holds now -- the value in the records VerifyFilter is handed -- and
+// never against the index. The re-check runs on the main thread after the
+// search released its reader lock, where the index's lock-free accessors race
+// the writer threads. Each case gives the index and the record opposite
+// answers, so the verdict shows which of the two was read.
+
+class VectorRangeRevalidationTest
+    : public ValkeySearchTestWithParam<data_model::AttributeDataType> {
+ protected:
+  bool IsJson() const {
+    return GetParam() ==
+           data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON;
+  }
+  // The vector as the database hands it back: raw bytes in a HASH field, JSON
+  // text for a JSON path.
+  std::string Stored(const std::vector<float> &v) const {
+    if (IsJson()) {
+      return absl::StrCat("[", absl::StrJoin(v, ","), "]");
+    }
+    return Floats(v);
+  }
+  static std::string Floats(const std::vector<float> &v) {
+    return {reinterpret_cast<const char *>(v.data()), v.size() * sizeof(float)};
+  }
+
+  // k1 is indexed with `indexed` and has been rewritten since the search: its
+  // fetched record holds `current` in the VR field, or no such field when
+  // `current` is nullopt. Returns whether VerifyFilter keeps k1 for
+  // `@vec:[VECTOR_RANGE radius $query]` on a 4-dimensional FLAT index.
+  bool Keeps(data_model::DistanceMetric metric,
+             const std::vector<float> &indexed,
+             const std::optional<std::string> &current,
+             const std::vector<float> &query, double radius) {
+    const std::string identifier = IsJson() ? "$.vec" : "vec";
+    UnitTestSearchParameters parameters;
+    std::unique_ptr<AttributeDataType> attribute_data_type;
+    if (IsJson()) {
+      attribute_data_type = std::make_unique<JsonAttributeDataType>();
+    } else {
+      attribute_data_type = std::make_unique<HashAttributeDataType>();
+    }
+    parameters.index_schema =
+        MockIndexSchema::Create(&fake_ctx_, "index", {"prefix:"},
+                                std::move(attribute_data_type))
+            .value();
+    auto index = indexes::VectorFlat<float>::Create(
+        CreateFlatVectorIndexProto(4, metric, 10, 10), identifier, GetParam(),
+        0);
+    EXPECT_TRUE(index.ok());
+    VMSDK_EXPECT_OK(
+        parameters.index_schema->AddIndex("vec", identifier, index.value()));
+    auto key = StringInternStore::Intern("k1");
+    VMSDK_EXPECT_OK(
+        testing_infra::AddVectorRecord(*index.value(), key, Floats(indexed)));
+    // The sequence numbers disagree, so VerifyFilter re-checks the document
+    // rather than returning on its fast path.
+    parameters.index_schema->SetIndexMutationSequenceNumber(key, 0);
+    parameters.index_schema->SetDbMutationSequenceNumber(key, 1);
+    indexes::Neighbor neighbor(key, 0.0f);
+    neighbor.sequence_number = 0;
+
+    auto predicate = std::make_unique<query::VectorRangePredicate>(
+        "vec", identifier, radius, "BLOB", std::nullopt, std::nullopt);
+    predicate->SetQueryVector(Floats(query));
+    parameters.filter_parse_results.root_predicate = std::move(predicate);
+    parameters.has_vector_range = true;
+
+    RecordsMap records;
+    if (current.has_value()) {
+      records.emplace(identifier,
+                      RecordsMapValue(vmsdk::MakeUniqueValkeyString(identifier),
+                                      vmsdk::MakeUniqueValkeyString(*current)));
+    }
+    std::unique_ptr<query::QueryContext> query_ctx;
+    return query::VerifyFilter(parameters, records, neighbor, query_ctx)
+        .matches;
+  }
+
+  // Squared L2 from the origin: 0.25 for inside_, 81 for outside_.
+  const std::vector<float> origin_{0.0f, 0.0f, 0.0f, 0.0f};
+  const std::vector<float> inside_{0.5f, 0.0f, 0.0f, 0.0f};
+  const std::vector<float> outside_{9.0f, 0.0f, 0.0f, 0.0f};
+};
+
+TEST_P(VectorRangeRevalidationTest, DroppedWhenTheCurrentVectorIsOutOfRange) {
+  EXPECT_FALSE(Keeps(data_model::DISTANCE_METRIC_L2, /*indexed=*/inside_,
+                     Stored(outside_), origin_, /*radius=*/1.0));
+}
+
+TEST_P(VectorRangeRevalidationTest, KeptWhenTheCurrentVectorIsInRange) {
+  EXPECT_TRUE(Keeps(data_model::DISTANCE_METRIC_L2, /*indexed=*/outside_,
+                    Stored(inside_), origin_, /*radius=*/1.0));
+}
+
+TEST_P(VectorRangeRevalidationTest, DroppedWhenTheVectorFieldIsGone) {
+  EXPECT_FALSE(Keeps(data_model::DISTANCE_METRIC_L2, /*indexed=*/inside_,
+                     std::nullopt, origin_, /*radius=*/1.0));
+}
+
+TEST_P(VectorRangeRevalidationTest, DroppedWhenTheVectorIsNotAVector) {
+  EXPECT_FALSE(Keeps(data_model::DISTANCE_METRIC_L2, /*indexed=*/inside_,
+                     Stored({0.5f, 0.0f, 0.0f}), origin_, /*radius=*/1.0));
+  EXPECT_FALSE(Keeps(data_model::DISTANCE_METRIC_L2, /*indexed=*/inside_,
+                     IsJson() ? "[0.5,zero,0,0]" : "not a vector", origin_,
+                     /*radius=*/1.0));
+}
+
+// The re-check must bound a cosine distance exactly as the index's own
+// membership test (IsWithinVectorRange) does, whatever that bound is, or a
+// document kept at search time could be dropped at reply time. Compare the two
+// verdicts for the same stored vector at the radii where the bound decides: 0
+// and either side of the raw distance, for a self-match whose raw distance is
+// rounding noise above 0 and for a near neighbour.
+TEST_P(VectorRangeRevalidationTest, CosineVerdictMatchesTheIndex) {
+  auto probe = indexes::VectorFlat<float>::Create(
+      CreateFlatVectorIndexProto(4, data_model::DISTANCE_METRIC_COSINE, 10, 10),
+      "probe", data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
+  ASSERT_TRUE(probe.ok());
+  // Multiples of 1/8 survive the JSON text Stored() writes unchanged, so the
+  // probe and the re-check see the same vector.
+  std::optional<std::vector<float>> self;
+  for (int i = 1; i <= 30 && !self.has_value(); ++i) {
+    std::vector<float> v{0.125f * i, 0.75f, 1.375f, 0.25f};
+    auto raw = probe.value()->RecomputeDistance(Floats(v), Floats(v));
+    ASSERT_TRUE(raw.ok());
+    if (*raw > 0.0f) {
+      self = v;
+    }
+  }
+  ASSERT_TRUE(self.has_value());
+  auto key = StringInternStore::Intern("probe");
+  VMSDK_EXPECT_OK(
+      testing_infra::AddVectorRecord(*probe.value(), key, Floats(*self)));
+  std::vector<float> near = *self;
+  near[3] += 0.125f;
+  bool saw_keep = false;
+  bool saw_drop = false;
+  for (const std::vector<float> &query : {*self, near}) {
+    auto raw = probe.value()->RecomputeDistance(Floats(*self), Floats(query));
+    ASSERT_TRUE(raw.ok());
+    for (float radius : {0.0f, std::nextafter(*raw, 0.0f), *raw, 2.0f}) {
+      auto in_index =
+          probe.value()->IsWithinVectorRange(key, Floats(query), radius);
+      ASSERT_TRUE(in_index.ok());
+      bool keeps = Keeps(data_model::DISTANCE_METRIC_COSINE,
+                         /*indexed=*/{-1.0f, 0.0f, 0.0f, 0.0f}, Stored(*self),
+                         query, radius);
+      EXPECT_EQ(keeps, in_index->has_value())
+          << "raw distance " << *raw << ", radius " << radius;
+      saw_keep |= keeps;
+      saw_drop |= !keeps;
+    }
+  }
+  EXPECT_TRUE(saw_keep && saw_drop);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    VectorRangeRevalidationTests, VectorRangeRevalidationTest,
+    testing::Values(data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH,
+                    data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON),
+    [](const testing::TestParamInfo<data_model::AttributeDataType> &info) {
+      return info.param ==
+                     data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH
+                 ? "Hash"
+                 : "Json";
+    });
 
 INSTANTIATE_TEST_SUITE_P(
     ResponseGeneratorTests, ResponseGeneratorTest,

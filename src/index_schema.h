@@ -15,6 +15,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "absl/base/thread_annotations.h"
@@ -33,6 +34,7 @@
 #include "src/expr/expr.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
+#include "src/indexes/text/language_registry.h"
 #include "src/indexes/text/text_index.h"
 #include "src/indexes/vector_base.h"
 #include "src/keyspace_event_manager.h"
@@ -172,7 +174,8 @@ class IndexSchema : public KeyspaceEventSubscription,
       absl::string_view attribute_alias) const;
   absl::Status AddIndex(absl::string_view attribute_alias,
                         absl::string_view identifier,
-                        std::shared_ptr<indexes::IndexBase> index);
+                        std::shared_ptr<indexes::IndexBase> index,
+                        AttributeOptions options = {});
 
   void RespondWithInfo(ValkeyModuleCtx *ctx) const;
 
@@ -206,34 +209,23 @@ class IndexSchema : public KeyspaceEventSubscription,
     }
     return itr->second.document_score;
   }
-
-  uint32_t GetDocumentLength(BorrowedInternedStringPtr key) const
-      ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
-    if (!text_index_schema_) {
-      return 0;
-    }
-    return text_index_schema_->GetKeyDocLen(key);
-  }
-
-  uint32_t GetDocumentNorm(const Key &key) const
-      ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
-    if (!text_index_schema_) {
-      return 0;
-    }
-    return text_index_schema_->GetKeyNorm(key);
-  }
-
-  uint64_t GetTotalDocumentLength() const
-      ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
-    if (!text_index_schema_) {
-      return 0;
-    }
-    return text_index_schema_->GetMetadata().total_doc_len.load();
+  // Main-thread read, which must not wait on the time-sliced mutex: every
+  // writer of index_key_info_ takes mutated_records_mutex_, so a short hold of
+  // it suffices.
+  float GetDocumentScoreLocked(BorrowedInternedStringPtr key) const
+      ABSL_LOCKS_EXCLUDED(mutated_records_mutex_) {
+    absl::MutexLock lock(&mutated_records_mutex_);
+    auto itr = index_key_info_.find(key);
+    return itr == index_key_info_.end() ? score_ : itr->second.document_score;
   }
 
   void CreateTextIndexSchema() {
+    auto language = indexes::text::LanguageRegistry::Instance().Get(language_);
+    CHECK(language != nullptr)
+        << "Unregistered language: " << data_model::Language_Name(language_);
     text_index_schema_ = std::make_shared<indexes::text::TextIndexSchema>(
-        language_, punctuation_, with_offsets_, stop_words_, min_stem_size_);
+        std::move(language), punctuation_, stop_words_, with_offsets_,
+        min_stem_size_);
     // BM25's N is the count of ALL indexed docs, not just text-bearing keys.
     // IndexSchema owns text_index_schema_, so `this` outlives the callback; the
     // scoring hot path already holds time_sliced_mutex_ in read phase when this
@@ -317,7 +309,7 @@ class IndexSchema : public KeyspaceEventSubscription,
     return time_sliced_mutex_;
   }
   void MarkAsDestructing();
-  bool IsMarkedDestructing() { return is_destructing_; };
+  bool IsMarkedDestructing() const { return is_destructing_.load(); }
   void ProcessMultiQueue();
   uint64_t GetBackfillScannedKeyCount() const;
   uint64_t GetBackfillDbSize() const;
@@ -331,6 +323,15 @@ class IndexSchema : public KeyspaceEventSubscription,
       const std::vector<indexes::Neighbor> &neighbors,
       std::unique_ptr<query::SearchParameters> &&params)
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
+
+  // Blocks until the in-flight mutations of `neighbors` are indexed, or
+  // `deadline` passes (false). For queries that reply synchronously and so
+  // cannot be parked in the mutation queue by PerformKeyContentionCheck.
+  // While the writer pool is suspended for a fork, applies them on the
+  // calling thread instead, taking time_sliced_mutex_ as writer.
+  bool WaitForContendedKeys(const std::vector<indexes::Neighbor> &neighbors,
+                            absl::Time deadline)
+      ABSL_LOCKS_EXCLUDED(mutated_records_mutex_, time_sliced_mutex_);
 
   static absl::Status TextInfoCmd(ValkeyModuleCtx *ctx,
                                   vmsdk::ArgsIterator &itr);
@@ -358,6 +359,19 @@ class IndexSchema : public KeyspaceEventSubscription,
 
   size_t GetDbKeyInfoSize() const { return db_key_info_.Get().size(); }
 
+  // Same as GetDbMutationSequenceNumber, for callers that may legitimately ask
+  // about a key the index no longer tracks: a mutation that deleted the key
+  // erases its entry, and asking about one of those is a question, not a bug.
+  std::optional<MutationSequenceNumber> TryGetDbMutationSequenceNumber(
+      const Key &key) const {
+    const auto &map = db_key_info_.Get();
+    auto itr = map.find(key);
+    if (itr == map.end()) {
+      return std::nullopt;
+    }
+    return itr->second.mutation_sequence_number_;
+  }
+
   MutationSequenceNumber GetDbMutationSequenceNumber(const Key &key) const {
     auto itr = db_key_info_.Get().find(key);
     CHECK(itr != db_key_info_.Get().end())
@@ -375,6 +389,15 @@ class IndexSchema : public KeyspaceEventSubscription,
   // REQUIRES: time_sliced_mutex_ held in read phase
   size_t GetIndexKeyInfoSize() const
       ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
+    return index_key_info_.size();
+  }
+
+  // Main-thread read, which must not wait on the time-sliced mutex: every
+  // writer of index_key_info_ takes mutated_records_mutex_, so a short hold of
+  // it suffices.
+  size_t GetIndexKeyInfoSizeLocked() const
+      ABSL_LOCKS_EXCLUDED(mutated_records_mutex_) {
+    absl::MutexLock lock(&mutated_records_mutex_);
     return index_key_info_.size();
   }
 
@@ -647,10 +670,15 @@ class IndexSchema : public KeyspaceEventSubscription,
   FRIEND_TEST(IndexSchemaFriendTest, FlatConsistencyTest);
   FRIEND_TEST(IndexSchemaFriendTest, MutatedAttributes);
   FRIEND_TEST(IndexSchemaFriendTest, WeightedBuffer);
+  FRIEND_TEST(IndexSchemaFriendTest, WaitForContendedKeysWhileSuspended);
+  FRIEND_TEST(IndexSchemaFriendTest, WaitForContendedKeysUntilApplied);
+  FRIEND_TEST(IndexSchemaFriendTest, WaitForContendedKeysDeadlineWhileBlocked);
   FRIEND_TEST(IndexSchemaFriendTest, MutatedAttributesSanity);
   FRIEND_TEST(IndexSchemaFriendTest, InvalidDataDropsKey);
   FRIEND_TEST(IndexSchemaFriendTest,
               InTrackedMutationRecordsAfterConsumeNoCrash);
+  // Orphan multi/exec key is skipped on save (test-only access).
+  FRIEND_TEST(IndexSchemaFriendTest, OrphanMultiKeySkippedOnSave);
   FRIEND_TEST(ValkeySearchTest, Info);
   FRIEND_TEST(OnSwapDBCallbackTest, OnSwapDBCallback);
 };

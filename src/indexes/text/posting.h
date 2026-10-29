@@ -70,14 +70,18 @@ static_assert(sizeof(FieldMask) == 16, "FieldMask should exactly be 16 bytes");
 
 using PositionMap = absl::btree_map<Position, FieldMask>;
 
+struct PostingDocStats {
+  uint32_t tf;
+  uint32_t doc_len;
+};
+
 // Btree value: the position map pointer plus the key's (immutable) term
 // frequency and document length, co-located so the scoring hot path reads them
 // straight off the merge iterator instead of decoding the separately allocated
 // FlatPositionMap block (tf) or probing the per-key scoring map (doc_len).
 struct PostingValue {
   FlatPositionMap* map;
-  uint32_t tf;
-  uint32_t doc_len;
+  PostingDocStats doc_stats;
 };
 // doc_len fills the padding after tf, so PostingValue stays 16 bytes.
 static_assert(sizeof(PostingValue) == 16,
@@ -110,9 +114,12 @@ struct Postings {
   // Total frequency of the term across all keys and positions
   size_t GetTotalTermFrequency() const;
 
-  // Look up the posting entry (tf + doc_len) for a specific key in one find,
-  // only used in extra-step scoring. Returns nullopt if the key is absent.
-  std::optional<PostingValue> LookupKey(BorrowedInternedStringPtr key) const;
+  // Returns a copy of `key`'s posting value if the key is present and the
+  // term occurs in at least one field of `field_mask`. Postings are shared
+  // across all TEXT fields, so the field check is needed; pass `~0ULL` to
+  // accept any field without scanning positions.
+  std::optional<PostingValue> GetPostingValue(BorrowedInternedStringPtr key,
+                                              uint64_t field_mask) const;
 
   // Defrag this contents of this object. Returns the updated "this" pointer.
   Postings* Defrag();
@@ -142,6 +149,9 @@ struct Postings {
     // Get Position Iterator
     PositionIterator GetPositionIterator() const;
 
+    // The current key's position map (what GetPositionIterator walks).
+    const FlatPositionMap& GetPositionMap() const;
+
     // get tf for the current key, only used in iterator scoring
     size_t GetTermFrequency() const;
 
@@ -162,7 +172,7 @@ struct Postings {
  private:
   // Cache tf in PostingValue to avoid a map lookup
   // PostValue should be removed and restored if no extra-step
-  // Transparent comparator so LookupKey() can probe with a borrowed key.
+  // Transparent comparator so GetPostingValue() can probe with a borrowed key.
   absl::btree_map<Key, PostingValue, InternedStringPtrLess> key_to_positions_;
 };
 

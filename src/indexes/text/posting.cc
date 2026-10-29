@@ -49,7 +49,7 @@ bool Postings::IsEmpty() const { return key_to_positions_.empty(); }
 
 void Postings::InsertKey(const Key& key, FlatPositionMap* flat_map, uint32_t tf,
                          uint32_t doc_len) {
-  key_to_positions_.emplace(key, PostingValue{flat_map, tf, doc_len});
+  key_to_positions_.emplace(key, PostingValue{flat_map, {tf, doc_len}});
 }
 
 // Remove a document key and all its positions
@@ -60,7 +60,7 @@ void Postings::RemoveKey(const Key& key, TextIndexMetadata* metadata) {
   FlatPositionMap* flat_map = node.mapped().map;
 
   metadata->total_positions -= flat_map->CountPositions();
-  metadata->total_term_frequency -= node.mapped().tf;
+  metadata->total_term_frequency -= node.mapped().doc_stats.tf;
 
   // Destroy and remove from map
   FlatPositionMap::Destroy(flat_map);
@@ -82,15 +82,38 @@ size_t Postings::GetPositionCount() const {
 size_t Postings::GetTotalTermFrequency() const {
   size_t total_frequency = 0;
   for (const auto& [key, value] : key_to_positions_) {
-    total_frequency += value.tf;
+    total_frequency += value.doc_stats.tf;
   }
   return total_frequency;
 }
 
-std::optional<PostingValue> Postings::LookupKey(
-    BorrowedInternedStringPtr key) const {
+namespace {
+
+// Does any position for this key fall in a field in `field_mask`?
+// NOTE: We could make a space tradeoff and store a union of the field masks
+// upon creation for every PostingValue to avoid iteration cost.
+bool ContainsFields(const PostingValue& value, uint64_t field_mask) {
+  CHECK(value.map != nullptr)
+      << "Posting list contains a key with no FlatPositionMap";
+  // Every key present has >=1 position, so "any field" needs no scan.
+  if (field_mask == ~0ULL) return true;
+  PositionIterator iter(*value.map);
+  while (iter.IsValid()) {
+    if ((iter.GetFieldMask() & field_mask) != 0) {
+      return true;
+    }
+    iter.NextPosition();
+  }
+  return false;
+}
+
+}  // namespace
+
+std::optional<PostingValue> Postings::GetPostingValue(
+    BorrowedInternedStringPtr key, uint64_t field_mask) const {
   auto it = key_to_positions_.find(key);
-  if (it == key_to_positions_.end()) {
+  if (it == key_to_positions_.end() ||
+      !text::ContainsFields(it->second, field_mask)) {
     return std::nullopt;
   }
   return it->second;
@@ -126,28 +149,7 @@ void Postings::KeyIterator::NextKey() {
 bool Postings::KeyIterator::ContainsFields(uint64_t field_mask) const {
   CHECK(key_map_ != nullptr && current_ != end_)
       << "KeyIterator is invalid or exhausted";
-
-  CHECK(current_->second.map != nullptr)
-      << "Posting list contains a key with no FlatPositionMap";
-
-  // When querying all fields (~0ULL), any non-zero position mask will match,
-  // and every key in the posting list has at least one position entry.
-  if (field_mask == ~0ULL) return true;
-
-  FlatPositionMap* flat_map = current_->second.map;
-
-  // Check all positions for this key to see if any of the requested fields are
-  // set
-  PositionIterator iter(*flat_map);
-  while (iter.IsValid()) {
-    uint64_t position_mask = iter.GetFieldMask();
-    if ((position_mask & field_mask) != 0) {
-      return true;
-    }
-    iter.NextPosition();
-  }
-
-  return false;
+  return text::ContainsFields(current_->second, field_mask);
 }
 
 bool Postings::KeyIterator::SkipForwardKey(const Key& key) {
@@ -166,24 +168,26 @@ const Key& Postings::KeyIterator::GetKey() const {
   return current_->first;
 }
 
-PositionIterator Postings::KeyIterator::GetPositionIterator() const {
+const FlatPositionMap& Postings::KeyIterator::GetPositionMap() const {
   CHECK(key_map_ != nullptr && current_ != end_)
       << "KeyIterator is invalid or exhausted";
+  return *current_->second.map;
+}
 
-  FlatPositionMap* flat_map = current_->second.map;
-  return PositionIterator(*flat_map);
+PositionIterator Postings::KeyIterator::GetPositionIterator() const {
+  return {GetPositionMap()};
 }
 
 size_t Postings::KeyIterator::GetTermFrequency() const {
   CHECK(key_map_ != nullptr && current_ != end_)
       << "KeyIterator is invalid or exhausted";
-  return current_->second.tf;
+  return current_->second.doc_stats.tf;
 }
 
 uint32_t Postings::KeyIterator::GetDocLen() const {
   CHECK(key_map_ != nullptr && current_ != end_)
       << "KeyIterator is invalid or exhausted";
-  return current_->second.doc_len;
+  return current_->second.doc_stats.doc_len;
 }
 
 }  // namespace valkey_search::indexes::text

@@ -592,10 +592,21 @@ void TrackResults(
 void IndexSchema::OnKeyspaceNotification(ValkeyModuleCtx *ctx, int type,
                                          const char *event,
                                          ValkeyModuleString *key) {
+  SharedBlockedClient blocked_client;
+  if (ShouldBlockClient(ctx, vmsdk::MultiOrLua(ctx), /*from_backfill=*/false)) {
+    blocked_client = std::make_shared<vmsdk::BlockedClient>(
+        ctx, true, GetBlockedCategoryFromProto());
+  }
+  OnKeyspaceNotification(ctx, type, event, key, blocked_client);
+}
+
+void IndexSchema::OnKeyspaceNotification(
+    ValkeyModuleCtx *ctx, int type, const char *event, ValkeyModuleString *key,
+    const SharedBlockedClient &blocked_client) {
   if (ABSL_PREDICT_FALSE(!IsInCurrentDB(ctx))) {
     return;
   }
-  ProcessKeyspaceNotification(ctx, key, false);
+  ProcessKeyspaceNotification(ctx, key, false, blocked_client);
 }
 
 std::vector<const indexes::VectorBase *> IndexSchema::GetVectorIndexes() const {
@@ -646,6 +657,13 @@ void AppendMutatedAttribute(
 void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
                                               ValkeyModuleString *key,
                                               bool from_backfill) {
+  SharedBlockedClient blocked_client;
+  ProcessKeyspaceNotification(ctx, key, from_backfill, blocked_client);
+}
+
+void IndexSchema::ProcessKeyspaceNotification(
+    ValkeyModuleCtx *ctx, ValkeyModuleString *key, bool from_backfill,
+    const SharedBlockedClient &blocked_client) {
   if (ABSL_PREDICT_FALSE(key == nullptr) || is_destructing_) {
     return;
   }
@@ -752,7 +770,8 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
     // it inflates FT.INFO num_docs (which is db_key_info_.size()) and lands
     // in the RDB key list that SaveIndexExtension writes.
     ProcessMutation(ctx, mutated_attributes, interned_key, from_backfill,
-                    key_obj == nullptr || filter_rejected, document_score);
+                    key_obj == nullptr || filter_rejected, document_score,
+                    blocked_client);
   }
 }
 
@@ -1076,7 +1095,8 @@ MutationSequenceNumber IndexSchema::UpdateDbInfoKey(
 void IndexSchema::ProcessMutation(ValkeyModuleCtx *ctx,
                                   MutatedAttributes &mutated_attributes,
                                   const Key &interned_key, bool from_backfill,
-                                  bool is_delete, float document_score) {
+                                  bool is_delete, float document_score,
+                                  SharedBlockedClient blocked_client) {
   auto this_mutation = UpdateDbInfoKey(ctx, mutated_attributes, interned_key,
                                        from_backfill, is_delete);
 
@@ -1084,12 +1104,10 @@ void IndexSchema::ProcessMutation(ValkeyModuleCtx *ctx,
   if (ABSL_PREDICT_FALSE(inside_multi_exec)) {
     EnqueueMultiMutation(interned_key);
   }
-  const bool block_client =
-      ShouldBlockClient(ctx, inside_multi_exec, from_backfill);
-
-  if (ABSL_PREDICT_FALSE(!TrackMutatedRecord(
-          ctx, interned_key, std::move(mutated_attributes), this_mutation,
-          from_backfill, block_client, inside_multi_exec, document_score)) ||
+  if (ABSL_PREDICT_FALSE(
+          !TrackMutatedRecord(interned_key, std::move(mutated_attributes),
+                              this_mutation, from_backfill, inside_multi_exec,
+                              document_score, std::move(blocked_client))) ||
       inside_multi_exec) {
     // Skip scheduling if the mutation key has already been tracked or is part
     // of a multi exec command.
@@ -2065,7 +2083,8 @@ void IndexSchema::OnLoadingEnded(ValkeyModuleCtx *ctx) {
 
   for (auto &[key, attributes] : deletion_attributes) {
     auto interned_key = StringInternStore::Intern(key);
-    ProcessMutation(ctx, attributes, interned_key, true, true);
+    ProcessMutation(ctx, attributes, interned_key, true, true,
+                    kDefaultDocumentScore);
   }
   VMSDK_LOG(NOTICE, ctx) << "Scanned index schema "
                          << vmsdk::config::RedactIfNeeded(name_)
@@ -2217,11 +2236,12 @@ size_t IndexSchema::ComputeWeightedBufferSize(
 }
 
 // Returns true if the inserted key not exists otherwise false
-bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx, const Key &key,
+bool IndexSchema::TrackMutatedRecord(const Key &key,
                                      MutatedAttributes &&mutated_attributes,
                                      MutationSequenceNumber sequence_number,
-                                     bool from_backfill, bool block_client,
-                                     bool from_multi, float document_score) {
+                                     bool from_backfill, bool from_multi,
+                                     float document_score,
+                                     SharedBlockedClient blocked_client) {
   absl::MutexLock lock(&mutated_records_mutex_);
   auto [itr, inserted] =
       tracked_mutated_records_.insert({key, DocumentMutation{}});
@@ -2236,11 +2256,9 @@ bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx, const Key &key,
     // Buffer is freed when the mutation record is erased.
     itr->second.weighted_buffer.resize(
         ComputeWeightedBufferSize(itr->second.attributes.value()));
-    if (ABSL_PREDICT_TRUE(block_client)) {
-      vmsdk::BlockedClient blocked_client(ctx, true,
-                                          GetBlockedCategoryFromProto());
-      blocked_client.MeasureTimeStart();
-      itr->second.blocked_clients.emplace_back(std::move(blocked_client));
+    if (ABSL_PREDICT_TRUE(blocked_client)) {
+      blocked_client->MeasureTimeStart();
+      itr->second.blocked_clients.push_back(std::move(blocked_client));
     }
     return true;
   }
@@ -2264,12 +2282,10 @@ bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx, const Key &key,
   itr->second.weighted_buffer.resize(
       ComputeWeightedBufferSize(itr->second.attributes.value()));
 
-  if (ABSL_PREDICT_TRUE(block_client) &&
+  if (ABSL_PREDICT_TRUE(blocked_client) &&
       ABSL_PREDICT_TRUE(!itr->second.from_multi)) {
-    vmsdk::BlockedClient blocked_client(ctx, true,
-                                        GetBlockedCategoryFromProto());
-    blocked_client.MeasureTimeStart();
-    itr->second.blocked_clients.emplace_back(std::move(blocked_client));
+    blocked_client->MeasureTimeStart();
+    itr->second.blocked_clients.push_back(std::move(blocked_client));
   }
 
   if (ABSL_PREDICT_FALSE(!from_backfill && itr->second.from_backfill)) {

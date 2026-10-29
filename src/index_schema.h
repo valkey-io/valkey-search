@@ -245,7 +245,11 @@ class IndexSchema : public KeyspaceEventSubscription,
   inline void SetVersion(uint32_t version) { version_ = version; }
 
   void OnKeyspaceNotification(ValkeyModuleCtx *ctx, int type, const char *event,
-                              ValkeyModuleString *key) override;
+                              ValkeyModuleString *key);
+  void OnKeyspaceNotification(
+      ValkeyModuleCtx *ctx, int type, const char *event,
+      ValkeyModuleString *key,
+      const SharedBlockedClient &blocked_client) override;
 
   uint32_t PerformBackfill(ValkeyModuleCtx *ctx, uint32_t batch_size);
 
@@ -294,7 +298,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   struct DocumentMutation {
     using AttributeData = valkey_search::AttributeData;
     std::optional<MutatedAttributes> attributes;
-    std::vector<vmsdk::BlockedClient> blocked_clients;
+    std::vector<SharedBlockedClient> blocked_clients;
     // Queries waiting for this mutation to complete
     std::vector<std::unique_ptr<query::SearchParameters>> waiting_queries;
     MutationSequenceNumber sequence_number{0};
@@ -560,12 +564,16 @@ class IndexSchema : public KeyspaceEventSubscription,
 
   void ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
                                    ValkeyModuleString *key, bool from_backfill);
+  void ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
+                                   ValkeyModuleString *key, bool from_backfill,
+                                   const SharedBlockedClient &blocked_client);
 
   void ProcessMutation(ValkeyModuleCtx *ctx,
                        MutatedAttributes &mutated_attributes,
                        const Key &interned_key, bool from_backfill,
                        bool is_delete,
-                       float document_score = kDefaultDocumentScore);
+                       float document_score = kDefaultDocumentScore,
+                       SharedBlockedClient blocked_client = nullptr);
   bool ScheduleMutation(bool from_backfill, const Key &key,
                         vmsdk::ThreadPool::Priority priority,
                         absl::BlockingCounter *blocking_counter);
@@ -605,12 +613,12 @@ class IndexSchema : public KeyspaceEventSubscription,
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
   bool InTrackedMutationRecords(const Key &key,
                                 const std::string &identifier) const;
-  bool TrackMutatedRecord(ValkeyModuleCtx *ctx, const Key &key,
+  bool TrackMutatedRecord(const Key &key,
                           MutatedAttributes &&mutated_attributes,
                           MutationSequenceNumber sequence_number,
-                          bool from_backfill, bool block_client,
-                          bool from_multi,
-                          float document_score = kDefaultDocumentScore)
+                          bool from_backfill, bool from_multi,
+                          float document_score = kDefaultDocumentScore,
+                          SharedBlockedClient blocked_client = nullptr)
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
 
   size_t ComputeWeightedBufferSize(const MutatedAttributes &attributes) const;

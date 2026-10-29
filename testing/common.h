@@ -291,7 +291,14 @@ class MockKeyspaceEventSubscription : public KeyspaceEventSubscription {
   MOCK_METHOD(void, OnKeyspaceNotification,
               (ValkeyModuleCtx * ctx, int type, const char *event,
                ValkeyModuleString *key),
-              (override));
+              ());
+  void OnKeyspaceNotification(
+      ValkeyModuleCtx *ctx, int type, const char *event,
+      ValkeyModuleString *key,
+      const SharedBlockedClient &blocked_client) override {
+    (void)blocked_client;
+    OnKeyspaceNotification(ctx, type, event, key);
+  }
   std::vector<const indexes::VectorBase *> GetVectorIndexes() const override {
     return vector_indexes_;
   }

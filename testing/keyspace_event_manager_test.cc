@@ -137,6 +137,50 @@ TEST_F(KeyspaceEventManagerTest, RemoveSubscriptionNotExists) {
             absl::StatusCode::kNotFound);
 }
 
+TEST_F(KeyspaceEventManagerTest, DoesNotBlockForSubscriptionInOtherDatabase) {
+  TestableKeyspaceEventManager keyspace_event_manager;
+  MockKeyspaceEventSubscription subscription;
+  MockAttributeDataType attribute_data_type;
+  std::vector<std::string> prefixes = {"prefix:"};
+  subscription.db_num_ = 1;
+
+  EXPECT_CALL(attribute_data_type, GetValkeyEventTypes())
+      .WillRepeatedly(Return(VALKEYMODULE_NOTIFY_HASH));
+  EXPECT_CALL(attribute_data_type, ToProto())
+      .WillRepeatedly(Return(data_model::ATTRIBUTE_DATA_TYPE_HASH));
+  EXPECT_CALL(subscription, GetAttributeDataType())
+      .WillRepeatedly(ReturnRef(attribute_data_type));
+  EXPECT_CALL(subscription, GetKeyPrefixes())
+      .WillRepeatedly(ReturnRef(prefixes));
+  EXPECT_CALL(*kMockValkeyModule,
+              SubscribeToKeyspaceEvents(&fake_ctx_, VALKEYMODULE_NOTIFY_HASH,
+                                        testing::_))
+      .WillOnce(Return(VALKEYMODULE_OK));
+  VMSDK_EXPECT_OK(
+      keyspace_event_manager.InsertSubscription(&fake_ctx_, &subscription));
+
+  auto key = vmsdk::MakeUniqueValkeyString("prefix:key");
+  EXPECT_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx_))
+      .WillOnce(Return(0));
+  EXPECT_CALL(*kMockValkeyModule, GetClientId(&fake_ctx_))
+      .WillRepeatedly(Return(1));
+  EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx_))
+      .WillRepeatedly(Return(0));
+  EXPECT_CALL(
+      *kMockValkeyModule,
+      BlockClient(&fake_ctx_, testing::_, testing::_, testing::_, testing::_))
+      .Times(0);
+  EXPECT_CALL(subscription,
+              OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_HASH,
+                                     testing::StrEq("event"), key.get()))
+      .Times(0);
+
+  keyspace_event_manager.NotifySubscribers(&fake_ctx_, VALKEYMODULE_NOTIFY_HASH,
+                                           "event", key.get());
+
+  VMSDK_EXPECT_OK(keyspace_event_manager.RemoveSubscription(&subscription));
+}
+
 INSTANTIATE_TEST_SUITE_P(
     KeyspaceEventManagerTests, KeyspaceEventManagerTest,
     testing::ValuesIn<KeyspaceEventManagerTestCase>({
@@ -404,10 +448,6 @@ TEST_F(KeyspaceEventManagerTest, RenameLifecycleCrossDatabaseMove) {
       .WillOnce(Return());
   EXPECT_CALL(*kMockValkeyModule, SelectDb(&fake_ctx_, 1))
       .WillOnce(Return(VALKEYMODULE_OK));
-  EXPECT_CALL(*mock_sub_db0,
-              OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_GENERIC,
-                                     testing::StrEq("rename_to"), testing::_))
-      .WillOnce(Return());
   EXPECT_CALL(*mock_sub_db1,
               OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_GENERIC,
                                      testing::StrEq("rename_to"), testing::_))
@@ -477,10 +517,6 @@ TEST_F(KeyspaceEventManagerTest, MoveLifecycleCrossDatabaseMove) {
       .WillOnce(Return());
   EXPECT_CALL(*kMockValkeyModule, SelectDb(&fake_ctx_, 1))
       .WillOnce(Return(VALKEYMODULE_OK));
-  EXPECT_CALL(*mock_sub_db0,
-              OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_GENERIC,
-                                     testing::StrEq("move_to"), testing::_))
-      .WillOnce(Return());
   EXPECT_CALL(*mock_sub_db1,
               OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_GENERIC,
                                      testing::StrEq("move_to"), testing::_))

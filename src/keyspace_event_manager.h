@@ -20,6 +20,10 @@
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
+namespace vmsdk {
+class BlockedClient;
+}  // namespace vmsdk
+
 namespace valkey_search {
 namespace indexes {
 class VectorBase;
@@ -27,6 +31,7 @@ class VectorBase;
 
 using StartSubscriptionFunction =
     std::function<absl::Status(ValkeyModuleCtx *, int)>;
+using SharedBlockedClient = std::shared_ptr<vmsdk::BlockedClient>;
 
 // KeyspaceEventSubscription is an interface for classes that want to subscribe
 // to keyspace events.
@@ -46,9 +51,9 @@ class KeyspaceEventSubscription {
   // completely prefixed by B. Otherwise, duplicate events may fire.
   virtual const std::vector<std::string> &GetKeyPrefixes() const = 0;
 
-  virtual void OnKeyspaceNotification(ValkeyModuleCtx *ctx, int type,
-                                      const char *event,
-                                      ValkeyModuleString *key) = 0;
+  virtual void OnKeyspaceNotification(
+      ValkeyModuleCtx *ctx, int type, const char *event,
+      ValkeyModuleString *key, const SharedBlockedClient &blocked_client) = 0;
   virtual std::vector<const indexes::VectorBase *> GetVectorIndexes() const = 0;
   virtual bool IsInDB(int db_num) const { return true; }
   virtual bool IsInCurrentDB(ValkeyModuleCtx *ctx) const {
@@ -85,9 +90,11 @@ class KeyspaceEventManager {
     return VALKEYMODULE_OK;
   }
 
-  void ProcessMoveNotification(ValkeyModuleCtx *ctx, int type,
-                               ValkeyModuleString *dst_key,
-                               const char *dst_event);
+  void ProcessMoveNotification(
+      ValkeyModuleCtx *ctx, int type, ValkeyModuleString *dst_key,
+      const char *dst_event, int dst_db_num,
+      const std::vector<KeyspaceEventSubscription *> &src_subscriptions,
+      const SharedBlockedClient &blocked_client);
 
   vmsdk::MainThreadAccessGuard<absl::flat_hash_set<KeyspaceEventSubscription *>>
       subscriptions_;

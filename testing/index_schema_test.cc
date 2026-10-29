@@ -705,6 +705,175 @@ TEST_F(IndexSchemaSubscriptionSimpleTest, DropIndexPrematurely) {
             0);
 }
 
+TEST_F(IndexSchemaSubscriptionSimpleTest,
+       ClientStaysBlockedUntilEverySchemaApplied) {
+  // Two schemas share the client's block. Each mutation runs to completion the
+  // moment it is scheduled, like a worker finishing before the main thread has
+  // notified the next schema; the client must only be released once both have
+  // applied it.
+  MockThreadPool mutations_thread_pool("writer-thread-pool-", 1);
+  EXPECT_CALL(mutations_thread_pool, Schedule(testing::_, testing::_))
+      .WillRepeatedly(
+          [](absl::AnyInvocable<void()> task, vmsdk::ThreadPool::Priority) {
+            task();
+            return true;
+          });
+  std::vector<absl::string_view> key_prefixes = {"prefix:"};
+  auto key = StringInternStore::Intern("prefix:key");
+  auto key_valkey_str = vmsdk::MakeUniqueValkeyString(key->Str());
+  const char *field = "vector";
+
+  std::vector<std::shared_ptr<MockIndexSchema>> index_schemas;
+  std::vector<std::shared_ptr<MockIndex>> mock_indexes;
+  for (const auto &name : {"first", "second"}) {
+    auto index_schema =
+        MockIndexSchema::Create(&fake_ctx_, name, key_prefixes,
+                                std::make_unique<HashAttributeDataType>(),
+                                &mutations_thread_pool)
+            .value();
+    auto mock_index = std::make_shared<MockIndex>();
+    VMSDK_EXPECT_OK(
+        index_schema->AddIndex("attribute_name", field, mock_index));
+    EXPECT_CALL(*mock_index, IsTracked(key)).WillRepeatedly(Return(false));
+    index_schemas.push_back(std::move(index_schema));
+    mock_indexes.push_back(std::move(mock_index));
+  }
+
+  EXPECT_CALL(*kMockValkeyModule, KeyType(testing::_))
+      .WillRepeatedly(TestValkeyModule_KeyTypeDefaultImpl);
+  EXPECT_CALL(*kMockValkeyModule,
+              KeyType(vmsdk::ValkeyModuleKeyIsForString(key->Str())))
+      .WillRepeatedly(Return(VALKEYMODULE_KEYTYPE_HASH));
+  EXPECT_CALL(*kMockValkeyModule,
+              HashGet(vmsdk::ValkeyModuleKeyIsForString(key->Str()),
+                      VALKEYMODULE_HASH_CFIELDS, StrEq(field),
+                      An<ValkeyModuleString **>(), TypedEq<void *>(nullptr)))
+      .WillRepeatedly([](ValkeyModuleKey *, int, const char *,
+                         ValkeyModuleString **value_out, void *) {
+        *value_out =
+            TestValkeyModule_CreateStringPrintf(nullptr, "vector_buffer");
+        return VALKEYMODULE_OK;
+      });
+  EXPECT_CALL(*kMockValkeyModule, GetClientId(testing::_))
+      .WillRepeatedly(Return(1));
+
+  // Notification order is unspecified; only block and release are ordered.
+  testing::Sequence first_applied, second_applied;
+  EXPECT_CALL(
+      *kMockValkeyModule,
+      BlockClient(testing::_, testing::_, testing::_, testing::_, testing::_))
+      .InSequence(first_applied, second_applied)
+      .WillOnce(Return((ValkeyModuleBlockedClient *)1));
+  EXPECT_CALL(*mock_indexes[0], AddRecord(key, testing::_))
+      .InSequence(first_applied)
+      .WillOnce(Return(indexes::RecordResult::kAdded));
+  EXPECT_CALL(*mock_indexes[1], AddRecord(key, testing::_))
+      .InSequence(second_applied)
+      .WillOnce(Return(indexes::RecordResult::kAdded));
+  EXPECT_CALL(*kMockValkeyModule,
+              UnblockClient((ValkeyModuleBlockedClient *)1, nullptr))
+      .InSequence(first_applied, second_applied)
+      .WillOnce(Return(1));
+
+  KeyspaceEventManager::Instance().NotifySubscribers(
+      &fake_ctx_, VALKEYMODULE_NOTIFY_HASH, "event", key_valkey_str.get());
+  EXPECT_EQ(vmsdk::BlockedClientTracker::GetInstance().GetClientCount(
+                vmsdk::BlockedClientCategory::kHash),
+            0);
+}
+
+TEST_F(IndexSchemaSubscriptionSimpleTest,
+       OverwrittenMutationKeepsClientBlockedUntilApplied) {
+  MockThreadPool mutations_thread_pool("writer-thread-pool-", 1);
+  std::vector<absl::AnyInvocable<void()>> scheduled_tasks;
+  EXPECT_CALL(mutations_thread_pool, Schedule(testing::_, testing::_))
+      .WillOnce([&](absl::AnyInvocable<void()> task,
+                    vmsdk::ThreadPool::Priority) {
+        scheduled_tasks.push_back(std::move(task));
+        return true;
+      });
+
+  std::vector<absl::string_view> key_prefixes = {"prefix:"};
+  auto index_schema =
+      MockIndexSchema::Create(&fake_ctx_, "index", key_prefixes,
+                              std::make_unique<HashAttributeDataType>(),
+                              &mutations_thread_pool)
+          .value();
+  auto mock_index = std::make_shared<MockIndex>();
+  VMSDK_EXPECT_OK(index_schema->AddIndex("attribute_name", "vector",
+                                         mock_index));
+  auto key = StringInternStore::Intern("prefix:key");
+  auto key_valkey_str = vmsdk::MakeUniqueValkeyString(key->Str());
+  EXPECT_CALL(*mock_index, IsTracked(key)).WillRepeatedly(Return(false));
+
+  EXPECT_CALL(*kMockValkeyModule, KeyType(testing::_))
+      .WillRepeatedly(TestValkeyModule_KeyTypeDefaultImpl);
+  EXPECT_CALL(*kMockValkeyModule,
+              KeyType(vmsdk::ValkeyModuleKeyIsForString(key->Str())))
+      .WillRepeatedly(Return(VALKEYMODULE_KEYTYPE_HASH));
+  EXPECT_CALL(*kMockValkeyModule,
+              HashGet(vmsdk::ValkeyModuleKeyIsForString(key->Str()),
+                      VALKEYMODULE_HASH_CFIELDS, StrEq("vector"),
+                      An<ValkeyModuleString **>(), TypedEq<void *>(nullptr)))
+      .WillRepeatedly([](ValkeyModuleKey *, int, const char *,
+                         ValkeyModuleString **value_out, void *) {
+        *value_out =
+            TestValkeyModule_CreateStringPrintf(nullptr, "vector_buffer");
+        return VALKEYMODULE_OK;
+      });
+
+  unsigned long long client_id = 1;
+  EXPECT_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx_))
+      .WillRepeatedly(Return(0));
+  EXPECT_CALL(*kMockValkeyModule, GetClientId(&fake_ctx_))
+      .WillRepeatedly([&](ValkeyModuleCtx *) { return client_id; });
+  EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx_))
+      .WillRepeatedly(Return(0));
+  EXPECT_CALL(*kMockValkeyModule,
+              BlockClient(&fake_ctx_, testing::_, testing::_, testing::_,
+                          testing::_))
+      .WillOnce(Return((ValkeyModuleBlockedClient *)1))
+      .WillOnce(Return((ValkeyModuleBlockedClient *)2));
+
+  bool mutation_applied = false;
+  EXPECT_CALL(*mock_index, AddRecord(key, testing::_))
+      .WillOnce([&](const InternedStringPtr &, AttributeData &&) {
+        mutation_applied = true;
+        return indexes::RecordResult::kAdded;
+      });
+  int unblocked_clients = 0;
+  EXPECT_CALL(*kMockValkeyModule, UnblockClient(testing::_, nullptr))
+      .Times(2)
+      .WillRepeatedly([&](ValkeyModuleBlockedClient *, void *) {
+        EXPECT_TRUE(mutation_applied);
+        ++unblocked_clients;
+        return 1;
+      });
+
+  KeyspaceEventManager::Instance().NotifySubscribers(
+      &fake_ctx_, VALKEYMODULE_NOTIFY_HASH, "event", key_valkey_str.get());
+  ASSERT_EQ(scheduled_tasks.size(), 1);
+  EXPECT_EQ(unblocked_clients, 0);
+
+  // A different client overwrites the pending mutation for the same key.
+  client_id = 2;
+  KeyspaceEventManager::Instance().NotifySubscribers(
+      &fake_ctx_, VALKEYMODULE_NOTIFY_HASH, "event", key_valkey_str.get());
+  EXPECT_EQ(scheduled_tasks.size(), 1);
+  EXPECT_EQ(unblocked_clients, 0);
+  EXPECT_EQ(vmsdk::BlockedClientTracker::GetInstance().GetClientCount(
+                vmsdk::BlockedClientCategory::kHash),
+            2);
+
+  scheduled_tasks.front()();
+
+  EXPECT_TRUE(mutation_applied);
+  EXPECT_EQ(unblocked_clients, 2);
+  EXPECT_EQ(vmsdk::BlockedClientTracker::GetInstance().GetClientCount(
+                vmsdk::BlockedClientCategory::kHash),
+            0);
+}
+
 TEST_F(IndexSchemaSubscriptionSimpleTest, EmptyKeyPrefixesTest) {
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
   mutations_thread_pool.StartWorkers();
@@ -1945,8 +2114,8 @@ TEST_F(IndexSchemaFriendTest, WeightedBuffer) {
     auto key1 = StringInternStore::Intern("weighted_key_1");
     auto mutated_attrs = CreateMutatedAttributes(
         attribute_identifier, vector_data, key1, hnsw_index.get());
-    EXPECT_TRUE(index_schema->TrackMutatedRecord(
-        nullptr, key1, std::move(mutated_attrs), 0, false, false, false));
+    EXPECT_TRUE(index_schema->TrackMutatedRecord(key1, std::move(mutated_attrs),
+                                                 0, false, false));
     absl::MutexLock lock(&index_schema->mutated_records_mutex_);
     auto itr = index_schema->tracked_mutated_records_.find(key1);
     ASSERT_NE(itr, index_schema->tracked_mutated_records_.end());
@@ -1959,8 +2128,8 @@ TEST_F(IndexSchemaFriendTest, WeightedBuffer) {
     std::string text_data(200, 'a');  // 200 bytes
     auto mutated_attrs = CreateMutatedAttributes("text_id", text_data);
     auto key2 = StringInternStore::Intern("weighted_key_2");
-    EXPECT_TRUE(index_schema->TrackMutatedRecord(
-        nullptr, key2, std::move(mutated_attrs), 0, false, false, false));
+    EXPECT_TRUE(index_schema->TrackMutatedRecord(key2, std::move(mutated_attrs),
+                                                 0, false, false));
     absl::MutexLock lock(&index_schema->mutated_records_mutex_);
     auto itr = index_schema->tracked_mutated_records_.find(key2);
     ASSERT_NE(itr, index_schema->tracked_mutated_records_.end());
@@ -1973,8 +2142,8 @@ TEST_F(IndexSchemaFriendTest, WeightedBuffer) {
     std::string numeric_data(8, 'n');  // 8 bytes
     auto mutated_attrs = CreateMutatedAttributes("numeric_id", numeric_data);
     auto key3 = StringInternStore::Intern("weighted_key_3");
-    EXPECT_TRUE(index_schema->TrackMutatedRecord(
-        nullptr, key3, std::move(mutated_attrs), 0, false, false, false));
+    EXPECT_TRUE(index_schema->TrackMutatedRecord(key3, std::move(mutated_attrs),
+                                                 0, false, false));
     absl::MutexLock lock(&index_schema->mutated_records_mutex_);
     auto itr = index_schema->tracked_mutated_records_.find(key3);
     ASSERT_NE(itr, index_schema->tracked_mutated_records_.end());
@@ -1987,8 +2156,8 @@ TEST_F(IndexSchemaFriendTest, WeightedBuffer) {
     std::string tag_data(100, 't');  // 100 bytes
     auto mutated_attrs = CreateMutatedAttributes("tag_id", tag_data);
     auto key4 = StringInternStore::Intern("weighted_key_4");
-    EXPECT_TRUE(index_schema->TrackMutatedRecord(
-        nullptr, key4, std::move(mutated_attrs), 0, false, false, false));
+    EXPECT_TRUE(index_schema->TrackMutatedRecord(key4, std::move(mutated_attrs),
+                                                 0, false, false));
     absl::MutexLock lock(&index_schema->mutated_records_mutex_);
     auto itr = index_schema->tracked_mutated_records_.find(key4);
     ASSERT_NE(itr, index_schema->tracked_mutated_records_.end());
@@ -2002,8 +2171,8 @@ TEST_F(IndexSchemaFriendTest, WeightedBuffer) {
     mutated_attrs[attribute_identifier] =
         AttributeData(indexes::DeletionType::kRecord);
     auto key5 = StringInternStore::Intern("weighted_key_5");
-    EXPECT_TRUE(index_schema->TrackMutatedRecord(
-        nullptr, key5, std::move(mutated_attrs), 0, false, false, false));
+    EXPECT_TRUE(index_schema->TrackMutatedRecord(key5, std::move(mutated_attrs),
+                                                 0, false, false));
     absl::MutexLock lock(&index_schema->mutated_records_mutex_);
     auto itr = index_schema->tracked_mutated_records_.find(key5);
     ASSERT_NE(itr, index_schema->tracked_mutated_records_.end());
@@ -2015,8 +2184,8 @@ TEST_F(IndexSchemaFriendTest, WeightedBuffer) {
     std::string initial_data(200, 'a');  // 200 bytes
     auto mutated_attrs = CreateMutatedAttributes("text_id", initial_data);
     auto key6 = StringInternStore::Intern("weighted_key_6");
-    EXPECT_TRUE(index_schema->TrackMutatedRecord(
-        nullptr, key6, std::move(mutated_attrs), 0, false, false, false));
+    EXPECT_TRUE(index_schema->TrackMutatedRecord(key6, std::move(mutated_attrs),
+                                                 0, false, false));
     {
       absl::MutexLock lock(&index_schema->mutated_records_mutex_);
       auto itr = index_schema->tracked_mutated_records_.find(key6);
@@ -2029,7 +2198,7 @@ TEST_F(IndexSchemaFriendTest, WeightedBuffer) {
     std::string larger_data(500, 'b');  // 500 bytes
     auto mutated_attrs2 = CreateMutatedAttributes("text_id", larger_data);
     EXPECT_FALSE(index_schema->TrackMutatedRecord(
-        nullptr, key6, std::move(mutated_attrs2), 0, false, false, false));
+        key6, std::move(mutated_attrs2), 0, false, false));
     {
       absl::MutexLock lock(&index_schema->mutated_records_mutex_);
       auto itr = index_schema->tracked_mutated_records_.find(key6);
@@ -2052,8 +2221,8 @@ TEST_F(IndexSchemaFriendTest, WeightedBuffer) {
     auto key7 = StringInternStore::Intern("weighted_key_7");
     auto mutated_attrs = CreateMutatedAttributes(attribute_identifier, data,
                                                  key7, hnsw_index.get());
-    EXPECT_TRUE(index_schema->TrackMutatedRecord(
-        nullptr, key7, std::move(mutated_attrs), 0, false, false, false));
+    EXPECT_TRUE(index_schema->TrackMutatedRecord(key7, std::move(mutated_attrs),
+                                                 0, false, false));
     {
       absl::MutexLock lock(&index_schema->mutated_records_mutex_);
       auto itr = index_schema->tracked_mutated_records_.find(key7);
@@ -2073,23 +2242,23 @@ TEST_F(IndexSchemaFriendTest, MutatedAttributesSanity) {
   auto mutated_attributes_1 = CreateMutatedAttributes(
       attribute_identifier, data_ptr, key, hnsw_index.get());
   EXPECT_TRUE(index_schema->TrackMutatedRecord(
-      nullptr, key, std::move(mutated_attributes_1), 0, true, false, false));
+      key, std::move(mutated_attributes_1), 0, true, false));
   // Verify that adding a track attribute with backfill off after on return true
   auto mutated_attributes_2 = CreateMutatedAttributes(
       attribute_identifier, data_ptr, key, hnsw_index.get());
   EXPECT_TRUE(index_schema->TrackMutatedRecord(
-      nullptr, key, std::move(mutated_attributes_2), 0, false, false, false));
+      key, std::move(mutated_attributes_2), 0, false, false));
   auto mutated_attributes_3 = CreateMutatedAttributes(
       attribute_identifier, data_ptr, key, hnsw_index.get());
   EXPECT_FALSE(index_schema->TrackMutatedRecord(
-      nullptr, key, std::move(mutated_attributes_3), 0, false, false, false));
+      key, std::move(mutated_attributes_3), 0, false, false));
   EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 1);
   auto consumed_data = index_schema->ConsumeTrackedMutatedAttribute(key, true);
   EXPECT_TRUE(consumed_data.has_value());
   auto mutated_attributes_4 = CreateMutatedAttributes(
       attribute_identifier, data_ptr, key, hnsw_index.get());
   EXPECT_FALSE(index_schema->TrackMutatedRecord(
-      nullptr, key, std::move(mutated_attributes_4), 0, false, false, false));
+      key, std::move(mutated_attributes_4), 0, false, false));
   consumed_data = index_schema->ConsumeTrackedMutatedAttribute(key, true);
   EXPECT_FALSE(consumed_data.has_value());
   EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 1);
@@ -2124,7 +2293,7 @@ TEST_F(IndexSchemaFriendTest, InTrackedMutationRecordsAfterConsumeNoCrash) {
   auto mutated_attributes = CreateMutatedAttributes(
       attribute_identifier, data_ptr, key, hnsw_index.get());
   EXPECT_TRUE(index_schema->TrackMutatedRecord(
-      nullptr, key, std::move(mutated_attributes), 0, false, false, false));
+      key, std::move(mutated_attributes), 0, false, false));
   EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 1u);
 
   // Consume the mutation. The entry stays in the map with attributes empty.
@@ -2159,7 +2328,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
           attribute_identifier, data_ptr, key, hnsw_index.get());
       EXPECT_EQ(index_schema->attributes_.size(), 1);
       EXPECT_TRUE(index_schema->TrackMutatedRecord(
-          nullptr, key, std::move(mutated_attributes), 0, false, false, false));
+          key, std::move(mutated_attributes), 0, false, false));
     }
     if (!track_before_consumption_data_ptr.empty()) {
       VLOG(1) << "track_before_consumption_data_ptr is not empty";
@@ -2168,7 +2337,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
           attribute_identifier, track_before_consumption_data_ptr, key,
           hnsw_index.get());
       EXPECT_FALSE(index_schema->TrackMutatedRecord(
-          nullptr, key, std::move(mutated_attributes), 0, false, false, false));
+          key, std::move(mutated_attributes), 0, false, false));
       data_ptr = track_before_consumption_data_ptr;
     }
     EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 1);
@@ -2206,8 +2375,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
             attribute_identifier, track_after_consumption_data_ptr, key,
             hnsw_index.get());
         EXPECT_EQ(index_schema->TrackMutatedRecord(
-                      nullptr, key, std::move(mutated_attributes), 0, false,
-                      false, false),
+                      key, std::move(mutated_attributes), 0, false, false),
                   !track_before_consumption_data_ptr.empty());
       }
       auto consumed_data =
@@ -3889,7 +4057,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   {
     auto a = CreateMutatedAttributes(attribute_identifier, data_ptr, k,
                                      hnsw_index.get());
-    index_schema->TrackMutatedRecord(nullptr, k, std::move(a), 1, false, false,
+    index_schema->TrackMutatedRecord(k, std::move(a), 1, false,
                                      /*from_multi=*/true, 0);  // map={K}
   }
   // Drive the real consumer (the writer-pool task body) to index and erase the

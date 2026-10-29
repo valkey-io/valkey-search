@@ -1,201 +1,88 @@
-# Client blocking: benchmark results and trade-offs
+# Client blocking: pre-PR and final benchmark results
 
-Measured on 2026-10-29 for PR #1640. This note records the implementation with execution-unit cleanup and preserved deferred transaction behavior.
+Measured on 2026-10-29 for PR #1640. The primary comparison is the PR parent `6d1eb26` against the final implementation's behavior.
 
-Removing the eager ordinary-write wait restores MULTI→ordinary acknowledgment latency to approximately the actual pre-PR behavior. Against the immediately preceding eager post-notification implementation, it substantially improves throughput with one/two index schemas and lowers single-client p50 latency at every schema count.
+Transaction acknowledgment latency is close to pre-PR behavior. Deleting eight untracked STRING keys is 4.6 to 5.0 times faster. JSON throughput falls 6.6% with five schemas and 5.2% with ten. The final implementation does not eliminate every performance regression.
 
-The tradeoff is explicit: **p99 transaction-group latency increases at every schema count**, and pipelined transaction throughput is lower with five/ten schemas. Remaining normal-path costs also prevent a blanket “no regression versus main” claim: the actual pre-PR comparison measures **JSON throughput 6.6% lower at five schemas and 5.2% lower at ten**, with all five independent pairs adverse.
+Intermediate implementations and diagnostic builds appear only in the appendices. Their results explain design choices but are not the baseline for judging the final PR.
 
-## What was measured
+## Builds and measurement method
 
-The immutable candidate is `.audit/pr1640-preserve-deferred-libsearch.so`, SHA256 `6fe877b0610028c9db4a0cc1653b1771ba3f3d80a64963d62ddf2baa8562e70c`. Its behavior preserves ordinary-write coalescing with a still-deferred transaction record: no eager worker or blocked-client ownership is created for that record. Queued/running ordinary mutations still retain client ownership. Post-notification registration cleanup and the untracked-deletion eligibility check remain.
+The final implementation uses `ClientBlockingContext`, shared `BlockedClient` ownership, and execution-unit cleanup. Ordinary writes that join deferred transaction records coalesce without acquiring a block or scheduling a worker. Queued and running mutations retain waiting clients until indexing completes.
 
-The comparisons are separate:
+The full sweep measures this behavior before the identifier-only rename to `ClientBlockingContext` and `AcquireBlock`. The JSON follow-up and final verification use the renamed Release build. Appendix D records the build identifiers and verification history.
 
-- **Actual pre-PR:** PR parent `6d1eb26`, using the old blocked-client tracker. This is a pinned parent comparison, not a claim about a newly fetched main revision.
-- **Before-sleep:** saved deferred-promotion implementation with event-loop before-sleep cleanup.
-- **Immediate previous:** saved eager post-notification implementation, SHA256 beginning `24c43eb6`. This targeted comparison isolates removing the eager transaction wait while retaining post-notification cleanup.
+The pre-PR comparison covers 13 macro workloads and four single-client workloads at 1, 2, 5, and 10 schemas. Each comparison uses five fresh independent server pairs with alternating execution order. The primary comparison contains **680 timed trials, 68 comparison cells, and 19,578,880 logical operations, with zero benchmark errors**.
 
-The full matrix against the first two baselines has 13 macro workloads and four single-client workloads at 1/2/5/10 index schemas. Each cell uses five fresh independent server pairs with alternating side order. It contributes **1,360 timed trials and 39,157,760 logical operations**. The direct immediate-previous comparison adds **90 trials and 573,440 operations**. Combined: **1,450 trials, 145 comparison cells, 39,731,200 logical operations and zero benchmark errors**.
+Release builds use `-O3 -DNDEBUG`, four writer threads, and two reader threads. The ARM64 host has 32 logical CPUs. Servers use CPUs 0 through 5, and the compiled generator uses CPUs 6 through 13. Persistence is disabled. Module arguments are loaded through temporary configuration files.
 
-All modules use Release `-O3 -DNDEBUG`, four writer threads and two reader threads. The ARM64 host has 32 logical CPUs; servers use CPUs 0–5 and the compiled generator CPUs 6–13. Persistence is disabled; module arguments are supplied in temporary configuration files.
+Macro runs use eight clients and a pipeline depth of 16. Micro runs use one client and a pipeline depth of one. Completed throughput includes replies and the final indexing drain. Ordinary workloads count commands per second. Transaction workloads count transaction groups per second.
 
-Macro runs use eight clients and pipeline depth 16. Completed throughput includes replies plus final FT.INFO/FT.SEARCH indexing drain; **higher is better**. Units are **commands/second** for ordinary writes/deletions and **transaction groups/second** for transaction shapes. Single-client runs use one client and pipeline depth one; p50/p99 are individual-command/group latency in **microseconds (µs); lower is better**. Macro tail values are **batch-of-16 latency**, not individual-command latency.
+Macro latency measures a batch of 16 operations. Micro latency measures one command or transaction group. Latency is in microseconds, abbreviated µs. Higher throughput and lower latency are better.
 
-Every trial waits for READY schemas, complete backfill and empty queues before timing. Exact RESP replies, final HASH/JSON values, deletion counts, document counts in every schema, searchable final-update markers and empty final mutation queues are checked. Optional blocked-client INFO metrics are unavailable throughout; these runs make **no zero-blocked-counter claim**.
+Every trial starts with ready schemas, complete backfill, and empty mutation queues. Validation checks exact RESP replies, final HASH and JSON values, deletion counts, document counts in every schema, searchable final-update markers, and empty final queues. Optional blocked-client INFO metrics were unavailable. The measurements do not establish that those counters reach zero.
 
-## Direct previous → new: throughput and tail tradeoff
+## Transaction acknowledgment
 
-Completed MULTI→ordinary throughput, **transaction groups/second; higher is better**:
+The final implementation preserves the pre-PR behavior of ordinary writes that join deferred MULTI or Lua work. Both implementations retain `ProcessMultiQueue` as the query barrier.
 
-| Index schemas | Eager post-notification | Preserve deferred | Change |
-| ---: | ---: | ---: | --- |
-| 1 | 44,323 | 73,928 | +66.8%, better in all five pairs |
-| 2 | 31,614 | 43,412 | +37.3%, better in all five pairs |
-| 5 | 19,954 | 19,115 | −4.2%, worse in all five pairs |
-| 10 | 11,676 | 9,906 | −15.2%, worse in all five pairs |
+| Schemas | Pre-PR groups/s | Final groups/s | Change | Pair direction |
+|---:|---:|---:|---:|---|
+| 1 | 72,686 | 72,639 | −0.1% | Mixed |
+| 2 | 42,915 | 42,742 | −0.4% | Mixed |
+| 5 | 18,594 | 18,824 | +1.2% | Mixed |
+| 10 | 9,343 | 9,859 | +5.5% | Mixed |
 
-Single-client transaction-group latency, **µs; lower is better**:
+The ranges overlap at every schema count. These medians do not establish a throughput improvement or regression.
 
-| Index schemas | Previous p50 → new | p50 direction | Previous p99 → new | p99 direction |
-| ---: | ---: | --- | ---: | --- |
-| 1 | 60.87→26.35 | Lower/better | 79.12→90.50 | Higher/worse |
-| 2 | 69.28→29.95 | Lower/better | 94.55→159.88 | Higher/worse |
-| 5 | 96.58→40.18 | Lower/better | 172.22→355.62 | Higher/worse |
-| 10 | 138.96→58.48 | Lower/better | 279.85→679.10 | Higher/worse |
+| Schemas | Pre-PR p50 µs | Final p50 µs | Pre-PR p99 µs | Final p99 µs |
+|---:|---:|---:|---:|---:|
+| 1 | 26.11 | 26.03 | 94.57 | 92.63 |
+| 2 | 29.92 | 29.71 | 157.06 | 157.13 |
+| 5 | 40.15 | 40.48 | 349.79 | 344.22 |
+| 10 | 58.47 | 58.62 | 677.66 | 683.98 |
 
-The p99 ranges are:
+## JSON throughput regression
 
-| Index schemas | Previous p99 µs [min–max] | New p99 µs [min–max] |
-| ---: | ---: | ---: |
-| 1 | 74.70–91.36 | 86.43–142.96 |
-| 2 | 92.32–123.50 | 155.11–176.55 |
-| 5 | 167.29–174.19 | 347.48–359.35 |
-| 10 | 275.49–292.37 | 664.24–723.03 |
-
-At five/ten schemas, macro batch-of-16 p99 also rises: **6,751.8→10,052.7 µs** and **11,505.6→19,483.7 µs**. Returning to batching removes the usual per-write wait but concentrates occasional work into synchronization batches. The p50 gain must not hide those tails.
-
-Single-client completed throughput improves +56.8%, +29.2% and +2.7% at one/two/five schemas, but falls **14.6% at ten**, all consistent across the five pairs. Direct ordinary HSET at one schema is approximately unchanged, **73,583→73,159 commands/second**, −0.6% with mixed pair directions.
-
-## Actual pre-PR transaction behavior is restored
-
-Completed MULTI→ordinary throughput, **transaction groups/second**:
-
-| Index schemas | Actual pre-PR → new | Median change | Pair consistency |
-| ---: | ---: | ---: | --- |
-| 1 | 72,686→72,639 | −0.1% | Mixed |
-| 2 | 42,915→42,742 | −0.4% | Mixed |
-| 5 | 18,594→18,824 | +1.2% | Mixed |
-| 10 | 9,343→9,859 | +5.5% | Mixed |
-
-All four independent-pair ranges overlap; the earlier material small-count transaction loss is absent from these medians.
-
-Single-client p50 is also close to pre-PR: **26.11→26.03**, **29.92→29.71**, **40.15→40.48** and **58.47→58.62 µs** across 1/2/5/10 schemas. p99 is **94.57→92.63**, **157.06→157.13**, **349.79→344.22** and **677.66→683.98 µs**.
-
-This restores changed write-acknowledgment timing; it is not a claim that a query protection was removed and reintroduced. Both implementations retain `ProcessMultiQueue` as the query barrier. Earlier acknowledgment of a deferred write does not by itself establish stale FT.SEARCH results or corruption.
-
-## Remaining adverse ordinary-path cells
-
-The actual pre-PR JSON comparison is adverse:
-
-| Index schemas | Pre-PR commands/second, median [range] | New commands/second, median [range] | Change |
-| ---: | ---: | ---: | ---: |
+| Schemas | Pre-PR commands/s, median [range] | Final commands/s, median [range] | Change |
+|---:|---:|---:|---:|
 | 5 | 27,783 [27,197–28,793] | 25,938 [24,359–26,837] | −6.6% |
 | 10 | 18,191 [17,347–18,410] | 17,251 [16,694–18,107] | −5.2% |
 
-JSON5 paired losses are −3.4%, −7.6%, −4.7%, −10.4% and −9.9%, with nonoverlapping aggregate ranges. JSON10 paired losses are −3.8%, −5.2%, −7.8%, −1.1% and −0.2%, with overlapping aggregate ranges. **All five pairs are worse in both cells.** These results must remain visible even though a separate JSON10 profile reverses direction.
+All five pairs are slower in both cells. The five-schema ranges do not overlap. The ten-schema ranges overlap.
 
-Against before-sleep cleanup, tracked HSET at one schema remains adverse: **79,506→73,819 commands/second, −7.2%, worse in all five pairs**. New-key HSET at two schemas is **57,198→52,569 commands/second, −8.1%, worse in all pairs**. Tracked single-key DEL1 is −3.7%, tracked DEL8 −2.7% at one schema, also all pairs adverse. These are additional costs relative to the preceding cleanup architecture, not effects that the direct transaction wait removal proves absent.
+Five-schema paired changes are −3.4%, −7.6%, −4.7%, −10.4%, and −9.9%. Ten-schema paired changes are −3.8%, −5.2%, −7.8%, −1.1%, and −0.2%.
 
-The before-sleep transaction comparison has the same tradeoff as the immediate-previous comparison: completed medians improve +62.3%/+31.5% with one/two schemas but fall −7.7%/−17.3% with five/ten, all pair directions consistent.
+A later pre-PR comparison with the final renamed build measures a smaller JSON5 loss of 1.4%. Main-thread cycle profiles also measure about 1.4% more cycles per update. The main thread consumes approximately one full core. Job overhead is a plausible contributor, but the full regression is not causally isolated. Appendix C includes the follow-up comparison and diagnostic controls.
 
-Other ordinary cells and small no-work controls have mixed or sub-percent differences. The full tables show every adverse median and pair direction; no blanket neutral-controls claim is made.
+## Untracked deletion improvement
 
-## Untracked deletion gain remains
+The final implementation skips ingestion for keys with neither indexed nor pending tracked state. Every pair improves for an eight-key untracked STRING deletion.
 
-Eight-key untracked STRING DEL throughput against actual pre-PR, **commands/second**:
+| Schemas | Pre-PR commands/s | Final commands/s | Improvement |
+|---:|---:|---:|---:|
+| 1 | 21,770 | 108,392 | 5.0× |
+| 2 | 17,016 | 78,149 | 4.6× |
+| 5 | 9,481 | 43,270 | 4.6× |
+| 10 | 5,450 | 25,810 | 4.7× |
 
-| Index schemas | Pre-PR → new | Improvement |
-| ---: | ---: | ---: |
-| 1 | 21,770→108,392 | 5.0× |
-| 2 | 17,016→78,149 | 4.6× |
-| 5 | 9,481→43,270 | 4.6× |
-| 10 | 5,450→25,810 | 4.7× |
+Deletion counts and final index contents pass validation. The complete tables also retain smaller adverse results, including duplicate-key MULTI throughput at one schema, which falls 0.8% in all five pairs.
 
-Every independent pair is better. The gain comes from skipping unnecessary ingestion work for keys with neither indexed nor pending tracked state. Deletion counts and final index contents still pass validation.
+## Verification and limits
 
-## CPU and waiting evidence
+The final renamed source passes 174 core tests, 392 relevant index tests, three SDK ownership tests, and 37 focused integrations. Formatting and isolated changed-line clang-tidy checks pass. Four known pre-existing distance tests are excluded. Before the identifier-only rename, the same behavior also passed 49 legacy integrations.
 
-Separate `/proc` CPU/wait-channel profiles are excluded from timed medians. The generator uses approximately **0.03–0.41 cores** across its eight available CPUs, so it is not the measured limiter.
+The full Python suite has not been rerun on the final candidate. Appendix D records the earlier full-suite result and its unresolved failure.
 
-- **Actual pre-PR JSON5:** a separate pair measures 28,450→27,910 commands/second, main CPU/update **34.79→36.01 µs**, with approximately one saturated main-thread core. This supports some main-thread cost but does not attribute it to a particular function or account precisely for the main sweep's −6.6%.
-- **Actual pre-PR JSON10:** a separate pair reverses direction, 16,588→17,913 commands/second, CPU/update 294.80→277.10 µs. This exposes process/scheduling variation; it does not erase the five adverse timed pairs.
-- **Before-sleep JSON5:** 28,533→25,535 commands/second, main CPU/update **35.40→39.06 µs**, approximately one main-thread core. Exact function-level cause remains unresolved.
-- **Actual pre-PR HSET1:** 71,876→73,580 commands/second with roughly one main-thread core and equal rounded main CPU/command, 13.43 µs. The actual baseline comparison is close here.
-- **Before-sleep HSET1:** 78,703→69,912 commands/second in the separate pair, approximately main-thread limited; short-run CPU-counter granularity does not isolate the source of the cost. The five-pair main sweep confirms the loss.
-- **Transactions:** against before-sleep, two-schema main CPU/group drops **28.08→9.77 µs** and throughput rises 32,750→41,660 groups/second. At five schemas, CPU/group drops **178.22→155.03 µs** but throughput falls 21,162→18,801; main-thread futex samples rise **50→263** at the same operation count. Batching performs less CPU work but spends more time waiting and uses less available concurrency.
+These measurements use modest text documents on loopback. They exclude replication, persistence, remote-network delays, and large vector updates. Mixed pair directions and overlapping ranges limit conclusions. No universal performance-neutrality claim is supported.
 
-No extra deferred-record eligibility lookup exists in the measured implementation: eligibility, merge and acquisition use the existing tracking mutex/map lookup. A proposed queue-empty shortcut based on an assumed second lookup was withdrawn after inspecting the current method. The profiles provide resource-level evidence, not a syscall count or function-level attribution.
+## Complete pre-PR versus final timing tables
 
-## Verification and scope
+Every cell has five independent pairs. Values are median [minimum–maximum]. The tables retain all 68 primary comparison cells, including throughput and p50 and p99 latency.
 
-The measured behavior passes **174 core tests, 392 relevant index tests, 37 focused integrations and 49 legacy integrations**. Four known distance tests are excluded. The new nonblocking MULTI/LUA cases at one/ten schemas pass; the saved eager candidate fails those changed-behavior regressions.
+### Macro throughput
 
-The full Python suite was **not rerun on this snapshot**. The preceding post-notification snapshot had 984 passes, 11 skips and one unresolved noeviction failure, which did not reproduce in 15 isolated runs. That earlier full-suite result must not be presented as a green full suite for this candidate.
-
-The measured module predates the subsequent identifier-only rename to `ClientBlockingContext`/`AcquireBlock`. No builds or style checks ran during timing; the immutable module remained unchanged. Final source names therefore differ, while the measured behavior is the preserved-deferred implementation.
-
-These measurements cover modest text documents on loopback without replication, persistence, remote-network delay or large vector updates. Five-pair consistency describes this experiment, not a production confidence bound. Mixed-sign cells are inconclusive; a universal no-regression claim is unsupported.
-
-All raw data and ranges are retained in `preserve-deferred-{pre_pr,before_sleep,postjob}-{macro,micro}.jsonl`, matching summary JSON and results tables, `preserve-deferred-profile-results.json` and `preserve-deferred-metadata.json`. The raw runs are retained in the development workspace; the complete summary tables below are included in the PR.
-
-## Final renamed-source checks
-
-After the identifier-only rename, the code passed 174 core tests, 392 relevant index tests and 3 SDK ownership tests. The rebuilt renamed Release module passed 37 focused lifecycle/transaction integrations again. Formatting and isolated changed-line clang-tidy checks passed on frozen source. Four known distance tests remain excluded. The renamed Release snapshot is `.audit/pr1640-client-blocking-context-libsearch.so`, SHA256 `a96f17ffb1d7e0f65c0fbce8e1e538a0f2127e5f66afab45db536142d407d30d`; timing results remain tied to the earlier immutable 6fe module.
-
-
-## JSON5 causal follow-up
-
-
-The post-notification job is a plausible contributor, but these experiments do not establish that it explains the entire earlier 6.6% regression. Fresh end-to-end comparisons show a smaller gap; cleanup timing alone does not recover throughput. The investigation changed only copied diagnostic sources; neither diagnostic implementation is part of the production change.
-
-### Decision and controls
-
-Question: does command-end job machinery account for the JSON5 loss, or does the loss require other ownership/scheduling changes? A consistent recovery across five paired runs with a gap exceeding the observed spread would support changing that mechanism. Overlapping spread and inconsistent pair directions limit attribution.
-
-Same JSON.SET workload as the existing sweep: five TEXT index schemas, content field with eight repetitions of a short text payload; eight clients, pipeline 16, four writer threads and two reader threads. Release builds, same clean Valkey server executable and JSON module, persistence disabled, loopback. Server affinity CPUs 0–5, generator CPUs 6–13. Initial host load average 0.68 with 32 CPUs. Module arguments were loaded through temporary configuration files. Every trial checks responses, document values, per-index counts/search markers, and drained indexing queues. Completed throughput includes final indexing drain; setup/seed/validation are outside the timed generator region.
-
-### Experiment 1: change cleanup timing only
-
-Five independent fresh-server cohorts; order reversed on alternate cohorts; 32,768 logical updates per trial. The isolated before_sleep binary retains current shared ownership and dispatch-state behavior, removes post-notification job registration, and releases command ownership in the host before-sleep callback. This deliberately changes release timing and is diagnostic, not a proposed production fix.
-
-| Build | Median completed commands/s | Range | Median main-thread CPU/update |
-|---|---:|---:|---:|
-| pre_pr | 28,132 | 27,477–29,537 | 35.71 µs |
-| current | 27,748 | 26,951–27,979 | 35.71 µs |
-| before_sleep | 27,680 | 25,405–28,171 | 36.01 µs |
-
-Current/pre-PR ratio of medians: -1.36%. Current was slower in all five corresponding cohorts, but ranges overlap. Before-sleep/current ratio of medians: -0.25%; before-sleep was slower in three pairs and faster in two. Removing jobs while delaying release did not yield a consistent completed-throughput gain.
-
-### Experiment 2: hold ownership timing fixed, add a no-op host job
-
-Five fresh-server pairs, alternating execution order, 131,072 updates per trial. Both builds release command ownership at before-sleep. The no-op variant registers one post-notification job per keyspace notification, independent of schema count; its callback does nothing. For this ordinary JSON.SET workload this exercises host job allocation, list processing, context preparation and cleanup while preserving the manager's reference-release timing. It does not measure the real manager cleanup callback or general multi-notification command behavior.
-
-| Build | Median completed commands/s | Range | Median main-thread CPU/update |
-|---|---:|---:|---:|
-| no_job | 28,337 | 26,761–29,172 | 35.25 µs |
-| noop_job | 27,008 | 26,474–28,884 | 37.00 µs |
-
-No-op/no-job ratio of medians: -4.69%. Paired changes: -9.25%, +2.37%, -0.22%, -5.33%, -4.40%. Four of five pairs were slower, one faster; ranges overlap. Median main-thread CPU/update increased by 1.75 µs. This supports job overhead as a candidate, but variation prevents assigning the entire original regression to it. Separate linking can also alter code layout; this is not a same-binary runtime toggle.
-
-### CPU profiles (excluded from throughput comparisons)
-
-Three user-space main-thread cycle profiles per build, 65,536 updates/profile, sampled at 997 Hz. No samples were reported lost. All three builds consumed approximately one full main core. Generator CPU use in timed no-op trials stayed below 0.155 cores, so the generator was not saturated.
-
-Weighted main-thread cycles/update: pre-PR 62,655; current 63,546 (+1.42%); before-sleep 60,958. Profile overhead makes profiled throughput unsuitable for comparison with the unprofiled sweep. Cycle profiles identify the main thread as the limiting resource, not a specific full causal stack.
-
-Current self samples include JsonUnquote 10.75%, allocator memory-size accounting zmalloc_used_memory 4.94%, and allocator/atomic operations. JsonUnquote was already 10.80% in pre-PR: a large existing cost is not proof of a new regression. Named job/context/cleanup functions individually occupy small self-sample fractions, but their called allocation and atomic work is counted elsewhere. Refcount/atomic helpers cannot be attributed to shared_ptr alone.
-
-User-space DWARF stack capture was attempted without altering perf_event_paranoid or system settings. Capture succeeded, but offline unwinding did not resolve caller chains reliably (ENOENT despite mapped binaries and copied container libraries). Consequently this report uses symbolized instruction samples only and does not claim inclusive job/refcount costs. Raw stack captures are retained for follow-up.
-
-### Verification and limits
-
-25 unprofiled trials completed 1,802,240 checked updates, with 0 response errors and no final-state/index validation failures. Nine instruction-profile and three stack-profile runs each validated another 65,536 updates. This is a narrow causal experiment, not a full regression suite or a substitute for the completed index-count sweep. The diagnostic builds deliberately restore longer ownership holds, so benchmark success does not make them suitable production changes.
-
-Earlier sweep results remain valid observations: JSON5 -6.6%, JSON10 -5.2%, all five paired results adverse. This new smaller gap demonstrates environmental/process-placement sensitivity; it does not erase those observations. No definitive attribution to shared_ptr, cleanup jobs, or record-lock contention is established. Keep the current correct lifecycle; do not introduce production complexity based on these uncertain measurements.
-
-Sources and artifacts: run_experiment.py/results.jsonl; run_noop.py/noop-results.jsonl; profile-summary.json and symbolized reports; copied diagnostic sources and build scripts; binary-sha256.json. Original production sources remain unchanged by this investigation. git diff --check passes.
-
-
-## Complete timing tables
-
-Every cell below has five independent pairs. Entries are median [minimum–maximum]. Completed throughput includes final indexing drain. Macro latency is for a batch of 16 operations; micro latency is for one command or transaction group. µs denotes microseconds. Transaction throughput counts groups; other workloads count commands. Mixed pair directions and overlapping ranges limit conclusions. The direct previous comparison is separate from the actual pre-PR baseline.
-
-### Actual pre-PR (6d1eb26)
-
-#### Macro throughput
-
-| Workload | Schemas | Baseline completed/s | Candidate completed/s | Change | Pair direction |
+| Workload | Schemas | Pre-PR completed/s | Final completed/s | Change | Pair direction |
 |---|---:|---:|---:|---:|---|
 | del_missing_8 | 1 | 742,356 [731,354–746,171] | 745,508 [730,740–748,660] | +0.4% | mixed across pairs |
 | del_missing_8 | 2 | 742,158 [739,689–743,465] | 743,175 [739,602–744,916] | +0.1% | mixed across pairs |
@@ -250,9 +137,9 @@ Every cell below has five independent pairs. Entries are median [minimum–maxim
 | unlink_tracked_8 | 5 | 10,535 [10,214–10,954] | 10,971 [10,646–11,630] | +4.1% | better in all five pairs |
 | unlink_tracked_8 | 10 | 6,389 [6,209–6,583] | 6,648 [6,551–6,709] | +4.1% | better in all five pairs |
 
-#### Macro latency (µs)
+### Macro latency (µs)
 
-| Workload | Schemas | Baseline p50 | Candidate p50 | Baseline p99 | Candidate p99 |
+| Workload | Schemas | Pre-PR p50 | Final p50 | Pre-PR p99 | Final p99 |
 |---|---:|---:|---:|---:|---:|
 | del_missing_8 | 1 | 155.21 [154.36–155.33] | 154.57 [153.80–155.34] | 268.78 [266.50–282.65] | 267.01 [266.19–275.47] |
 | del_missing_8 | 2 | 154.96 [154.48–155.17] | 154.56 [154.42–155.18] | 267.12 [266.22–275.87] | 268.25 [265.66–272.68] |
@@ -307,9 +194,9 @@ Every cell below has five independent pairs. Entries are median [minimum–maxim
 | unlink_tracked_8 | 5 | 11,792.70 [11,379.00–12,234.50] | 11,382.80 [10,698.40–11,763.80] | 13,409.40 [12,419.20–13,897.90] | 12,817.30 [11,687.30–13,368.70] |
 | unlink_tracked_8 | 10 | 19,672.30 [19,019.20–20,235.90] | 18,930.40 [18,687.70–19,206.40] | 21,438.90 [20,834.80–22,076.80] | 20,511.70 [19,967.30–21,477.10] |
 
-#### Micro throughput
+### Micro throughput
 
-| Workload | Schemas | Baseline completed/s | Candidate completed/s | Change | Pair direction |
+| Workload | Schemas | Pre-PR completed/s | Final completed/s | Change | Pair direction |
 |---|---:|---:|---:|---:|---|
 | del_tracked_1 | 1 | 25,961 [25,582–26,665] | 26,176 [26,049–27,238] | +0.8% | mixed across pairs |
 | del_tracked_1 | 2 | 21,902 [19,161–22,585] | 22,760 [22,272–23,373] | +3.9% | better in all five pairs |
@@ -328,9 +215,9 @@ Every cell below has five independent pairs. Entries are median [minimum–maxim
 | multi_then_normal | 5 | 9,052 [8,882–9,179] | 9,126 [8,927–9,240] | +0.8% | mixed across pairs |
 | multi_then_normal | 10 | 5,061 [4,935–5,091] | 5,031 [4,875–5,120] | -0.6% | mixed across pairs |
 
-#### Micro latency (µs)
+### Micro latency (µs)
 
-| Workload | Schemas | Baseline p50 | Candidate p50 | Baseline p99 | Candidate p99 |
+| Workload | Schemas | Pre-PR p50 | Final p50 | Pre-PR p99 | Final p99 |
 |---|---:|---:|---:|---:|---:|
 | del_tracked_1 | 1 | 37.03 [36.34–37.51] | 36.98 [35.66–37.02] | 49.91 [46.68–58.47] | 49.18 [42.80–51.57] |
 | del_tracked_1 | 2 | 43.37 [42.56–46.11] | 41.94 [41.20–43.09] | 68.47 [58.98–115.32] | 52.27 [51.69–61.44] |
@@ -348,6 +235,14 @@ Every cell below has five independent pairs. Entries are median [minimum–maxim
 | multi_then_normal | 2 | 29.92 [29.79–30.43] | 29.71 [29.42–30.09] | 157.06 [152.11–175.14] | 157.13 [151.50–159.30] |
 | multi_then_normal | 5 | 40.15 [39.75–40.31] | 40.48 [39.32–40.67] | 349.79 [339.28–357.17] | 344.22 [336.83–376.37] |
 | multi_then_normal | 10 | 58.47 [57.88–58.80] | 58.62 [58.05–60.03] | 677.66 [669.74–707.30] | 683.98 [679.59–733.04] |
+
+## Appendix A: earlier before-sleep implementation
+
+This intermediate build promotes deferred transaction work and releases command registration ownership at before-sleep. It is a historical comparison, not the pre-PR baseline.
+
+Against before-sleep cleanup, tracked HSET at one schema remains adverse: **79,506→73,819 commands/second, −7.2%, worse in all five pairs**. New-key HSET at two schemas is **57,198→52,569 commands/second, −8.1%, worse in all pairs**. Tracked single-key DEL1 is −3.7%, tracked DEL8 −2.7% at one schema, also all pairs adverse. These are additional costs relative to the preceding cleanup architecture, not effects that the direct transaction wait removal proves absent.
+
+The before-sleep transaction comparison has the same tradeoff as the immediate-previous comparison: completed medians improve +62.3%/+31.5% with one/two schemas but fall −7.7%/−17.3% with five/ten, all pair directions consistent.
 
 ### Earlier before-sleep implementation
 
@@ -507,6 +402,43 @@ Every cell below has five independent pairs. Entries are median [minimum–maxim
 | multi_then_normal | 5 | 97.00 [94.25–97.86] | 40.28 [39.82–40.72] | 172.14 [169.69–177.38] | 350.61 [337.65–358.75] |
 | multi_then_normal | 10 | 138.91 [136.77–143.10] | 58.44 [58.28–58.93] | 285.31 [279.11–288.11] | 663.17 [661.44–680.22] |
 
+## Appendix B: earlier eager post-notification implementation
+
+This intermediate build uses execution-unit cleanup but eagerly waits when an ordinary write joins deferred transaction work. The final implementation removes that wait.
+
+### Eager waiting versus final deferred behavior
+
+Completed MULTI→ordinary throughput, **transaction groups/second; higher is better**:
+
+| Index schemas | Eager post-notification | Preserve deferred | Change |
+| ---: | ---: | ---: | --- |
+| 1 | 44,323 | 73,928 | +66.8%, better in all five pairs |
+| 2 | 31,614 | 43,412 | +37.3%, better in all five pairs |
+| 5 | 19,954 | 19,115 | −4.2%, worse in all five pairs |
+| 10 | 11,676 | 9,906 | −15.2%, worse in all five pairs |
+
+Single-client transaction-group latency, **µs; lower is better**:
+
+| Index schemas | Previous p50 → new | p50 direction | Previous p99 → new | p99 direction |
+| ---: | ---: | --- | ---: | --- |
+| 1 | 60.87→26.35 | Lower/better | 79.12→90.50 | Higher/worse |
+| 2 | 69.28→29.95 | Lower/better | 94.55→159.88 | Higher/worse |
+| 5 | 96.58→40.18 | Lower/better | 172.22→355.62 | Higher/worse |
+| 10 | 138.96→58.48 | Lower/better | 279.85→679.10 | Higher/worse |
+
+The p99 ranges are:
+
+| Index schemas | Previous p99 µs [min–max] | New p99 µs [min–max] |
+| ---: | ---: | ---: |
+| 1 | 74.70–91.36 | 86.43–142.96 |
+| 2 | 92.32–123.50 | 155.11–176.55 |
+| 5 | 167.29–174.19 | 347.48–359.35 |
+| 10 | 275.49–292.37 | 664.24–723.03 |
+
+At five/ten schemas, macro batch-of-16 p99 also rises: **6,751.8→10,052.7 µs** and **11,505.6→19,483.7 µs**. Returning to batching removes the usual per-write wait but concentrates occasional work into synchronization batches. The p50 gain must not hide those tails.
+
+Single-client completed throughput improves +56.8%, +29.2% and +2.7% at one/two/five schemas, but falls **14.6% at ten**, all consistent across the five pairs. Direct ordinary HSET at one schema is approximately unchanged, **73,583→73,159 commands/second**, −0.6% with mixed pair directions.
+
 ### Immediately preceding eager post-notification implementation
 
 #### Macro throughput
@@ -546,3 +478,112 @@ Every cell below has five independent pairs. Entries are median [minimum–maxim
 | multi_then_normal | 2 | 69.28 [68.36–72.30] | 29.95 [29.68–30.13] | 94.55 [92.32–123.50] | 159.88 [155.11–176.55] |
 | multi_then_normal | 5 | 96.58 [94.41–98.47] | 40.18 [40.10–40.45] | 172.22 [167.29–174.19] | 355.62 [347.48–359.35] |
 | multi_then_normal | 10 | 138.96 [137.25–144.19] | 58.48 [58.14–59.75] | 279.85 [275.49–292.37] | 679.10 [664.24–723.02] |
+
+## Appendix C: diagnostic JSON5 experiments
+
+
+The post-notification job is a plausible contributor, but these experiments do not establish that it explains the entire earlier 6.6% regression. Fresh end-to-end comparisons show a smaller gap; cleanup timing alone does not recover throughput. The investigation changed only copied diagnostic sources; neither diagnostic implementation is part of the production change.
+
+### Decision and controls
+
+Question: does command-end job machinery account for the JSON5 loss, or does the loss require other ownership/scheduling changes? A consistent recovery across five paired runs with a gap exceeding the observed spread would support changing that mechanism. Overlapping spread and inconsistent pair directions limit attribution.
+
+Same JSON.SET workload as the existing sweep: five TEXT index schemas, content field with eight repetitions of a short text payload; eight clients, pipeline 16, four writer threads and two reader threads. Release builds, same clean Valkey server executable and JSON module, persistence disabled, loopback. Server affinity CPUs 0–5, generator CPUs 6–13. Initial host load average 0.68 with 32 CPUs. Module arguments were loaded through temporary configuration files. Every trial checks responses, document values, per-index counts/search markers, and drained indexing queues. Completed throughput includes final indexing drain; setup/seed/validation are outside the timed generator region.
+
+### Experiment 1: change cleanup timing only
+
+Five independent fresh-server cohorts; order reversed on alternate cohorts; 32,768 logical updates per trial. The isolated before_sleep binary retains current shared ownership and dispatch-state behavior, removes post-notification job registration, and releases command ownership in the host before-sleep callback. This deliberately changes release timing and is diagnostic, not a proposed production fix.
+
+| Build | Median completed commands/s | Range | Median main-thread CPU/update |
+|---|---:|---:|---:|
+| pre_pr | 28,132 | 27,477–29,537 | 35.71 µs |
+| current | 27,748 | 26,951–27,979 | 35.71 µs |
+| before_sleep | 27,680 | 25,405–28,171 | 36.01 µs |
+
+Current/pre-PR ratio of medians: -1.36%. Current was slower in all five corresponding cohorts, but ranges overlap. Before-sleep/current ratio of medians: -0.25%; before-sleep was slower in three pairs and faster in two. Removing jobs while delaying release did not yield a consistent completed-throughput gain.
+
+### Experiment 2: hold ownership timing fixed, add a no-op host job
+
+Five fresh-server pairs, alternating execution order, 131,072 updates per trial. Both builds release command ownership at before-sleep. The no-op variant registers one post-notification job per keyspace notification, independent of schema count; its callback does nothing. For this ordinary JSON.SET workload this exercises host job allocation, list processing, context preparation and cleanup while preserving the manager's reference-release timing. It does not measure the real manager cleanup callback or general multi-notification command behavior.
+
+| Build | Median completed commands/s | Range | Median main-thread CPU/update |
+|---|---:|---:|---:|
+| no_job | 28,337 | 26,761–29,172 | 35.25 µs |
+| noop_job | 27,008 | 26,474–28,884 | 37.00 µs |
+
+No-op/no-job ratio of medians: -4.69%. Paired changes: -9.25%, +2.37%, -0.22%, -5.33%, -4.40%. Four of five pairs were slower, one faster; ranges overlap. Median main-thread CPU/update increased by 1.75 µs. This supports job overhead as a candidate, but variation prevents assigning the entire original regression to it. Separate linking can also alter code layout; this is not a same-binary runtime toggle.
+
+### CPU profiles (excluded from throughput comparisons)
+
+Three user-space main-thread cycle profiles per build, 65,536 updates/profile, sampled at 997 Hz. No samples were reported lost. All three builds consumed approximately one full main core. Generator CPU use in timed no-op trials stayed below 0.155 cores, so the generator was not saturated.
+
+Weighted main-thread cycles/update: pre-PR 62,655; current 63,546 (+1.42%); before-sleep 60,958. Profile overhead makes profiled throughput unsuitable for comparison with the unprofiled sweep. Cycle profiles identify the main thread as the limiting resource, not a specific full causal stack.
+
+Current self samples include JsonUnquote 10.75%, allocator memory-size accounting zmalloc_used_memory 4.94%, and allocator/atomic operations. JsonUnquote was already 10.80% in pre-PR: a large existing cost is not proof of a new regression. Named job/context/cleanup functions individually occupy small self-sample fractions, but their called allocation and atomic work is counted elsewhere. Refcount/atomic helpers cannot be attributed to shared_ptr alone.
+
+User-space DWARF stack capture was attempted without altering perf_event_paranoid or system settings. Capture succeeded, but offline unwinding did not resolve caller chains reliably (ENOENT despite mapped binaries and copied container libraries). Consequently this report uses symbolized instruction samples only and does not claim inclusive job/refcount costs. Raw stack captures are retained for follow-up.
+
+### Verification and limits
+
+25 unprofiled trials completed 1,802,240 checked updates, with 0 response errors and no final-state/index validation failures. Nine instruction-profile and three stack-profile runs each validated another 65,536 updates. This is a narrow causal experiment, not a full regression suite or a substitute for the completed index-count sweep. The diagnostic builds deliberately restore longer ownership holds, so benchmark success does not make them suitable production changes.
+
+Earlier sweep results remain valid observations: JSON5 -6.6%, JSON10 -5.2%, all five paired results adverse. This new smaller gap demonstrates environmental/process-placement sensitivity; it does not erase those observations. No definitive attribution to shared_ptr, cleanup jobs, or record-lock contention is established. Keep the current correct lifecycle; do not introduce production complexity based on these uncertain measurements.
+
+Sources and artifacts: run_experiment.py/results.jsonl; run_noop.py/noop-results.jsonl; profile-summary.json and symbolized reports; copied diagnostic sources and build scripts; binary-sha256.json. Original production sources remain unchanged by this investigation. git diff --check passes.
+
+## Appendix D: provenance and earlier verification
+
+Across the primary comparison and the two intermediate comparisons, the sweep contains 1,450 trials, 145 comparison cells, and 39,731,200 logical operations, with zero benchmark errors. The primary comparison contributes 680 trials and 19,578,880 operations. The before-sleep comparison contributes another 680 trials and 19,578,880 operations. The eager post-notification comparison contributes 90 trials and 573,440 operations.
+
+The separate JSON investigation adds 25 timed trials and 1,802,240 validated updates. These totals are separate from the primary comparison.
+
+### Build identifiers
+
+- The pre-PR parent is `6d1eb2667d214c4841a8c5c59b249b02bbbdd7b8`, with the old SDK reference tracker. This is a pinned baseline, not a freshly fetched main revision.
+- The full sweep uses `.audit/pr1640-preserve-deferred-libsearch.so`, with SHA256 `6fe877b0610028c9db4a0cc1653b1771ba3f3d80a64963d62ddf2baa8562e70c`.
+- The final renamed Release build is `.audit/pr1640-client-blocking-context-libsearch.so`, with SHA256 `a96f17ffb1d7e0f65c0fbce8e1e538a0f2127e5f66afab45db536142d407d30d`.
+- The earlier eager post-notification artifact has a SHA256 beginning `24c43eb6`.
+
+No builds or style checks ran during the full sweep. The measured module remained unchanged. The subsequent rename changes identifiers but not the measured behavior.
+
+### Earlier full-suite result
+
+The preceding post-notification snapshot had 984 Python test passes, 11 skips, and one unresolved noeviction failure. The failure did not reproduce in 15 isolated runs. That result is not a green full-suite result for the final candidate.
+
+### Earlier CPU and wait-channel profiles
+
+Separate `/proc` CPU/wait-channel profiles are excluded from timed medians. The generator uses approximately **0.03–0.41 cores** across its eight available CPUs, so it is not the measured limiter.
+
+- **Actual pre-PR JSON5:** a separate pair measures 28,450→27,910 commands/second, main CPU/update **34.79→36.01 µs**, with approximately one saturated main-thread core. This supports some main-thread cost but does not attribute it to a particular function or account precisely for the main sweep's −6.6%.
+- **Actual pre-PR JSON10:** a separate pair reverses direction, 16,588→17,913 commands/second, CPU/update 294.80→277.10 µs. This exposes process/scheduling variation; it does not erase the five adverse timed pairs.
+- **Before-sleep JSON5:** 28,533→25,535 commands/second, main CPU/update **35.40→39.06 µs**, approximately one main-thread core. Exact function-level cause remains unresolved.
+- **Actual pre-PR HSET1:** 71,876→73,580 commands/second with roughly one main-thread core and equal rounded main CPU/command, 13.43 µs. The actual baseline comparison is close here.
+- **Before-sleep HSET1:** 78,703→69,912 commands/second in the separate pair, approximately main-thread limited; short-run CPU-counter granularity does not isolate the source of the cost. The five-pair main sweep confirms the loss.
+- **Transactions:** against before-sleep, two-schema main CPU/group drops **28.08→9.77 µs** and throughput rises 32,750→41,660 groups/second. At five schemas, CPU/group drops **178.22→155.03 µs** but throughput falls 21,162→18,801; main-thread futex samples rise **50→263** at the same operation count. Batching performs less CPU work but spends more time waiting and uses less available concurrency.
+
+No extra deferred-record eligibility lookup exists in the measured implementation: eligibility, merge and acquisition use the existing tracking mutex/map lookup. A proposed queue-empty shortcut based on an assumed second lookup was withdrawn after inspecting the current method. The profiles provide resource-level evidence, not a syscall count or function-level attribution.
+
+### Raw results
+
+The development workspace retains `preserve-deferred-{pre_pr,before_sleep,postjob}-{macro,micro}.jsonl`, the corresponding summary JSON files, `preserve-deferred-profile-results.json`, and `preserve-deferred-metadata.json`. The tables in this note summarize those runs.
+
+The following command reproduces the primary trial, operation, and error counts from the retained raw data:
+
+```bash
+python3 - <<'PYCOUNT'
+import json
+from pathlib import Path
+
+rows = [
+	json.loads(line)
+	for mode in ("macro", "micro")
+	for line in Path(
+		f".audit/benchmarks/preserve-deferred-pre_pr-{mode}.jsonl"
+	).read_text().splitlines()
+]
+print(len(rows), sum(r["completed_operations"] for r in rows),
+	  sum(r["errors"] for r in rows))
+PYCOUNT
+```
+
+The output is `680 19578880 0`.

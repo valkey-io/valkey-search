@@ -26,6 +26,7 @@
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
+#include "absl/synchronization/notification.h"
 #include "absl/types/optional.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -1550,6 +1551,33 @@ class IndexSchemaFriendTest : public ValkeySearchTest {
   std::shared_ptr<indexes::VectorHNSW<float>> hnsw_index;
   const std::string attribute_identifier{"hnsw_id"};
   InternedStringPtr key = StringInternStore::Intern("my_key_");
+
+  void MutateKey(const std::vector<float> &vector) {
+    auto itr = index_schema->attributes_.find(attribute_identifier);
+    CHECK(itr != index_schema->attributes_.end());
+    IndexSchema::MutatedAttributes mutated;
+    mutated[itr->second.GetIdentifier()].data = vmsdk::MakeUniqueValkeyString(
+        absl::string_view(reinterpret_cast<const char *>(vector.data()),
+                          dimensions * sizeof(float)));
+    index_schema->ProcessMutation(&fake_ctx, mutated, key, false, false);
+  }
+  // Indexes `vector` under `key` and returns it as a neighbor of that
+  // mutation, so a further MutateKey leaves the neighbor contended.
+  std::vector<indexes::Neighbor> IndexedNeighbor(
+      const std::vector<float> &vector) {
+    MutateKey(vector);
+    WaitWorkerTasksAreCompleted(mutations_thread_pool);
+    std::vector<indexes::Neighbor> neighbors(1);
+    neighbors[0].external_id = key;
+    neighbors[0].sequence_number =
+        index_schema->GetDbMutationSequenceNumber(key);
+    return neighbors;
+  }
+  void ExpectWriterQueueDrained() {
+    WaitWorkerTasksAreCompleted(mutations_thread_pool);
+    EXPECT_EQ(mutations_thread_pool.QueueSize(), 0);
+    EXPECT_EQ(index_schema->GetStats().GetStats().mutation_queue_size, 0u);
+  }
 };
 
 IndexSchema::MutatedAttributes CreateMutatedAttributes(
@@ -2398,6 +2426,91 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
   // Cleanup
   VMSDK_EXPECT_OK(options::GetSkipIndexLoadMutable().SetValue(false));
   LOG(INFO) << "=== Comprehensive Skip Load Test Completed ===";
+}
+
+TEST_F(IndexSchemaFriendTest, WaitForContendedKeysWhileSuspended)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  auto vectors = DeterministicallyGenerateVectors(2, dimensions, 2);
+  auto neighbors = IndexedNeighbor(vectors[0]);
+
+  VMSDK_EXPECT_OK(mutations_thread_pool.SuspendWorkers());
+  MutateKey(vectors[1]);
+  EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 1u);
+
+  // Expired deadline: nothing is applied, the record stays for the workers.
+  EXPECT_FALSE(
+      index_schema->WaitForContendedKeys(neighbors, absl::InfinitePast()));
+  EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 1u);
+
+  EXPECT_TRUE(index_schema->WaitForContendedKeys(
+      neighbors, absl::Now() + absl::Seconds(10)));
+  EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 0u);
+
+  VMSDK_EXPECT_OK(mutations_thread_pool.ResumeWorkers());
+  ExpectWriterQueueDrained();
+}
+
+TEST_F(IndexSchemaFriendTest, WaitForContendedKeysUntilApplied)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  auto vectors = DeterministicallyGenerateVectors(2, dimensions, 2);
+  auto neighbors = IndexedNeighbor(vectors[0]);
+
+  // The writer cannot apply while a reader slice is held; it is let through
+  // only once this thread has entered the await path (blocked count bumped).
+  // Both waits are bounded so a regression fails instead of hanging.
+  const auto blocked_before = Metrics::GetStats().text_query_blocked_cnt.load();
+  const absl::Time give_up = absl::Now() + absl::Seconds(10);
+  absl::Notification reader_held;
+  bool observed_blocked = false;
+  std::thread release([&] {
+    vmsdk::ReaderMutexLock lock(&index_schema->GetTimeSlicedMutex());
+    reader_held.Notify();
+    while (Metrics::GetStats().text_query_blocked_cnt.load() ==
+               blocked_before &&
+           absl::Now() < give_up) {
+      std::this_thread::yield();
+    }
+    observed_blocked =
+        Metrics::GetStats().text_query_blocked_cnt.load() != blocked_before;
+  });
+  reader_held.WaitForNotification();
+  MutateKey(vectors[1]);
+  EXPECT_TRUE(index_schema->WaitForContendedKeys(neighbors, give_up));
+  release.join();
+  EXPECT_TRUE(observed_blocked);
+  EXPECT_EQ(Metrics::GetStats().text_query_blocked_cnt.load(),
+            blocked_before + 1);
+  EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 0u);
+  // The kMax re-queue and the original task both ran; accounting balances.
+  ExpectWriterQueueDrained();
+}
+
+TEST_F(IndexSchemaFriendTest, WaitForContendedKeysDeadlineWhileBlocked)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  auto vectors = DeterministicallyGenerateVectors(2, dimensions, 2);
+  auto neighbors = IndexedNeighbor(vectors[0]);
+
+  // The reader slice is held until after the wait has given up, so the
+  // deadline expires inside the await.
+  const auto blocked_before = Metrics::GetStats().text_query_blocked_cnt.load();
+  absl::Notification reader_held, wait_returned;
+  std::thread release([&] {
+    vmsdk::ReaderMutexLock lock(&index_schema->GetTimeSlicedMutex());
+    reader_held.Notify();
+    wait_returned.WaitForNotification();
+  });
+  reader_held.WaitForNotification();
+  MutateKey(vectors[1]);
+  EXPECT_FALSE(index_schema->WaitForContendedKeys(
+      neighbors, absl::Now() + absl::Milliseconds(50)));
+  EXPECT_EQ(Metrics::GetStats().text_query_blocked_cnt.load(),
+            blocked_before + 1);
+  // The record stays for the workers, which apply it once let through.
+  EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 1u);
+  wait_returned.Notify();
+  release.join();
+  ExpectWriterQueueDrained();
+  EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 0u);
 }
 
 }  // namespace valkey_search

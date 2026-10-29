@@ -605,7 +605,6 @@ class IndexSchema : public KeyspaceEventSubscription,
                                    ValkeyModuleKey *key, void *privdata);
   bool DeleteIfNotInValkeyDict(ValkeyModuleCtx *ctx, ValkeyModuleString *key,
                                const Attribute &attribute);
-  vmsdk::BlockedClientCategory GetBlockedCategoryFromProto() const;
   // Checks if a key is known to the schema: in db_key_info_, in-flight in the
   // mutation tracker, or tracked/untracked by any underlying index.
   // REQUIRES: Valkey Main Thread.

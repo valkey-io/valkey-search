@@ -594,8 +594,8 @@ void IndexSchema::OnKeyspaceNotification(ValkeyModuleCtx *ctx, int type,
                                          ValkeyModuleString *key) {
   SharedBlockedClient blocked_client;
   if (ShouldBlockClient(ctx, vmsdk::MultiOrLua(ctx), /*from_backfill=*/false)) {
-    blocked_client = std::make_shared<vmsdk::BlockedClient>(
-        ctx, true, GetBlockedCategoryFromProto());
+    blocked_client =
+        std::make_shared<vmsdk::BlockedClient>(ctx, GetBlockedClientCategory());
   }
   OnKeyspaceNotification(ctx, type, event, key, blocked_client);
 }
@@ -2090,18 +2090,6 @@ void IndexSchema::OnLoadingEnded(ValkeyModuleCtx *ctx) {
                          << vmsdk::config::RedactIfNeeded(name_)
                          << " for stale entries in "
                          << absl::FormatDuration(stop_watch.Duration());
-}
-
-vmsdk::BlockedClientCategory IndexSchema::GetBlockedCategoryFromProto() const {
-  // Determine category based on data type
-  switch (attribute_data_type_->ToProto()) {
-    case data_model::ATTRIBUTE_DATA_TYPE_HASH:
-      return vmsdk::BlockedClientCategory::kHash;
-    case data_model::ATTRIBUTE_DATA_TYPE_JSON:
-      return vmsdk::BlockedClientCategory::kJson;
-    default:
-      return vmsdk::BlockedClientCategory::kOther;
-  }
 }
 
 bool IndexSchema::PerformKeyContentionCheck(

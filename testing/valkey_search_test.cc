@@ -446,8 +446,7 @@ TEST_F(ValkeySearchTest, Info) {
 
   // Set global ingestion stats
   stats.ingest_hash_keys = 100;
-  // Let's set the blocked clients values in the test
-  // These would normally be set from the BlockedClientTracker
+  // Blocked-client INFO fields read the active RAII counters directly.
   stats.ingest_json_keys = 200;
   stats.ingest_field_vector = 300;
   stats.ingest_field_numeric = 400;

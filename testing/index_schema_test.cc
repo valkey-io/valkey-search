@@ -694,13 +694,13 @@ TEST_F(IndexSchemaSubscriptionSimpleTest, DropIndexPrematurely) {
   EXPECT_EQ(mutations_thread_pool.QueueSize(), 1);
   VMSDK_EXPECT_OK(mutations_thread_pool.ResumeWorkers());
   WaitWorkerTasksAreCompleted(mutations_thread_pool);
-  EXPECT_EQ(vmsdk::BlockedClientTracker::GetInstance().GetClientCount(
+  EXPECT_EQ(vmsdk::BlockedClient::GetActiveClientCount(
                 vmsdk::BlockedClientCategory::kHash),
             0);
-  EXPECT_EQ(vmsdk::BlockedClientTracker::GetInstance().GetClientCount(
+  EXPECT_EQ(vmsdk::BlockedClient::GetActiveClientCount(
                 vmsdk::BlockedClientCategory::kJson),
             0);
-  EXPECT_EQ(vmsdk::BlockedClientTracker::GetInstance().GetClientCount(
+  EXPECT_EQ(vmsdk::BlockedClient::GetActiveClientCount(
                 vmsdk::BlockedClientCategory::kOther),
             0);
 }
@@ -777,7 +777,7 @@ TEST_F(IndexSchemaSubscriptionSimpleTest,
 
   KeyspaceEventManager::Instance().NotifySubscribers(
       &fake_ctx_, VALKEYMODULE_NOTIFY_HASH, "event", key_valkey_str.get());
-  EXPECT_EQ(vmsdk::BlockedClientTracker::GetInstance().GetClientCount(
+  EXPECT_EQ(vmsdk::BlockedClient::GetActiveClientCount(
                 vmsdk::BlockedClientCategory::kHash),
             0);
 }
@@ -787,11 +787,11 @@ TEST_F(IndexSchemaSubscriptionSimpleTest,
   MockThreadPool mutations_thread_pool("writer-thread-pool-", 1);
   std::vector<absl::AnyInvocable<void()>> scheduled_tasks;
   EXPECT_CALL(mutations_thread_pool, Schedule(testing::_, testing::_))
-      .WillOnce([&](absl::AnyInvocable<void()> task,
-                    vmsdk::ThreadPool::Priority) {
-        scheduled_tasks.push_back(std::move(task));
-        return true;
-      });
+      .WillOnce(
+          [&](absl::AnyInvocable<void()> task, vmsdk::ThreadPool::Priority) {
+            scheduled_tasks.push_back(std::move(task));
+            return true;
+          });
 
   std::vector<absl::string_view> key_prefixes = {"prefix:"};
   auto index_schema =
@@ -800,8 +800,8 @@ TEST_F(IndexSchemaSubscriptionSimpleTest,
                               &mutations_thread_pool)
           .value();
   auto mock_index = std::make_shared<MockIndex>();
-  VMSDK_EXPECT_OK(index_schema->AddIndex("attribute_name", "vector",
-                                         mock_index));
+  VMSDK_EXPECT_OK(
+      index_schema->AddIndex("attribute_name", "vector", mock_index));
   auto key = StringInternStore::Intern("prefix:key");
   auto key_valkey_str = vmsdk::MakeUniqueValkeyString(key->Str());
   EXPECT_CALL(*mock_index, IsTracked(key)).WillRepeatedly(Return(false));
@@ -829,9 +829,9 @@ TEST_F(IndexSchemaSubscriptionSimpleTest,
       .WillRepeatedly([&](ValkeyModuleCtx *) { return client_id; });
   EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx_))
       .WillRepeatedly(Return(0));
-  EXPECT_CALL(*kMockValkeyModule,
-              BlockClient(&fake_ctx_, testing::_, testing::_, testing::_,
-                          testing::_))
+  EXPECT_CALL(
+      *kMockValkeyModule,
+      BlockClient(&fake_ctx_, testing::_, testing::_, testing::_, testing::_))
       .WillOnce(Return((ValkeyModuleBlockedClient *)1))
       .WillOnce(Return((ValkeyModuleBlockedClient *)2));
 
@@ -861,7 +861,7 @@ TEST_F(IndexSchemaSubscriptionSimpleTest,
       &fake_ctx_, VALKEYMODULE_NOTIFY_HASH, "event", key_valkey_str.get());
   EXPECT_EQ(scheduled_tasks.size(), 1);
   EXPECT_EQ(unblocked_clients, 0);
-  EXPECT_EQ(vmsdk::BlockedClientTracker::GetInstance().GetClientCount(
+  EXPECT_EQ(vmsdk::BlockedClient::GetActiveClientCount(
                 vmsdk::BlockedClientCategory::kHash),
             2);
 
@@ -869,7 +869,7 @@ TEST_F(IndexSchemaSubscriptionSimpleTest,
 
   EXPECT_TRUE(mutation_applied);
   EXPECT_EQ(unblocked_clients, 2);
-  EXPECT_EQ(vmsdk::BlockedClientTracker::GetInstance().GetClientCount(
+  EXPECT_EQ(vmsdk::BlockedClient::GetActiveClientCount(
                 vmsdk::BlockedClientCategory::kHash),
             0);
 }

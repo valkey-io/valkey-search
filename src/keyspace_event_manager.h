@@ -22,6 +22,7 @@
 
 namespace vmsdk {
 class BlockedClient;
+enum class BlockedClientCategory;
 }  // namespace vmsdk
 
 namespace valkey_search {
@@ -39,6 +40,7 @@ class KeyspaceEventSubscription {
  public:
   virtual ~KeyspaceEventSubscription() = default;
   virtual const AttributeDataType &GetAttributeDataType() const = 0;
+  vmsdk::BlockedClientCategory GetBlockedClientCategory() const;
 
   // GetKeyPrefixes should return a vector containing >= 1 prefixes to subscribe
   // to. Note that this should not be empty. If no prefixes are needed, this

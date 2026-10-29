@@ -40,9 +40,20 @@ inline bool IsMoveToEvent(const char *event) {
   return event && (event == kRenameToEvent || event == kMoveToEvent);
 }
 
-vmsdk::BlockedClientCategory GetBlockedClientCategory(
-    const KeyspaceEventSubscription &subscription) {
-  switch (subscription.GetAttributeDataType().ToProto()) {
+SharedBlockedClient MakeBlockedClientHold(
+    ValkeyModuleCtx *ctx, const KeyspaceEventSubscription *subscription) {
+  if (!subscription || vmsdk::MultiOrLua(ctx) ||
+      !vmsdk::IsRealUserClient(ctx)) {
+    return nullptr;
+  }
+  return std::make_shared<vmsdk::BlockedClient>(
+      ctx, subscription->GetBlockedClientCategory());
+}
+}  // namespace
+
+vmsdk::BlockedClientCategory
+KeyspaceEventSubscription::GetBlockedClientCategory() const {
+  switch (GetAttributeDataType().ToProto()) {
     case data_model::ATTRIBUTE_DATA_TYPE_HASH:
       return vmsdk::BlockedClientCategory::kHash;
     case data_model::ATTRIBUTE_DATA_TYPE_JSON:
@@ -51,17 +62,6 @@ vmsdk::BlockedClientCategory GetBlockedClientCategory(
       return vmsdk::BlockedClientCategory::kOther;
   }
 }
-
-SharedBlockedClient MakeBlockedClientHold(
-    ValkeyModuleCtx *ctx, const KeyspaceEventSubscription *subscription) {
-  if (!subscription || vmsdk::MultiOrLua(ctx) ||
-      !vmsdk::IsRealUserClient(ctx)) {
-    return nullptr;
-  }
-  return std::make_shared<vmsdk::BlockedClient>(
-      ctx, true, GetBlockedClientCategory(*subscription));
-}
-}  // namespace
 
 static absl::NoDestructor<std::unique_ptr<KeyspaceEventManager>>
     keyspace_event_manager_instance;

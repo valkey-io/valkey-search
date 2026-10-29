@@ -179,6 +179,7 @@ TEST_F(MultiExecTest, TrackMutationOverride) {
   // Get initial metrics values to compare after operations
   auto &metrics = Metrics::GetStats();
   uint64_t initial_batches = metrics.ingest_total_batches;
+  ValkeyModuleCtx second_fake_ctx;
 
   VMSDK_EXPECT_OK(mutations_thread_pool->SuspendWorkers());
   EXPECT_CALL(*kMockValkeyModule, EventLoopAddOneShot(testing::_, testing::_))
@@ -193,11 +194,15 @@ TEST_F(MultiExecTest, TrackMutationOverride) {
   EXPECT_CALL(
       *kMockValkeyModule,
       BlockClient(testing::_, testing::_, testing::_, testing::_, testing::_))
-      .Times(1)
-      .WillRepeatedly(testing::Return((ValkeyModuleBlockedClient *)1));
+      .WillOnce(testing::Return((ValkeyModuleBlockedClient *)1))
+      .WillOnce(testing::Return((ValkeyModuleBlockedClient *)2));
 
   EXPECT_CALL(*kMockValkeyModule,
               UnblockClient((ValkeyModuleBlockedClient *)1, testing::_))
+      .Times(1)
+      .WillRepeatedly(testing::Return(VALKEYMODULE_OK));
+  EXPECT_CALL(*kMockValkeyModule,
+              UnblockClient((ValkeyModuleBlockedClient *)2, testing::_))
       .Times(1)
       .WillRepeatedly(testing::Return(VALKEYMODULE_OK));
   auto key_valkey_str = vmsdk::MakeUniqueValkeyString(key_prefix + "0");
@@ -226,12 +231,13 @@ TEST_F(MultiExecTest, TrackMutationOverride) {
   }
   EXPECT_CALL(*kMockValkeyModule, GetContextFlags(testing::_))
       .WillRepeatedly(testing::Return(0));
-  EXPECT_CALL(*kMockValkeyModule, GetClientId(&fake_ctx_))
-      .WillRepeatedly(testing::Return(1));
+  EXPECT_CALL(*kMockValkeyModule, GetClientId(&second_fake_ctx))
+      .WillRepeatedly(testing::Return(2));
   key_valkey_str = vmsdk::MakeUniqueValkeyString(key_prefix + "1");
   VMSDK_EXPECT_OK(mutations_thread_pool->ResumeWorkers());
-  index_schema->OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_HASH,
-                                       "event", key_valkey_str.get());
+  index_schema->OnKeyspaceNotification(&second_fake_ctx,
+                                       VALKEYMODULE_NOTIFY_HASH, "event",
+                                       key_valkey_str.get());
   absl::AnyInvocable<void()> *fn = (absl::AnyInvocable<void()> *)cb_data;
   (*fn)();
   delete fn;
@@ -248,13 +254,13 @@ TEST_F(MultiExecTest, TrackMutationOverride) {
     EXPECT_GT(metrics.ingest_total_batches, initial_batches);
     EXPECT_EQ(metrics.ingest_last_batch_size, expected_keys.size());
   }
-  EXPECT_EQ(vmsdk::BlockedClientTracker::GetInstance().GetClientCount(
+  EXPECT_EQ(vmsdk::BlockedClient::GetActiveClientCount(
                 vmsdk::BlockedClientCategory::kHash),
             0);
-  EXPECT_EQ(vmsdk::BlockedClientTracker::GetInstance().GetClientCount(
+  EXPECT_EQ(vmsdk::BlockedClient::GetActiveClientCount(
                 vmsdk::BlockedClientCategory::kJson),
             0);
-  EXPECT_EQ(vmsdk::BlockedClientTracker::GetInstance().GetClientCount(
+  EXPECT_EQ(vmsdk::BlockedClient::GetActiveClientCount(
                 vmsdk::BlockedClientCategory::kOther),
             0);
   index_schema = nullptr;

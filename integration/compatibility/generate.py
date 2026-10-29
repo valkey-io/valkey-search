@@ -122,19 +122,26 @@ class BaseCompatibilityTest:
         # command, so no sleep is needed between loading data and querying it:
         # https://redis.io/docs/latest/develop/ai/redisvl/concepts/search-and-indexing/#search-visibility-after-writes
         server_args = " redis-server --search-workers 0"
+        cls.containers = [cls.container_name]
         if cls.CLUSTER:
-            server_args += " --cluster-enabled yes"
-        if os.system(f"docker run --rm -d --name {cls.container_name} "
-                     f"-p 0:6379 redis:latest{server_args}") != 0:
-            print("Failed to start Redis server, please check your Docker setup.")
-            sys.exit(1)
-        port = cls._published_port()
-        if port is None:
-            os.system(f"docker stop {cls.container_name}")
-            print(f"Could not read the published port of {cls.container_name}.")
-            sys.exit(1)
-        cls.address = ("localhost", port)
-        print(f"Started {cls.container_name} server on port {port}")
+            try:
+                cls._create_cluster(server_args + " --cluster-enabled yes")
+            except Exception as e:
+                os.system(f"docker stop {' '.join(cls.containers)}")
+                print(f"Failed to create the Redis cluster: {e}")
+                sys.exit(1)
+        else:
+            if os.system(f"docker run --rm -d --name {cls.container_name} "
+                         f"-p 0:6379 redis:latest{server_args}") != 0:
+                print("Failed to start Redis server, please check your Docker setup.")
+                sys.exit(1)
+            port = cls._published_port()
+            if port is None:
+                os.system(f"docker stop {cls.container_name}")
+                print(f"Could not read the published port of {cls.container_name}.")
+                sys.exit(1)
+            cls.address = ("localhost", port)
+            print(f"Started {cls.container_name} server on port {port}")
         # teardown_class has no route to the pytest session, and it must not
         # write an answer file from a run that did not finish. Set it up front
         # so that a run which never reaches a test is treated as incomplete.
@@ -151,24 +158,49 @@ class BaseCompatibilityTest:
                 print("Waiting for R system to be ready...")
                 time.sleep(.25)
         if cls.CLUSTER:
-            nodes = [cls.container_name] + [f"{cls.container_name}-{i}" for i in (1, 2)]
-            for node in nodes[1:]:
-                os.system(f"docker run --rm -d --name {node} redis:latest{server_args}")
-            # teardown's `docker stop` then stops every node.
-            cls.container_name = " ".join(nodes)
-            ips = [os.popen("docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "
-                            + node).read().strip() for node in nodes]
-            # Retried until every node is up; the default slot split matches the valkey test cluster's.
-            while os.system(f"docker exec {nodes[0]} redis-cli --cluster create "
-                            f"{' '.join(ip + ':6379' for ip in ips)} "
-                            f"--cluster-replicas 0 --cluster-yes") != 0:
-                time.sleep(.25)
-            # create returns before every node sees the cluster up.
-            while any(os.system(f"docker exec {node} redis-cli cluster info | grep -q cluster_state:ok")
-                      for node in nodes):
-                time.sleep(.25)
-            cls.client.client = valkey.ValkeyCluster(host=ips[0], port=6379)
+            cls.client.client = valkey.ValkeyCluster(host=cls.address[0], port=6379)
         print("Done initializing")
+
+    @classmethod
+    def _create_cluster(cls, server_args):
+        """Start 3 primaries with ValkeySearchClusterTestCase's slot split.
+
+        The host reaches the nodes on their docker bridge IPs, which only a
+        Linux host can route to -- Docker Desktop cannot.
+        """
+        cls.containers += [f"{cls.container_name}-{i}" for i in (1, 2)]
+        for node in cls.containers:
+            if os.system(f"docker run --rm -d --name {node} redis:latest{server_args}") != 0:
+                raise RuntimeError(f"could not start {node}")
+        ips = [os.popen("docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "
+                        + node).read().strip() for node in cls.containers]
+        nodes = [valkey.Valkey(host=ip, port=6379) for ip in ips]
+        for node in nodes:
+            cls._wait_for(node.ping, "a node to answer PING")
+        # Same ranges as _split_range_pairs(0, 16384, 3). redis-cli --cluster
+        # create rounds the boundaries differently, which would move a slot
+        # to another shard and change both shards' BM25 statistics.
+        points = [i * 16384 // 3 for i in range(4)]
+        for node, start, end in zip(nodes, points, points[1:]):
+            node.execute_command("CLUSTER ADDSLOTSRANGE", start, end - 1)
+        for node in nodes[1:]:
+            node.execute_command("CLUSTER MEET", ips[0], 6379)
+        cls._wait_for(lambda: all(node.execute_command("CLUSTER INFO")["cluster_state"] == "ok"
+                                  for node in nodes), "the cluster to be up")
+        cls.address = (ips[0], 6379)
+        print(f"Started cluster {' '.join(cls.containers)}")
+
+    @staticmethod
+    def _wait_for(check, what, timeout=30):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                if check():
+                    return
+            except ConnectionError:
+                pass
+            time.sleep(.25)
+        raise RuntimeError(f"timed out waiting for {what}")
 
     @classmethod
     def _published_port(cls):
@@ -192,8 +224,8 @@ class BaseCompatibilityTest:
 
     @classmethod
     def teardown_class(cls):
-        print(f"Stopping {cls.container_name} server")
-        os.system(f"docker stop {cls.container_name}")
+        print(f"Stopping {' '.join(cls.containers)}")
+        os.system(f"docker stop {' '.join(cls.containers)}")
 
         # A generator that died part way collected only some of its answers.
         # Writing them replaces a complete answer file with a short one that

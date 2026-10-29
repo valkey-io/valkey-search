@@ -670,6 +670,14 @@ weight to all of its stem leaves, Redis to the exact word only
 part was drawn from it. Weighted queries on the `NOSTEM` variants (`nostem`,
 `docscore`, `stopwords`) are compared normally.
 
+### 7.2. A `$weight` over an OR group in cluster mode — excluded
+
+In `scoring-cluster-answers.pickle.gz`, every query that puts a `$weight` on an
+OR group is marked `excluded`. On a shard where only one branch of the OR
+matches any document, Redis ignores the group's weight and valkey-search
+applies it (`known_differences.md` §1.10). These queries are still compared in
+the standalone answers.
+
 ## 8. FT.AGGREGATE
 
 ### 8.1. `LOAD * SORTBY` on a NUMERIC HASH field — excluded

@@ -693,19 +693,6 @@ absl::Status CheckSimsimdBf16Capability() {
   return absl::OkStatus();
 }
 
-void InitSimsimdDispatch() {
-  simsimd_f32_t f32[1] = {0};
-  simsimd_f16_t f16[1] = {0};
-  simsimd_bf16_t bf16[1] = {0};
-  simsimd_distance_t distance;
-  simsimd_dot_f32(f32, f32, 1, &distance);
-  simsimd_l2sq_f32(f32, f32, 1, &distance);
-  simsimd_dot_f16(f16, f16, 1, &distance);
-  simsimd_l2sq_f16(f16, f16, 1, &distance);
-  simsimd_dot_bf16(bf16, bf16, 1, &distance);
-  simsimd_l2sq_bf16(bf16, bf16, 1, &distance);
-}
-
 VectorRecord VectorRecord::Construct(absl::string_view vector,
                                      float reciprocal_magnitude,
                                      Allocator *allocator) {

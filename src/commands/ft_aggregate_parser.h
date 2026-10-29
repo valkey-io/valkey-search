@@ -71,6 +71,9 @@ struct LoadField {
   // command order, so a later `LOAD *` overwrites this entry's output column
   // with the stored field of the same name.
   bool before_loadall{false};
+  // A rename onto the score's own name. Redisearch keeps the score there and
+  // drops the entry; it stays in the list only for the after-GROUPBY check.
+  bool yields_to_score{false};
 };
 
 struct IndexInterface {

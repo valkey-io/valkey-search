@@ -124,6 +124,25 @@ class TestAggregateLoadAfterGroupby(ValkeySearchTestCaseDebugMode):
                 assert hybrid(*late) == expected, (release, late)
                 assert client.info("SEARCH").get(COUNTER, 0) == before
 
+    def test_rename_onto_the_knn_score_still_counts_as_a_late_load(self):
+        # The entry is dropped so the score keeps its name; it must not also
+        # drop the after-GROUPBY error.
+        client = self._client("1.3.0")
+        client.execute_command(
+            "FT.CREATE", "v", "ON", "HASH", "PREFIX", "1", "vd:", "SCHEMA",
+            "g", "TAG", "n", "NUMERIC",
+            "vec", "VECTOR", "FLAT", "6", "TYPE", "FLOAT32", "DIM", "2",
+            "DISTANCE_METRIC", "L2")
+        client.execute_command(
+            "HSET", "vd:1", "g", "a", "n", "1", "vec", struct.pack("<2f", 1.0, 0.0))
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "v")
+        with pytest.raises(valkey.exceptions.ResponseError,
+                           match="LOAD cannot be applied after GROUPBY"):
+            client.execute_command(
+                "FT.AGGREGATE", "v", "*=>[KNN 2 @vec $q AS dist]", *GROUPBY,
+                "LOAD", "3", "@n", "AS", "dist",
+                "PARAMS", "2", "q", struct.pack("<2f", 0.0, 0.0), "DIALECT", "2")
+
     def test_load_after_other_stages_still_loads(self):
         client = self._client("1.3.0")
         reply, ticks = self._ticks(

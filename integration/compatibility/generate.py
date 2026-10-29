@@ -1008,6 +1008,22 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         ]:
             self.check(dialect, f"ft.aggregate {idx} * load 1 @__key {loads}")
 
+    def test_aggregate_load_as_and_knn_score(self, key_type, dialect, vector_data_type):
+        # Redisearch keeps a vector query's score under its own name: a rename
+        # onto that name is dropped, and a rename of the score is ignored.
+        self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
+        idx = f"{key_type}_idx1"
+        for loads in [
+            "load 4 @__key @n1 as d",
+            "load 4 @__key @d as x",
+            "load 5 @__key @n2 @n1 as d",
+        ]:
+            self.checkvec(dialect, f"ft.aggregate {idx} * {loads} sortby 2 @__key asc",
+                          knn=4, score_as="AS d")
+        if key_type == "hash":
+            self.checkvec(dialect, f"ft.aggregate {idx} * load 1 @__key load * load 3 @n1 as d "
+                          "sortby 2 @__key asc", knn=4, score_as="AS d")
+
     def test_aggregate_load_after_groupby(self, key_type, dialect, vector_data_type):
         # After GROUPBY each record is a group; any later LOAD is rejected,
         # including LOAD * and a LOAD in a command that also has LOAD *.

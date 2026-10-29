@@ -740,6 +740,16 @@ class TestHybridCompatibility(BaseCompatibilityTest):
         ]:
             self.hybrid(key_type, "@title:alpha", load=load)
 
+    # A rename onto the fused score's name is dropped and the fused score
+    # shows, as in Redisearch.
+    def test_load_as_fused_score(self, key_type):
+        super().setup_data("hybrid text extra", key_type)
+        for load in [
+            ["LOAD", "4", "@__key", "@price", "AS", "__score"],
+            ["LOAD", "4", "@__key", "@extra", "AS", "__score"],
+        ]:
+            self.hybrid(key_type, "@title:alpha", load=load, fused_score_as=None)
+
     # -----------------------------------------------------------------
     # Defaults. These are the cases the sweeps above deliberately pin, so
     # that a disagreement about a default shows up here and only here.

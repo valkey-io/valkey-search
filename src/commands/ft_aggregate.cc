@@ -71,7 +71,8 @@ absl::Status CheckLoadAfterGroupby(const AggregateParameters &params) {
 absl::Status ResolveLoadsUnderLoadAll(AggregateParameters &params) {
   const bool reply_differs = std::any_of(
       params.loads_.begin(), params.loads_.end(), [](const LoadField &f) {
-        return !f.after_groupby && (f.renamed || f.identifier == "__key");
+        return !f.after_groupby && !f.yields_to_score &&
+               (f.renamed || f.identifier == "__key");
       });
   if (!reply_differs) {
     return absl::OkStatus();
@@ -83,7 +84,7 @@ absl::Status ResolveLoadsUnderLoadAll(AggregateParameters &params) {
     return absl::OkStatus();
   }
   for (const auto &load : params.loads_) {
-    if (load.after_groupby) {
+    if (load.after_groupby || load.yields_to_score) {
       continue;
     }
     if (load.identifier == "__key") {
@@ -115,7 +116,8 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
   } else {
     std::vector<LoadField> loads_to_process;
     for (const auto &load : params.loads_) {
-      if (!(load.after_groupby && params.embedded_in_hybrid_)) {
+      if (!(load.after_groupby && params.embedded_in_hybrid_) &&
+          !load.yields_to_score) {
         loads_to_process.push_back(load);
       }
     }

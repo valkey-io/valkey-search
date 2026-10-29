@@ -161,6 +161,31 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
                     },
                     []() -> absl::StatusOr<bool> { return false; }));
           }
+          // Redisearch never moves a vector query's score: renaming the KNN
+          // score is ignored, and a rename onto the score's name is dropped
+          // so the score keeps it.
+          if (renamed) {
+            const absl::string_view score_name =
+                parameters.score_as == nullptr
+                    ? absl::string_view()
+                    : vmsdk::ToStringView(parameters.score_as.get());
+            const bool knn_score = !parameters.embedded_in_hybrid_ &&
+                                   parameters.IsVectorQuery() &&
+                                   identifier == score_name;
+            if (knn_score) {
+              alias = identifier;
+              renamed = false;
+            } else if (parameters.IsVectorQuery() && alias == score_name) {
+              parameters.loads_.emplace_back(
+                  LoadField{.identifier = std::move(identifier),
+                            .alias = std::move(alias),
+                            .renamed = true,
+                            .after_groupby = after_groupby,
+                            .before_loadall = !parameters.loadall_,
+                            .yields_to_score = true});
+              continue;
+            }
+          }
           // A name outside the schema is read straight from the document.
           // Later stages resolve names at parse time, so its column has to
           // exist before they are parsed.

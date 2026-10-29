@@ -126,4 +126,4 @@ FT.ALIASLIST
 - `FT.INFO` can be queried via an alias and reports the aliases of the underlying index in its response.
 - `FLUSHDB` removes all indexes and their aliases in the current database.
 - `SWAPDB` moves aliases in lockstep with their indexes between databases.
-- `MULTI/EXEC` and Lua scripts are not supported for alias commands in CME (Cluster Manager Enabled) mode.
+- `MULTI/EXEC` and Lua scripts are not supported for alias commands in cluster mode with the coordinator enabled (CME).

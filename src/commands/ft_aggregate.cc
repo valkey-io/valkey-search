@@ -109,153 +109,163 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
   // operation. And modify the common search returns list accordingly
   CHECK(!params.no_content);
   bool content = false;
+  // `LOAD *` asks for the whole record. It is not a short circuit: a field
+  // named by a pipeline stage still has to be fetched by name alongside it,
+  // because on a JSON index the whole record arrives as the single `$` root
+  // and no `@name` resolves against that blob. Fall through into the same
+  // load processing every other clause gets, with an empty `loads_`, so the
+  // implicit loads below are collected exactly as usual.
   if (params.loadall_) {
     CHECK(params.return_attributes.empty());
-    VMSDK_RETURN_IF_ERROR(CheckLoadAfterGroupby(params));
-    return ResolveLoadsUnderLoadAll(params);
-  } else {
-    std::vector<LoadField> loads_to_process;
-    for (const auto &load : params.loads_) {
-      if (!(load.after_groupby && params.embedded_in_hybrid_) &&
-          !load.yields_to_score && !load.duplicate) {
-        loads_to_process.push_back(load);
-      }
-    }
-
-    // A field named by a pipeline stage but absent from the LOAD clause still
-    // has to be fetched. Redisearch loads such fields implicitly; without that
-    // the field reads as Nil, so a GROUPBY key vanishes from the reply and
-    // every record lands in one group, a REDUCE aggregates nothing, and a
-    // SORTBY does not sort. See issue #919.
-    //
-    // Every `@name` in a GROUPBY key, REDUCE argument, SORTBY key, APPLY or
-    // FILTER expression has already been turned into a record column by
-    // AggregateParameters::MakeReference() -- GROUPBY keys directly, the rest
-    // via expr::Expression::Compile -- so the column table is a complete list
-    // of the names the pipeline references. No stage walking is needed.
-    //
-    // Only names that resolve to a declared attribute are loaded here. Any
-    // other column is a pipeline output, or a LOAD name outside the schema
-    // that the LOAD loop below fetches.
-    //
-    // An implicit load is never a rename: it is emitted under the attribute
-    // name, exactly as if the query had written `@name` in the LOAD clause.
-    const auto score_name = vmsdk::ToStringView(params.score_as.get());
-    for (const auto &info : params.record_info_by_index_) {
-      const std::string &name = info.alias_;
-      if (name == "__key" || name == score_name) {
-        continue;
-      }
-      auto indexer = params.index_schema->GetIndex(name);
-      if (!indexer.ok()) {
-        continue;
-      }
-      // Vector fields cannot be loaded at all (rejected below). Auto-loading
-      // one would turn a query that merely produced a Nil into an error, which
-      // is a bigger behavior change than this fix intends.
-      if (indexes::IsVectorIndex(*indexer)) {
-        continue;
-      }
-      if (std::find_if(loads_to_process.begin(), loads_to_process.end(),
-                       [&name](const LoadField &f) {
-                         return f.identifier == name;
-                       }) == loads_to_process.end()) {
-        loads_to_process.push_back(
-            LoadField{.identifier = name, .alias = name, .renamed = false});
-      }
-    }
-
-    for (const auto &load : loads_to_process) {
-      const std::string &identifier = load.identifier;
-      const std::string &alias = load.alias;  // output name (== identifier
-                                              // when there is no AS clause)
-      const bool renamed = load.renamed;
-      // Apply a LOAD ... AS rename to an attribute already present in the
-      // record table: emit it under `alias` and let `@alias` resolve in later
-      // pipeline stages (APPLY/SORTBY/FILTER).
-      auto apply_rename = [&](size_t record_index) {
-        params.record_info_by_index_[record_index].output_name_ = alias;
-        params.record_indexes_by_alias_[alias] = record_index;
-      };
-      //
-      // Skip loading of the score and the key, we always get those...
-      //
-      if (identifier == "__key") {
-        params.load_key = true;
-        if (renamed) {
-          apply_rename(params.record_indexes_by_alias_.at("__key"));
-        }
-        continue;
-      }
-      if (identifier == vmsdk::ToStringView(params.score_as.get())) {
-        if (renamed) {
-          apply_rename(params.record_indexes_by_alias_.at(identifier));
-        }
-        continue;
-      }
-      // Also skip the VR score field name — it is a synthetic computed field
-      // that is not in the index schema.
-      bool is_vr_field = !params.vr_score_field_name_.empty() &&
-                         identifier == params.vr_score_field_name_;
-      if (is_vr_field) {
-        if (renamed) {
-          apply_rename(params.record_indexes_by_alias_.at(identifier));
-        }
-        continue;
-      }
-      content = true;
-      auto indexer = params.index_schema->GetIndex(identifier);
-      if (indexer.ok() && indexes::IsVectorIndex(*indexer)) {
-        return absl::InvalidArgumentError(
-            absl::StrCat("Loading of vector fields is not supported (field `",
-                         identifier, "`)"));
-      }
-      size_t record_index;
-      if (indexer.ok()) {
-        VMSDK_ASSIGN_OR_RETURN(auto schema_identifier,
-                               params.index_schema->GetIdentifier(identifier));
-        params.return_attributes.emplace_back(query::ReturnAttribute{
-            .identifier = vmsdk::MakeUniqueValkeyString(schema_identifier),
-            .attribute_alias = vmsdk::MakeUniqueValkeyString(identifier),
-            .alias = vmsdk::MakeUniqueValkeyString(alias)});
-        record_index = params.AddRecordAttribute(
-            schema_identifier, identifier,
-            renamed ? alias : OutputNameFor(alias, schema_identifier),
-            (*indexer)->GetIndexerType());
-      } else {
-        // Below 1.3.0 `AS` is read as a field name; keep the unknown-field
-        // error so the ignored rename is not silent.
-        if (!options::EnabledInVersion(1, 3, 0) &&
-            absl::EqualsIgnoreCase(identifier, kAsParam)) {
-          return indexer.status();
-        }
-        // An FT.HYBRID per-arm score alias passes the parser's lookup but is
-        // not a document field; keep the unknown-field error for it.
-        const auto *index_interface = params.parse_vars_.index_interface_;
-        if (index_interface != nullptr &&
-            index_interface->GetFieldType(identifier).ok()) {
-          return indexer.status();
-        }
-        if (load.after_groupby) {
-          return indexer.status();
-        }
-        params.return_attributes.emplace_back(query::ReturnAttribute{
-            .identifier = vmsdk::MakeUniqueValkeyString(identifier),
-            .attribute_alias = vmsdk::UniqueValkeyString(),
-            .alias = vmsdk::MakeUniqueValkeyString(alias)});
-        record_index = params.AddRecordAttribute(identifier, identifier,
-                                                 renamed ? alias : identifier,
-                                                 indexes::IndexerType::kNone);
-      }
-      if (renamed) {
-        apply_rename(record_index);
-      }
-    }
-    // Checked after the loop so that only a command that is otherwise valid
-    // reaches the counter.
-    VMSDK_RETURN_IF_ERROR(CheckLoadAfterGroupby(params));
+    params.all_content = true;
   }
-  params.no_content = !content;
+  std::vector<LoadField> loads_to_process;
+  for (const auto &load : params.loads_) {
+    if (!(load.after_groupby && params.embedded_in_hybrid_) &&
+        !load.yields_to_score && !load.duplicate) {
+      loads_to_process.push_back(load);
+    }
+  }
+
+  // A field named by a pipeline stage but absent from the LOAD clause still
+  // has to be fetched. Redisearch loads such fields implicitly; without that
+  // the field reads as Nil, so a GROUPBY key vanishes from the reply and
+  // every record lands in one group, a REDUCE aggregates nothing, and a
+  // SORTBY does not sort. See issue #919.
+  //
+  // Every `@name` in a GROUPBY key, REDUCE argument, SORTBY key, APPLY or
+  // FILTER expression has already been turned into a record column by
+  // AggregateParameters::MakeReference() -- GROUPBY keys directly, the rest
+  // via expr::Expression::Compile -- so the column table is a complete list
+  // of the names the pipeline references. No stage walking is needed.
+  //
+  // Only names that resolve to a declared attribute are loaded. Anything
+  // else is produced by the pipeline itself (an APPLY or REDUCE output, a
+  // chained GROUPBY over a reducer alias) and has no stored value to fetch.
+  //
+  // An implicit load is never a rename: it is emitted under the attribute
+  // name, exactly as if the query had written `@name` in the LOAD clause.
+  const auto score_name = vmsdk::ToStringView(params.score_as.get());
+  for (const auto &info : params.record_info_by_index_) {
+    const std::string &name = info.alias_;
+    if (name == "__key" || name == score_name) {
+      continue;
+    }
+    auto indexer = params.index_schema->GetIndex(name);
+    if (!indexer.ok()) {
+      continue;
+    }
+    // Vector fields cannot be loaded at all (rejected below). Auto-loading
+    // one would turn a query that merely produced a Nil into an error, which
+    // is a bigger behavior change than this fix intends.
+    if (indexes::IsVectorIndex(*indexer)) {
+      continue;
+    }
+    if (std::find_if(loads_to_process.begin(), loads_to_process.end(),
+                     [&name](const LoadField &f) {
+                       return f.identifier == name;
+                     }) == loads_to_process.end()) {
+      loads_to_process.push_back(
+          LoadField{.identifier = name, .alias = name, .renamed = false});
+    }
+  }
+
+  for (const auto &load : loads_to_process) {
+    const std::string &identifier = load.identifier;
+    const std::string &alias = load.alias;  // output name (== identifier
+                                            // when there is no AS clause)
+    const bool renamed = load.renamed;
+    // Apply a LOAD ... AS rename to an attribute already present in the
+    // record table: emit it under `alias` and let `@alias` resolve in later
+    // pipeline stages (APPLY/SORTBY/FILTER).
+    auto apply_rename = [&](size_t record_index) {
+      params.record_info_by_index_[record_index].output_name_ = alias;
+      params.record_indexes_by_alias_[alias] = record_index;
+    };
+    //
+    // Skip loading of the score and the key, we always get those...
+    //
+    if (identifier == "__key") {
+      params.load_key = true;
+      if (renamed) {
+        apply_rename(params.record_indexes_by_alias_.at("__key"));
+      }
+      continue;
+    }
+    if (identifier == vmsdk::ToStringView(params.score_as.get())) {
+      if (renamed) {
+        apply_rename(params.record_indexes_by_alias_.at(identifier));
+      }
+      continue;
+    }
+    // Also skip the VR score field name — it is a synthetic computed field
+    // that is not in the index schema.
+    bool is_vr_field = !params.vr_score_field_name_.empty() &&
+                       identifier == params.vr_score_field_name_;
+    if (is_vr_field) {
+      if (renamed) {
+        apply_rename(params.record_indexes_by_alias_.at(identifier));
+      }
+      continue;
+    }
+    content = true;
+    auto indexer = params.index_schema->GetIndex(identifier);
+    if (indexer.ok() && indexes::IsVectorIndex(*indexer)) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Loading of vector fields is not supported (field `",
+                       identifier, "`)"));
+    }
+    size_t record_index;
+    if (indexer.ok()) {
+      VMSDK_ASSIGN_OR_RETURN(auto schema_identifier,
+                             params.index_schema->GetIdentifier(identifier));
+      params.return_attributes.emplace_back(query::ReturnAttribute{
+          .identifier = vmsdk::MakeUniqueValkeyString(schema_identifier),
+          .attribute_alias = vmsdk::MakeUniqueValkeyString(identifier),
+          .alias = vmsdk::MakeUniqueValkeyString(alias)});
+      record_index = params.AddRecordAttribute(
+          schema_identifier, identifier,
+          renamed ? alias : OutputNameFor(alias, schema_identifier),
+          (*indexer)->GetIndexerType());
+    } else {
+      // Below 1.3.0 `AS` is read as a field name; keep the unknown-field
+      // error so the ignored rename is not silent.
+      if (!options::EnabledInVersion(1, 3, 0) &&
+          absl::EqualsIgnoreCase(identifier, kAsParam)) {
+        return indexer.status();
+      }
+      // An FT.HYBRID per-arm score alias passes the parser's lookup but is
+      // not a document field; keep the unknown-field error for it.
+      const auto *index_interface = params.parse_vars_.index_interface_;
+      if (index_interface != nullptr &&
+          index_interface->GetFieldType(identifier).ok()) {
+        return indexer.status();
+      }
+      if (load.after_groupby) {
+        return indexer.status();
+      }
+      params.return_attributes.emplace_back(query::ReturnAttribute{
+          .identifier = vmsdk::MakeUniqueValkeyString(identifier),
+          .attribute_alias = vmsdk::UniqueValkeyString(),
+          .alias = vmsdk::MakeUniqueValkeyString(alias)});
+      record_index = params.AddRecordAttribute(identifier, identifier,
+                                               renamed ? alias : identifier,
+                                               indexes::IndexerType::kNone);
+    }
+    if (renamed) {
+      apply_rename(record_index);
+    }
+  }
+  // Checked after the loop so that only a command that is otherwise valid
+  // reaches the counter.
+  VMSDK_RETURN_IF_ERROR(CheckLoadAfterGroupby(params));
+  if (params.loadall_) {
+    VMSDK_RETURN_IF_ERROR(ResolveLoadsUnderLoadAll(params));
+  }
+  // `LOAD *` on its own loads no named field, so `content` stays false even
+  // though the whole record is wanted. Nothing is fetched only when neither
+  // was asked for.
+  params.no_content = !content && !params.all_content;
   return absl::OkStatus();
 }
 

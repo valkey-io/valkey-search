@@ -128,6 +128,30 @@ Average commands per second. Before is pre-PR. After is the final PR implementat
 | 5 | 27,846 | 25,836 | -7.2% |
 | 10 | 18,065 | 17,413 | -3.6% |
 
+## DEL of tracked keys
+
+The keys are existing HASH keys indexed by every schema. Before is pre-PR. After is the final PR.
+
+For one `DEL <key>`, average reply latency is in µs:
+
+| Schemas | Before p50 | After p50 | Before p99 | After p99 |
+|---:|---:|---:|---:|---:|
+| 1 | 36.98 | 36.72 | 51.84 | 48.36 |
+| 2 | 43.81 | 41.99 | 78.24 | 55.77 |
+| 5 | 53.70 | 52.80 | 72.10 | 71.71 |
+| 10 | 62.49 | 60.90 | 83.57 | 81.80 |
+
+Average pipelined throughput includes the final index drain. Each value counts `DEL` commands per second, not deleted keys.
+
+| Schemas | Before `DEL key` | After `DEL key` | Before `DEL key1 ... key8` | After `DEL key1 ... key8` |
+|---:|---:|---:|---:|---:|
+| 1 | 71,496 | 72,924 | 19,096 | 19,210 |
+| 2 | 61,158 | 61,214 | 15,137 | 16,095 |
+| 5 | 48,972 | 49,573 | 10,345 | 10,902 |
+| 10 | 35,543 | 36,500 | 6,331 | 6,482 |
+
+Single-key p50 is 0.7% to 4.2% lower. Throughput is 0.1% to 2.7% higher for one key and 0.6% to 6.3% higher for eight keys.
+
 ## DEL of eight untracked STRING keys
 
 The command is `DEL <key1> ... <key8>`. After the PR, ingestion skips keys with neither indexed nor pending tracked state.

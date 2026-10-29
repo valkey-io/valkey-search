@@ -2,7 +2,17 @@
 
 Measured on 2026-10-29 for PR #1640. The primary comparison is the PR parent `6d1eb26` against the final implementation's behavior.
 
-Transaction acknowledgment latency is close to pre-PR behavior. Deleting eight untracked STRING keys is 4.6 to 5.0 times faster. JSON throughput falls 6.6% with five schemas and 5.2% with ten. The final implementation does not eliminate every performance regression.
+## What was tested
+
+The benchmark compares pre-PR and final behavior with 1, 2, 5, and 10 index schemas. Workloads cover HASH and JSON writes, tracked and untracked keys, missing keys, expiration, and single-key and multi-key deletion. Transaction cases use distinct keys, duplicate keys, and an ordinary write after MULTI.
+
+Single-client runs measure p50 and p99 latency. Pipelined runs measure throughput through completed indexing. The primary comparison validates 19.6 million operations with no response or final-index errors.
+
+## Overall results
+
+Transaction latency stays close to pre-PR behavior. HASH-write throughput varies by workload and schema count, with no consistent change across the tracked-write results. Deleting eight untracked STRING keys is 4.6 to 5.0 times faster.
+
+JSON throughput falls 6.6% with five schemas and 5.2% with ten. The cause remains unresolved. The final implementation improves untracked deletion and preserves transaction acknowledgment behavior, but it is not performance-neutral across all workloads.
 
 Intermediate implementations and diagnostic builds appear only in the appendices. Their results explain design choices but are not the baseline for judging the final PR.
 
@@ -26,12 +36,12 @@ Every trial starts with ready schemas, complete backfill, and empty mutation que
 
 The final implementation preserves the pre-PR behavior of ordinary writes that join deferred MULTI or Lua work. Both implementations retain `ProcessMultiQueue` as the query barrier.
 
-| Schemas | Pre-PR groups/s | Final groups/s | Change | Pair direction |
-|---:|---:|---:|---:|---|
-| 1 | 72,686 | 72,639 | −0.1% | Mixed |
-| 2 | 42,915 | 42,742 | −0.4% | Mixed |
-| 5 | 18,594 | 18,824 | +1.2% | Mixed |
-| 10 | 9,343 | 9,859 | +5.5% | Mixed |
+| Schemas | Pre-PR groups/s | Final groups/s | Change |
+|---:|---:|---:|---:|
+| 1 | 72,686 | 72,639 | −0.1% |
+| 2 | 42,915 | 42,742 | −0.4% |
+| 5 | 18,594 | 18,824 | +1.2% |
+| 10 | 9,343 | 9,859 | +5.5% |
 
 The ranges overlap at every schema count. These medians do not establish a throughput improvement or regression.
 
@@ -49,15 +59,13 @@ The ranges overlap at every schema count. These medians do not establish a throu
 | 5 | 27,783 [27,197–28,793] | 25,938 [24,359–26,837] | −6.6% |
 | 10 | 18,191 [17,347–18,410] | 17,251 [16,694–18,107] | −5.2% |
 
-All five pairs are slower in both cells. The five-schema ranges do not overlap. The ten-schema ranges overlap.
-
-Five-schema paired changes are −3.4%, −7.6%, −4.7%, −10.4%, and −9.9%. Ten-schema paired changes are −3.8%, −5.2%, −7.8%, −1.1%, and −0.2%.
+Both JSON cases have lower median throughput. The five-schema ranges do not overlap. The ten-schema ranges overlap.
 
 A later pre-PR comparison with the final renamed build measures a smaller JSON5 loss of 1.4%. Main-thread cycle profiles also measure about 1.4% more cycles per update. The main thread consumes approximately one full core. Job overhead is a plausible contributor, but the full regression is not causally isolated. Appendix C includes the follow-up comparison and diagnostic controls.
 
 ## Untracked deletion improvement
 
-The final implementation skips ingestion for keys with neither indexed nor pending tracked state. Every pair improves for an eight-key untracked STRING deletion.
+The final implementation skips ingestion for keys with neither indexed nor pending tracked state. This reduces the work required for an eight-key untracked STRING deletion.
 
 | Schemas | Pre-PR commands/s | Final commands/s | Improvement |
 |---:|---:|---:|---:|
@@ -66,7 +74,7 @@ The final implementation skips ingestion for keys with neither indexed nor pendi
 | 5 | 9,481 | 43,270 | 4.6× |
 | 10 | 5,450 | 25,810 | 4.7× |
 
-Deletion counts and final index contents pass validation. The complete tables also retain smaller adverse results, including duplicate-key MULTI throughput at one schema, which falls 0.8% in all five pairs.
+Deletion counts and final index contents pass validation. The complete tables also retain smaller adverse results, including duplicate-key MULTI throughput at one schema, which falls 0.8%.
 
 ## Verification and limits
 

@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "src/attribute_data_type.h"
 #include "src/utils/patricia_tree.h"
@@ -33,6 +34,20 @@ class VectorBase;
 using StartSubscriptionFunction =
     std::function<absl::Status(ValkeyModuleCtx *, int)>;
 using SharedBlockedClient = std::shared_ptr<vmsdk::BlockedClient>;
+
+class KeyspaceEventManager;
+
+class MutationBlocker {
+ public:
+  MutationBlocker(ValkeyModuleCtx *ctx, KeyspaceEventManager &manager)
+      : ctx_(ctx), manager_(manager) {}
+
+  SharedBlockedClient Acquire(vmsdk::BlockedClientCategory category) const;
+
+ private:
+  ValkeyModuleCtx *ctx_;
+  KeyspaceEventManager &manager_;
+};
 
 // KeyspaceEventSubscription is an interface for classes that want to subscribe
 // to keyspace events.
@@ -55,7 +70,7 @@ class KeyspaceEventSubscription {
 
   virtual void OnKeyspaceNotification(
       ValkeyModuleCtx *ctx, int type, const char *event,
-      ValkeyModuleString *key, const SharedBlockedClient &blocked_client) = 0;
+      ValkeyModuleString *key, const MutationBlocker &mutation_blocker) = 0;
   virtual std::vector<const indexes::VectorBase *> GetVectorIndexes() const = 0;
   virtual bool IsInDB(int db_num) const { return true; }
   virtual bool IsInCurrentDB(ValkeyModuleCtx *ctx) const {
@@ -68,6 +83,7 @@ class KeyspaceEventManager {
   KeyspaceEventManager() = default;
   void NotifySubscribers(ValkeyModuleCtx *ctx, int type, const char *event,
                          ValkeyModuleString *key);
+  void OnBeforeSleep();
 
   absl::Status InsertSubscription(ValkeyModuleCtx *ctx,
                                   KeyspaceEventSubscription *subscription);
@@ -83,6 +99,11 @@ class KeyspaceEventManager {
   static KeyspaceEventManager &Instance();
 
  private:
+  friend class MutationBlocker;
+
+  SharedBlockedClient AcquireBlockedClient(
+      ValkeyModuleCtx *ctx, vmsdk::BlockedClientCategory category);
+
   absl::Status StartValkeySubscriptionIfNeeded(ValkeyModuleCtx *ctx, int types);
 
   static inline int OnValkeyKeyspaceNotification(ValkeyModuleCtx *ctx, int type,
@@ -96,7 +117,13 @@ class KeyspaceEventManager {
       ValkeyModuleCtx *ctx, int type, ValkeyModuleString *dst_key,
       const char *dst_event, int dst_db_num,
       const std::vector<KeyspaceEventSubscription *> &src_subscriptions,
-      const SharedBlockedClient &blocked_client);
+      const MutationBlocker &mutation_blocker);
+
+  // Normal before-sleep events run after commands and post-notification jobs,
+  // and are skipped when a module command yields to nested event processing.
+  vmsdk::MainThreadAccessGuard<
+      absl::flat_hash_map<unsigned long long, SharedBlockedClient>>
+      command_blocks_;
 
   vmsdk::MainThreadAccessGuard<absl::flat_hash_set<KeyspaceEventSubscription *>>
       subscriptions_;

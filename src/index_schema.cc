@@ -592,21 +592,17 @@ void TrackResults(
 void IndexSchema::OnKeyspaceNotification(ValkeyModuleCtx *ctx, int type,
                                          const char *event,
                                          ValkeyModuleString *key) {
-  SharedBlockedClient blocked_client;
-  if (ShouldBlockClient(ctx, vmsdk::MultiOrLua(ctx), /*from_backfill=*/false)) {
-    blocked_client =
-        std::make_shared<vmsdk::BlockedClient>(ctx, GetBlockedClientCategory());
-  }
-  OnKeyspaceNotification(ctx, type, event, key, blocked_client);
+  const MutationBlocker mutation_blocker(ctx, KeyspaceEventManager::Instance());
+  OnKeyspaceNotification(ctx, type, event, key, mutation_blocker);
 }
 
 void IndexSchema::OnKeyspaceNotification(
     ValkeyModuleCtx *ctx, int type, const char *event, ValkeyModuleString *key,
-    const SharedBlockedClient &blocked_client) {
+    const MutationBlocker &mutation_blocker) {
   if (ABSL_PREDICT_FALSE(!IsInCurrentDB(ctx))) {
     return;
   }
-  ProcessKeyspaceNotification(ctx, key, false, blocked_client);
+  ProcessKeyspaceNotification(ctx, key, false, &mutation_blocker);
 }
 
 std::vector<const indexes::VectorBase *> IndexSchema::GetVectorIndexes() const {
@@ -657,13 +653,12 @@ void AppendMutatedAttribute(
 void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
                                               ValkeyModuleString *key,
                                               bool from_backfill) {
-  SharedBlockedClient blocked_client;
-  ProcessKeyspaceNotification(ctx, key, from_backfill, blocked_client);
+  ProcessKeyspaceNotification(ctx, key, from_backfill, nullptr);
 }
 
 void IndexSchema::ProcessKeyspaceNotification(
     ValkeyModuleCtx *ctx, ValkeyModuleString *key, bool from_backfill,
-    const SharedBlockedClient &blocked_client) {
+    const MutationBlocker *mutation_blocker) {
   if (ABSL_PREDICT_FALSE(key == nullptr) || is_destructing_) {
     return;
   }
@@ -771,7 +766,9 @@ void IndexSchema::ProcessKeyspaceNotification(
     // in the RDB key list that SaveIndexExtension writes.
     ProcessMutation(ctx, mutated_attributes, interned_key, from_backfill,
                     key_obj == nullptr || filter_rejected, document_score,
-                    blocked_client);
+                    mutation_blocker
+                        ? mutation_blocker->Acquire(GetBlockedClientCategory())
+                        : nullptr);
   }
 }
 
@@ -917,8 +914,7 @@ std::unique_ptr<vmsdk::StopWatch> CreateQueueDelayCapturer() {
 }
 
 // ProcessMultiQueue is used to flush pending mutations occurring in a
-// multi/exec transaction. This function is called lazily on the next FT.SEARCH
-// command.
+// multi/exec transaction. Searches and ordinary indexed writes flush the batch.
 void IndexSchema::ProcessMultiQueue() {
   schedule_multi_exec_processing_ = false;
   auto &multi_mutations_keys = multi_mutations_keys_.Get();
@@ -1027,11 +1023,6 @@ bool IndexSchema::ScheduleMutation(bool from_backfill, const Key &key,
   return scheduled;
 }
 
-bool ShouldBlockClient(ValkeyModuleCtx *ctx, bool inside_multi_exec,
-                       bool from_backfill) {
-  return !inside_multi_exec && !from_backfill && vmsdk::IsRealUserClient(ctx);
-}
-
 MutationSequenceNumber IndexSchema::UpdateDbInfoKey(
     ValkeyModuleCtx *ctx, const MutatedAttributes &mutated_attributes,
     const Key &interned_key, [[maybe_unused]] bool from_backfill,
@@ -1097,6 +1088,9 @@ void IndexSchema::ProcessMutation(ValkeyModuleCtx *ctx,
                                   const Key &interned_key, bool from_backfill,
                                   bool is_delete, float document_score,
                                   SharedBlockedClient blocked_client) {
+  if (blocked_client && !multi_mutations_keys_.Get().empty()) {
+    ProcessMultiQueue();
+  }
   auto this_mutation = UpdateDbInfoKey(ctx, mutated_attributes, interned_key,
                                        from_backfill, is_delete);
 
@@ -2270,8 +2264,7 @@ bool IndexSchema::TrackMutatedRecord(const Key &key,
   itr->second.weighted_buffer.resize(
       ComputeWeightedBufferSize(itr->second.attributes.value()));
 
-  if (ABSL_PREDICT_TRUE(blocked_client) &&
-      ABSL_PREDICT_TRUE(!itr->second.from_multi)) {
+  if (ABSL_PREDICT_TRUE(blocked_client)) {
     blocked_client->MeasureTimeStart();
     itr->second.blocked_clients.push_back(std::move(blocked_client));
   }

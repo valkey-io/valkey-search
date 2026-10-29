@@ -54,9 +54,6 @@ struct SearchParameters;
 }  // namespace valkey_search::query
 
 namespace valkey_search {
-bool ShouldBlockClient(ValkeyModuleCtx *ctx, bool inside_multi_exec,
-                       bool from_backfill);
-
 inline absl::Status GenerateIndexNotFoundError(int db_num,
                                                absl::string_view name) {
   return absl::NotFoundError(absl::StrFormat(
@@ -246,10 +243,9 @@ class IndexSchema : public KeyspaceEventSubscription,
 
   void OnKeyspaceNotification(ValkeyModuleCtx *ctx, int type, const char *event,
                               ValkeyModuleString *key);
-  void OnKeyspaceNotification(
-      ValkeyModuleCtx *ctx, int type, const char *event,
-      ValkeyModuleString *key,
-      const SharedBlockedClient &blocked_client) override;
+  void OnKeyspaceNotification(ValkeyModuleCtx *ctx, int type, const char *event,
+                              ValkeyModuleString *key,
+                              const MutationBlocker &mutation_blocker) override;
 
   uint32_t PerformBackfill(ValkeyModuleCtx *ctx, uint32_t batch_size);
 
@@ -566,7 +562,7 @@ class IndexSchema : public KeyspaceEventSubscription,
                                    ValkeyModuleString *key, bool from_backfill);
   void ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
                                    ValkeyModuleString *key, bool from_backfill,
-                                   const SharedBlockedClient &blocked_client);
+                                   const MutationBlocker *mutation_blocker);
 
   void ProcessMutation(ValkeyModuleCtx *ctx,
                        MutatedAttributes &mutated_attributes,

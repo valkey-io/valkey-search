@@ -692,6 +692,7 @@ TEST_F(IndexSchemaSubscriptionSimpleTest, DropIndexPrematurely) {
         .WillOnce(Return(1));
   }
   EXPECT_EQ(mutations_thread_pool.QueueSize(), 1);
+  KeyspaceEventManager::Instance().OnBeforeSleep();
   VMSDK_EXPECT_OK(mutations_thread_pool.ResumeWorkers());
   WaitWorkerTasksAreCompleted(mutations_thread_pool);
   EXPECT_EQ(vmsdk::BlockedClient::GetActiveClientCount(
@@ -777,6 +778,7 @@ TEST_F(IndexSchemaSubscriptionSimpleTest,
 
   KeyspaceEventManager::Instance().NotifySubscribers(
       &fake_ctx_, VALKEYMODULE_NOTIFY_HASH, "event", key_valkey_str.get());
+  KeyspaceEventManager::Instance().OnBeforeSleep();
   EXPECT_EQ(vmsdk::BlockedClient::GetActiveClientCount(
                 vmsdk::BlockedClientCategory::kHash),
             0);
@@ -852,6 +854,7 @@ TEST_F(IndexSchemaSubscriptionSimpleTest,
 
   KeyspaceEventManager::Instance().NotifySubscribers(
       &fake_ctx_, VALKEYMODULE_NOTIFY_HASH, "event", key_valkey_str.get());
+  KeyspaceEventManager::Instance().OnBeforeSleep();
   ASSERT_EQ(scheduled_tasks.size(), 1);
   EXPECT_EQ(unblocked_clients, 0);
 
@@ -859,6 +862,7 @@ TEST_F(IndexSchemaSubscriptionSimpleTest,
   client_id = 2;
   KeyspaceEventManager::Instance().NotifySubscribers(
       &fake_ctx_, VALKEYMODULE_NOTIFY_HASH, "event", key_valkey_str.get());
+  KeyspaceEventManager::Instance().OnBeforeSleep();
   EXPECT_EQ(scheduled_tasks.size(), 1);
   EXPECT_EQ(unblocked_clients, 0);
   EXPECT_EQ(vmsdk::BlockedClient::GetActiveClientCount(
@@ -872,6 +876,156 @@ TEST_F(IndexSchemaSubscriptionSimpleTest,
   EXPECT_EQ(vmsdk::BlockedClient::GetActiveClientCount(
                 vmsdk::BlockedClientCategory::kHash),
             0);
+}
+
+class MultiKeyCommandTest : public IndexSchemaSubscriptionSimpleTest,
+                            public testing::WithParamInterface<int> {};
+
+TEST_P(MultiKeyCommandTest,
+       MultiKeyCommandKeepsClientBlockedUntilEveryKeyApplied) {
+  // A command such as DEL k1 k2 notifies once per key. Valkey rejects a second
+  // block while the client is already blocked, and only clears the blocked
+  // state after the command returns.
+  MockThreadPool mutations_thread_pool("writer-thread-pool-", 1);
+  std::vector<absl::AnyInvocable<void()>> scheduled_tasks;
+  EXPECT_CALL(mutations_thread_pool, Schedule(testing::_, testing::_))
+      .WillRepeatedly(
+          [&](absl::AnyInvocable<void()> task, vmsdk::ThreadPool::Priority) {
+            scheduled_tasks.push_back(std::move(task));
+            return true;
+          });
+
+  std::vector<absl::string_view> key_prefixes = {"prefix:"};
+  auto index_schema =
+      MockIndexSchema::Create(&fake_ctx_, "index", key_prefixes,
+                              std::make_unique<HashAttributeDataType>(),
+                              &mutations_thread_pool)
+          .value();
+  auto mock_index = std::make_shared<MockIndex>();
+  VMSDK_EXPECT_OK(
+      index_schema->AddIndex("attribute_name", "vector", mock_index));
+  auto first_key = StringInternStore::Intern("prefix:k1");
+  auto second_key = StringInternStore::Intern("prefix:k2");
+  auto first_key_str = vmsdk::MakeUniqueValkeyString(first_key->Str());
+  auto second_key_str = vmsdk::MakeUniqueValkeyString(second_key->Str());
+  EXPECT_CALL(*mock_index, IsTracked(testing::_)).WillRepeatedly(Return(false));
+
+  EXPECT_CALL(*kMockValkeyModule, KeyType(testing::_))
+      .WillRepeatedly(TestValkeyModule_KeyTypeDefaultImpl);
+  for (const auto &key : {first_key, second_key}) {
+    EXPECT_CALL(*kMockValkeyModule,
+                KeyType(vmsdk::ValkeyModuleKeyIsForString(key->Str())))
+        .WillRepeatedly(Return(VALKEYMODULE_KEYTYPE_HASH));
+    EXPECT_CALL(*kMockValkeyModule,
+                HashGet(vmsdk::ValkeyModuleKeyIsForString(key->Str()),
+                        VALKEYMODULE_HASH_CFIELDS, StrEq("vector"),
+                        An<ValkeyModuleString **>(), TypedEq<void *>(nullptr)))
+        .WillRepeatedly([](ValkeyModuleKey *, int, const char *,
+                           ValkeyModuleString **value_out, void *) {
+          *value_out =
+              TestValkeyModule_CreateStringPrintf(nullptr, "vector_buffer");
+          return VALKEYMODULE_OK;
+        });
+  }
+  EXPECT_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx_))
+      .WillRepeatedly(Return(0));
+  EXPECT_CALL(*kMockValkeyModule, GetClientId(&fake_ctx_))
+      .WillRepeatedly(Return(1));
+  EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx_))
+      .WillRepeatedly(Return(0));
+
+  bool client_blocked = false;
+  EXPECT_CALL(
+      *kMockValkeyModule,
+      BlockClient(&fake_ctx_, testing::_, testing::_, testing::_, testing::_))
+      .WillOnce([&](ValkeyModuleCtx *, ValkeyModuleCmdFunc, ValkeyModuleCmdFunc,
+                    void (*)(ValkeyModuleCtx *, void *), long long) {
+        if (client_blocked) {
+          return (ValkeyModuleBlockedClient *)nullptr;
+        }
+        client_blocked = true;
+        return (ValkeyModuleBlockedClient *)1;
+      });
+  int applied_keys = 0;
+  EXPECT_CALL(*mock_index, AddRecord(testing::_, testing::_))
+      .Times(2)
+      .WillRepeatedly([&](const InternedStringPtr &, AttributeData &&) {
+        ++applied_keys;
+        return indexes::RecordResult::kAdded;
+      });
+  int unblocked_clients = 0;
+  EXPECT_CALL(*kMockValkeyModule,
+              UnblockClient((ValkeyModuleBlockedClient *)1, nullptr))
+      .WillOnce([&](ValkeyModuleBlockedClient *, void *) {
+        ++unblocked_clients;
+        return 1;
+      });
+
+  KeyspaceEventManager::Instance().NotifySubscribers(
+      &fake_ctx_, VALKEYMODULE_NOTIFY_HASH, "event", first_key_str.get());
+  ASSERT_EQ(scheduled_tasks.size(), 1);
+  if (GetParam() >= 1) {
+    scheduled_tasks[0]();
+    EXPECT_EQ(applied_keys, 1);
+    EXPECT_EQ(unblocked_clients, 0);
+  }
+  KeyspaceEventManager::Instance().NotifySubscribers(
+      &fake_ctx_, VALKEYMODULE_NOTIFY_HASH, "event", second_key_str.get());
+  ASSERT_EQ(scheduled_tasks.size(), 2);
+
+  if (GetParam() == 2) {
+    scheduled_tasks[1]();
+    EXPECT_EQ(applied_keys, 2);
+  }
+  EXPECT_EQ(unblocked_clients, 0);
+  KeyspaceEventManager::Instance().OnBeforeSleep();
+
+  if (GetParam() == 0) {
+    scheduled_tasks[0]();
+    EXPECT_EQ(applied_keys, 1);
+    EXPECT_EQ(unblocked_clients, 0);
+  }
+  if (GetParam() < 2) {
+    scheduled_tasks[1]();
+  }
+  EXPECT_EQ(applied_keys, 2);
+  EXPECT_EQ(unblocked_clients, 1);
+}
+
+INSTANTIATE_TEST_SUITE_P(CommandCompletionOrders, MultiKeyCommandTest,
+                         testing::Values(0, 1, 2));
+
+TEST_F(IndexSchemaSubscriptionSimpleTest,
+       UntrackedStringDoesNotBlockHashMutationClient) {
+  MockThreadPool mutations_thread_pool("writer-thread-pool-", 1);
+  EXPECT_CALL(mutations_thread_pool, Schedule(testing::_, testing::_)).Times(0);
+  std::vector<absl::string_view> key_prefixes = {""};
+  auto index_schema =
+      MockIndexSchema::Create(&fake_ctx_, "index", key_prefixes,
+                              std::make_unique<HashAttributeDataType>(),
+                              &mutations_thread_pool)
+          .value();
+  auto mock_index = std::make_shared<MockIndex>();
+  VMSDK_EXPECT_OK(
+      index_schema->AddIndex("attribute_name", "vector", mock_index));
+  EXPECT_CALL(*mock_index, IsTracked(testing::_)).WillRepeatedly(Return(false));
+  auto key = vmsdk::MakeUniqueValkeyString("untracked");
+  EXPECT_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx_))
+      .WillRepeatedly(Return(0));
+  EXPECT_CALL(*kMockValkeyModule, GetClientId(&fake_ctx_))
+      .WillRepeatedly(Return(1));
+  EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx_))
+      .WillRepeatedly(Return(0));
+  EXPECT_CALL(*kMockValkeyModule, KeyType(testing::_))
+      .Times(testing::AtLeast(1))
+      .WillRepeatedly(Return(VALKEYMODULE_KEYTYPE_STRING));
+  EXPECT_CALL(
+      *kMockValkeyModule,
+      BlockClient(testing::_, testing::_, testing::_, testing::_, testing::_))
+      .Times(0);
+
+  KeyspaceEventManager::Instance().NotifySubscribers(
+      &fake_ctx_, VALKEYMODULE_NOTIFY_GENERIC, "expire", key.get());
 }
 
 TEST_F(IndexSchemaSubscriptionSimpleTest, EmptyKeyPrefixesTest) {
@@ -2735,23 +2889,6 @@ TEST_F(IndexSchemaFriendTest, FlatConsistencyTest) {
 }
 
 class IndexSchemaTest : public ValkeySearchTest {};
-
-TEST_F(IndexSchemaTest, ShouldBlockClient) {
-  ValkeyModuleCtx fake_ctx;
-  {
-    EXPECT_CALL(*kMockValkeyModule, GetClientId(&fake_ctx))
-        .WillOnce(testing::Return(1));
-    EXPECT_TRUE(ShouldBlockClient(&fake_ctx, false, false));
-  }
-  {
-    EXPECT_CALL(*kMockValkeyModule, GetClientId(&fake_ctx))
-        .WillOnce(testing::Return(0));
-    EXPECT_FALSE(ShouldBlockClient(&fake_ctx, false, false));
-  }
-  EXPECT_FALSE(ShouldBlockClient(&fake_ctx, true, false));
-  EXPECT_FALSE(ShouldBlockClient(&fake_ctx, false, true));
-  EXPECT_FALSE(ShouldBlockClient(&fake_ctx, true, true));
-}
 
 TEST_F(IndexSchemaRDBTest, DrainMutationQueueOnSaveEnabled) {
   // Enable drain-mutation-queue-on-save configuration

@@ -295,8 +295,8 @@ class MockKeyspaceEventSubscription : public KeyspaceEventSubscription {
   void OnKeyspaceNotification(
       ValkeyModuleCtx *ctx, int type, const char *event,
       ValkeyModuleString *key,
-      const SharedBlockedClient &blocked_client) override {
-    (void)blocked_client;
+      const MutationBlocker &mutation_blocker) override {
+    (void)mutation_blocker;
     OnKeyspaceNotification(ctx, type, event, key);
   }
   std::vector<const indexes::VectorBase *> GetVectorIndexes() const override {
@@ -599,6 +599,7 @@ class ValkeySearchTest : public vmsdk::ValkeyTest {
         WaitWorkerTasksAreCompleted(*pool);
       }
     }
+    KeyspaceEventManager::Instance().OnBeforeSleep();
     kMockValkeyModule->RunPendingOneShots();
     SchemaManager::InitInstance(nullptr);
     ValkeySearch::InitInstance(nullptr);
@@ -675,6 +676,7 @@ class ValkeySearchTestWithParam : public vmsdk::ValkeyTestWithParam<T> {
         WaitWorkerTasksAreCompleted(*pool);
       }
     }
+    KeyspaceEventManager::Instance().OnBeforeSleep();
     kMockValkeyModule->RunPendingOneShots();
     SchemaManager::InitInstance(nullptr);
     ValkeySearch::InitInstance(nullptr);

@@ -19,6 +19,7 @@
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "testing/common.h"
+#include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -179,6 +180,53 @@ TEST_F(KeyspaceEventManagerTest, DoesNotBlockForSubscriptionInOtherDatabase) {
                                            "event", key.get());
 
   VMSDK_EXPECT_OK(keyspace_event_manager.RemoveSubscription(&subscription));
+}
+
+TEST_F(KeyspaceEventManagerTest, CommandBlockReleasedBeforeNextCommand) {
+  auto &manager = KeyspaceEventManager::Instance();
+  const MutationBlocker mutation_blocker(&fake_ctx_, manager);
+  EXPECT_CALL(*kMockValkeyModule, GetClientId(&fake_ctx_))
+      .WillRepeatedly(Return(1));
+  EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx_))
+      .WillRepeatedly(Return(0));
+  EXPECT_CALL(*kMockValkeyModule, BlockClient(&fake_ctx_, _, _, _, _))
+      .WillOnce(Return(reinterpret_cast<ValkeyModuleBlockedClient *>(1)))
+      .WillOnce(Return(reinterpret_cast<ValkeyModuleBlockedClient *>(2)));
+  EXPECT_CALL(*kMockValkeyModule, UnblockClient(_, nullptr)).Times(2);
+  for (int command = 0; command < 2; ++command) {
+    auto first = mutation_blocker.Acquire(vmsdk::BlockedClientCategory::kHash);
+    auto second = mutation_blocker.Acquire(vmsdk::BlockedClientCategory::kHash);
+    ASSERT_NE(first, nullptr);
+    EXPECT_EQ(first, second);
+    manager.OnBeforeSleep();
+    EXPECT_EQ(vmsdk::BlockedClient::GetActiveClientCount(
+                  vmsdk::BlockedClientCategory::kHash),
+              1);
+  }
+  EXPECT_EQ(vmsdk::BlockedClient::GetActiveClientCount(
+                vmsdk::BlockedClientCategory::kHash),
+            0);
+}
+
+TEST_F(KeyspaceEventManagerTest, IneligibleContextsDoNotBlockClients) {
+  const MutationBlocker mutation_blocker(&fake_ctx_,
+                                         KeyspaceEventManager::Instance());
+  int context_flags = 0;
+  unsigned long long client_id = 0;
+  EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx_))
+      .WillRepeatedly([&](ValkeyModuleCtx *) { return context_flags; });
+  EXPECT_CALL(*kMockValkeyModule, GetClientId(&fake_ctx_))
+      .WillRepeatedly([&](ValkeyModuleCtx *) { return client_id; });
+  EXPECT_CALL(*kMockValkeyModule, BlockClient(_, _, _, _, _)).Times(0);
+  EXPECT_EQ(mutation_blocker.Acquire(vmsdk::BlockedClientCategory::kHash),
+            nullptr);
+  client_id = 1;
+  for (int flags : {VALKEYMODULE_CTX_FLAGS_MULTI, VALKEYMODULE_CTX_FLAGS_LUA,
+                    VALKEYMODULE_CTX_FLAGS_REPLICATED}) {
+    context_flags = flags;
+    EXPECT_EQ(mutation_blocker.Acquire(vmsdk::BlockedClientCategory::kHash),
+              nullptr);
+  }
 }
 
 INSTANTIATE_TEST_SUITE_P(

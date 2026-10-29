@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "absl/base/thread_annotations.h"
+#include "absl/container/flat_hash_map.h"
 #include "absl/functional/any_invocable.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
@@ -245,15 +246,23 @@ TEST_F(MultiExecTest, TrackMutationOverride) {
   WaitWorkerTasksAreCompleted(*mutations_thread_pool);
   {
     absl::MutexLock lock(&mutex);
-    std::vector<std::string> expected_records = {
-        std::string(record_value_) + "1", std::string(record_value_) + "4",
-        std::string(record_value_) + "3"};
-    EXPECT_THAT(expected_keys, testing::UnorderedElementsAreArray(added_keys));
+    ASSERT_EQ(added_keys.size(), added_records.size());
+    absl::flat_hash_map<std::string, std::string> final_records;
+    for (size_t i = 0; i < added_keys.size(); ++i) {
+      final_records[added_keys[i]] = added_records[i];
+    }
+    EXPECT_THAT(
+        final_records,
+        testing::UnorderedElementsAre(
+            testing::Pair(key_prefix + "0", std::string(record_value_) + "1"),
+            testing::Pair(key_prefix + "1", std::string(record_value_) + "4"),
+            testing::Pair(key_prefix + "2", std::string(record_value_) + "3")));
 
     // Check that the batch metrics were updated
     EXPECT_GT(metrics.ingest_total_batches, initial_batches);
     EXPECT_EQ(metrics.ingest_last_batch_size, expected_keys.size());
   }
+  KeyspaceEventManager::Instance().OnBeforeSleep();
   EXPECT_EQ(vmsdk::BlockedClient::GetActiveClientCount(
                 vmsdk::BlockedClientCategory::kHash),
             0);

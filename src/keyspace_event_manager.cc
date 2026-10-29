@@ -40,16 +40,31 @@ inline bool IsMoveToEvent(const char *event) {
   return event && (event == kRenameToEvent || event == kMoveToEvent);
 }
 
-SharedBlockedClient MakeBlockedClientHold(
-    ValkeyModuleCtx *ctx, const KeyspaceEventSubscription *subscription) {
-  if (!subscription || vmsdk::MultiOrLua(ctx) ||
-      !vmsdk::IsRealUserClient(ctx)) {
+}  // namespace
+
+SharedBlockedClient MutationBlocker::Acquire(
+    vmsdk::BlockedClientCategory category) const {
+  return manager_.AcquireBlockedClient(ctx_, category);
+}
+
+SharedBlockedClient KeyspaceEventManager::AcquireBlockedClient(
+    ValkeyModuleCtx *ctx, vmsdk::BlockedClientCategory category) {
+  if (vmsdk::MultiOrLua(ctx) || !vmsdk::IsRealUserClient(ctx)) {
     return nullptr;
   }
-  return std::make_shared<vmsdk::BlockedClient>(
-      ctx, subscription->GetBlockedClientCategory());
+  auto client_id = ValkeyModule_GetClientId(ctx);
+  auto &command_blocks = command_blocks_.Get();
+  auto existing = command_blocks.find(client_id);
+  if (existing != command_blocks.end()) {
+    return existing->second;
+  }
+
+  auto blocked_client = std::make_shared<vmsdk::BlockedClient>(ctx, category);
+  command_blocks.emplace(client_id, blocked_client);
+  return blocked_client;
 }
-}  // namespace
+
+void KeyspaceEventManager::OnBeforeSleep() { command_blocks_.Get().clear(); }
 
 vmsdk::BlockedClientCategory
 KeyspaceEventSubscription::GetBlockedClientCategory() const {
@@ -96,7 +111,7 @@ void KeyspaceEventManager::ProcessMoveNotification(
     ValkeyModuleCtx *ctx, int type, ValkeyModuleString *dst_key,
     const char *dst_event, int dst_db_num,
     const std::vector<KeyspaceEventSubscription *> &src_subscriptions,
-    const SharedBlockedClient &blocked_client) {
+    const MutationBlocker &mutation_blocker) {
   auto cleanup = absl::MakeCleanup([this]() {
     moved_src_key_.reset();
     src_db_num_ = -1;
@@ -149,7 +164,7 @@ void KeyspaceEventManager::ProcessMoveNotification(
     vmsdk::ValkeySelectDbGuard db_guard(ctx, src_db_num_);
     for (const auto &subscription : src_subscriptions) {
       subscription->OnKeyspaceNotification(
-          ctx, type, src_event, moved_src_key_.get(), blocked_client);
+          ctx, type, src_event, moved_src_key_.get(), mutation_blocker);
     }
   }
 }
@@ -157,6 +172,7 @@ void KeyspaceEventManager::ProcessMoveNotification(
 void KeyspaceEventManager::NotifySubscribers(ValkeyModuleCtx *ctx, int type,
                                              const char *event,
                                              ValkeyModuleString *key) {
+  const MutationBlocker mutation_blocker(ctx, *this);
   if (IsMoveFromEvent(event)) {
     moved_src_key_ = vmsdk::RetainUniqueValkeyString(key);
     src_db_num_ = ValkeyModule_GetSelectedDb(ctx);
@@ -170,17 +186,12 @@ void KeyspaceEventManager::NotifySubscribers(ValkeyModuleCtx *ctx, int type,
         vmsdk::ToStringView(moved_src_key_.get()), type, src_db_num_);
     auto dst_subscriptions =
         GetMatchingSubscriptions(vmsdk::ToStringView(key), type, dst_db_num);
-    const auto *first_subscription =
-        !src_subscriptions.empty()
-            ? src_subscriptions.front()
-            : (dst_subscriptions.empty() ? nullptr : dst_subscriptions.front());
-    auto blocked_client = MakeBlockedClientHold(ctx, first_subscription);
     ProcessMoveNotification(ctx, type, key, event, dst_db_num,
-                            src_subscriptions, blocked_client);
+                            src_subscriptions, mutation_blocker);
     CHECK(!moved_src_key_);
     for (const auto &subscription : dst_subscriptions) {
       subscription->OnKeyspaceNotification(ctx, type, event, key,
-                                           blocked_client);
+                                           mutation_blocker);
     }
     return;
   }
@@ -188,12 +199,9 @@ void KeyspaceEventManager::NotifySubscribers(ValkeyModuleCtx *ctx, int type,
 
   auto subscriptions_to_notify = GetMatchingSubscriptions(
       vmsdk::ToStringView(key), type, ValkeyModule_GetSelectedDb(ctx));
-  const auto *first_subscription = subscriptions_to_notify.empty()
-                                       ? nullptr
-                                       : subscriptions_to_notify.front();
-  auto blocked_client = MakeBlockedClientHold(ctx, first_subscription);
   for (const auto &subscription : subscriptions_to_notify) {
-    subscription->OnKeyspaceNotification(ctx, type, event, key, blocked_client);
+    subscription->OnKeyspaceNotification(ctx, type, event, key,
+                                         mutation_blocker);
   }
 }
 

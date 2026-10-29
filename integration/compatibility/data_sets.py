@@ -845,6 +845,7 @@ def compute_data_sets(vector_data_type="FLOAT32"):
 
     data["hard numbers"] = {}
     data["sortable numbers"] = {}
+    data["non-schema field"] = {}
     data["reverse vector numbers"] = {}
     data["bad numbers"] = {}
     data["missing numbers"] = {}
@@ -947,6 +948,14 @@ def compute_data_sets(vector_data_type="FLOAT32"):
                 },
             )
             for i in range(len(sortable_numbers))
+        ]
+        # The same keys plus `x`, a field the schema does not declare, on every
+        # other key, in an order unlike the key order. Its own data set so that
+        # no answer over "sortable numbers" changes.
+        data["non-schema field"][CREATES_KEY(key_type)] = data["sortable numbers"][CREATES_KEY(key_type)]
+        data["non-schema field"][SETS_KEY(key_type)] = [
+            (key, {**fields, "x": f"x{(i * 7) % 15:02d}"} if i % 2 == 0 else fields)
+            for i, (key, fields) in enumerate(data["sortable numbers"][SETS_KEY(key_type)])
         ]
         #
         # Sortable numbers, designed so that sorted keys for this index don't have any duplications
@@ -2418,7 +2427,7 @@ def extract_vocab_by_field_from_text_data(dataset_name, key_type):
 # suffix, fuzzy or wildcard forms), which the scoring path does not implement
 # either.
 
-HYBRID_DATASETS = ["hybrid text"]
+HYBRID_DATASETS = ["hybrid text", "hybrid text extra"]
 
 HYBRID_VECTOR_DIM = 4
 HYBRID_NUM_KEYS = 24
@@ -2554,5 +2563,16 @@ def compute_hybrid_data_sets():
                 },
             ))
         data[name][SETS_KEY(key_type)] = docs
+
+    # The same corpus plus `extra`, a field the schema does not declare. Kept
+    # as its own data set so that no `LOAD *` answer over `hybrid text`
+    # changes.
+    extra = data[name + " extra"] = {}
+    for key_type in ["hash", "json"]:
+        extra[CREATES_KEY(key_type)] = data[name][CREATES_KEY(key_type)]
+        extra[SETS_KEY(key_type)] = [
+            (key, {**fields, "extra": f"e{i:02d}"})
+            for i, (key, fields) in enumerate(data[name][SETS_KEY(key_type)])
+        ]
 
     return data

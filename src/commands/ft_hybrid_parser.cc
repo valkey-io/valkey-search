@@ -800,6 +800,7 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
   //    embedded AggregateParameters in env.agg.
   if (env.agg == nullptr) {
     env.agg = std::make_unique<aggregate::AggregateParameters>(env.db_num);
+    env.agg->embedded_in_hybrid_ = true;
     env.agg->index_schema = env.index_schema;
     env.agg->index_schema_name = env.index_schema_name;
     env.agg->dialect = 2;
@@ -999,14 +1000,11 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
   // That is as explicit a request as COMBINE ... YIELD_SCORE_AS, and the
   // reference honours it, so it must not be suppressed.
   //
-  // Only `identifier`, the name as written, counts. Matching `alias` too
-  // would catch `LOAD 3 @price AS __score`, which renames a different field
-  // onto the score's name and asks for no score at all: un-suppressing there
-  // put two columns called `__score` in one reply, one holding the fused
-  // score and one holding the price.
+  // A rename onto the score's name (`LOAD 3 @price AS __score`) counts too:
+  // the parser drops that entry, and the reference shows the fused score.
   bool a_load_names_the_score = false;
   for (const auto &load : env.agg->loads_) {
-    if (load.identifier == env.output_score_name) {
+    if (load.identifier == env.output_score_name || load.yields_to_score) {
       a_load_names_the_score = true;
       break;
     }

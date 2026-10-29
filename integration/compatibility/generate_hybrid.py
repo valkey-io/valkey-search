@@ -9,9 +9,7 @@ the shared reference image moved to `redis:latest` (#1366). The override is
 gone: it now inherits DOCKER_IMAGE from BaseCompatibilityTest like every other
 generator.
 
-The LOAD clause is swept separately, in test_load_clause. One form is still
-recorded `xfail` -- loading a field the index does not have; see
-TODO(load-unknown-field) and integration/compatibility/unsupported_tests.md.
+The LOAD clause is swept separately, in test_load_clause.
 
 The corpus is `hybrid text` (see data_sets.py): a text corpus with a spread of
 term frequency, document frequency and document length, plus a vector field
@@ -533,9 +531,6 @@ class TestHybridCompatibility(BaseCompatibilityTest):
     # FT.HYBRID honors LOAD the way FT.AGGREGATE does: it names the columns the
     # reply carries, `AS` renames them, and the rename is visible to the stages
     # that follow. These are compared normally.
-    #
-    # The one form still recorded `xfail` is a LOAD naming a field the index
-    # does not have; see TODO(load-unknown-field) below.
     # -----------------------------------------------------------------
 
     def _load_cases(self, key_type):
@@ -684,13 +679,8 @@ class TestHybridCompatibility(BaseCompatibilityTest):
         for load, tail in cases:
             self.hybrid(key_type, "@title:alpha", load=load, tail=tail)
 
-    # TODO(load-unknown-field): Redis lets a LOAD name a field the index does
-    # not have and simply returns no column for it; Valkey rejects the command
-    # with "Index field `x` does not exist". FT.AGGREGATE does the same thing
-    # on the same input, so this is not an FT.HYBRID gap -- when it is fixed
-    # for the aggregate pipeline these should start matching, the run will
-    # report XPASS, and both the `xfail=True` here and the entry in
-    # unsupported_tests.md should come off.
+    # A LOAD may name a field the index does not have: it is read from the
+    # document, and a key without it simply has no such column.
     def test_load_unknown_field(self, key_type):
         self.setup_data(key_type)
         cases = [
@@ -708,7 +698,57 @@ class TestHybridCompatibility(BaseCompatibilityTest):
         # name that exists.
         cases += [["LOAD", "1", "@__KEY"], ["LOAD", "1", "@__SCORE"]]
         for load in cases:
-            self.hybrid(key_type, "@title:alpha", load=load, xfail=True)
+            self.hybrid(key_type, "@title:alpha", load=load)
+
+    def test_load_non_schema_field(self, key_type):
+        super().setup_data("hybrid text extra", key_type)
+        cases = [
+            (["LOAD", "2", "@__key", "@extra"], []),
+            (["LOAD", "4", "@__key", "@extra", "AS", "e"],
+             ["APPLY", "upper(@e)", "AS", "E"]),
+        ]
+        for load, tail in cases:
+            self.hybrid(key_type, "@title:alpha", load=load, tail=tail)
+
+    # Unlike FT.AGGREGATE, which rejects it, FT.HYBRID accepts a LOAD after
+    # GROUPBY and ignores it.
+    def test_load_after_groupby(self, key_type):
+        super().setup_data("hybrid text extra", key_type)
+        groupby = ["GROUPBY", "1", "@color", "REDUCE", "COUNT", "0", "AS", "cnt"]
+        sortby = ["SORTBY", "2", "@color", "ASC"]
+        for load, late in [
+            (NO_LOAD, ["LOAD", "1", "@price"]),
+            (NO_LOAD, ["LOAD", "1", "@extra"]),
+            (NO_LOAD, ["LOAD", "*"]),
+            (NO_LOAD, ["LOAD", "1", "@__key"]),
+            (LOAD_ALL, ["LOAD", "1", "@price"]),
+        ]:
+            self.hybrid(key_type, "@title:alpha", load=load,
+                        tail=[*groupby, *late, *sortby])
+
+    # Under `LOAD *` a rename adds a column next to the field it reads, and a
+    # later clause overwrites an earlier one of the same output name.
+    def test_loadall_with_named_loads(self, key_type):
+        super().setup_data("hybrid text extra", key_type)
+        for load in [
+            ["LOAD", "*", "LOAD", "3", "@extra", "AS", "x"],
+            ["LOAD", "3", "@extra", "AS", "x", "LOAD", "*"],
+            ["LOAD", "3", "@extra", "AS", "price", "LOAD", "*"],
+            ["LOAD", "*", "LOAD", "3", "@extra", "AS", "price"],
+            ["LOAD", "*", "LOAD", "3", "@price", "AS", "p"],
+            ["LOAD", "*", "LOAD", "1", "@__key"],
+        ]:
+            self.hybrid(key_type, "@title:alpha", load=load)
+
+    # A rename onto the fused score's name is dropped and the fused score
+    # shows, as in Redisearch.
+    def test_load_as_fused_score(self, key_type):
+        super().setup_data("hybrid text extra", key_type)
+        for load in [
+            ["LOAD", "4", "@__key", "@price", "AS", "__score"],
+            ["LOAD", "4", "@__key", "@extra", "AS", "__score"],
+        ]:
+            self.hybrid(key_type, "@title:alpha", load=load, fused_score_as=None)
 
     # -----------------------------------------------------------------
     # Defaults. These are the cases the sweeps above deliberately pin, so
@@ -1189,18 +1229,13 @@ class TestHybridCompatibility(BaseCompatibilityTest):
                     load=["LOAD", "3", "@price", "AS", "__score"],
                     fused_score_as="hybrid_score", search_score_as=None)
 
-    # TODO(load-unknown-field): the same gap as test_load_unknown_field and
-    # unsupported_tests.md 5.1, reached through the score column: COMBINE ...
-    # YIELD_SCORE_AS renames the fused score, so `@__score` no longer names
-    # anything, and Redis ignores the unknown LOAD entry while valkey-search
-    # rejects the command. Kept separate from that sweep because this is the
-    # one way a LOAD entry becomes unknown without the caller misspelling a
-    # field.
+    # COMBINE ... YIELD_SCORE_AS renames the fused score, so `@__score` no
+    # longer names anything: the one way a LOAD entry becomes unknown without
+    # the caller misspelling a field.
     def test_load_score_column_that_combine_renamed_away(self, key_type):
         self.setup_data(key_type)
         self.hybrid(key_type, "@title:alpha", load=["LOAD", "1", "@__score"],
-                    fused_score_as="hybrid_score", search_score_as=None,
-                    xfail=True)
+                    fused_score_as="hybrid_score", search_score_as=None)
 
     def test_per_arm_and_fused_score_aliases_together(self, key_type):
         """All three aliases at once, and the fused one renamed away from the

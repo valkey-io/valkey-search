@@ -69,8 +69,14 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
          vmsdk::ArgsIterator &itr) -> absl::Status {
         VMSDK_ASSIGN_OR_RETURN(auto count_string, itr.Get());
         itr.Next();
+        const bool after_groupby = std::any_of(
+            parameters.stages_.begin(), parameters.stages_.end(),
+            [](const auto &stage) {
+              return dynamic_cast<const GroupBy *>(stage.get()) != nullptr;
+            });
         if (vmsdk::ToStringView(count_string) == "*") {
           parameters.loadall_ = true;
+          parameters.loadall_after_groupby_ |= after_groupby;
           return absl::OkStatus();
         }
         uint32_t cnt{0};
@@ -112,9 +118,11 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
           // unresolved and the load fails outright ("Index field `$.price`
           // does not exist"), so the old behavior is unusable and there is no
           // user base for SemVer to protect.
-          if (!index.GetFieldType(identifier).ok()) {
+          bool in_schema = index.GetFieldType(identifier).ok();
+          if (!in_schema) {
             if (auto resolved = index.GetAlias(identifier); resolved.ok()) {
               identifier = *std::move(resolved);
+              in_schema = true;
             }
           }
 
@@ -153,6 +161,38 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
                     },
                     []() -> absl::StatusOr<bool> { return false; }));
           }
+          // Redisearch never moves a vector query's score: renaming the KNN
+          // score is ignored, and a rename onto the score's name is dropped
+          // so the score keeps it.
+          if (renamed) {
+            const absl::string_view score_name =
+                parameters.score_as == nullptr
+                    ? absl::string_view()
+                    : vmsdk::ToStringView(parameters.score_as.get());
+            const bool knn_score = !parameters.embedded_in_hybrid_ &&
+                                   parameters.IsVectorQuery() &&
+                                   identifier == score_name;
+            if (knn_score) {
+              alias = identifier;
+              renamed = false;
+            } else if (parameters.IsVectorQuery() && alias == score_name) {
+              parameters.loads_.emplace_back(
+                  LoadField{.identifier = std::move(identifier),
+                            .alias = std::move(alias),
+                            .renamed = true,
+                            .after_groupby = after_groupby,
+                            .before_loadall = !parameters.loadall_,
+                            .yields_to_score = true});
+              continue;
+            }
+          }
+          // A name outside the schema is read straight from the document.
+          // Later stages resolve names at parse time, so its column has to
+          // exist before they are parsed.
+          if (!in_schema && !after_groupby) {
+            VMSDK_RETURN_IF_ERROR(
+                parameters.MakeReference(identifier, true).status());
+          }
           // Intentionally stricter than RediSearch (which keeps the first claim
           // of a name and silently drops the rest): reject a LOAD clause that
           // names the same output twice when an `AS` rename is involved. Left
@@ -186,7 +226,9 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
           parameters.loads_.emplace_back(
               LoadField{.identifier = std::move(identifier),
                         .alias = std::move(alias),
-                        .renamed = renamed});
+                        .renamed = renamed,
+                        .after_groupby = after_groupby,
+                        .before_loadall = !parameters.loadall_});
         }
         return absl::OkStatus();
       });

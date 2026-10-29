@@ -11,6 +11,7 @@
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/match.h"
 #include "ft_search_parser.h"
 #include "src/commands/commands.h"
 #include "src/commands/ft_aggregate_exec.h"
@@ -39,6 +40,70 @@ struct RealIndexInterface : public IndexInterface {
   RealIndexInterface(std::shared_ptr<IndexSchema> schema) : schema_(schema) {}
 };
 
+namespace {
+
+// After GROUPBY each record is a group, so a later LOAD has nothing to read.
+// RediSearch rejects it in FT.AGGREGATE and ignores it in FT.HYBRID.
+absl::Status CheckLoadAfterGroupby(const AggregateParameters &params) {
+  if (params.embedded_in_hybrid_) {
+    return absl::OkStatus();
+  }
+  const bool late_load =
+      params.loadall_after_groupby_ ||
+      std::any_of(params.loads_.begin(), params.loads_.end(),
+                  [](const LoadField &f) { return f.after_groupby; });
+  if (!late_load) {
+    return absl::OkStatus();
+  }
+  return VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 3, 0, "ft_aggregate_load_after_groupby",
+      [] {
+        return absl::InvalidArgumentError(
+            "LOAD cannot be applied after GROUPBY");
+      },
+      [] { return absl::OkStatus(); });
+}
+
+// Under `LOAD *` RediSearch applies the LOAD clauses in command order, each
+// writing the column of its output name, so a rename adds a column instead of
+// hiding the field it reads. Only a rename or `__key` makes the reply differ
+// from the legacy one, so only those commands reach the counter.
+absl::Status ResolveLoadsUnderLoadAll(AggregateParameters &params) {
+  const bool reply_differs = std::any_of(
+      params.loads_.begin(), params.loads_.end(), [](const LoadField &f) {
+        return !f.after_groupby && !f.yields_to_score &&
+               (f.renamed || f.identifier == "__key");
+      });
+  if (!reply_differs) {
+    return absl::OkStatus();
+  }
+  params.loadall_named_loads_ = VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 3, 0, "ft_aggregate_loadall_named_loads", [] { return true; },
+      [] { return false; });
+  if (!params.loadall_named_loads_) {
+    return absl::OkStatus();
+  }
+  for (const auto &load : params.loads_) {
+    if (load.after_groupby || load.yields_to_score) {
+      continue;
+    }
+    if (load.identifier == "__key") {
+      params.load_key = true;
+    }
+    if (!load.renamed || !load.before_loadall) {
+      continue;
+    }
+    auto it = params.record_indexes_by_alias_.find(load.alias);
+    if (it != params.record_indexes_by_alias_.end() &&
+        params.record_info_by_index_[it->second].output_name_ == load.alias) {
+      params.record_info_by_index_[it->second].yields_to_loadall_ = true;
+    }
+  }
+  return absl::OkStatus();
+}
+
+}  // namespace
+
 absl::Status ManipulateReturnsClause(AggregateParameters &params) {
   // Figure out what fields actually need to be returned by the aggregation
   // operation. And modify the common search returns list accordingly
@@ -46,9 +111,16 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
   bool content = false;
   if (params.loadall_) {
     CHECK(params.return_attributes.empty());
-    return absl::OkStatus();
+    VMSDK_RETURN_IF_ERROR(CheckLoadAfterGroupby(params));
+    return ResolveLoadsUnderLoadAll(params);
   } else {
-    std::vector<LoadField> loads_to_process = params.loads_;
+    std::vector<LoadField> loads_to_process;
+    for (const auto &load : params.loads_) {
+      if (!(load.after_groupby && params.embedded_in_hybrid_) &&
+          !load.yields_to_score) {
+        loads_to_process.push_back(load);
+      }
+    }
 
     // A field named by a pipeline stage but absent from the LOAD clause still
     // has to be fetched. Redisearch loads such fields implicitly; without that
@@ -62,9 +134,9 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
     // via expr::Expression::Compile -- so the column table is a complete list
     // of the names the pipeline references. No stage walking is needed.
     //
-    // Only names that resolve to a declared attribute are loaded. Anything
-    // else is produced by the pipeline itself (an APPLY or REDUCE output, a
-    // chained GROUPBY over a reducer alias) and has no stored value to fetch.
+    // Only names that resolve to a declared attribute are loaded here. Any
+    // other column is a pipeline output, or a LOAD name outside the schema
+    // that the LOAD loop below fetches.
     //
     // An implicit load is never a rename: it is emitted under the attribute
     // name, exactly as if the query had written `@name` in the LOAD clause.
@@ -132,26 +204,41 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
         continue;
       }
       content = true;
-      VMSDK_ASSIGN_OR_RETURN(auto indexer,
-                             params.index_schema->GetIndex(identifier));
-      auto indexer_type = indexer->GetIndexerType();
-      if (indexes::IsVectorIndex(indexer)) {
+      auto indexer = params.index_schema->GetIndex(identifier);
+      if (indexer.ok() && indexes::IsVectorIndex(*indexer)) {
         return absl::InvalidArgumentError(
             absl::StrCat("Loading of vector fields is not supported (field `",
                          identifier, "`)"));
       }
-      auto schema_identifier = params.index_schema->GetIdentifier(identifier);
       size_t record_index;
-      if (schema_identifier.ok()) {
+      if (indexer.ok()) {
+        VMSDK_ASSIGN_OR_RETURN(auto schema_identifier,
+                               params.index_schema->GetIdentifier(identifier));
         params.return_attributes.emplace_back(query::ReturnAttribute{
-            .identifier = vmsdk::MakeUniqueValkeyString(*schema_identifier),
+            .identifier = vmsdk::MakeUniqueValkeyString(schema_identifier),
             .attribute_alias = vmsdk::MakeUniqueValkeyString(identifier),
             .alias = vmsdk::MakeUniqueValkeyString(alias)});
         record_index = params.AddRecordAttribute(
-            *schema_identifier, identifier,
-            renamed ? alias : OutputNameFor(alias, *schema_identifier),
-            indexer_type);
+            schema_identifier, identifier,
+            renamed ? alias : OutputNameFor(alias, schema_identifier),
+            (*indexer)->GetIndexerType());
       } else {
+        // Below 1.3.0 `AS` is read as a field name; keep the unknown-field
+        // error so the ignored rename is not silent.
+        if (!options::EnabledInVersion(1, 3, 0) &&
+            absl::EqualsIgnoreCase(identifier, kAsParam)) {
+          return indexer.status();
+        }
+        // An FT.HYBRID per-arm score alias passes the parser's lookup but is
+        // not a document field; keep the unknown-field error for it.
+        const auto *index_interface = params.parse_vars_.index_interface_;
+        if (index_interface != nullptr &&
+            index_interface->GetFieldType(identifier).ok()) {
+          return indexer.status();
+        }
+        if (load.after_groupby) {
+          return indexer.status();
+        }
         params.return_attributes.emplace_back(query::ReturnAttribute{
             .identifier = vmsdk::MakeUniqueValkeyString(identifier),
             .attribute_alias = vmsdk::UniqueValkeyString(),
@@ -164,6 +251,9 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
         apply_rename(record_index);
       }
     }
+    // Checked after the loop so that only a command that is otherwise valid
+    // reaches the counter.
+    VMSDK_RETURN_IF_ERROR(CheckLoadAfterGroupby(params));
   }
   params.no_content = !content;
   return absl::OkStatus();

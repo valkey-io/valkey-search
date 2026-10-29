@@ -13,6 +13,7 @@
 #include <random>
 
 #include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -1062,15 +1063,17 @@ bool ReplyWithValue(ValkeyModuleCtx *ctx,
                     std::string_view name, indexes::IndexerType indexer_type,
                     const expr::Value &value, int dialect) {
   if (value.IsNil()) {
-    // 1.3.0 fix: a field the key never had stays out of the reply, but
-    // something that evaluated to nothing is named with a nil value, which is
-    // what Redisearch does. Before the fix every nil was left out.
+    // Both releases leave out a field the key never had, so it must not tick
+    // the counter.
+    if (value.IsMissing()) {
+      return false;
+    }
+    // 1.3.0 fix: something that evaluated to nothing is named with a nil
+    // value, which is what Redisearch does. Before the fix every nil was left
+    // out.
     return VALKEY_SEARCH_COMPATIBILITY_FIX(
         1, 3, 0, "aggregate_nil_alias_named",
         [&] {
-          if (value.IsMissing()) {
-            return false;
-          }
           ValkeyModule_ReplyWithSimpleString(ctx, name.data());
           ValkeyModule_ReplyWithNull(ctx);
           return true;
@@ -1167,6 +1170,12 @@ absl::Status CreateRecordsFromNeighbors(
     std::vector<indexes::Neighbor> &neighbors, AggregateParameters &parameters,
     size_t key_index, size_t scores_index, RecordSet &records) {
   auto data_type = parameters.index_schema->GetAttributeDataType().ToProto();
+  absl::flat_hash_set<std::string_view> output_names;
+  if (parameters.loadall_named_loads_) {
+    for (const auto &info : parameters.record_info_by_index_) {
+      output_names.insert(info.output_name_);
+    }
+  }
 
   for (auto &n : neighbors) {
     // One slot per record column. Not record_indexes_by_alias_.size(): that
@@ -1231,15 +1240,28 @@ absl::Status CreateRecordsFromNeighbors(
         }
         const auto &info = parameters.record_info_by_index_[i];
         auto itr = n.attribute_contents->find(info.identifier_);
+        auto field_type = info.data_type_;
+        // A renamed column shares its output name with `LOAD *`'s copy of the
+        // stored field of that name; the clause later in the command wins,
+        // and a clause with no value leaves the other one in place.
+        if (parameters.loadall_named_loads_ && i != key_index &&
+            info.output_name_ != info.identifier_) {
+          auto stored = n.attribute_contents->find(info.output_name_);
+          if (stored != n.attribute_contents->end() &&
+              (info.yields_to_loadall_ || itr == n.attribute_contents->end())) {
+            itr = stored;
+            field_type = indexes::IndexerType::kNone;
+          }
+        }
         if (itr == n.attribute_contents->end()) {
           continue;
         }
         auto processed_value =
             ProcessFieldValue(vmsdk::ToStringView(itr->second.value.get()),
-                              info.data_type_, data_type);
+                              field_type, data_type);
         if (processed_value.ok()) {
           rec->fields_[i] = std::move(*processed_value);
-        } else if (info.data_type_ != indexes::IndexerType::kNumeric) {
+        } else if (field_type != indexes::IndexerType::kNumeric) {
           // For JSON unquote failures, drop the entire record
           should_drop_record = true;
           break;
@@ -1253,9 +1275,17 @@ absl::Status CreateRecordsFromNeighbors(
 
       // 2/ Anything fetched that no column sources is passed through as an
       //    extra field. This is how LOAD * surfaces the contents of a key,
-      //    since it builds no columns of its own.
+      //    since it builds no columns of its own. Under the 1.3.0 rule a field
+      //    is held back only when a column emits its name, so a renamed field
+      //    still appears under its own.
       for (auto &[name, records_map_value] : *n.attribute_contents) {
-        if (parameters.record_identifiers_.contains(name)) {
+        bool sourced;
+        if (parameters.loadall_named_loads_) {
+          sourced = output_names.contains(name);
+        } else {
+          sourced = parameters.record_identifiers_.contains(name);
+        }
+        if (sourced) {
           continue;
         }
         rec->extra_fields_.push_back(std::make_pair(

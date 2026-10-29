@@ -64,6 +64,16 @@ struct LoadField {
   // from `alias != identifier`, which no longer implies a rename now that a
   // resolved JSON path leaves the two legitimately different.
   bool renamed{false};
+  // After a GROUPBY each record is a group, not a document, so there is no
+  // field to fetch.
+  bool after_groupby{false};
+  // Whether the entry precedes the command's `LOAD *`. Clauses apply in
+  // command order, so a later `LOAD *` overwrites this entry's output column
+  // with the stored field of the same name.
+  bool before_loadall{false};
+  // A rename onto the score's own name. Redisearch keeps the score there and
+  // drops the entry; it stays in the list only for the after-GROUPBY check.
+  bool yields_to_score{false};
 };
 
 struct IndexInterface {
@@ -84,6 +94,14 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   // Replies [count, row...] with the first `count` records, removing them.
   void ReplyRecords(ValkeyModuleCtx* ctx, RecordSet& records, size_t count);
   bool loadall_{false};
+  bool loadall_after_groupby_{false};
+  // FT.HYBRID accepts and ignores any LOAD placed after a GROUPBY, where
+  // FT.AGGREGATE rejects it.
+  bool embedded_in_hybrid_{false};
+  // Set from 1.3.0 when a `LOAD *` command also renames a field or loads
+  // `__key`: fetched fields then pass through under their own name unless a
+  // column emits that name.
+  bool loadall_named_loads_{false};
   // A record column the pipeline needs but the reply must not carry.
   // FT.HYBRID registers its fused score as a column so SORTBY/APPLY/FILTER
   // can reference it, and hides it from the caller when a LOAD clause has
@@ -143,6 +161,9 @@ struct AggregateParameters : public expr::Expression::CompileContext,
     // rename overrides it with the requested alias.
     std::string output_name_;
     indexes::IndexerType data_type_;
+    // A renamed column loaded before `LOAD *`: the stored field named like
+    // the column wins over the renamed source.
+    bool yields_to_loadall_{false};
   };
 
   friend std::ostream& operator<<(std::ostream& os,

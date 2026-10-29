@@ -157,6 +157,21 @@ class TestAggregateLoadAs(ValkeySearchTestCaseDebugMode):
                 "LOAD", "3", "$.price", "AS", "cost",
             )
 
+    def test_load_as_legacy_error_matches_main(self):
+        client = self._client(emulate_release=LEGACY_RELEASE)
+        self._make_hash(client)
+        self._make_json(client)
+        counter = "search_compatibility-ft_aggregate_load_as"
+        for index, field in (("idx_hash", "@price"), ("idx_json", "$.price")):
+            before = client.info("SEARCH").get(counter, 0)
+            with pytest.raises(valkey.exceptions.ResponseError,
+                               match=r"^Index field `AS` does not exist$"):
+                client.execute_command(
+                    "FT.AGGREGATE", index, "@price:[-inf inf]",
+                    "LOAD", "3", field, "AS", "cost",
+                )
+            assert client.info("SEARCH").get(counter, 0) - before == 1
+
     def test_rename_hides_declared_attribute(self):
         """A rename can shadow a declared attribute: `@price AS qty` makes the
         name `qty` resolve to price's value, not the schema's qty."""

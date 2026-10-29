@@ -255,6 +255,20 @@ class TestFtHybridBase(ValkeySearchTestCaseBase):
             assert b"hscore" in keys, f"hscore missing in {rec}"
             assert b"h2" in keys, f"h2 (APPLY result) missing in {rec}"
 
+    def test_load_of_a_per_arm_score_alias_is_rejected(self):
+        client = self.server.get_new_client()
+        self.setup_index(client)
+        with pytest.raises(ResponseError,
+                           match=r"^Index field `vscore` does not exist$"):
+            client.execute_command(
+                "FT.HYBRID", self.INDEX,
+                "SEARCH", "@title:hello",
+                "VSIM", "@vec", "$q", "KNN", "2", "K", "5",
+                "YIELD_SCORE_AS", "vscore",
+                "LOAD", "1", "@vscore",
+                "PARAMS", "2", "q", self.Q,
+            )
+
     # ---------------------------------------------------------------------
     # The synchronous dispatch path, which MULTI/EXEC and a server without
     # parallel queries both take. FT.HYBRID has no correct implementation of
@@ -1051,15 +1065,6 @@ class TestFtHybridLoad(ValkeySearchTestCaseDebugMode):
             "GROUPBY", "1", "@hue", "REDUCE", "SUM", "1", "@amount", "AS", "total")
         assert {r[b"hue"]: int(r[b"total"]) for r in rows} == {
             b"red": 0 + 20 + 40, b"blue": 10 + 30}
-
-    def test_load_of_an_unknown_field_is_rejected(self):
-        """Redis returns no column for a field the index does not have;
-        valkey-search rejects the command. Tracked in
-        integration/compatibility/unsupported_tests.md section 5.1."""
-        client = self.server.get_new_client()
-        self.setup_index(client)
-        with pytest.raises(ResponseError, match=r"does not exist"):
-            self._rows(client, "LOAD", "1", "@nosuchfield")
 
 class _ScoreAliasOverAStoredFieldTests:
     """A YIELD_SCORE_AS alias naming a field the document also carries.

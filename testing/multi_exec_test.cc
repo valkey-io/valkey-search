@@ -195,15 +195,10 @@ TEST_F(MultiExecTest, TrackMutationOverride) {
   EXPECT_CALL(
       *kMockValkeyModule,
       BlockClient(testing::_, testing::_, testing::_, testing::_, testing::_))
-      .WillOnce(testing::Return((ValkeyModuleBlockedClient *)1))
-      .WillOnce(testing::Return((ValkeyModuleBlockedClient *)2));
+      .WillOnce(testing::Return((ValkeyModuleBlockedClient *)1));
 
   EXPECT_CALL(*kMockValkeyModule,
               UnblockClient((ValkeyModuleBlockedClient *)1, testing::_))
-      .Times(1)
-      .WillRepeatedly(testing::Return(VALKEYMODULE_OK));
-  EXPECT_CALL(*kMockValkeyModule,
-              UnblockClient((ValkeyModuleBlockedClient *)2, testing::_))
       .Times(1)
       .WillRepeatedly(testing::Return(VALKEYMODULE_OK));
   auto key_valkey_str = vmsdk::MakeUniqueValkeyString(key_prefix + "0");
@@ -262,7 +257,7 @@ TEST_F(MultiExecTest, TrackMutationOverride) {
     EXPECT_GT(metrics.ingest_total_batches, initial_batches);
     EXPECT_EQ(metrics.ingest_last_batch_size, expected_keys.size());
   }
-  KeyspaceEventManager::Instance().OnBeforeSleep();
+  KeyspaceEventManager::Instance().OnExecutionUnitEnd();
   EXPECT_EQ(vmsdk::BlockedClient::GetActiveClientCount(
                 vmsdk::BlockedClientCategory::kHash),
             0);
@@ -272,6 +267,215 @@ TEST_F(MultiExecTest, TrackMutationOverride) {
   EXPECT_EQ(vmsdk::BlockedClient::GetActiveClientCount(
                 vmsdk::BlockedClientCategory::kOther),
             0);
+  index_schema = nullptr;
+}
+
+TEST_F(MultiExecTest,
+       OrdinaryWriteCoalescesDeferredMutationWithoutInlineFlush) {
+  VMSDK_EXPECT_OK(mutations_thread_pool->SuspendWorkers());
+  EXPECT_CALL(*kMockValkeyModule, EventLoopAddOneShot(testing::_, testing::_))
+      .Times(0);
+  EXPECT_CALL(*kMockValkeyModule, GetContextFlags(testing::_))
+      .WillRepeatedly(testing::Return(VALKEYMODULE_CTX_FLAGS_MULTI));
+  auto key = vmsdk::MakeUniqueValkeyString(key_prefix + "0");
+  index_schema->OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_HASH,
+                                       "event", key.get());
+
+  EXPECT_CALL(*kMockValkeyModule, GetContextFlags(testing::_))
+      .WillRepeatedly(testing::Return(0));
+  EXPECT_CALL(*kMockValkeyModule, GetClientId(&fake_ctx_))
+      .WillRepeatedly(testing::Return(1));
+  EXPECT_CALL(
+      *kMockValkeyModule,
+      BlockClient(testing::_, testing::_, testing::_, testing::_, testing::_))
+      .Times(0);
+  EXPECT_CALL(
+      *kMockValkeyModule,
+      AddPostNotificationJob(testing::_, testing::_, testing::_, testing::_))
+      .Times(0);
+  index_schema->OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_HASH,
+                                       "event", key.get());
+  {
+    absl::MutexLock lock(&mutex);
+    EXPECT_TRUE(added_keys.empty());
+  }
+  EXPECT_EQ(mutations_thread_pool->QueueSize(), 0);
+
+  VMSDK_EXPECT_OK(mutations_thread_pool->ResumeWorkers());
+  WaitWorkerTasksAreCompleted(*mutations_thread_pool);
+  {
+    absl::MutexLock lock(&mutex);
+    EXPECT_TRUE(added_keys.empty());
+  }
+  index_schema->ProcessMultiQueue();
+  {
+    absl::MutexLock lock(&mutex);
+    EXPECT_THAT(added_keys, testing::ElementsAre(key_prefix + "0"));
+    EXPECT_THAT(added_records,
+                testing::ElementsAre(std::string(record_value_) + "1"));
+  }
+  KeyspaceEventManager::Instance().OnExecutionUnitEnd();
+  index_schema = nullptr;
+}
+
+TEST_F(MultiExecTest,
+       TransactionOverwriteKeepsExistingWorkerAndBothWaitingClients) {
+  VMSDK_EXPECT_OK(mutations_thread_pool->SuspendWorkers());
+  EXPECT_CALL(*kMockValkeyModule, EventLoopAddOneShot(testing::_, testing::_))
+      .Times(0);
+  EXPECT_CALL(*kMockValkeyModule, GetContextFlags(testing::_))
+      .WillRepeatedly(testing::Return(0));
+  EXPECT_CALL(*kMockValkeyModule, GetClientId(&fake_ctx_))
+      .WillRepeatedly(testing::Return(1));
+  EXPECT_CALL(
+      *kMockValkeyModule,
+      BlockClient(&fake_ctx_, testing::_, testing::_, testing::_, testing::_))
+      .WillOnce(testing::Return((ValkeyModuleBlockedClient *)1))
+      .WillOnce(testing::Return((ValkeyModuleBlockedClient *)2));
+  EXPECT_CALL(*kMockValkeyModule,
+              UnblockClient((ValkeyModuleBlockedClient *)1, testing::_))
+      .WillOnce(testing::Return(VALKEYMODULE_OK));
+  EXPECT_CALL(*kMockValkeyModule,
+              UnblockClient((ValkeyModuleBlockedClient *)2, testing::_))
+      .WillOnce(testing::Return(VALKEYMODULE_OK));
+  auto key = vmsdk::MakeUniqueValkeyString(key_prefix + "0");
+  index_schema->OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_HASH,
+                                       "event", key.get());
+  KeyspaceEventManager::Instance().OnExecutionUnitEnd();
+
+  EXPECT_CALL(*kMockValkeyModule, GetContextFlags(testing::_))
+      .WillRepeatedly(testing::Return(VALKEYMODULE_CTX_FLAGS_MULTI));
+  index_schema->OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_HASH,
+                                       "event", key.get());
+  EXPECT_CALL(*kMockValkeyModule, GetContextFlags(testing::_))
+      .WillRepeatedly(testing::Return(0));
+  EXPECT_CALL(*kMockValkeyModule, GetClientId(&fake_ctx_))
+      .WillRepeatedly(testing::Return(2));
+  index_schema->OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_HASH,
+                                       "event", key.get());
+
+  EXPECT_EQ(mutations_thread_pool->QueueSize(), 1);
+  {
+    absl::MutexLock lock(&mutex);
+    EXPECT_TRUE(added_keys.empty());
+  }
+  EXPECT_EQ(vmsdk::BlockedClient::GetActiveClientCount(
+                vmsdk::BlockedClientCategory::kHash),
+            2);
+  VMSDK_EXPECT_OK(mutations_thread_pool->ResumeWorkers());
+  WaitWorkerTasksAreCompleted(*mutations_thread_pool);
+  {
+    absl::MutexLock lock(&mutex);
+    EXPECT_THAT(added_keys, testing::ElementsAre(key_prefix + "0"));
+    EXPECT_THAT(added_records,
+                testing::ElementsAre(std::string(record_value_) + "2"));
+  }
+  EXPECT_EQ(vmsdk::BlockedClient::GetActiveClientCount(
+                vmsdk::BlockedClientCategory::kHash),
+            1);
+  KeyspaceEventManager::Instance().OnExecutionUnitEnd();
+  EXPECT_EQ(vmsdk::BlockedClient::GetActiveClientCount(
+                vmsdk::BlockedClientCategory::kHash),
+            0);
+  index_schema = nullptr;
+}
+
+TEST_F(MultiExecTest, QueryFlushAppliesDeferredMutationWithWorkersSuspended) {
+  VMSDK_EXPECT_OK(mutations_thread_pool->SuspendWorkers());
+  EXPECT_CALL(*kMockValkeyModule, EventLoopAddOneShot(testing::_, testing::_))
+      .Times(0);
+  EXPECT_CALL(*kMockValkeyModule, GetContextFlags(testing::_))
+      .WillRepeatedly(testing::Return(VALKEYMODULE_CTX_FLAGS_MULTI));
+  auto key = vmsdk::MakeUniqueValkeyString(key_prefix + "0");
+  index_schema->OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_HASH,
+                                       "event", key.get());
+  EXPECT_CALL(*kMockValkeyModule, GetContextFlags(testing::_))
+      .WillRepeatedly(testing::Return(0));
+  EXPECT_CALL(*kMockValkeyModule, GetClientId(&fake_ctx_))
+      .WillRepeatedly(testing::Return(1));
+  EXPECT_CALL(
+      *kMockValkeyModule,
+      BlockClient(testing::_, testing::_, testing::_, testing::_, testing::_))
+      .Times(0);
+  index_schema->OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_HASH,
+                                       "event", key.get());
+
+  EXPECT_EQ(mutations_thread_pool->QueueSize(), 0);
+  // Searches apply the latest coalesced value before reading the index,
+  // even when workers are suspended and neither writer waited for indexing.
+  index_schema->ProcessMultiQueue();
+  {
+    absl::MutexLock lock(&mutex);
+    EXPECT_THAT(added_keys, testing::ElementsAre(key_prefix + "0"));
+    EXPECT_THAT(added_records,
+                testing::ElementsAre(std::string(record_value_) + "1"));
+  }
+  VMSDK_EXPECT_OK(mutations_thread_pool->ResumeWorkers());
+  WaitWorkerTasksAreCompleted(*mutations_thread_pool);
+  {
+    absl::MutexLock lock(&mutex);
+    EXPECT_THAT(added_keys, testing::ElementsAre(key_prefix + "0"));
+  }
+  KeyspaceEventManager::Instance().OnExecutionUnitEnd();
+  index_schema = nullptr;
+}
+
+TEST_F(MultiExecTest, OrdinaryWriteDoesNotFlushUnrelatedTransactionMutation) {
+  VMSDK_EXPECT_OK(mutations_thread_pool->SuspendWorkers());
+  EXPECT_CALL(*kMockValkeyModule, EventLoopAddOneShot(testing::_, testing::_))
+      .Times(0);
+  EXPECT_CALL(*kMockValkeyModule, GetContextFlags(testing::_))
+      .WillRepeatedly(testing::Return(VALKEYMODULE_CTX_FLAGS_MULTI));
+  auto transaction_key = vmsdk::MakeUniqueValkeyString(key_prefix + "0");
+  index_schema->OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_HASH,
+                                       "event", transaction_key.get());
+  EXPECT_CALL(*kMockValkeyModule, GetContextFlags(testing::_))
+      .WillRepeatedly(testing::Return(0));
+  EXPECT_CALL(*kMockValkeyModule, GetClientId(&fake_ctx_))
+      .WillRepeatedly(testing::Return(1));
+  EXPECT_CALL(
+      *kMockValkeyModule,
+      BlockClient(&fake_ctx_, testing::_, testing::_, testing::_, testing::_))
+      .WillOnce(testing::Return((ValkeyModuleBlockedClient *)1));
+  bool unblocked = false;
+  EXPECT_CALL(*kMockValkeyModule,
+              UnblockClient((ValkeyModuleBlockedClient *)1, testing::_))
+      .WillOnce([&](ValkeyModuleBlockedClient *, void *) {
+        unblocked = true;
+        return VALKEYMODULE_OK;
+      });
+  auto ordinary_key = vmsdk::MakeUniqueValkeyString(key_prefix + "1");
+  index_schema->OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_HASH,
+                                       "event", ordinary_key.get());
+  // Another notification in the same command joins deferred work. It must
+  // not retain the block already created for the queued ordinary mutation.
+  index_schema->OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_HASH,
+                                       "event", transaction_key.get());
+  EXPECT_EQ(mutations_thread_pool->QueueSize(), 1);
+  {
+    absl::MutexLock lock(&mutex);
+    EXPECT_TRUE(added_keys.empty());
+  }
+
+  VMSDK_EXPECT_OK(mutations_thread_pool->ResumeWorkers());
+  WaitWorkerTasksAreCompleted(*mutations_thread_pool);
+  {
+    absl::MutexLock lock(&mutex);
+    EXPECT_THAT(added_keys, testing::ElementsAre(key_prefix + "1"));
+    EXPECT_THAT(added_records,
+                testing::ElementsAre(std::string(record_value_) + "1"));
+  }
+  KeyspaceEventManager::Instance().OnExecutionUnitEnd();
+  EXPECT_TRUE(unblocked);
+  index_schema->ProcessMultiQueue();
+  {
+    absl::MutexLock lock(&mutex);
+    EXPECT_THAT(added_keys,
+                testing::ElementsAre(key_prefix + "1", key_prefix + "0"));
+    EXPECT_THAT(added_records,
+                testing::ElementsAre(std::string(record_value_) + "1",
+                                     std::string(record_value_) + "2"));
+  }
   index_schema = nullptr;
 }
 

@@ -37,12 +37,12 @@ using SharedBlockedClient = std::shared_ptr<vmsdk::BlockedClient>;
 
 class KeyspaceEventManager;
 
-class MutationBlocker {
+class ClientBlockingContext {
  public:
-  MutationBlocker(ValkeyModuleCtx *ctx, KeyspaceEventManager &manager)
+  ClientBlockingContext(ValkeyModuleCtx *ctx, KeyspaceEventManager &manager)
       : ctx_(ctx), manager_(manager) {}
 
-  SharedBlockedClient Acquire(vmsdk::BlockedClientCategory category) const;
+  SharedBlockedClient AcquireBlock(vmsdk::BlockedClientCategory category) const;
 
  private:
   ValkeyModuleCtx *ctx_;
@@ -70,7 +70,8 @@ class KeyspaceEventSubscription {
 
   virtual void OnKeyspaceNotification(
       ValkeyModuleCtx *ctx, int type, const char *event,
-      ValkeyModuleString *key, const MutationBlocker &mutation_blocker) = 0;
+      ValkeyModuleString *key,
+      const ClientBlockingContext &blocking_context) = 0;
   virtual std::vector<const indexes::VectorBase *> GetVectorIndexes() const = 0;
   virtual bool IsInDB(int db_num) const { return true; }
   virtual bool IsInCurrentDB(ValkeyModuleCtx *ctx) const {
@@ -83,7 +84,7 @@ class KeyspaceEventManager {
   KeyspaceEventManager() = default;
   void NotifySubscribers(ValkeyModuleCtx *ctx, int type, const char *event,
                          ValkeyModuleString *key);
-  void OnBeforeSleep();
+  void OnExecutionUnitEnd();
 
   absl::Status InsertSubscription(ValkeyModuleCtx *ctx,
                                   KeyspaceEventSubscription *subscription);
@@ -99,7 +100,7 @@ class KeyspaceEventManager {
   static KeyspaceEventManager &Instance();
 
  private:
-  friend class MutationBlocker;
+  friend class ClientBlockingContext;
 
   SharedBlockedClient AcquireBlockedClient(
       ValkeyModuleCtx *ctx, vmsdk::BlockedClientCategory category);
@@ -117,10 +118,10 @@ class KeyspaceEventManager {
       ValkeyModuleCtx *ctx, int type, ValkeyModuleString *dst_key,
       const char *dst_event, int dst_db_num,
       const std::vector<KeyspaceEventSubscription *> &src_subscriptions,
-      const MutationBlocker &mutation_blocker);
+      const ClientBlockingContext &blocking_context);
 
-  // Normal before-sleep events run after commands and post-notification jobs,
-  // and are skipped when a module command yields to nested event processing.
+  // Keep registration open across all notifications in an execution unit.
+  // Post-notification cleanup releases this hold; mutations own their work.
   vmsdk::MainThreadAccessGuard<
       absl::flat_hash_map<unsigned long long, SharedBlockedClient>>
       command_blocks_;

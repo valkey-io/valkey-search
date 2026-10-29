@@ -42,7 +42,7 @@ inline bool IsMoveToEvent(const char *event) {
 
 }  // namespace
 
-SharedBlockedClient MutationBlocker::Acquire(
+SharedBlockedClient ClientBlockingContext::AcquireBlock(
     vmsdk::BlockedClientCategory category) const {
   return manager_.AcquireBlockedClient(ctx_, category);
 }
@@ -59,12 +59,27 @@ SharedBlockedClient KeyspaceEventManager::AcquireBlockedClient(
     return existing->second;
   }
 
+  if (command_blocks.empty()) {
+    // Schedule before blocking: loading and read-only replicas reject jobs.
+    if (ValkeyModule_AddPostNotificationJob(
+            ctx,
+            [](ValkeyModuleCtx *, void *manager) {
+              static_cast<KeyspaceEventManager *>(manager)
+                  ->OnExecutionUnitEnd();
+            },
+            this, nullptr) != VALKEYMODULE_OK) {
+      return nullptr;
+    }
+  }
+
   auto blocked_client = std::make_shared<vmsdk::BlockedClient>(ctx, category);
   command_blocks.emplace(client_id, blocked_client);
   return blocked_client;
 }
 
-void KeyspaceEventManager::OnBeforeSleep() { command_blocks_.Get().clear(); }
+void KeyspaceEventManager::OnExecutionUnitEnd() {
+  command_blocks_.Get().clear();
+}
 
 vmsdk::BlockedClientCategory
 KeyspaceEventSubscription::GetBlockedClientCategory() const {
@@ -111,7 +126,7 @@ void KeyspaceEventManager::ProcessMoveNotification(
     ValkeyModuleCtx *ctx, int type, ValkeyModuleString *dst_key,
     const char *dst_event, int dst_db_num,
     const std::vector<KeyspaceEventSubscription *> &src_subscriptions,
-    const MutationBlocker &mutation_blocker) {
+    const ClientBlockingContext &blocking_context) {
   auto cleanup = absl::MakeCleanup([this]() {
     moved_src_key_.reset();
     src_db_num_ = -1;
@@ -164,7 +179,7 @@ void KeyspaceEventManager::ProcessMoveNotification(
     vmsdk::ValkeySelectDbGuard db_guard(ctx, src_db_num_);
     for (const auto &subscription : src_subscriptions) {
       subscription->OnKeyspaceNotification(
-          ctx, type, src_event, moved_src_key_.get(), mutation_blocker);
+          ctx, type, src_event, moved_src_key_.get(), blocking_context);
     }
   }
 }
@@ -172,7 +187,7 @@ void KeyspaceEventManager::ProcessMoveNotification(
 void KeyspaceEventManager::NotifySubscribers(ValkeyModuleCtx *ctx, int type,
                                              const char *event,
                                              ValkeyModuleString *key) {
-  const MutationBlocker mutation_blocker(ctx, *this);
+  const ClientBlockingContext blocking_context(ctx, *this);
   if (IsMoveFromEvent(event)) {
     moved_src_key_ = vmsdk::RetainUniqueValkeyString(key);
     src_db_num_ = ValkeyModule_GetSelectedDb(ctx);
@@ -187,11 +202,11 @@ void KeyspaceEventManager::NotifySubscribers(ValkeyModuleCtx *ctx, int type,
     auto dst_subscriptions =
         GetMatchingSubscriptions(vmsdk::ToStringView(key), type, dst_db_num);
     ProcessMoveNotification(ctx, type, key, event, dst_db_num,
-                            src_subscriptions, mutation_blocker);
+                            src_subscriptions, blocking_context);
     CHECK(!moved_src_key_);
     for (const auto &subscription : dst_subscriptions) {
       subscription->OnKeyspaceNotification(ctx, type, event, key,
-                                           mutation_blocker);
+                                           blocking_context);
     }
     return;
   }
@@ -201,7 +216,7 @@ void KeyspaceEventManager::NotifySubscribers(ValkeyModuleCtx *ctx, int type,
       vmsdk::ToStringView(key), type, ValkeyModule_GetSelectedDb(ctx));
   for (const auto &subscription : subscriptions_to_notify) {
     subscription->OnKeyspaceNotification(ctx, type, event, key,
-                                         mutation_blocker);
+                                         blocking_context);
   }
 }
 

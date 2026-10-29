@@ -243,9 +243,10 @@ class IndexSchema : public KeyspaceEventSubscription,
 
   void OnKeyspaceNotification(ValkeyModuleCtx *ctx, int type, const char *event,
                               ValkeyModuleString *key);
-  void OnKeyspaceNotification(ValkeyModuleCtx *ctx, int type, const char *event,
-                              ValkeyModuleString *key,
-                              const MutationBlocker &mutation_blocker) override;
+  void OnKeyspaceNotification(
+      ValkeyModuleCtx *ctx, int type, const char *event,
+      ValkeyModuleString *key,
+      const ClientBlockingContext &blocking_context) override;
 
   uint32_t PerformBackfill(ValkeyModuleCtx *ctx, uint32_t batch_size);
 
@@ -292,6 +293,12 @@ class IndexSchema : public KeyspaceEventSubscription,
   std::unique_ptr<data_model::IndexSchema> ToProto() const;
   using MutatedAttributes = absl::flat_hash_map<std::string, AttributeData>;
   struct DocumentMutation {
+    enum class DispatchState : uint8_t {
+      kDeferred,
+      kQueued,
+      kRunning,
+    };
+
     using AttributeData = valkey_search::AttributeData;
     std::optional<MutatedAttributes> attributes;
     std::vector<SharedBlockedClient> blocked_clients;
@@ -299,9 +306,8 @@ class IndexSchema : public KeyspaceEventSubscription,
     std::vector<std::unique_ptr<query::SearchParameters>> waiting_queries;
     MutationSequenceNumber sequence_number{0};
     std::vector<uint8_t> weighted_buffer;
-    bool consume_in_progress{false};
+    DispatchState dispatch_state{DispatchState::kQueued};
     bool from_backfill{false};
-    bool from_multi{false};
     float document_score{kDefaultDocumentScore};
   };
   vmsdk::TimeSlicedMRMWMutex &GetTimeSlicedMutex()
@@ -560,16 +566,16 @@ class IndexSchema : public KeyspaceEventSubscription,
 
   void ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
                                    ValkeyModuleString *key, bool from_backfill);
-  void ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
-                                   ValkeyModuleString *key, bool from_backfill,
-                                   const MutationBlocker *mutation_blocker);
+  void ProcessKeyspaceNotification(
+      ValkeyModuleCtx *ctx, ValkeyModuleString *key, bool from_backfill,
+      const ClientBlockingContext *blocking_context);
 
   void ProcessMutation(ValkeyModuleCtx *ctx,
                        MutatedAttributes &mutated_attributes,
                        const Key &interned_key, bool from_backfill,
                        bool is_delete,
                        float document_score = kDefaultDocumentScore,
-                       SharedBlockedClient blocked_client = nullptr);
+                       const ClientBlockingContext *blocking_context = nullptr);
   bool ScheduleMutation(bool from_backfill, const Key &key,
                         vmsdk::ThreadPool::Priority priority,
                         absl::BlockingCounter *blocking_counter);
@@ -608,12 +614,11 @@ class IndexSchema : public KeyspaceEventSubscription,
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
   bool InTrackedMutationRecords(const Key &key,
                                 const std::string &identifier) const;
-  bool TrackMutatedRecord(const Key &key,
-                          MutatedAttributes &&mutated_attributes,
-                          MutationSequenceNumber sequence_number,
-                          bool from_backfill, bool from_multi,
-                          float document_score = kDefaultDocumentScore,
-                          SharedBlockedClient blocked_client = nullptr)
+  bool TrackMutatedRecord(
+      const Key &key, MutatedAttributes &&mutated_attributes,
+      MutationSequenceNumber sequence_number, bool from_backfill,
+      bool from_multi, float document_score = kDefaultDocumentScore,
+      const ClientBlockingContext *blocking_context = nullptr)
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
 
   size_t ComputeWeightedBufferSize(const MutatedAttributes &attributes) const;
@@ -654,6 +659,8 @@ class IndexSchema : public KeyspaceEventSubscription,
       ValkeyModuleCtx *ctx, const MutatedAttributes &mutated_attributes,
       const Key &interned_key, bool from_backfill, bool is_delete);
   mutable vmsdk::TimeSlicedMRMWMutex time_sliced_mutex_;
+  // Transaction query barriers remain queued even when an existing worker
+  // consumes the mutation before its batch is flushed.
   vmsdk::MainThreadAccessGuard<std::deque<Key>> multi_mutations_keys_;
   vmsdk::MainThreadAccessGuard<bool> schedule_multi_exec_processing_{false};
 
@@ -677,6 +684,8 @@ class IndexSchema : public KeyspaceEventSubscription,
   FRIEND_TEST(IndexSchemaFriendTest, WaitForContendedKeysUntilApplied);
   FRIEND_TEST(IndexSchemaFriendTest, WaitForContendedKeysDeadlineWhileBlocked);
   FRIEND_TEST(IndexSchemaFriendTest, MutatedAttributesSanity);
+  FRIEND_TEST(IndexSchemaFriendTest,
+              RunningMutationCoalescesTransactionAndOrdinaryUpdates);
   FRIEND_TEST(IndexSchemaFriendTest, InvalidDataDropsKey);
   FRIEND_TEST(IndexSchemaFriendTest,
               InTrackedMutationRecordsAfterConsumeNoCrash);

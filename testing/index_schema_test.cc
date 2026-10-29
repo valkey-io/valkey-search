@@ -692,7 +692,7 @@ TEST_F(IndexSchemaSubscriptionSimpleTest, DropIndexPrematurely) {
         .WillOnce(Return(1));
   }
   EXPECT_EQ(mutations_thread_pool.QueueSize(), 1);
-  KeyspaceEventManager::Instance().OnBeforeSleep();
+  KeyspaceEventManager::Instance().OnExecutionUnitEnd();
   VMSDK_EXPECT_OK(mutations_thread_pool.ResumeWorkers());
   WaitWorkerTasksAreCompleted(mutations_thread_pool);
   EXPECT_EQ(vmsdk::BlockedClient::GetActiveClientCount(
@@ -778,7 +778,7 @@ TEST_F(IndexSchemaSubscriptionSimpleTest,
 
   KeyspaceEventManager::Instance().NotifySubscribers(
       &fake_ctx_, VALKEYMODULE_NOTIFY_HASH, "event", key_valkey_str.get());
-  KeyspaceEventManager::Instance().OnBeforeSleep();
+  KeyspaceEventManager::Instance().OnExecutionUnitEnd();
   EXPECT_EQ(vmsdk::BlockedClient::GetActiveClientCount(
                 vmsdk::BlockedClientCategory::kHash),
             0);
@@ -854,7 +854,7 @@ TEST_F(IndexSchemaSubscriptionSimpleTest,
 
   KeyspaceEventManager::Instance().NotifySubscribers(
       &fake_ctx_, VALKEYMODULE_NOTIFY_HASH, "event", key_valkey_str.get());
-  KeyspaceEventManager::Instance().OnBeforeSleep();
+  KeyspaceEventManager::Instance().OnExecutionUnitEnd();
   ASSERT_EQ(scheduled_tasks.size(), 1);
   EXPECT_EQ(unblocked_clients, 0);
 
@@ -862,7 +862,7 @@ TEST_F(IndexSchemaSubscriptionSimpleTest,
   client_id = 2;
   KeyspaceEventManager::Instance().NotifySubscribers(
       &fake_ctx_, VALKEYMODULE_NOTIFY_HASH, "event", key_valkey_str.get());
-  KeyspaceEventManager::Instance().OnBeforeSleep();
+  KeyspaceEventManager::Instance().OnExecutionUnitEnd();
   EXPECT_EQ(scheduled_tasks.size(), 1);
   EXPECT_EQ(unblocked_clients, 0);
   EXPECT_EQ(vmsdk::BlockedClient::GetActiveClientCount(
@@ -978,7 +978,7 @@ TEST_P(MultiKeyCommandTest,
     EXPECT_EQ(applied_keys, 2);
   }
   EXPECT_EQ(unblocked_clients, 0);
-  KeyspaceEventManager::Instance().OnBeforeSleep();
+  KeyspaceEventManager::Instance().OnExecutionUnitEnd();
 
   if (GetParam() == 0) {
     scheduled_tasks[0]();
@@ -1026,6 +1026,42 @@ TEST_F(IndexSchemaSubscriptionSimpleTest,
 
   KeyspaceEventManager::Instance().NotifySubscribers(
       &fake_ctx_, VALKEYMODULE_NOTIFY_GENERIC, "expire", key.get());
+}
+
+TEST_F(IndexSchemaSubscriptionSimpleTest,
+       UntrackedDeletedKeyDoesNotBlockHashMutationClient) {
+  MockThreadPool mutations_thread_pool("writer-thread-pool-", 1);
+  EXPECT_CALL(mutations_thread_pool, Schedule(testing::_, testing::_)).Times(0);
+  std::vector<absl::string_view> key_prefixes = {""};
+  auto index_schema =
+      MockIndexSchema::Create(&fake_ctx_, "index", key_prefixes,
+                              std::make_unique<HashAttributeDataType>(),
+                              &mutations_thread_pool)
+          .value();
+  auto mock_index = std::make_shared<MockIndex>();
+  VMSDK_EXPECT_OK(
+      index_schema->AddIndex("attribute_name", "vector", mock_index));
+  EXPECT_CALL(*mock_index, IsTracked(testing::_)).WillRepeatedly(Return(false));
+  auto key = vmsdk::MakeUniqueValkeyString("untracked");
+  EXPECT_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx_))
+      .WillRepeatedly(Return(0));
+  EXPECT_CALL(*kMockValkeyModule, GetClientId(&fake_ctx_))
+      .WillRepeatedly(Return(1));
+  EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx_))
+      .WillRepeatedly(Return(0));
+  EXPECT_CALL(*kMockValkeyModule, OpenKey(testing::_, testing::_, testing::_))
+      .WillOnce(Return(nullptr));
+  EXPECT_CALL(
+      *kMockValkeyModule,
+      AddPostNotificationJob(testing::_, testing::_, testing::_, testing::_))
+      .Times(0);
+  EXPECT_CALL(
+      *kMockValkeyModule,
+      BlockClient(testing::_, testing::_, testing::_, testing::_, testing::_))
+      .Times(0);
+
+  KeyspaceEventManager::Instance().NotifySubscribers(
+      &fake_ctx_, VALKEYMODULE_NOTIFY_GENERIC, "del", key.get());
 }
 
 TEST_F(IndexSchemaSubscriptionSimpleTest, EmptyKeyPrefixesTest) {
@@ -2385,6 +2421,36 @@ TEST_F(IndexSchemaFriendTest, WeightedBuffer) {
       EXPECT_EQ(itr->second.weighted_buffer.size(), 800);
     }
   }
+}
+
+TEST_F(IndexSchemaFriendTest,
+       RunningMutationCoalescesTransactionAndOrdinaryUpdates) {
+  vmsdk::WriterMutexLock lock(&index_schema->GetTimeSlicedMutex());
+  auto attributes = [&](absl::string_view value) {
+    IndexSchema::MutatedAttributes result;
+    result.emplace(attribute_identifier,
+                   AttributeData(vmsdk::MakeUniqueValkeyString(value)));
+    return result;
+  };
+  EXPECT_TRUE(index_schema->TrackMutatedRecord(key, attributes("initial"), 1,
+                                               false, false));
+  auto initial = index_schema->ConsumeTrackedMutatedAttribute(key, true);
+  ASSERT_TRUE(initial.has_value());
+  EXPECT_EQ(initial->at(attribute_identifier).GetStringView(), "initial");
+
+  EXPECT_FALSE(index_schema->TrackMutatedRecord(key, attributes("transaction"),
+                                                2, false, true));
+  EXPECT_FALSE(index_schema->TrackMutatedRecord(key, attributes("latest"), 3,
+                                                false, false));
+  EXPECT_FALSE(
+      index_schema->ConsumeTrackedMutatedAttribute(key, true).has_value());
+
+  auto latest = index_schema->ConsumeTrackedMutatedAttribute(key, false);
+  ASSERT_TRUE(latest.has_value());
+  EXPECT_EQ(latest->at(attribute_identifier).GetStringView(), "latest");
+  EXPECT_FALSE(
+      index_schema->ConsumeTrackedMutatedAttribute(key, false).has_value());
+  EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 0);
 }
 
 TEST_F(IndexSchemaFriendTest, MutatedAttributesSanity) {

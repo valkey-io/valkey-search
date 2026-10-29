@@ -592,17 +592,18 @@ void TrackResults(
 void IndexSchema::OnKeyspaceNotification(ValkeyModuleCtx *ctx, int type,
                                          const char *event,
                                          ValkeyModuleString *key) {
-  const MutationBlocker mutation_blocker(ctx, KeyspaceEventManager::Instance());
-  OnKeyspaceNotification(ctx, type, event, key, mutation_blocker);
+  const ClientBlockingContext blocking_context(
+      ctx, KeyspaceEventManager::Instance());
+  OnKeyspaceNotification(ctx, type, event, key, blocking_context);
 }
 
 void IndexSchema::OnKeyspaceNotification(
     ValkeyModuleCtx *ctx, int type, const char *event, ValkeyModuleString *key,
-    const MutationBlocker &mutation_blocker) {
+    const ClientBlockingContext &blocking_context) {
   if (ABSL_PREDICT_FALSE(!IsInCurrentDB(ctx))) {
     return;
   }
-  ProcessKeyspaceNotification(ctx, key, false, &mutation_blocker);
+  ProcessKeyspaceNotification(ctx, key, false, &blocking_context);
 }
 
 std::vector<const indexes::VectorBase *> IndexSchema::GetVectorIndexes() const {
@@ -658,7 +659,7 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
 
 void IndexSchema::ProcessKeyspaceNotification(
     ValkeyModuleCtx *ctx, ValkeyModuleString *key, bool from_backfill,
-    const MutationBlocker *mutation_blocker) {
+    const ClientBlockingContext *blocking_context) {
   if (ABSL_PREDICT_FALSE(key == nullptr) || is_destructing_) {
     return;
   }
@@ -667,9 +668,10 @@ void IndexSchema::ProcessKeyspaceNotification(
       ctx, key, VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
 
   auto interned_key = StringInternStore::Intern(key_cstr);
-  if (key_obj && !GetAttributeDataType().IsProperType(key_obj.get())) {
-    // If the object type of the key does not match the one of the index,
-    // process as if the key was deleted only if it was previously tracked.
+  if (!key_obj || !GetAttributeDataType().IsProperType(key_obj.get())) {
+    // Missing and wrong-type keys need deletion work only if already tracked.
+    // IsKeyTracked also includes pending mutations, so queued inserts are
+    // removed.
     if (!IsKeyTracked(interned_key)) {
       return;
     }
@@ -766,9 +768,7 @@ void IndexSchema::ProcessKeyspaceNotification(
     // in the RDB key list that SaveIndexExtension writes.
     ProcessMutation(ctx, mutated_attributes, interned_key, from_backfill,
                     key_obj == nullptr || filter_rejected, document_score,
-                    mutation_blocker
-                        ? mutation_blocker->Acquire(GetBlockedClientCategory())
-                        : nullptr);
+                    blocking_context);
   }
 }
 
@@ -913,8 +913,8 @@ std::unique_ptr<vmsdk::StopWatch> CreateQueueDelayCapturer() {
   return ret;
 }
 
-// ProcessMultiQueue is used to flush pending mutations occurring in a
-// multi/exec transaction. Searches and ordinary indexed writes flush the batch.
+// Searches and the transaction batch callback synchronize with every queued
+// transaction key, including keys already consumed by an existing worker.
 void IndexSchema::ProcessMultiQueue() {
   schedule_multi_exec_processing_ = false;
   auto &multi_mutations_keys = multi_mutations_keys_.Get();
@@ -1083,14 +1083,10 @@ MutationSequenceNumber IndexSchema::UpdateDbInfoKey(
   return this_mutation;
 }
 
-void IndexSchema::ProcessMutation(ValkeyModuleCtx *ctx,
-                                  MutatedAttributes &mutated_attributes,
-                                  const Key &interned_key, bool from_backfill,
-                                  bool is_delete, float document_score,
-                                  SharedBlockedClient blocked_client) {
-  if (blocked_client && !multi_mutations_keys_.Get().empty()) {
-    ProcessMultiQueue();
-  }
+void IndexSchema::ProcessMutation(
+    ValkeyModuleCtx *ctx, MutatedAttributes &mutated_attributes,
+    const Key &interned_key, bool from_backfill, bool is_delete,
+    float document_score, const ClientBlockingContext *blocking_context) {
   auto this_mutation = UpdateDbInfoKey(ctx, mutated_attributes, interned_key,
                                        from_backfill, is_delete);
 
@@ -1101,10 +1097,10 @@ void IndexSchema::ProcessMutation(ValkeyModuleCtx *ctx,
   if (ABSL_PREDICT_FALSE(
           !TrackMutatedRecord(interned_key, std::move(mutated_attributes),
                               this_mutation, from_backfill, inside_multi_exec,
-                              document_score, std::move(blocked_client))) ||
+                              document_score, blocking_context)) ||
       inside_multi_exec) {
-    // Skip scheduling if the mutation key has already been tracked or is part
-    // of a multi exec command.
+    // The existing worker consumes coalesced updates. Deferred transaction
+    // records remain deferred until their batch is flushed.
     return;
   }
   const vmsdk::ThreadPool::Priority priority =
@@ -1701,7 +1697,9 @@ absl::Status IndexSchema::SaveIndexExtension(RDBChunkOutputStream out) const {
     }
     VMSDK_RETURN_IF_ERROR(out.SaveString(key->Str()));
     VMSDK_RETURN_IF_ERROR(out.SaveObject(value.from_backfill));
-    VMSDK_RETURN_IF_ERROR(out.SaveObject(value.from_multi));
+    // Preserve the historical transaction boolean slot in the RDB format.
+    VMSDK_RETURN_IF_ERROR(out.SaveObject(
+        value.dispatch_state == DocumentMutation::DispatchState::kDeferred));
     count--;
   }
   CHECK(count == 0);
@@ -1813,7 +1811,7 @@ absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
     for (size_t i = 0; i < count; ++i) {
       VMSDK_ASSIGN_OR_RETURN(auto keyname_str, input.LoadString());
       VMSDK_ASSIGN_OR_RETURN(auto from_backfill, input.LoadObject<bool>());
-      VMSDK_ASSIGN_OR_RETURN([[maybe_unused]] auto from_multi,
+      VMSDK_ASSIGN_OR_RETURN([[maybe_unused]] auto was_deferred,
                              input.LoadObject<bool>());
 
       auto keyname = vmsdk::MakeUniqueValkeyString(keyname_str);
@@ -2217,63 +2215,56 @@ size_t IndexSchema::ComputeWeightedBufferSize(
   return total / 100;
 }
 
-// Returns true if the inserted key not exists otherwise false
-bool IndexSchema::TrackMutatedRecord(const Key &key,
-                                     MutatedAttributes &&mutated_attributes,
-                                     MutationSequenceNumber sequence_number,
-                                     bool from_backfill, bool from_multi,
-                                     float document_score,
-                                     SharedBlockedClient blocked_client) {
+// Merges the latest data and client ownership, then claims dispatch if needed.
+// Returns whether a non-transaction caller must schedule a worker.
+bool IndexSchema::TrackMutatedRecord(
+    const Key &key, MutatedAttributes &&mutated_attributes,
+    MutationSequenceNumber sequence_number, bool from_backfill, bool from_multi,
+    float document_score, const ClientBlockingContext *blocking_context) {
   absl::MutexLock lock(&mutated_records_mutex_);
   auto [itr, inserted] =
       tracked_mutated_records_.insert({key, DocumentMutation{}});
+  auto &mutation = itr->second;
   if (ABSL_PREDICT_TRUE(inserted)) {
-    itr->second.attributes = MutatedAttributes();
-    itr->second.attributes.value() = std::move(mutated_attributes);
-    itr->second.from_backfill = from_backfill;
-    itr->second.from_multi = from_multi;
-    itr->second.sequence_number = sequence_number;
-    itr->second.document_score = document_score;
-    // Allocate memory buffer proportional to data size and mutation weights
-    // Buffer is freed when the mutation record is erased.
-    itr->second.weighted_buffer.resize(
-        ComputeWeightedBufferSize(itr->second.attributes.value()));
-    if (ABSL_PREDICT_TRUE(blocked_client)) {
-      blocked_client->MeasureTimeStart();
-      itr->second.blocked_clients.push_back(std::move(blocked_client));
+    mutation.attributes = std::move(mutated_attributes);
+    mutation.from_backfill = from_backfill;
+    mutation.dispatch_state = from_multi
+                                  ? DocumentMutation::DispatchState::kDeferred
+                                  : DocumentMutation::DispatchState::kQueued;
+  } else {
+    if (!mutation.attributes.has_value()) {
+      mutation.attributes = MutatedAttributes();
     }
-    return true;
+    for (auto &mutated_attribute : mutated_attributes) {
+      mutation.attributes.value()[mutated_attribute.first] =
+          std::move(mutated_attribute.second);
+    }
   }
+  mutation.sequence_number = sequence_number;
+  mutation.document_score = document_score;
+  // Allocate memory proportional to data size and mutation weights. The
+  // buffer is freed when the mutation record is erased.
+  mutation.weighted_buffer.resize(
+      ComputeWeightedBufferSize(mutation.attributes.value()));
 
-  itr->second.sequence_number = sequence_number;
-  itr->second.document_score = document_score;
-
-  if (!itr->second.from_multi && from_multi) {
-    itr->second.from_multi = from_multi;
+  // A deferred transaction record has no worker yet. Keep coalescing without
+  // blocking this writer; the transaction batch or search barrier applies it.
+  if (mutation.dispatch_state == DocumentMutation::DispatchState::kDeferred) {
+    return inserted;
   }
-
-  if (!itr->second.attributes.has_value()) {
-    itr->second.attributes = MutatedAttributes();
-  }
-  for (auto &mutated_attribute : mutated_attributes) {
-    itr->second.attributes.value()[mutated_attribute.first] =
-        std::move(mutated_attribute.second);
-  }
-  // Allocate memory buffer proportional to data size and mutation weights
-  // Buffer is freed when the mutation record is erased.
-  itr->second.weighted_buffer.resize(
-      ComputeWeightedBufferSize(itr->second.attributes.value()));
-
-  if (ABSL_PREDICT_TRUE(blocked_client)) {
+  if (auto blocked_client =
+          !from_multi && blocking_context
+              ? blocking_context->AcquireBlock(GetBlockedClientCategory())
+              : nullptr) {
     blocked_client->MeasureTimeStart();
-    itr->second.blocked_clients.push_back(std::move(blocked_client));
+    mutation.blocked_clients.push_back(std::move(blocked_client));
   }
 
-  if (ABSL_PREDICT_FALSE(!from_backfill && itr->second.from_backfill)) {
-    itr->second.from_backfill = false;
+  if (ABSL_PREDICT_FALSE(!from_backfill && mutation.from_backfill)) {
+    mutation.from_backfill = false;
     return true;
   }
-  return false;
+  return inserted;
 }
 
 void IndexSchema::MarkAsDestructing() {
@@ -2334,10 +2325,14 @@ IndexSchema::ConsumeTrackedMutatedAttribute(const Key &key, bool first_time) {
     if (ABSL_PREDICT_FALSE(itr == tracked_mutated_records_.end())) {
       return std::nullopt;
     }
-    if (ABSL_PREDICT_FALSE(first_time && itr->second.consume_in_progress)) {
+    if (ABSL_PREDICT_FALSE(first_time &&
+                           itr->second.dispatch_state ==
+                               DocumentMutation::DispatchState::kRunning)) {
       return std::nullopt;
     }
-    itr->second.consume_in_progress = true;
+    // Transaction batches claim deferred records directly. Their synchronous
+    // main-thread flush prevents ordinary writes from dispatching them again.
+    itr->second.dispatch_state = DocumentMutation::DispatchState::kRunning;
     // Delete this tracked document if no additional mutations were tracked
     if (!itr->second.attributes.has_value()) {
       queries_to_notify = std::move(itr->second.waiting_queries);

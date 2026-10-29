@@ -12,7 +12,6 @@
 #include "absl/time/clock.h"
 #include "src/coordinator/metadata_manager.h"
 #include "src/cursor.h"
-#include "src/keyspace_event_manager.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
 #include "src/vector_registry.h"
@@ -67,13 +66,6 @@ void OnServerCronCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
   }
 }
 
-void OnEventLoopCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
-                         uint64_t subevent, void *data) {
-  if (subevent == VALKEYMODULE_SUBEVENT_EVENTLOOP_BEFORE_SLEEP) {
-    KeyspaceEventManager::Instance().OnBeforeSleep();
-  }
-}
-
 void OnShutdownCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
                         uint64_t subevent, void *data) {
   // Clear all PausePoints so any waiting worker threads wake up and exit
@@ -117,8 +109,6 @@ void SubscribeToServerEvents() {
   ValkeyModuleCtx *ctx = ValkeySearch::Instance().GetBackgroundCtx();
   ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_CronLoop,
                                       &OnServerCronCallback);
-  ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_EventLoop,
-                                      &OnEventLoopCallback);
   pthread_atfork(AtForkPrepare, AfterForkParent, nullptr);
   ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_ForkChild,
                                       &OnForkChildCallback);

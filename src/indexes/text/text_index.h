@@ -21,29 +21,31 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/node_hash_map.h"
+#include "absl/functional/function_ref.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
+#include "absl/types/span.h"
 #include "rax/rax.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/text/invasive_ptr.h"
-#include "src/indexes/text/lexer.h"
+#include "src/indexes/text/language.h"
 #include "src/indexes/text/posting.h"
 #include "src/indexes/text/rax_target_mutex_pool.h"
 #include "src/indexes/text/rax_wrapper.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/memory_tracker.h"
 
-struct sb_stemmer;
-
 namespace valkey_search::indexes::text {
 
-// Inline capacity for stem variants extracted from stem tree
-constexpr size_t kStemVariantsInlineCapacity = 20;
+// Inline capacity for the surface forms of one stem root; a handful in
+// practice.
+constexpr size_t kStemVariantsInlineCapacity = 5;
 
 // token -> (PositionMap, suffix support)
 using TokenPositions =
@@ -99,8 +101,12 @@ class TextIndex {
 
 class TextIndexSchema {
  public:
-  TextIndexSchema(data_model::Language language, const std::string &punctuation,
-                  bool with_offsets, const std::vector<std::string> &stop_words,
+  // `language` is the shared instance for the index's LANGUAGE; `punctuation`
+  // and `stop_words` are the index's own settings (FT.CREATE overrides or the
+  // language defaults).
+  TextIndexSchema(std::shared_ptr<const Language> language,
+                  const std::string &punctuation,
+                  const std::vector<std::string> &stop_words, bool with_offsets,
                   uint32_t min_stem_size);
 
   absl::StatusOr<bool> StageAttributeData(const InternedStringPtr &key,
@@ -120,7 +126,12 @@ class TextIndexSchema {
   bool HasTextOffsets() const { return with_offsets_; }
   uint8_t GetNumTextFields() const { return num_text_fields_; }
   std::shared_ptr<TextIndex> GetTextIndex() const { return text_index_; }
-  Lexer GetLexer() const { return lexer_; }
+  const Language &GetLanguage() const { return *language_; }
+  const TokenizerConfig &GetTokenizerConfig() const {
+    return *tokenizer_config_;
+  }
+  // Query-side stemming; the word itself when the language has no stemmer.
+  std::string StemWord(absl::string_view word) const;
 
   // Access to metadata for memory pool usage
   TextIndexMetadata &GetMetadata() { return metadata_; }
@@ -169,15 +180,6 @@ class TextIndexSchema {
   // Access stem tree for word expansion during search
   const Rax &GetStemTree() const { return stem_tree_; }
 
-  // Get stem root and all stem parents for a search term. out_distinct_docs, if
-  // set, receives StemParents::distinct_docs (untouched if the root is absent).
-  std::string GetAllStemVariants(
-      absl::string_view search_term,
-      absl::InlinedVector<absl::string_view, kStemVariantsInlineCapacity>
-          &words_to_search,
-      uint64_t stem_enabled_mask, bool lock_needed,
-      uint32_t *out_distinct_docs = nullptr);
-
   // Get the minimum stem size across all fields
   uint32_t GetMinStemSize() const { return min_stem_size_; }
 
@@ -190,6 +192,36 @@ class TextIndexSchema {
   void EnableSuffix() {
     with_suffix_trie_ = true;
     text_index_ = std::make_shared<TextIndex>(true);
+  }
+
+  // We avoid stalling the main thread waiting on the time-slice mutex and
+  // instead take the same short locks the writers take. WithTextIndexLock runs
+  // `fn` on the global text index with the tree lock held for the traversal
+  // and target retrieval. A returned Postings is then probed under its word's
+  // bucket via WithWordLock, never with the tree lock still held (writers take
+  // bucket first, tree second).
+  template <class Fn>
+  std::invoke_result_t<Fn, const TextIndex &> WithTextIndexLock(Fn &&fn) const
+      ABSL_LOCKS_EXCLUDED(text_index_mutex_) {
+    absl::ReaderMutexLock guard(&text_index_mutex_);
+    return fn(*text_index_);
+  }
+
+  // Same for the stem tree. The parent lists in it belong to the tree and we
+  // want them stable while `fn` reads them.
+  template <class Fn>
+  std::invoke_result_t<Fn, const Rax &> WithStemTreeLock(Fn &&fn) const
+      ABSL_LOCKS_EXCLUDED(stem_tree_mutex_) {
+    absl::ReaderMutexLock guard(&stem_tree_mutex_);
+    return fn(stem_tree_);
+  }
+
+  // Runs `fn` under `word`'s bucket so the main thread can safely access a
+  // posting's underlying Key map without contending writes.
+  template <class Fn>
+  auto WithWordLock(absl::string_view word, Fn &&fn) const -> decltype(fn()) {
+    absl::MutexLock guard(&rax_target_mutex_pool_.Get(word));
+    return fn();
   }
 
  private:
@@ -214,11 +246,12 @@ class TextIndexSchema {
   //
   Rax stem_tree_;
 
-  // Guards structural changes to stem_tree_.
+  // Guards structural changes to stem_tree_. Acquired before
+  // text_index_mutex_ when both are held.
   mutable absl::Mutex stem_tree_mutex_;
 
   // Per-word bucket locks for concurrent Rax target updates.
-  RaxTargetMutexPool rax_target_mutex_pool_;
+  mutable RaxTargetMutexPool rax_target_mutex_pool_;
 
   //
   // To support the Delete record and the post-filtering case, there is a
@@ -251,7 +284,10 @@ class TextIndexSchema {
   // Prevent concurrent mutations to per-key text index map and scoring info
   mutable std::mutex per_key_text_indexes_mutex_;
 
-  Lexer lexer_;
+  std::shared_ptr<const Language> language_;
+  // Shared with the language when the index uses its default punctuation and
+  // stop words; owned by this index otherwise.
+  std::shared_ptr<const TokenizerConfig> tokenizer_config_;
 
   // Key updates are fanned out to each attribute's IndexBase object. Since text
   // indexing operates at the schema-level, any new text data to insert for a
@@ -311,7 +347,7 @@ class TextIndexSchema {
   // Helper function to lookup text index for a key.
   // Locking needs to be true if called outside of read phase of time sliced
   // mutex.
-  const TextIndex *GetPerKeyTextIndex(const Key &key, bool lock);
+  const TextIndex *GetPerKeyTextIndex(const Key &key, bool lock) const;
 };
 
 }  // namespace valkey_search::indexes::text

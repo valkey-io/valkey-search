@@ -329,13 +329,15 @@ The pipeline consists of four stages applied in order:
 
 The input string is split into words based on punctuation characters and whitespace. A "word" is any contiguous sequence of characters that is not punctuation and not whitespace.
 
-**Whitespace characters** always break words. This includes spaces, tabs, newlines, carriage returns, and control characters.
+**Whitespace characters** always break words. This includes spaces, tabs, newlines, carriage returns, and control characters. For every language except English, Unicode whitespace such as the no-break space (U+00A0) and the ideographic space (U+3000) also breaks words; English keeps ASCII-only whitespace.
 
-**Punctuation characters** are configurable. The default set is:
+**Punctuation characters** are configurable. The default set depends on `LANGUAGE`. For English it is:
 
 ```
-,.<>{}[]"':;!@#$%^&*()-+=~/\|
+,.<>{}[]"':;!@#$%^&*()-+=~/\|?
 ```
+
+Other languages add their own punctuation to this set, for example `« » – —` for French and `، ؛ ؟` for Arabic.
 
 A custom punctuation set can be specified at index creation time:
 
@@ -343,11 +345,20 @@ A custom punctuation set can be specified at index creation time:
 FT.CREATE idx PUNCTUATION ",.!?" SCHEMA content TEXT
 ```
 
-The punctuation set operates on individual bytes. Multi-byte UTF-8 characters (such as CJK characters or emoji) are not treated as punctuation and become part of the surrounding word.
+The punctuation set is matched per character (Unicode code point), so it can include multi-byte characters such as `—`. Characters not in the set, such as CJK characters or emoji, become part of the surrounding word. For languages other than English, a character that normalizes to punctuation in the set is also a word boundary, for example the fullwidth comma `，` (U+FF0C) for Arabic, whose normalization maps it to `,`.
 
-**Escape sequences**: A backslash (`\`) before a punctuation character causes that character to be treated as part of the word rather than as a word boundary. For example, `hello\,world` produces the single token `hello,world`.
+**Escape sequences**: A backslash (`\`) before a punctuation character causes that character to be treated as part of the word rather than as a word boundary. The same rules apply to documents and to queries. With the default punctuation, which includes `\`:
 
-The input must be valid UTF-8. Invalid UTF-8 sequences cause the record to be rejected.
+| Input           | Tokens                                                             |
+| :-------------- | :----------------------------------------------------------------- |
+| `hello\,world`  | `hello,world` (escaped punctuation is kept)                        |
+| `hello\\world` | `hello\world` (an escaped backslash is kept)                       |
+| `hello\world`   | `hello`, `world` (before other characters, `\` is a word boundary) |
+| `hello\`        | `hello` in a document; an error in a query                         |
+
+If `\` is removed from a custom punctuation set, a backslash before a non-punctuation character is dropped and the word continues.
+
+The input must be valid UTF-8. A text field containing invalid UTF-8 is not indexed and is counted in `hash_indexing_failures`.
 
 ### Case Folding
 
@@ -372,11 +383,11 @@ Removed stop words do not occupy a position in the token sequence. For example, 
 
 ### Stemming
 
-Stemming reduces words to their root form so that morphological variants match each other. For example, "running", "runs", and "run" all have the same stem: "run". The stemming algorithm is language-specific; currently only English (Snowball stemmer) is supported.
+Stemming reduces words to their root form so that morphological variants match each other. For example, "running", "runs", and "run" all have the same stem: "run". The stemming algorithm is language-specific and uses the Snowball stemmer for the index's `LANGUAGE`.
 
 Stemming is controlled by these options:
 
-- `LANGUAGE ENGLISH` (schema-level): Specifies the stemming language. Currently only `ENGLISH` is supported.
+- `LANGUAGE <language>` (schema-level): Specifies the language, which selects the stemmer, the default stop words, and the default punctuation. Supported: `ENGLISH` (default), `ARABIC`, `DUTCH`, `FRENCH`, `GERMAN`, `INDONESIAN`, `ITALIAN`, `PORTUGUESE`, `RUSSIAN`, `SPANISH`, `SWEDISH`, `TURKISH`.
 - `NOSTEM` (per-field): Disables stemming for a specific text field.
 - `MINSTEMSIZE <size>` (schema-level): Words shorter than this length are not stemmed. The default is 4.
 

@@ -426,11 +426,13 @@ class TestLoadTrackedKeyMissingFromKeyspace(ValkeySearchTestCaseDebugMode):
         deleter = threading.Thread(
             target=self.server.get_new_client().delete, args=("k:1",))
         deleter.start()
-        waiters.wait_for_true(lambda: self.info().mutation_queue_size == 1)
-        self.client.execute_command("SAVE")
-        self.client.execute_command(
-            "FT._DEBUG", "PAUSEPOINT", "RESET", "block_mutation_queue")
-        deleter.join()
+        try:
+            waiters.wait_for_true(lambda: self.info().mutation_queue_size == 1)
+            self.client.execute_command("SAVE")
+        finally:
+            self.client.execute_command(
+                "FT._DEBUG", "PAUSEPOINT", "RESET", "block_mutation_queue")
+            deleter.join()
         assert self.reload_and_get_keys() == {b"k:0", b"k:2", b"k:3"}
 
 

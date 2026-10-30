@@ -9,6 +9,7 @@
 #define VMSDK_SRC_TYPE_CONVERSIONS_H_
 
 #include <algorithm>
+#include <bit>
 #include <cctype>
 #include <charconv>
 #include <cstddef>
@@ -75,11 +76,30 @@ static inline absl::StatusOr<T> ToNumeric(absl::string_view str) {
       absl::StrCat("`", str, "` is not a valid numeric value"));
 }
 
+// Bit-level checks, because -ffast-math folds std::isnan and std::isinf to
+// false.
+inline bool IsNaNBits(double d) {
+  const uint64_t bits = std::bit_cast<uint64_t>(d);
+  return (bits & 0x7FF0000000000000ull) == 0x7FF0000000000000ull &&
+         (bits & 0x000FFFFFFFFFFFFFull) != 0;
+}
+
+inline bool IsNaNBits(float f) {
+  const uint32_t bits = std::bit_cast<uint32_t>(f);
+  return (bits & 0x7F800000u) == 0x7F800000u && (bits & 0x007FFFFFu) != 0;
+}
+
+inline bool IsInfBits(double d) {
+  const uint64_t bits = std::bit_cast<uint64_t>(d);
+  return (bits & 0x7FF0000000000000ull) == 0x7FF0000000000000ull &&
+         (bits & 0x000FFFFFFFFFFFFFull) == 0;
+}
+
 // Evaluate if the implementation could rely on ToNumeric
 template <>
 inline absl::StatusOr<float> To(absl::string_view str) {
   float value;
-  if (absl::AsciiStrToLower(str) == "nan" || !absl::SimpleAtof(str, &value)) {
+  if (!absl::SimpleAtof(str, &value) || IsNaNBits(value)) {
     return absl::InvalidArgumentError(
         absl::StrCat(str, " is not a valid float"));
   }
@@ -125,7 +145,7 @@ inline absl::StatusOr<unsigned long> To(absl::string_view str) {
 template <>
 inline absl::StatusOr<double> To(absl::string_view str) {
   double value;
-  if (absl::AsciiStrToLower(str) == "nan" || !absl::SimpleAtod(str, &value)) {
+  if (!absl::SimpleAtod(str, &value) || IsNaNBits(value)) {
     return absl::InvalidArgumentError(
         absl::StrCat(str, " is not a valid double"));
   }

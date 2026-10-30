@@ -6,11 +6,15 @@
 
 #include "src/commands/ft_aggregate_exec.h"
 
+#include <algorithm>
+#include <bit>
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
 #include <memory>
 
+#include "absl/strings/str_cat.h"
 #include "gtest/gtest.h"
 #include "src/attribute_data_type.h"
 #include "src/commands/ft_aggregate_parser.h"
@@ -283,6 +287,68 @@ TEST_F(AggregateExecTest, SortTest) {
       if (!do_max || tc.ordered) {
         for (auto i = 0; i < order.size(); ++i) {
           EXPECT_EQ(*records[i], *RecordNOfM(order[i], input_count));
+        }
+      }
+    }
+  }
+}
+
+// Built from bits: -ffast-math does not guarantee quiet_NaN().
+static double NaNValue() {
+  return std::bit_cast<double>(uint64_t{0x7FF8000000000000ull});
+}
+
+static bool IsNaNValue(const expr::Value &v) {
+  return v.IsDouble() && vmsdk::IsNaNBits(v.GetDouble());
+}
+
+// Record i holds NaN when i % 3 == 1, else the number (i * 37) % 101.
+static RecordSet MakeDataWithNaNs(size_t m, std::vector<double> &numbers) {
+  RecordSet result(nullptr);
+  numbers.clear();
+  for (size_t i = 0; i < m; ++i) {
+    auto rec = std::make_unique<Record>(2);
+    if (i % 3 == 1) {
+      rec->fields_[0] = expr::Value(NaNValue());
+    } else {
+      const double n = double((i * 37) % 101);
+      rec->fields_[0] = expr::Value(n);
+      numbers.push_back(n);
+    }
+    rec->fields_[1] = expr::Value(double(i));
+    result.emplace_back(std::move(rec));
+  }
+  return result;
+}
+
+// A NaN sort key sorts after every number in both directions.
+TEST_F(AggregateExecTest, SortPutsNaNLast) {
+  for (size_t m : {8, 100}) {
+    for (bool desc : {false, true}) {
+      for (bool use_max : {false, true}) {
+        std::vector<double> numbers;
+        auto records = MakeDataWithNaNs(m, numbers);
+        const size_t nan_count = m - numbers.size();
+        std::string text = absl::StrCat("SORTBY 2 @n1 ", desc ? "DESC" : "ASC");
+        // MAX >= record count takes the stable_sort path, else the heap path.
+        const size_t keep = use_max ? numbers.size() + nan_count / 2 : m;
+        absl::StrAppend(&text, " MAX ", keep);
+        SCOPED_TRACE(absl::StrCat(text, " over ", m, " records"));
+        auto param = MakeStages(text);
+        VMSDK_EXPECT_OK(param->stages_[0]->Execute(records));
+        ASSERT_EQ(records.size(), keep);
+        std::sort(numbers.begin(), numbers.end());
+        if (desc) {
+          std::reverse(numbers.begin(), numbers.end());
+        }
+        for (size_t i = 0; i < records.size(); ++i) {
+          const auto &v = records[i]->fields_[0];
+          if (i < numbers.size()) {
+            ASSERT_FALSE(IsNaNValue(v)) << "position " << i;
+            EXPECT_EQ(v.GetDouble(), numbers[i]) << "position " << i;
+          } else {
+            EXPECT_TRUE(IsNaNValue(v)) << "position " << i;
+          }
         }
       }
     }

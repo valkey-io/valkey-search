@@ -28,12 +28,13 @@
 
 namespace valkey_search::indexes {
 namespace {
+// Rejects NaN: it is unordered, so the B-tree could never erase it.
 std::optional<double> ParseNumber(absl::string_view data) {
-  double value;
-  if (absl::AsciiStrToLower(data) == "nan" || !absl::SimpleAtod(data, &value)) {
+  auto value = vmsdk::To<double>(data);
+  if (!value.ok()) {
     return std::nullopt;
   }
-  return value;
+  return *value;
 }
 }  // namespace
 

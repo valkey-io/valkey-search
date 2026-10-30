@@ -243,10 +243,18 @@ void ApplySorting(std::vector<indexes::Neighbor> &neighbors,
 
     expr::Value val_a, val_b;
     if (is_numeric) {
-      auto num_a = vmsdk::To<double>(str_a).value_or(0.0);
-      auto num_b = vmsdk::To<double>(str_b).value_or(0.0);
-      val_a = expr::Value(num_a);
-      val_b = expr::Value(num_b);
+      // A value that does not parse (a NaN indexed before 1.3.0) sorts last,
+      // as a missing one does and as in FT.AGGREGATE.
+      auto num_a = vmsdk::To<double>(str_a);
+      if (!num_a.ok()) {
+        return false;
+      }
+      auto num_b = vmsdk::To<double>(str_b);
+      if (!num_b.ok()) {
+        return true;
+      }
+      val_a = expr::Value(*num_a);
+      val_b = expr::Value(*num_b);
     } else {
       val_a = expr::Value(str_a);
       val_b = expr::Value(str_b);

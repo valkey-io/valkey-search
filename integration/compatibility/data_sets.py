@@ -773,12 +773,15 @@ class ClientSystem:
 
     def execute_command(self, *cmd):
         print("Execute:", *cmd)
+        # A cluster client cannot route a command written as one string.
+        if isinstance(cmd[0], str):
+            cmd = (*cmd[0].split(), *cmd[1:])
         result = self.client.execute_command(*cmd)
         #print("Result:", result)
         return result
     
     def ft_info(self, index):
-        values = self.client.execute_command(f"FT.INFO {index}")
+        values = self.client.execute_command("FT.INFO", index)
         result = {unbytes(values[i]):unbytes(values[i+1]) for i in range(0, len(values), 2)}
         return result
         
@@ -2295,7 +2298,9 @@ def load_data_cluster(cluster_client, test_case, data_set, key_type, data_source
     # filter, sortkey, return) replayed in cluster mode raised KeyError on
     # data[data_set].
     if data_source is None:
-        if data_set in HYBRID_DATASETS:
+        if data_set in SCORING_DATASETS:
+            data_source = "scoring"
+        elif data_set in HYBRID_DATASETS:
             data_source = "hybrid"
         elif data_set in TEXT_DATASETS:
             data_source = "text"
@@ -2315,6 +2320,8 @@ def load_data_cluster(cluster_client, test_case, data_set, key_type, data_source
             data = compute_data_sets(vector_data_type=vector_data_type)
         case "text":
             data = compute_text_data_sets(data_set, schema_type=schema_type)
+        case "scoring":
+            data = compute_scoring_data_sets(data_set, schema_type=schema_type)
         case "hybrid":
             data = compute_hybrid_data_sets()
         case "filter":
@@ -2334,6 +2341,9 @@ def load_data_cluster(cluster_client, test_case, data_set, key_type, data_source
             primary0.execute_command(*create_cmd)
         else:
             primary0.execute_command(create_cmd)
+    from utils import IndexingTestHelper
+    IndexingTestHelper.wait_for_indexing_complete_on_all_nodes(
+        test_case.get_all_primary_clients(), f"{key_type}_idx1")
 
     for key, fields in data[data_set][SETS_KEY(key_type)]:
         if key_type == "hash":

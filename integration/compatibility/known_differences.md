@@ -246,7 +246,34 @@ runs       (@text:running) => { $weight: 2 }        0.47    0.94
 `generate_scoring.py` marks every weighted query on the stemmed `default`
 variant `excluded` (`unsupported_tests.md` §7.1).
 
-### 1.10 What counts as a number in a comparison
+### 1.10 Weight on an OR group with only one non-empty branch
+
+Redis ignores an OR group's `$weight` when only one branch of the OR matches any
+document in the index. A branch is empty if it is a term no document contains, or
+an AND containing such a term. The query then scores as the remaining branch
+alone. valkey-search applies the weight regardless. Measured on `redis:latest`,
+`SCORER BM25STD`, on the `nostem` scoring corpus, for a document containing
+`heavy`. `zzqqxx` is in no document:
+
+```
+query                                        Redis    valkey-search
+heavy                                        1.387    1.387
+(heavy | zzqqxx) => { $weight: 0.5 }         1.387    0.694
+(heavy | zzqqxx) => { $weight: 3.0 }         1.387    4.162
+```
+
+With a second non-empty branch, both engines apply the weight and agree. That
+holds for `(heavy | olive | zzqqxx) => { $weight: 0.5 }`, where `olive` is in
+three documents. Redis's EXPLAINSCORE shows the group's `Weight 0.50` replaced
+by `Weight 1.00` once only one branch is left.
+
+The standalone generators never meet this: every queried term occurs somewhere
+in the corpus. A cluster shard holds only part of the corpus, so a branch is
+often empty there. `generate_scoring_cluster.py` therefore records every query
+that weights an OR group as `excluded`, 764 of 14504 answers. See
+`unsupported_tests.md` §7.2.
+
+### 1.11 What counts as a number in a comparison
 
 A comparison with a numeric operand converts the other operand without falling
 back to comparing strings, and fails the query when it cannot ("Error
@@ -255,32 +282,32 @@ converting string"). Redis's conversion is stricter than valkey-search's
 hex, so `5 < ' 7'` and `5 < '0x10'` are errors on Redis 8 and compare as
 numbers on valkey-search.
 
-### 1.11 Arithmetic on a non-number
+### 1.12 Arithmetic on a non-number
 
 `'abc' + 4` and `lower(@n) + 1` (a null) fail the query on Redis 8 ("Invalid
 numeric value"). valkey-search answers nil and keeps the record.
 
-### 1.12 Chained comparisons
+### 1.13 Chained comparisons
 
 Redis comparisons do not chain: `@a < @b < @c` and `@a == @b == @c` are syntax
 errors. valkey-search parses them left to right, as `(@a < @b) < @c`.
 `test_aggregate_numeric_triadic_operators` produces 36 such commands per key
 type; the harness reports each as a permissiveness warning, not a failure.
 
-### 1.13 An array against a scalar
+### 1.14 An array against a scalar
 
 A comparison between an array (TOLIST, RANDOM_SAMPLE) and a number or string
 keeps valkey-search's generic comparison, which reads the array as the empty
 string. Redis compares the array's first element (see 1.5).
 
-### 1.14 Error messages
+### 1.15 Error messages
 
 Where both engines fail a query on an evaluation error, the messages differ:
 valkey-search's string-function errors name the argument and the expected
 type, but not in Redis's `VALIDATE_ARG__STRING` form. The harness compares only
 that both engines raised.
 
-### 1.15 SORTBY over numbers and non-numeric strings
+### 1.16 SORTBY over numbers and non-numeric strings
 
 Redis 8 fails a SORTBY whose column holds both numbers and strings that do
 not convert to numbers ("Error converting string"), as a `<` between them
@@ -288,7 +315,7 @@ would. valkey-search sorts them, comparing such a pair as strings. Nulls
 (`lower()` of a number) and missing values sort the same on both: a null
 first ascending and last descending, a missing value last either way.
 
-### 1.16 Parameters in expressions
+### 1.17 Parameters in expressions
 
 Redis 8 rejects a `$param` inside an APPLY, FILTER or SORTBY expression
 ("Unknown symbol"). valkey-search accepts it: a parameter whose text is a

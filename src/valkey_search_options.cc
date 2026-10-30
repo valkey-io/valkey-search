@@ -12,6 +12,7 @@
 #include "valkey_search.h"
 #include "version.h"
 #include "vmsdk/src/concurrency.h"
+#include "vmsdk/src/huge_page_allocation.h"
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/thread_pool.h"
 
@@ -185,6 +186,20 @@ constexpr absl::string_view kHNSWValidationEnable{"hnsw-validation-enable"};
 static auto hnsw_validation_enable =
     config::BooleanBuilder(kHNSWValidationEnable, true)  // default true
         .Dev()
+        .Build();
+
+/// Allocate HNSW / FLAT vector index memory (graph and vector storage) in
+/// units of transparent huge pages.
+/// Takes effect only when the server provides the external memory accounting
+/// APIs (Valkey 9.2+), and only for memory allocated after the change. Huge
+/// pages are best effort: with the host THP mode set to "always", Valkey
+/// disables THP for the process unless "disable-thp no" is set.
+constexpr absl::string_view kVectorChunkHugePages{"vector-chunk-huge-pages"};
+static auto vector_chunk_huge_pages =
+    config::BooleanBuilder(kVectorChunkHugePages, true)  // default true
+        .WithModifyCallback([](auto new_value) {
+          vmsdk::SetHugePageAllocationEnabled(new_value);
+        })
         .Build();
 
 // Register an enumerator for the log level

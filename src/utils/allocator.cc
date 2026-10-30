@@ -17,6 +17,7 @@
 #include "absl/base/thread_annotations.h"
 #include "absl/log/check.h"
 #include "absl/synchronization/mutex.h"
+#include "vmsdk/src/huge_page_allocation.h"
 #include "vmsdk/src/sharded_atomic.h"
 
 namespace valkey_search {
@@ -209,11 +210,46 @@ size_t EntriesFitInChunk(size_t size, size_t num_pages) {
   return std::max<size_t>(kChunkBufferMinEntriesPerChunk, total_bytes / size);
 }
 
+namespace {
+// With huge pages, a chunk fills whole huge pages instead of
+// kChunkBufferPages base pages.
+size_t ChunkEntries(bool huge_pages, size_t size) {
+  if (huge_pages) {
+    return std::max<size_t>(kChunkBufferMinEntriesPerChunk,
+                            vmsdk::kHugePageSize / size);
+  }
+  return EntriesFitInChunk(size, kChunkBufferPages);
+}
+
+size_t ChunkDataBytes(bool huge_pages, size_t entries_in_chunk, size_t size) {
+  size_t bytes = BufferSize(entries_in_chunk, size);
+  if (huge_pages) {
+    bytes = (bytes + vmsdk::kHugePageSize - 1) / vmsdk::kHugePageSize *
+            vmsdk::kHugePageSize;
+  }
+  return bytes;
+}
+
+char *AllocateChunkData(bool huge_pages, size_t bytes) {
+  // Note: Using new[] to avoid calling constructor of char[].
+  return huge_pages ? vmsdk::AllocateHugePages(bytes) : new char[bytes];
+}
+}  // namespace
+
+void ChunkDataDeleter::operator()(char *data) const {
+  if (huge_pages) {
+    vmsdk::FreeHugePages(data, bytes);
+  } else {
+    delete[] data;
+  }
+}
+
 AllocatorChunk::AllocatorChunk(Allocator *allocator, size_t size)
-    : entries_in_chunk(EntriesFitInChunk(size, kChunkBufferPages)),
-      // Note: Using new[] to avoid calling constructor of char[].
-      data(std::unique_ptr<char[]>(
-          new char[BufferSize(entries_in_chunk, size)])),
+    : huge_pages(vmsdk::UseHugePageAllocation()),
+      entries_in_chunk(ChunkEntries(huge_pages, size)),
+      data_bytes(ChunkDataBytes(huge_pages, entries_in_chunk, size)),
+      data(AllocateChunkData(huge_pages, data_bytes),
+           ChunkDataDeleter{huge_pages, data_bytes}),
       allocator(allocator) {
   for (size_t i = 0; i < entries_in_chunk; ++i) {
     free_list.push(data.get() + i * size);

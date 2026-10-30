@@ -1,10 +1,12 @@
 #pragma once
 
+#include <algorithm>
 #include <atomic>
 #include <cstdlib>
 
 #include "absl/status/status.h"
 #include "iostream.h"
+#include "vmsdk/src/huge_page_allocation.h"
 
 #ifdef VMSDK_ENABLE_MEMORY_ALLOCATION_OVERRIDES
 #include "vmsdk/src/memory_allocation_overrides.h"  // IWYU pragma: keep
@@ -256,11 +258,23 @@ AlgorithmInterface<dist_t, QueryVectorT, StoredVectorT>::searchKnnCloserFirst(
 
 class ChunkedArray {
  public:
+  // When huge page allocation is available, chunks are sized to fill whole
+  // huge pages and `elements_per_chunk` is ignored.
   ChunkedArray(size_t element_byte_size, size_t elements_per_chunk,
                size_t element_count)
-      : element_byte_size_(element_byte_size),
+      : huge_pages_(vmsdk::UseHugePageAllocation()),
+        element_byte_size_(element_byte_size),
         elements_per_chunk_(elements_per_chunk),
         element_count_(0) {
+    if (huge_pages_) {
+      elements_per_chunk_ =
+          std::max<size_t>(1, vmsdk::kHugePageSize / element_byte_size_);
+      chunk_bytes_ = elements_per_chunk_ * element_byte_size_;
+      chunk_bytes_ = (chunk_bytes_ + vmsdk::kHugePageSize - 1) /
+                     vmsdk::kHugePageSize * vmsdk::kHugePageSize;
+    } else {
+      chunk_bytes_ = elements_per_chunk_ * element_byte_size_;
+    }
     resize(element_count);
   }
 
@@ -275,9 +289,7 @@ class ChunkedArray {
 
   size_t getSizePerElement() const { return element_byte_size_; }
 
-  size_t getSizePerChunk() const {
-    return elements_per_chunk_ * element_byte_size_;
-  }
+  size_t getSizePerChunk() const { return chunk_bytes_; }
 
   char *operator[](size_t i) const {
     assert(i < getCapacity());
@@ -289,7 +301,7 @@ class ChunkedArray {
 
   void clear() {
     for (auto chunk : chunks_) {
-      delete[] chunk;
+      freeChunk(chunk);
     }
     chunks_.clear();
     element_count_.store(0, std::memory_order_relaxed);
@@ -302,7 +314,7 @@ class ChunkedArray {
 
     chunks_.resize(new_chunk_count);
     for (size_t i = chunk_count; i < new_chunk_count; i++) {
-      chunks_[i] = new char[elements_per_chunk_ * element_byte_size_];
+      chunks_[i] = allocateChunk();
       // Note that we don't initialize the memory on purpose. The caller
       // is expected to track the initialization state.
     }
@@ -314,8 +326,24 @@ class ChunkedArray {
     return (element_count + elements_per_chunk_ - 1) / elements_per_chunk_;
   }
 
+  char *allocateChunk() const {
+    return huge_pages_ ? vmsdk::AllocateHugePages(chunk_bytes_)
+                       : new char[chunk_bytes_];
+  }
+
+  void freeChunk(char *chunk) const {
+    if (huge_pages_) {
+      vmsdk::FreeHugePages(chunk, chunk_bytes_);
+    } else {
+      delete[] chunk;
+    }
+  }
+
+  // Fixed at construction so every chunk is freed the way it was allocated.
+  const bool huge_pages_;
   size_t element_byte_size_;
   size_t elements_per_chunk_;
+  size_t chunk_bytes_;
   std::atomic<size_t> element_count_;
   std::deque<char *> chunks_;
 };

@@ -114,6 +114,14 @@ This section describes areas where Valkey Search intentionally diverges from Red
 
 **Migration impact.** Applications that check for `nan` scores should expect `0` instead.
 
+### Word-position queries on an index without offsets
+
+**What differs.** On an index created with `NOOFFSETS`, Valkey Search rejects a quoted phrase of two or more words (`FT.SEARCH` and `FT.AGGREGATE`) and the `INORDER` and `SLOP` arguments (`FT.SEARCH`) with `Index does not support offsets`. Redisearch answers these queries: a quoted phrase matches documents that contain all its words in any order and at any distance, and `INORDER` and `SLOP` are ignored. `FT.AGGREGATE` already ignores `INORDER` and `SLOP` on such an index, as Redisearch does.
+
+**Why.** Such an index stores no word positions, so word order and distance cannot be checked. This is a known defect, not a design choice; it will be removed when the queries are answered as Redisearch answers them.
+
+**Migration impact.** Until then, remove quotes and `INORDER` / `SLOP` from queries against `NOOFFSETS` indexes, or create the index with offsets.
+
 ## Extensions
 
 Valkey Search may extend functionality beyond what Redisearch provides. These extensions take two forms.

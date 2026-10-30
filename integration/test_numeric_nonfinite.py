@@ -12,6 +12,7 @@ In FT.AGGREGATE, an APPLY that yields NaN (sqrt of a negative) sorts after
 every number in both directions, as a missing value does.
 """
 
+import json
 import math
 
 from valkey_search_test_case import ValkeySearchTestCaseBase
@@ -59,6 +60,28 @@ class TestNumericNonFinite(ValkeySearchTestCaseBase):
             assert _count(client, index, "@n:[0 19]") == 20, spelling
             assert client.ping()
 
+    def test_nan_is_invalid_and_leaves_nothing_behind_json(self):
+        client = self.server.get_new_client()
+        for i, spelling in enumerate(NAN_SPELLINGS):
+            index = f"jidx{i}"
+            client.execute_command(
+                "FT.CREATE", index, "ON", "JSON", "PREFIX", "1", index + ":",
+                "SCHEMA", "$.n", "AS", "n", "NUMERIC")
+            valid = set()
+            for v in list(range(20)) + list(range(100, 120)):
+                client.execute_command(
+                    "JSON.SET", f"{index}:{v}", "$", json.dumps({"n": v}))
+                valid.add(f"{index}:{v}")
+            client.execute_command(
+                "JSON.SET", f"{index}:bad", "$", json.dumps({"n": spelling}))
+            client.delete(f"{index}:bad")
+            assert _keys(client, index, "@n:[100 119]") == {
+                f"{index}:{v}" for v in range(100, 120)}, spelling
+            assert _keys(client, index, "@n:[-inf +inf]") == valid, spelling
+            assert _count(client, index, "@n:[-inf +inf]") == 40, spelling
+            assert _count(client, index, "@n:[0 19]") == 20, spelling
+            assert client.ping()
+
     def test_nan_overwrite_drops_the_field(self):
         """The modify path: a valid value overwritten with NaN."""
         client = self.server.get_new_client()
@@ -90,13 +113,12 @@ class TestNumericNonFinite(ValkeySearchTestCaseBase):
 
 class TestSearchSortByNaN(ValkeySearchTestCaseBase):
 
-    def test_sortby_numeric_ignores_nan(self):
+    def test_sortby_numeric_puts_nan_last(self):
         """FT.SEARCH SORTBY on a NUMERIC field whose stored value is a NaN.
 
         Before 1.3.0 an invalid field is treated as missing and the key stays
-        in its other indexes, so the tag query still returns it and SORTBY
-        reads the raw NaN. Parsing must reject it, or it compares as a tie
-        with every value and the numbers are not sorted.
+        in its other indexes, so the tag query still returns it. Its NaN sorts
+        last in both directions, as in FT.AGGREGATE.
         """
         client = self.server.get_new_client()
         client.execute_command(
@@ -105,19 +127,24 @@ class TestSearchSortByNaN(ValkeySearchTestCaseBase):
             "FT.CREATE", "s", "ON", "HASH", "PREFIX", "1", "s:",
             "SCHEMA", "n", "NUMERIC", "t", "TAG")
         numbers = [(i * 37) % 101 for i in range(60)]
+        nan_count = 0
         for i, n in enumerate(numbers):
             client.hset(f"s:{i}", mapping={"n": n, "t": "x"})
             if i % 3 == 1:
                 client.hset(f"s:nan{i}", mapping={"n": "-nan", "t": "x"})
+                nan_count += 1
         for direction in ("ASC", "DESC"):
             result = client.execute_command(
                 "FT.SEARCH", "s", "@t:{x}", "SORTBY", "n", direction,
                 "RETURN", "1", "n", "LIMIT", "0", "200")
-            got = []
-            for key, fields in zip(result[1::2], result[2::2]):
-                if key.decode().startswith("s:nan"):
-                    continue
-                got.append(float(dict(zip(fields[::2], fields[1::2]))[b"n"]))
+            keys = [key.decode() for key in result[1::2]]
+            head = keys[:len(numbers)]
+            tail = keys[len(numbers):]
+            assert all(k.startswith("s:nan") for k in tail), (direction, tail)
+            assert len(tail) == nan_count, direction
+            got = [float(dict(zip(fields[::2], fields[1::2]))[b"n"])
+                   for fields in result[2:2 * len(numbers) + 1:2]]
+            assert not any(k.startswith("s:nan") for k in head), direction
             expected = sorted(numbers, reverse=(direction == "DESC"))
             assert got == expected, (direction, got[:10])
         assert client.ping()

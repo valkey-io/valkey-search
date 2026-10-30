@@ -76,10 +76,8 @@ static inline absl::StatusOr<T> ToNumeric(absl::string_view str) {
       absl::StrCat("`", str, "` is not a valid numeric value"));
 }
 
-// Evaluate if the implementation could rely on ToNumeric
-// SimpleAtod parses many spellings of NaN ("-nan", "+nan", "nan(1)", " nan"),
-// so a NaN is rejected after parsing, from its bits: -ffast-math folds
-// std::isnan to false. Infinities are ordered and stay valid.
+// Bit-level checks, because -ffast-math folds std::isnan and std::isinf to
+// false.
 inline bool IsNaNBits(double d) {
   const uint64_t bits = std::bit_cast<uint64_t>(d);
   return (bits & 0x7FF0000000000000ull) == 0x7FF0000000000000ull &&
@@ -91,6 +89,13 @@ inline bool IsNaNBits(float f) {
   return (bits & 0x7F800000u) == 0x7F800000u && (bits & 0x007FFFFFu) != 0;
 }
 
+inline bool IsInfBits(double d) {
+  const uint64_t bits = std::bit_cast<uint64_t>(d);
+  return (bits & 0x7FF0000000000000ull) == 0x7FF0000000000000ull &&
+         (bits & 0x000FFFFFFFFFFFFFull) == 0;
+}
+
+// Evaluate if the implementation could rely on ToNumeric
 template <>
 inline absl::StatusOr<float> To(absl::string_view str) {
   float value;

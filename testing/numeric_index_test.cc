@@ -108,9 +108,6 @@ TEST_F(NumericIndexTest, DetectsInvalidData) {
   EXPECT_FALSE(index.IsTracked("key4"));
 }
 
-// Every spelling that parses to NaN is invalid data, not just "nan". A NaN in
-// the B-tree is never ordered against other values, so it lands out of order
-// and can never be erased.
 TEST_F(NumericIndexTest, RejectsEveryNaNSpelling) {
   const std::vector<std::string> nans = {"nan",  "NaN",    "-nan", "+nan",
                                          "-NaN", "nan(1)", " nan", "nan "};
@@ -131,7 +128,6 @@ TEST_F(NumericIndexTest, RejectsEveryNaNSpelling) {
   }
 }
 
-// Infinities are ordered values and stay valid numeric data.
 TEST_F(NumericIndexTest, AcceptsInfinities) {
   EXPECT_EQ(index.AddRecordResult("pos", "inf").value(), RecordResult::kAdded);
   EXPECT_EQ(index.AddRecordResult("neg", "-inf").value(), RecordResult::kAdded);
@@ -148,8 +144,6 @@ TEST_F(NumericIndexTest, AcceptsInfinities) {
               testing::UnorderedElementsAre("one"));
 }
 
-// A NaN offered for a key must leave nothing behind: after the key is
-// removed, range searches return only the keys still in the index.
 TEST_F(NumericIndexTest, NaNLeavesNoStaleEntry) {
   for (int i = 0; i < 40; ++i) {
     VMSDK_EXPECT_OK(index.AddRecord("k" + std::to_string(i),

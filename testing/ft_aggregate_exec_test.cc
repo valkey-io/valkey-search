@@ -7,9 +7,9 @@
 #include "src/commands/ft_aggregate_exec.h"
 
 #include <algorithm>
+#include <bit>
 #include <cstdint>
 #include <cstdlib>
-#include <cstring>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -293,28 +293,16 @@ TEST_F(AggregateExecTest, SortTest) {
   }
 }
 
-// The NaN sentinel used by these tests, from its bits: -ffast-math does not
-// guarantee std::numeric_limits<double>::quiet_NaN() or std::isnan.
+// Built from bits: -ffast-math does not guarantee quiet_NaN().
 static double NaNValue() {
-  const uint64_t bits = 0x7FF8000000000000ull;
-  double d;
-  std::memcpy(&d, &bits, sizeof(d));
-  return d;
+  return std::bit_cast<double>(uint64_t{0x7FF8000000000000ull});
 }
 
 static bool IsNaNValue(const expr::Value &v) {
-  if (!v.IsDouble()) {
-    return false;
-  }
-  const double d = v.GetDouble();
-  uint64_t bits;
-  std::memcpy(&bits, &d, sizeof(bits));
-  return (bits & 0x7FF0000000000000ull) == 0x7FF0000000000000ull &&
-         (bits & 0x000FFFFFFFFFFFFFull) != 0;
+  return v.IsDouble() && vmsdk::IsNaNBits(v.GetDouble());
 }
 
-// Sort keys for NaN records: index i holds a NaN when i % 3 == 1, otherwise
-// the number (i * 37) % 101, so the numbers are distinct and out of order.
+// Record i holds NaN when i % 3 == 1, else the number (i * 37) % 101.
 static RecordSet MakeDataWithNaNs(size_t m, std::vector<double> &numbers) {
   RecordSet result(nullptr);
   numbers.clear();
@@ -333,10 +321,7 @@ static RecordSet MakeDataWithNaNs(size_t m, std::vector<double> &numbers) {
   return result;
 }
 
-// A NaN sort key (sqrt(-1), log(-1), 0/0 from APPLY) sorts after every
-// number in both directions, as a missing key does. Treating it as a tie with
-// everything is not a strict weak ordering: the numbers come back unsorted
-// and std::stable_sort's behavior is undefined.
+// A NaN sort key sorts after every number in both directions.
 TEST_F(AggregateExecTest, SortPutsNaNLast) {
   for (size_t m : {8, 100}) {
     for (bool desc : {false, true}) {
@@ -345,8 +330,7 @@ TEST_F(AggregateExecTest, SortPutsNaNLast) {
         auto records = MakeDataWithNaNs(m, numbers);
         const size_t nan_count = m - numbers.size();
         std::string text = absl::StrCat("SORTBY 2 @n1 ", desc ? "DESC" : "ASC");
-        // MAX equal to the record count takes the std::stable_sort path, and
-        // below it the priority_queue path. Without MAX the default keeps 10.
+        // MAX >= record count takes the stable_sort path, else the heap path.
         const size_t keep = use_max ? numbers.size() + nan_count / 2 : m;
         absl::StrAppend(&text, " MAX ", keep);
         SCOPED_TRACE(absl::StrCat(text, " over ", m, " records"));

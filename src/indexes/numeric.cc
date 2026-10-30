@@ -28,16 +28,13 @@
 
 namespace valkey_search::indexes {
 namespace {
-// A NaN is never ordered against other values, so in the B-tree it lands out
-// of order and can never be erased. SimpleAtod parses many spellings of it
-// ("-nan", "+nan", "nan(1)", " nan"), so it is rejected after parsing.
-// Infinities are ordered and stay valid.
+// Rejects NaN: it is unordered, so the B-tree could never erase it.
 std::optional<double> ParseNumber(absl::string_view data) {
-  double value;
-  if (!absl::SimpleAtod(data, &value) || vmsdk::IsNaNBits(value)) {
+  auto value = vmsdk::To<double>(data);
+  if (!value.ok()) {
     return std::nullopt;
   }
-  return value;
+  return *value;
 }
 }  // namespace
 

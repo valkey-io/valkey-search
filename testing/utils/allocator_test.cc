@@ -8,6 +8,8 @@
 #include "src/utils/allocator.h"
 
 #include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <string>
 #include <thread>
 #include <vector>
@@ -15,8 +17,10 @@
 #include "absl/container/flat_hash_set.h"
 #include "gtest/gtest.h"
 #include "src/utils/intrusive_ref_count.h"
+#include "vmsdk/src/huge_page_allocation.h"
 #include "vmsdk/src/sharded_atomic.h"
 #include "vmsdk/src/testing_infra/utils.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
 
@@ -308,6 +312,114 @@ TEST(ShardedAtomicTest, GetNonNegativeTotal) {
   counter.Add(5);
   EXPECT_EQ(counter.GetTotal(), 0);
   EXPECT_EQ(counter.GetNonNegativeTotal(), 0);
+}
+
+size_t external_bytes = 0;
+int external_calls = 0;
+
+int FakeIncrExternalMemory(size_t bytes) {
+  external_bytes += bytes;
+  ++external_calls;
+  return VALKEYMODULE_OK;
+}
+
+int FakeDecrExternalMemory(size_t bytes) {
+  if (bytes > external_bytes) {
+    return VALKEYMODULE_ERR;
+  }
+  external_bytes -= bytes;
+  ++external_calls;
+  return VALKEYMODULE_OK;
+}
+
+class HugePageAllocatorTest : public vmsdk::ValkeyTest {
+ protected:
+  void SetUp() override {
+    vmsdk::ValkeyTest::SetUp();
+    external_bytes = 0;
+    external_calls = 0;
+    ValkeyModule_IncrExternalMemory = &FakeIncrExternalMemory;
+    ValkeyModule_DecrExternalMemory = &FakeDecrExternalMemory;
+  }
+  void TearDown() override {
+    ValkeyModule_IncrExternalMemory = nullptr;
+    ValkeyModule_DecrExternalMemory = nullptr;
+    vmsdk::SetHugePageAllocationEnabled(true);
+    vmsdk::ValkeyTest::TearDown();
+  }
+};
+
+// About the size of a 1024-dim FLOAT32 VectorRecord.
+constexpr size_t kVectorSize = 4104;
+
+TEST_F(HugePageAllocatorTest, ChunksFillHugePages) {
+  ASSERT_TRUE(vmsdk::UseHugePageAllocation());
+  const size_t per_chunk = vmsdk::kHugePageSize / kVectorSize;
+  auto allocator = CREATE_UNIQUE_PTR(FixedSizeAllocator, kVectorSize, true);
+  std::vector<char *> ptrs;
+  for (size_t i = 0; i < 2 * per_chunk + 1; ++i) {
+    char *ptr = allocator->Allocate(kVectorSize);
+    memset(ptr, static_cast<int>(i % 251), kVectorSize);
+    ptrs.push_back(ptr);
+  }
+  EXPECT_EQ(allocator->ChunkCount(), 3);
+  EXPECT_EQ(external_bytes, 3 * vmsdk::kHugePageSize);
+  // Every entry lies on the entry grid of a huge-page-aligned chunk.
+  for (char *ptr : ptrs) {
+    size_t offset = reinterpret_cast<uintptr_t>(ptr) % vmsdk::kHugePageSize;
+    EXPECT_EQ(offset % kVectorSize, 0);
+    EXPECT_LE(offset + kVectorSize, vmsdk::kHugePageSize);
+  }
+  for (size_t i = 0; i < ptrs.size(); ++i) {
+    ASSERT_EQ(static_cast<unsigned char>(ptrs[i][0]), i % 251) << i;
+    ASSERT_EQ(static_cast<unsigned char>(ptrs[i][kVectorSize - 1]), i % 251)
+        << i;
+  }
+  // Emptying the last chunk returns its huge page.
+  Allocator::Free(ptrs.back());
+  ptrs.pop_back();
+  EXPECT_EQ(allocator->ChunkCount(), 2);
+  EXPECT_EQ(external_bytes, 2 * vmsdk::kHugePageSize);
+  for (char *ptr : ptrs) {
+    Allocator::Free(ptr);
+  }
+  EXPECT_EQ(allocator->ChunkCount(), 0);
+  EXPECT_EQ(external_bytes, 0);
+}
+
+TEST_F(HugePageAllocatorTest, FallbackWhenDisabled) {
+  vmsdk::SetHugePageAllocationEnabled(false);
+  auto allocator = CREATE_UNIQUE_PTR(FixedSizeAllocator, kVectorSize, true);
+  std::vector<char *> ptrs;
+  for (size_t i = 0; i < EntriesFitInChunk(kVectorSize, kChunkBufferPages) + 1;
+       ++i) {
+    ptrs.push_back(allocator->Allocate(kVectorSize));
+  }
+  EXPECT_EQ(allocator->ChunkCount(), 2);
+  for (char *ptr : ptrs) {
+    Allocator::Free(ptr);
+  }
+  EXPECT_EQ(external_calls, 0);
+}
+
+// Chunks of both kinds can coexist in one allocator after the config changes,
+// and each is freed the way it was allocated.
+TEST_F(HugePageAllocatorTest, MixedChunks) {
+  auto allocator = CREATE_UNIQUE_PTR(FixedSizeAllocator, kVectorSize, true);
+  std::vector<char *> ptrs;
+  const size_t per_chunk = vmsdk::kHugePageSize / kVectorSize;
+  for (size_t i = 0; i < per_chunk; ++i) {
+    ptrs.push_back(allocator->Allocate(kVectorSize));
+  }
+  vmsdk::SetHugePageAllocationEnabled(false);
+  ptrs.push_back(allocator->Allocate(kVectorSize));
+  EXPECT_EQ(allocator->ChunkCount(), 2);
+  EXPECT_EQ(external_bytes, vmsdk::kHugePageSize);
+  for (char *ptr : ptrs) {
+    Allocator::Free(ptr);
+  }
+  EXPECT_EQ(allocator->ChunkCount(), 0);
+  EXPECT_EQ(external_bytes, 0);
 }
 
 INSTANTIATE_TEST_SUITE_P(AllocatorTests, AllocatorTest,

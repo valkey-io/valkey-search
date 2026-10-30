@@ -223,22 +223,38 @@ absl::Status Filter::Execute(RecordSet &records) const {
   return absl::OkStatus();
 }
 
+// A record with its sort keys, evaluated once before sorting. Every key of
+// every record is evaluated, so whether a key's evaluation error fails the
+// query does not depend on which records happen to tie on an earlier key.
+template <typename T>
+struct KeyedRecord {
+  T record;
+  ArgVector keys;
+};
+
+// Evaluates every sort key of `record`. An evaluation error fails the query,
+// as in APPLY and FILTER.
+static absl::StatusOr<ArgVector> EvaluateSortKeys(
+    const absl::InlinedVector<SortBy::SortKey, 4> &sortkeys,
+    const Record &record) {
+  ArgVector keys;
+  for (auto &sk : sortkeys) {
+    keys.emplace_back(sk.expr_->Evaluate(ctx, record));
+    if (keys.back().IsError()) {
+      return absl::InvalidArgumentError(keys.back().GetNil().GetReason());
+    }
+  }
+  return keys;
+}
+
 template <typename T>
 struct SortFunctor {
   const absl::InlinedVector<SortBy::SortKey, 4> *sortkeys_;
-  // The first evaluation error seen. A comparator cannot fail, so SortBy
-  // reports it once the sort is done: an error fails the query, as in APPLY
-  // and FILTER.
-  absl::Status *error_;
-  bool operator()(const T &l, const T &r) const {
-    for (auto &sk : *sortkeys_) {
-      auto lvalue = sk.expr_->Evaluate(ctx, *l);
-      auto rvalue = sk.expr_->Evaluate(ctx, *r);
-      for (const auto *v : {&lvalue, &rvalue}) {
-        if (v->IsError() && error_->ok()) {
-          *error_ = absl::InvalidArgumentError(v->GetNil().GetReason());
-        }
-      }
+  bool operator()(const KeyedRecord<T> &l, const KeyedRecord<T> &r) const {
+    for (size_t i = 0; i < sortkeys_->size(); ++i) {
+      const auto &sk = (*sortkeys_)[i];
+      const auto &lvalue = l.keys[i];
+      const auto &rvalue = r.keys[i];
       // A record that has no value for this key sorts after one that does,
       // ascending and descending alike, which is what Redisearch does.
       //
@@ -284,18 +300,28 @@ absl::Status SortBy::Execute(RecordSet &records) const {
   if (records.size() > max_) {
     // Sadly std::priority_queue can't operate on unique_ptr's. so we need an
     // extra copy
-    absl::Status error;
-    SortFunctor<Record *> sorter{&sortkeys_, &error};
-    std::priority_queue<Record *, std::vector<Record *>, SortFunctor<Record *>>
-        heap(sorter);
+    using Keyed = KeyedRecord<Record *>;
+    SortFunctor<Record *> sorter{&sortkeys_};
+    std::priority_queue<Keyed, std::vector<Keyed>, SortFunctor<Record *>> heap(
+        sorter);
     absl::Status status = absl::OkStatus();
     size_t polled = 0;
+    // Evaluates the front record's keys and pushes it onto the heap. On an
+    // error the record stays in `records`, where the caller discards it.
+    auto push_front = [&]() {
+      auto keys = EvaluateSortKeys(sortkeys_, *records.front());
+      if (!keys.ok()) {
+        status = keys.status();
+        return;
+      }
+      heap.push(Keyed{records.pop_front().release(), *std::move(keys)});
+    };
     for (auto i = 0; i < max_ && status.ok(); ++i) {
       if (++polled % kCancellationPollInterval == 0) {
         status = CheckCancelled(records);
       }
       if (status.ok()) {
-        heap.push(records.pop_front().release());
+        push_front();
       }
     }
     while (status.ok() && !records.empty()) {
@@ -305,20 +331,22 @@ absl::Status SortBy::Execute(RecordSet &records) const {
           break;
         }
       }
-      heap.push(records.pop_front().release());
-      auto top = RecordPtr(heap.top());  // no leak....
+      push_front();
+      if (!status.ok()) {
+        break;
+      }
+      auto top = RecordPtr(heap.top().record);  // no leak....
       heap.pop();
     }
-    // Drained even when cancelled: the heap holds raw pointers this function
-    // owns, so leaving early without handing them back would leak them. On the
-    // cancelled path the record set is left in whatever order the partial fill
-    // produced, which is fine -- the caller discards it with the error.
+    // Drained even when cancelled or failed: the heap holds raw pointers this
+    // function owns, so leaving early without handing them back would leak
+    // them. On that path the record set is left in whatever order the partial
+    // fill produced, which is fine -- the caller discards it with the error.
     while (!heap.empty()) {
-      records.emplace_front(RecordPtr(heap.top()));
+      records.emplace_front(RecordPtr(heap.top().record));
       heap.pop();
     }
-    VMSDK_RETURN_IF_ERROR(status);
-    return error;
+    return status;
   }
   // A std::stable_sort cannot be interrupted without replacing the comparator
   // or chunking the input, neither of which is worth the cost here, so this
@@ -326,15 +354,23 @@ absl::Status SortBy::Execute(RecordSet &records) const {
   // during the sort is not seen until it finishes. It is bounded by SORTBY's
   // MAX (this branch only runs when the input is already no larger than it).
   VMSDK_RETURN_IF_ERROR(CheckCancelled(records));
-  absl::Status error;
-  SortFunctor<RecordPtr> sorter{&sortkeys_, &error};
-  if (records.size() == 1) {
-    // Nothing to compare it with, so the comparator would never see its keys.
-    sorter(records.front(), records.front());
+  std::vector<KeyedRecord<RecordPtr>> keyed;
+  keyed.reserve(records.size());
+  for (const auto &record : records) {
+    VMSDK_ASSIGN_OR_RETURN(auto keys, EvaluateSortKeys(sortkeys_, *record));
+    keyed.push_back({nullptr, std::move(keys)});
   }
-  std::stable_sort(records.begin(), records.end(), sorter);
+  // Moved only once every key is evaluated, so an error leaves `records` whole.
+  for (size_t i = 0; i < keyed.size(); ++i) {
+    keyed[i].record = std::move(records[i]);
+  }
+  std::stable_sort(keyed.begin(), keyed.end(),
+                   SortFunctor<RecordPtr>{&sortkeys_});
+  for (size_t i = 0; i < keyed.size(); ++i) {
+    records[i] = std::move(keyed[i].record);
+  }
   VMSDK_RETURN_IF_ERROR(CheckCancelled(records));
-  return error;
+  return absl::OkStatus();
 }
 
 // Redisearch treats an array group key as a multi-value field: the record joins

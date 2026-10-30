@@ -249,9 +249,13 @@ TEST_F(AggregateExecTest, EvaluationErrorFailsTheStage) {
   const auto saved = options::GetEmulateRelease().GetValue();
   for (absl::string_view stage :
        {"APPLY strlen(@n1) AS x", "FILTER strlen(@n1)",
-        "GROUPBY 0 REDUCE SUM 1 strlen(@n1) AS s", "SORTBY 1 strlen(@n1)"}) {
-    // One record too: SORTBY has nothing to compare it with.
-    for (size_t count : {1, 2}) {
+        "GROUPBY 0 REDUCE SUM 1 strlen(@n1) AS s", "SORTBY 1 strlen(@n1)",
+        // No two records tie on @n1, so a comparator would never need the
+        // second key; it fails all the same.
+        "SORTBY 4 @n1 ASC strlen(@n1) ASC"}) {
+    // One record too: SORTBY has nothing to compare it with. Twenty is more
+    // than SORTBY's default MAX, which takes its bounded-heap path.
+    for (size_t count : {1, 2, 20}) {
       VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue({1, 3, 0}));
       auto records = MakeData(count);
       auto status = MakeStages(stage)->stages_[0]->Execute(records);

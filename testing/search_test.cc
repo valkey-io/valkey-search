@@ -2315,20 +2315,24 @@ TEST_F(ScoreTextQueryTestBase, UnscopedStemDoesNotReachNoStemField) {
   }
 }
 
-// "runs" is in stemmed title and NOSTEM body; only title may satisfy "run".
+// "runs" is in stemmed title and NOSTEM body: stem "run" may match only the
+// title, exact "runs" both.
 TEST_F(ScoreTextQueryTestBase,
        StemInflectionPositionsDoNotLeakFromNoStemField) {
   auto schema = BuildTwoTextFieldSchema({
       {"d1", "he runs", "runs fast"},
-      {"d2", "he runs fast", ""},
+      {"d2", "he runs fast", "runs"},
       {"d3", "runs slow", "runs fast"},
   });
   const auto *scorer =
       indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std);
-  auto matches = [&](const std::string &key, const TextParsingOptions &opts) {
+  auto matches = [&](absl::string_view text, const std::string &key,
+                     const TextParsingOptions &opts) {
     // The negated range makes the prefilter evaluate the text children.
-    const std::string filter = "-@rating:[500 600] (run fast)";
-    auto parsed = FilterParser(*schema, filter, opts).Parse();
+    auto parsed =
+        FilterParser(*schema, absl::StrCat("-@rating:[500 600] (", text, ")"),
+                     opts)
+            .Parse();
     EXPECT_TRUE(parsed.ok()) << parsed.status();
     query::QueryContext query_ctx(*schema, scorer);
     indexes::PrefilterEvaluator evaluator(query_ctx, parsed->query_operations,
@@ -2337,39 +2341,40 @@ TEST_F(ScoreTextQueryTestBase,
     return evaluator.Evaluate(*parsed->root_predicate,
                               StringInternStore::Intern(key));
   };
-  const TextParsingOptions slop0{.slop = 0};
-  const TextParsingOptions inorder{.inorder = true};
-  EXPECT_FALSE(matches("d1", slop0));
-  EXPECT_FALSE(matches("d1", inorder));
-  EXPECT_TRUE(matches("d2", slop0));
-  EXPECT_TRUE(matches("d2", inorder));
-  EXPECT_FALSE(matches("d3", slop0));
-  EXPECT_FALSE(matches("d3", inorder));
+  for (const TextParsingOptions &opts :
+       {TextParsingOptions{.slop = 0}, TextParsingOptions{.inorder = true}}) {
+    EXPECT_FALSE(matches("run fast", "d1", opts));
+    EXPECT_TRUE(matches("run fast", "d2", opts));
+    EXPECT_FALSE(matches("run fast", "d3", opts));
+    EXPECT_TRUE(matches("runs fast", "d1", opts));
+    EXPECT_TRUE(matches("runs fast", "d3", opts));
+  }
 }
 
 TEST_F(ScoreTextQueryTestBase, StemInflectionIteratorSkipsNoStemPositions) {
-  auto schema = BuildTwoTextFieldSchema(
-      {{"d1", "he runs", "runs fast"}, {"d2", "runs slow", "runs fast"}});
-  TextParsingOptions options{};
-  auto parsed = FilterParser(*schema, "run", options).Parse();
-  ASSERT_TRUE(parsed.ok()) << parsed.status();
-  auto *text_pred =
-      dynamic_cast<query::TextPredicate *>(parsed->root_predicate.get());
-  ASSERT_NE(text_pred, nullptr);
+  auto schema = BuildTwoTextFieldSchema({{"d1", "he runs", "runs fast"}});
   vmsdk::ReaderMutexLock lock(&schema->GetTimeSlicedMutex());
   const FieldMaskPredicate title_mask =
       schema->GetTextIndexSchema()->GetStemTextFieldMask();
-  for (const char *key : {"d1", "d2"}) {
+  auto masks = [&](absl::string_view query) {
+    TextParsingOptions options{};
+    auto parsed = FilterParser(*schema, query, options).Parse();
+    EXPECT_TRUE(parsed.ok()) << parsed.status();
+    auto *text_pred =
+        dynamic_cast<query::TextPredicate *>(parsed->root_predicate.get());
     auto iter = text_pred->BuildTextIterator(
         schema->GetTextIndexSchema()->GetTextIndex(), text_pred->GetFieldMask(),
         /*require_positions=*/true, /*or_weight_multiplier=*/1.0f);
-    ASSERT_TRUE(iter->SeekForwardKey(StringInternStore::Intern(key))) << key;
-    std::vector<FieldMaskPredicate> masks;
+    EXPECT_TRUE(iter->SeekForwardKey(StringInternStore::Intern("d1")));
+    std::vector<FieldMaskPredicate> result;
     for (; !iter->DonePositions(); iter->NextPosition()) {
-      masks.push_back(iter->CurrentFieldMask());
+      result.push_back(iter->CurrentFieldMask());
     }
-    EXPECT_THAT(masks, ::testing::ElementsAre(title_mask)) << key;
-  }
+    return result;
+  };
+  EXPECT_THAT(masks("run"), ::testing::ElementsAre(title_mask));
+  EXPECT_THAT(masks("runs"), ::testing::UnorderedElementsAre(
+                                 title_mask, ::testing::Ne(title_mask)));
 }
 
 // The recompute path walks the same grouped ScoreNode, so field-scoped

@@ -934,9 +934,10 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         client: Valkey = self.server.get_new_client()
         client.execute_command("FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:",
                                "SCHEMA", "title", "TEXT", "body", "TEXT", "NOSTEM", "rating", "NUMERIC")
-        # doc:1 and doc:3 match only through the NOSTEM body.
+        # doc:1 and doc:3 match only through the NOSTEM body. doc:2's NOSTEM body
+        # makes a dropped prefilter mask fail cleanly.
         client.execute_command("HSET", "doc:1", "title", "he runs", "body", "runs fast", "rating", "1")
-        client.execute_command("HSET", "doc:2", "title", "he runs fast", "rating", "1")
+        client.execute_command("HSET", "doc:2", "title", "he runs fast", "body", "runs", "rating", "1")
         client.execute_command("HSET", "doc:3", "title", "runs slow", "body", "runs fast", "rating", "1")
         IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
         # The negated range routes the text through the per-key prefilter path.

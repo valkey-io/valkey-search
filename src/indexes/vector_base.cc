@@ -519,11 +519,6 @@ absl::Status VectorBase::LoadTrackedKeys(
     }
     if (!attribute_val ||
         !IsValidSizeVector(vmsdk::ToStringView(attribute_val.get()))) {
-      // The keyspace no longer holds a valid vector for this key: it expired
-      // before the load, or a delete or update was still queued when the RDB
-      // was saved. Keep the vector loaded from the index content; the
-      // post-load reconciliation (index extension replay, or the stale-entry
-      // scan for V1) removes or re-indexes the key.
       ++keys_without_vector;
       continue;
     }

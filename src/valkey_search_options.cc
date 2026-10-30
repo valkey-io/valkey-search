@@ -904,10 +904,10 @@ config::Version &GetEmulateRelease() {
   return dynamic_cast<config::Version &>(*emulate_release_config);
 }
 
-thread_local int ScopedLatestRelease::depth_ = 0;
+thread_local vmsdk::ValkeyVersion ScopedMinimumRelease::minimum_{0, 0, 0};
 
 bool EnabledInVersion(vmsdk::ValkeyVersion version) {
-  return ScopedLatestRelease::Active() ||
+  return version <= ScopedMinimumRelease::Minimum() ||
          GetEmulateRelease().GetValue() >= version;
 }
 

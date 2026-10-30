@@ -93,8 +93,8 @@ void ConvertVectorArmScoresToSimilarity(std::vector<indexes::Neighbor> &ns,
 // aliases are injected into attribute_contents (see rank_fusion.cc).
 std::vector<indexes::Neighbor> BuildFusedNeighbors(
     MultiSearchParameters &params) {
-  // FT.HYBRID is new in 1.3.0: every compatibility fix applies.
-  options::ScopedLatestRelease latest;
+  // FT.HYBRID is new in 1.3.0, so it emulates at least 1.3.0.
+  options::ScopedMinimumRelease minimum(vmsdk::ValkeyVersion(1, 3, 0));
   std::vector<rank_fusion::ArmInput> arm_inputs;
   arm_inputs.reserve(params.arms.size());
   for (size_t i = 0; i < params.arms.size(); ++i) {
@@ -171,8 +171,8 @@ std::vector<indexes::Neighbor> BuildFusedNeighbors(
 // this point (see the fused-resolution path below), so the aggregate's own
 // ProcessNeighborsForReply finds content present and does not re-fetch.
 void RunAggregateReply(ValkeyModuleCtx *ctx, MultiSearchParameters &params) {
-  // FT.HYBRID is new in 1.3.0: every compatibility fix applies.
-  options::ScopedLatestRelease latest;
+  // FT.HYBRID is new in 1.3.0, so it emulates at least 1.3.0.
+  options::ScopedMinimumRelease minimum(vmsdk::ValkeyVersion(1, 3, 0));
   if (!params.combine_error.ok()) {
     ++Metrics::GetStats().query_failed_requests_cnt;
     ValkeyModule_ReplyWithError(ctx, params.combine_error.message().data());
@@ -729,8 +729,8 @@ namespace query {
 
 absl::Status MultiSearchParameters::ParseAfterIndex(MultiSearchParameters &cmd,
                                                     vmsdk::ArgsIterator &itr) {
-  // FT.HYBRID is new in 1.3.0: every compatibility fix applies.
-  options::ScopedLatestRelease latest;
+  // FT.HYBRID is new in 1.3.0, so it emulates at least 1.3.0.
+  options::ScopedMinimumRelease minimum(vmsdk::ValkeyVersion(1, 3, 0));
   return ParseFtHybridCommand(cmd, itr);
 }
 

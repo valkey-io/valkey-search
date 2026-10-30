@@ -111,7 +111,7 @@ struct AggregateParameters : public expr::Expression::CompileContext,
 
   // Set by FT.HYBRID, which embeds these parameters for its pipeline. Unlike
   // FT.AGGREGATE it is new in 1.3.0, so it has no older release to emulate:
-  // its reply is written under an options::ScopedLatestRelease.
+  // its reply is written under an options::ScopedMinimumRelease.
   bool hybrid_{false};
 
   absl::StatusOr<expr::Value> GetParam(

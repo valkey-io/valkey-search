@@ -2510,8 +2510,8 @@ absl::Status IndexSchema::CompileFilter() {
   if (filter_expression_str_.empty() || compiled_filter_) {
     return absl::OkStatus();
   }
-  // FT.CREATE FILTER is new in 1.3.0: every compatibility fix applies.
-  options::ScopedLatestRelease latest;
+  // FT.CREATE FILTER is new in 1.3.0, so it emulates at least 1.3.0.
+  options::ScopedMinimumRelease minimum(vmsdk::ValkeyVersion(1, 3, 0));
   VMSDK_ASSIGN_OR_RETURN(compiled_filter_, expr::Expression::Compile(
                                                *this, filter_expression_str_));
   return absl::OkStatus();
@@ -2529,8 +2529,8 @@ bool IndexSchema::EvaluateFilter(const MutatedAttributes &mutated_attributes,
   // take the stats by reference and count conversion failures directly.
   FilterRecord record(mutated_attributes, stats_);
   FilterEvalContext eval_ctx(ctx, open_key, key, attribute_data_type_.get());
-  // FT.CREATE FILTER is new in 1.3.0: every compatibility fix applies.
-  options::ScopedLatestRelease latest;
+  // FT.CREATE FILTER is new in 1.3.0, so it emulates at least 1.3.0.
+  options::ScopedMinimumRelease minimum(vmsdk::ValkeyVersion(1, 3, 0));
   auto result = compiled_filter_->Evaluate(eval_ctx, record);
   // Only a definite true admits the document. A missing field already made
   // its comparison false (see FilterFunc* in expr/value.cc), and an

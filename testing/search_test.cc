@@ -2315,6 +2315,68 @@ TEST_F(ScoreTextQueryTestBase, UnscopedStemDoesNotReachNoStemField) {
   }
 }
 
+// "runs" is in stemmed title and NOSTEM body: stem "run" may match only the
+// title, exact "runs" both.
+TEST_F(ScoreTextQueryTestBase,
+       StemInflectionPositionsDoNotLeakFromNoStemField) {
+  auto schema = BuildTwoTextFieldSchema({
+      {"d1", "he runs", "runs fast"},
+      {"d2", "he runs fast", "runs"},
+      {"d3", "runs slow", "runs fast"},
+  });
+  const auto *scorer =
+      indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std);
+  auto matches = [&](absl::string_view text, const std::string &key,
+                     const TextParsingOptions &opts) {
+    // The negated range makes the prefilter evaluate the text children.
+    auto parsed =
+        FilterParser(*schema, absl::StrCat("-@rating:[500 600] (", text, ")"),
+                     opts)
+            .Parse();
+    EXPECT_TRUE(parsed.ok()) << parsed.status();
+    query::QueryContext query_ctx(*schema, scorer);
+    indexes::PrefilterEvaluator evaluator(query_ctx, parsed->query_operations,
+                                          *schema);
+    vmsdk::ReaderMutexLock lock(&schema->GetTimeSlicedMutex());
+    return evaluator.Evaluate(*parsed->root_predicate,
+                              StringInternStore::Intern(key));
+  };
+  for (const TextParsingOptions &opts :
+       {TextParsingOptions{.slop = 0}, TextParsingOptions{.inorder = true}}) {
+    EXPECT_FALSE(matches("run fast", "d1", opts));
+    EXPECT_TRUE(matches("run fast", "d2", opts));
+    EXPECT_FALSE(matches("run fast", "d3", opts));
+    EXPECT_TRUE(matches("runs fast", "d1", opts));
+    EXPECT_TRUE(matches("runs fast", "d3", opts));
+  }
+}
+
+TEST_F(ScoreTextQueryTestBase, StemInflectionIteratorSkipsNoStemPositions) {
+  auto schema = BuildTwoTextFieldSchema({{"d1", "he runs", "runs fast"}});
+  vmsdk::ReaderMutexLock lock(&schema->GetTimeSlicedMutex());
+  const FieldMaskPredicate title_mask =
+      schema->GetTextIndexSchema()->GetStemTextFieldMask();
+  auto masks = [&](absl::string_view query) {
+    TextParsingOptions options{};
+    auto parsed = FilterParser(*schema, query, options).Parse();
+    EXPECT_TRUE(parsed.ok()) << parsed.status();
+    auto *text_pred =
+        dynamic_cast<query::TextPredicate *>(parsed->root_predicate.get());
+    auto iter = text_pred->BuildTextIterator(
+        schema->GetTextIndexSchema()->GetTextIndex(), text_pred->GetFieldMask(),
+        /*require_positions=*/true, /*or_weight_multiplier=*/1.0f);
+    EXPECT_TRUE(iter->SeekForwardKey(StringInternStore::Intern("d1")));
+    std::vector<FieldMaskPredicate> result;
+    for (; !iter->DonePositions(); iter->NextPosition()) {
+      result.push_back(iter->CurrentFieldMask());
+    }
+    return result;
+  };
+  EXPECT_THAT(masks("run"), ::testing::ElementsAre(title_mask));
+  EXPECT_THAT(masks("runs"), ::testing::UnorderedElementsAre(
+                                 title_mask, ::testing::Ne(title_mask)));
+}
+
 // The recompute path walks the same grouped ScoreNode, so field-scoped
 // admission must agree with the extra-step path.
 TEST_F(ScoreTextQueryTestBase, FieldScopedRecomputePathAgrees) {

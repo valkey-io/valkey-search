@@ -1907,6 +1907,143 @@ TEST_F(VectorIndexTest, SaveAndLoadFlatNewKeyGetsUnusedLabel) {
   }
 }
 
+// The keyspace can lack a valid vector for a key the RDB's index section
+// tracks: the key expired before the load, or a delete or update was still
+// queued when the RDB was saved. LoadTrackedKeys must keep the vector from the
+// index content, so searches stay safe until post-load reconciliation removes
+// the key.
+TEST_F(VectorIndexTest, LoadTrackedKeysWithoutKeyspaceVector) {
+  constexpr size_t kLoaded = 10;
+  constexpr size_t kMissingKey = 1;
+  constexpr size_t kInvalidVector = 2;
+  for (auto &distance_metric :
+       {data_model::DISTANCE_METRIC_COSINE, data_model::DISTANCE_METRIC_L2}) {
+    for (bool hnsw : {false, true}) {
+      SCOPED_TRACE(testing::Message() << "distance_metric: " << distance_metric
+                                      << ", hnsw: " << hnsw);
+      FakeSafeRDB rdb;
+      // Scaled basis vectors: every vector's nearest neighbor is itself, under
+      // both metrics.
+      std::vector<std::vector<float>> vectors(kLoaded,
+                                              std::vector<float>(kDimensions));
+      for (size_t i = 0; i < vectors.size(); ++i) {
+        vectors[i][i] = static_cast<float>(i + 1);
+      }
+      data_model::VectorIndex proto =
+          hnsw ? CreateHNSWVectorIndexProto(kDimensions, distance_metric,
+                                            kInitialCap, kM, kEFConstruction,
+                                            kEFRuntime)
+               : CreateFlatVectorIndexProto(kDimensions, distance_metric,
+                                            kInitialCap, kBlockSize);
+      {
+        absl::StatusOr<std::shared_ptr<VectorBase>> index;
+        if (hnsw) {
+          index = VectorHNSW<float>::Create(proto, attribute_identifier,
+                                            attribute_data_type, 0);
+        } else {
+          index = VectorFlat<float>::Create(proto, attribute_identifier,
+                                            attribute_data_type, 0);
+        }
+        VMSDK_EXPECT_OK(index);
+        for (size_t i = 0; i < kLoaded; ++i) {
+          VERIFY_ADD(index->get(), vectors, i, ExpectedResults::kSuccess);
+        }
+        VMSDK_EXPECT_OK((*index)->SaveIndex(RDBChunkOutputStream(&rdb)));
+        VMSDK_EXPECT_OK((*index)->SaveTrackedKeys(RDBChunkOutputStream(&rdb)));
+        proto = (*index)->ToProto()->vector_index();
+      }
+      ValkeyModuleString *records[kLoaded];
+      for (size_t i = 0; i < kLoaded; ++i) {
+        records[i] = new ValkeyModuleString{
+            i == kInvalidVector ? std::string("bad")
+                                : std::string((char *)&vectors[i][0],
+                                              kDimensions * sizeof(float))};
+      }
+      EXPECT_CALL(*kMockValkeyModule,
+                  OpenKey(testing::_, testing::_, testing::_))
+          .WillRepeatedly([](ValkeyModuleCtx *ctx, ValkeyModuleString *key,
+                             int flags) -> ValkeyModuleKey * {
+            if (key->data == IndexToKey(kMissingKey)->Str()) {
+              return nullptr;
+            }
+            return TestValkeyModule_OpenKeyDefaultImpl(ctx, key, flags);
+          });
+      EXPECT_CALL(*kMockValkeyModule,
+                  HashGet(testing::_, VALKEYMODULE_HASH_CFIELDS, testing::_,
+                          testing::An<ValkeyModuleString **>(),
+                          testing::TypedEq<void *>(nullptr)))
+          .WillRepeatedly([&records](ValkeyModuleKey *key, int, const char *,
+                                     ValkeyModuleString **value_out, void *) {
+            auto key_str = absl::string_view(key->key);
+            CHECK(absl::ConsumeSuffix(&key_str, "_key"));
+            int index;
+            CHECK(absl::SimpleAtoi(key_str, &index));
+            *value_out = records[index];
+            ValkeyModule_RetainString(nullptr, records[index]);
+            return VALKEYMODULE_OK;
+          });
+      std::shared_ptr<VectorBase> index;
+      if (hnsw) {
+        auto loaded = VectorHNSW<float>::LoadFromRDB(
+            &fake_ctx_, &hash_attribute_data_type_, proto,
+            "attribute_identifier_2", SupplementalContentChunkIter(&rdb), 0);
+        VMSDK_EXPECT_OK(loaded);
+        index = std::move(loaded.value());
+      } else {
+        auto loaded = VectorFlat<float>::LoadFromRDB(
+            &fake_ctx_, &hash_attribute_data_type_, proto,
+            "attribute_identifier_2", SupplementalContentChunkIter(&rdb), 0);
+        VMSDK_EXPECT_OK(loaded);
+        index = std::move(loaded.value());
+      }
+      VMSDK_EXPECT_OK(
+          index->LoadTrackedKeys(&fake_ctx_, &hash_attribute_data_type_,
+                                 SupplementalContentChunkIter(&rdb)));
+      EXPECT_EQ(index->GetTrackedKeyCount(), kLoaded);
+
+      auto keys_of = [](const std::vector<Neighbor> &neighbors) {
+        std::vector<std::string> keys;
+        keys.reserve(neighbors.size());
+        for (const auto &neighbor : neighbors) {
+          keys.emplace_back(neighbor.external_id->Str());
+        }
+        return keys;
+      };
+      constexpr float kSelfRadius = 0.5f;
+      auto expect_self_match = [&](size_t i) {
+        const std::vector<std::string> self = {
+            std::string(IndexToKey(i)->Str())};
+        absl::string_view query = VectorToStr(vectors[i]);
+        auto knn = index->Search(query, 1, CancelNever());
+        ASSERT_TRUE(knn.ok()) << knn.status();
+        EXPECT_EQ(keys_of(*knn), self) << "KNN, vector " << i;
+        auto range = index->SearchRange(query, kSelfRadius, CancelNever());
+        ASSERT_TRUE(range.ok()) << range.status();
+        EXPECT_EQ(keys_of(*range), self) << "SearchRange, vector " << i;
+      };
+      // The kept vectors stay searchable. On HNSW a null vector in a live node
+      // would crash the graph traversal.
+      for (size_t i = 0; i < kLoaded; ++i) {
+        expect_self_match(i);
+      }
+      // Post-load reconciliation then deletes the keys the keyspace lacks.
+      for (size_t i : {kMissingKey, kInvalidVector}) {
+        VMSDK_EXPECT_OK(
+            index->RemoveRecord(IndexToKey(i), DeletionType::kRecord));
+      }
+      EXPECT_EQ(index->GetTrackedKeyCount(), kLoaded - 2);
+      for (size_t i = 0; i < kLoaded; ++i) {
+        if (i != kMissingKey && i != kInvalidVector) {
+          expect_self_match(i);
+        }
+      }
+      for (auto *record : records) {
+        delete record;
+      }
+    }
+  }
+}
+
 // verify reclaimable_memory is correctly synchronized and writes are not lost
 // lost writes can lead to negative integer underflow issue
 TEST_F(VectorIndexTest, ReclaimableMemoryRaceReturnsToBaseline)

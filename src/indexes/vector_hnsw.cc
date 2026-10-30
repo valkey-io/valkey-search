@@ -117,14 +117,7 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
 
     auto generator = [allocator = index->GetVectorAllocator()](
                          absl::string_view vector_data,
-                         bool is_marked_deleted) {
-      if (!is_marked_deleted) {
-        return VectorRecord(nullptr);
-      }
-      // For normalized indexes, tombstones are saved already normalized (see
-      // AlgoDeleteRecord), so restore them with a reciprocal magnitude of
-      // exactly 1.0; the HNSW distance path relies on this invariant. For
-      // other indexes the magnitude is not used.
+                         [[maybe_unused]] bool is_marked_deleted) {
       return VectorRecord::Construct(
           vector_data, 1.0f, static_cast<FixedSizeAllocator *>(allocator));
     };

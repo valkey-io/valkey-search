@@ -368,6 +368,126 @@ class TestFlatLabelsAfterLoad(ValkeySearchTestCaseDebugMode):
         assert self.search(query) == {**loaded, b"k:1": 1.0}
 
 
+class TestLoadTrackedKeyMissingFromKeyspace(ValkeySearchTestCaseDebugMode):
+    """
+    An RDB's index section can track a key its keyspace section no longer
+    holds: the key expired before the load, or its delete was still in the
+    mutation queue at save time. The load must not crash, and the key must
+    drop out of the index.
+    """
+
+    def info(self) -> FTInfoParser:
+        return FTInfoParser(self.client.execute_command("FT.INFO", "idx"))
+
+    def index_idle(self) -> bool:
+        info = self.info()
+        return info.is_backfill_complete() and info.mutation_queue_size == 0
+
+    def create_and_fill(self, algo: str, metric: str):
+        self.client.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "k:",
+            "SCHEMA", "v", "VECTOR", algo, "6", "TYPE", "FLOAT32", "DIM", "2",
+            "DISTANCE_METRIC", metric,
+        )
+        for i in range(4):
+            self.client.hset(
+                f"k:{i}", mapping={"v": float_to_bytes([float(i), 1.0])})
+        waiters.wait_for_true(self.index_idle)
+
+    def use_rdb_v2(self, enabled: str):
+        # V2 removes the key by replaying the saved key list; V1 by the
+        # stale-entry scan and the backfill that follow the load.
+        self.client.execute_command(
+            "CONFIG", "SET", "search.rdb-write-v2", enabled)
+        self.client.execute_command(
+            "CONFIG", "SET", "search.rdb-read-v2", enabled)
+
+    def reload_and_check(self, expected: set):
+        # NOSAVE loads the RDB written by the test instead of saving the
+        # current state.
+        self.client.execute_command("DEBUG", "RELOAD", "NOSAVE")
+        waiters.wait_for_true(self.index_idle)
+        res = self.client.execute_command(
+            "FT.SEARCH", "idx", "*=>[KNN 10 @v $B]", "NOCONTENT",
+            "PARAMS", "2", "B", float_to_bytes([1.0, 1.0]), "DIALECT", "2",
+        )
+        assert set(res[1:]) == expected
+        # Search results alone could hide a stale entry; check the index too.
+        assert self.info().get_attribute_by_name("v")["index"]["size"] == len(
+            expected)
+
+    @pytest.mark.parametrize("algo", ["FLAT", "HNSW"])
+    @pytest.mark.parametrize("metric", ["L2", "COSINE"])
+    @pytest.mark.parametrize("rdb_v2", ["yes", "no"])
+    def test_key_expired_before_load(self, algo, metric, rdb_v2):
+        self.use_rdb_v2(rdb_v2)
+        self.create_and_fill(algo, metric)
+        self.client.pexpire("k:1", 500)
+        self.client.execute_command("SAVE")
+        # k:1 is saved alive and has expired by the load.
+        time.sleep(1)
+        self.reload_and_check({b"k:0", b"k:2", b"k:3"})
+
+    @pytest.mark.parametrize("algo", ["FLAT", "HNSW"])
+    @pytest.mark.parametrize("metric", ["L2", "COSINE"])
+    @pytest.mark.parametrize("rdb_v2", ["yes", "no"])
+    def test_delete_queued_at_save(self, algo, metric, rdb_v2):
+        self.use_rdb_v2(rdb_v2)
+        self.create_and_fill(algo, metric)
+        self.client.execute_command(
+            "FT._DEBUG", "PAUSEPOINT", "SET", "block_mutation_queue")
+        # Like TestMutationQueue, write from a separate client while the queue
+        # is blocked.
+        deleter = threading.Thread(
+            target=self.server.get_new_client().delete, args=("k:1",))
+        deleter.start()
+        try:
+            waiters.wait_for_true(lambda: self.info().mutation_queue_size == 1)
+            self.client.execute_command("SAVE")
+        finally:
+            self.client.execute_command(
+                "FT._DEBUG", "PAUSEPOINT", "RESET", "block_mutation_queue")
+            deleter.join()
+        self.reload_and_check({b"k:0", b"k:2", b"k:3"})
+
+    @pytest.mark.parametrize("algo", ["FLAT", "HNSW"])
+    @pytest.mark.parametrize("change", ["hdel", "wrong_size"])
+    @pytest.mark.parametrize("rdb_v2", ["yes", "no"])
+    def test_invalid_vector_queued_at_save(self, algo, change, rdb_v2):
+        # The key still exists at load, but its vector is gone or has the wrong
+        # size, so V1 relies on the backfill rather than the stale-entry scan.
+        self.use_rdb_v2(rdb_v2)
+        self.client.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "k:",
+            "SCHEMA", "t", "TAG",
+            "v", "VECTOR", algo, "6", "TYPE", "FLOAT32", "DIM", "2",
+            "DISTANCE_METRIC", "L2",
+        )
+        for i in range(4):
+            self.client.hset(
+                f"k:{i}",
+                mapping={"v": float_to_bytes([float(i), 1.0]), "t": "x"})
+        waiters.wait_for_true(self.index_idle)
+        self.client.execute_command(
+            "FT._DEBUG", "PAUSEPOINT", "SET", "block_mutation_queue")
+        writer_client = self.server.get_new_client()
+        if change == "hdel":
+            writer = threading.Thread(
+                target=writer_client.hdel, args=("k:1", "v"))
+        else:
+            writer = threading.Thread(
+                target=writer_client.hset, args=("k:1", "v", "bad"))
+        writer.start()
+        try:
+            waiters.wait_for_true(lambda: self.info().mutation_queue_size == 1)
+            self.client.execute_command("SAVE")
+        finally:
+            self.client.execute_command(
+                "FT._DEBUG", "PAUSEPOINT", "RESET", "block_mutation_queue")
+            writer.join()
+        self.reload_and_check({b"k:0", b"k:2", b"k:3"})
+
+
 class TestMutationQueue(ValkeySearchTestCaseDebugMode):
     def append_startup_args(self, args):
         args["search.rdb_write_v2"] = "yes"

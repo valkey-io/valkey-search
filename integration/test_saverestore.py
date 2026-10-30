@@ -394,7 +394,15 @@ class TestLoadTrackedKeyMissingFromKeyspace(ValkeySearchTestCaseDebugMode):
                 f"k:{i}", mapping={"v": float_to_bytes([float(i), 1.0])})
         waiters.wait_for_true(self.index_idle)
 
-    def reload_and_get_keys(self) -> set:
+    def use_rdb_v2(self, enabled: str):
+        # V2 removes the key by replaying the saved key list; V1 by the
+        # stale-entry scan and the backfill that follow the load.
+        self.client.execute_command(
+            "CONFIG", "SET", "search.rdb-write-v2", enabled)
+        self.client.execute_command(
+            "CONFIG", "SET", "search.rdb-read-v2", enabled)
+
+    def reload_and_check(self, expected: set):
         # NOSAVE loads the RDB written by the test instead of saving the
         # current state.
         self.client.execute_command("DEBUG", "RELOAD", "NOSAVE")
@@ -403,21 +411,28 @@ class TestLoadTrackedKeyMissingFromKeyspace(ValkeySearchTestCaseDebugMode):
             "FT.SEARCH", "idx", "*=>[KNN 10 @v $B]", "NOCONTENT",
             "PARAMS", "2", "B", float_to_bytes([1.0, 1.0]), "DIALECT", "2",
         )
-        return set(res[1:])
+        assert set(res[1:]) == expected
+        # Search results alone could hide a stale entry; check the index too.
+        assert self.info().get_attribute_by_name("v")["index"]["size"] == len(
+            expected)
 
     @pytest.mark.parametrize("algo", ["FLAT", "HNSW"])
     @pytest.mark.parametrize("metric", ["L2", "COSINE"])
-    def test_key_expired_before_load(self, algo, metric):
+    @pytest.mark.parametrize("rdb_v2", ["yes", "no"])
+    def test_key_expired_before_load(self, algo, metric, rdb_v2):
+        self.use_rdb_v2(rdb_v2)
         self.create_and_fill(algo, metric)
         self.client.pexpire("k:1", 500)
         self.client.execute_command("SAVE")
         # k:1 is saved alive and has expired by the load.
         time.sleep(1)
-        assert self.reload_and_get_keys() == {b"k:0", b"k:2", b"k:3"}
+        self.reload_and_check({b"k:0", b"k:2", b"k:3"})
 
     @pytest.mark.parametrize("algo", ["FLAT", "HNSW"])
     @pytest.mark.parametrize("metric", ["L2", "COSINE"])
-    def test_delete_queued_at_save(self, algo, metric):
+    @pytest.mark.parametrize("rdb_v2", ["yes", "no"])
+    def test_delete_queued_at_save(self, algo, metric, rdb_v2):
+        self.use_rdb_v2(rdb_v2)
         self.create_and_fill(algo, metric)
         self.client.execute_command(
             "FT._DEBUG", "PAUSEPOINT", "SET", "block_mutation_queue")
@@ -433,14 +448,15 @@ class TestLoadTrackedKeyMissingFromKeyspace(ValkeySearchTestCaseDebugMode):
             self.client.execute_command(
                 "FT._DEBUG", "PAUSEPOINT", "RESET", "block_mutation_queue")
             deleter.join()
-        assert self.reload_and_get_keys() == {b"k:0", b"k:2", b"k:3"}
+        self.reload_and_check({b"k:0", b"k:2", b"k:3"})
 
     @pytest.mark.parametrize("algo", ["FLAT", "HNSW"])
     @pytest.mark.parametrize("change", ["hdel", "wrong_size"])
-    @pytest.mark.parametrize("read_v2", ["yes", "no"])
-    def test_invalid_vector_queued_at_save(self, algo, change, read_v2):
+    @pytest.mark.parametrize("rdb_v2", ["yes", "no"])
+    def test_invalid_vector_queued_at_save(self, algo, change, rdb_v2):
         # The key still exists at load, but its vector is gone or has the wrong
-        # size. V2 drops it by replaying the saved key list, V1 by backfilling.
+        # size, so V1 relies on the backfill rather than the stale-entry scan.
+        self.use_rdb_v2(rdb_v2)
         self.client.execute_command(
             "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "k:",
             "SCHEMA", "t", "TAG",
@@ -469,11 +485,7 @@ class TestLoadTrackedKeyMissingFromKeyspace(ValkeySearchTestCaseDebugMode):
             self.client.execute_command(
                 "FT._DEBUG", "PAUSEPOINT", "RESET", "block_mutation_queue")
             writer.join()
-        self.client.execute_command(
-            "CONFIG", "SET", "search.rdb-read-v2", read_v2)
-        assert self.reload_and_get_keys() == {b"k:0", b"k:2", b"k:3"}
-        # Search results alone could hide a stale entry; check the index too.
-        assert self.info().get_attribute_by_name("v")["index"]["size"] == 3
+        self.reload_and_check({b"k:0", b"k:2", b"k:3"})
 
 
 class TestMutationQueue(ValkeySearchTestCaseDebugMode):

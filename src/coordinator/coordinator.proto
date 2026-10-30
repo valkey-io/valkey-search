@@ -90,6 +90,7 @@ message VectorRangePredicate {
   optional double epsilon = 5;
   bytes query_vector = 6;
   string radius_param_name = 7;
+  optional uint32 ef_runtime = 8;
 }
 
 message AndPredicate {

@@ -2060,9 +2060,41 @@ INSTANTIATE_TEST_SUITE_P(
                 "Unexpected argument 'UNKNOWN_PARAM'",
         },
         {
-            .test_name = "vector_range_ef_runtime_ignored",
+            .test_name = "vector_range_ef_runtime",
             .filter = "@vec:[VECTOR_RANGE 1.5 $blob EF_RUNTIME 100]",
             .create_success = true,
+        },
+        {
+            .test_name = "vector_range_ef_runtime_zero",
+            .filter = "@vec:[VECTOR_RANGE 1.5 $blob EF_RUNTIME 0]",
+            .create_success = false,
+            .create_expected_error_message =
+                "`EF_RUNTIME` must be a positive integer greater than 0 and "
+                "cannot exceed 1000000.",
+        },
+        {
+            .test_name = "vector_range_ef_runtime_non_integer",
+            .filter = "@vec:[VECTOR_RANGE 1.5 $blob EF_RUNTIME abc]",
+            .create_success = false,
+            .create_expected_error_message =
+                "`EF_RUNTIME` must be a positive integer greater than 0 and "
+                "cannot exceed 1000000.",
+        },
+        {
+            .test_name = "vector_range_ef_runtime_negative",
+            .filter = "@vec:[VECTOR_RANGE 1.5 $blob EF_RUNTIME -5]",
+            .create_success = false,
+            .create_expected_error_message =
+                "`EF_RUNTIME` must be a positive integer greater than 0 and "
+                "cannot exceed 1000000.",
+        },
+        {
+            .test_name = "vector_range_ef_runtime_above_max",
+            .filter = "@vec:[VECTOR_RANGE 1.5 $blob EF_RUNTIME 1000001]",
+            .create_success = false,
+            .create_expected_error_message =
+                "`EF_RUNTIME` must be a positive integer greater than 0 and "
+                "cannot exceed 1000000.",
         },
         {
             .test_name = "vector_range_empty_yield_distance_as",

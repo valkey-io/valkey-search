@@ -454,7 +454,9 @@ class VectorBase : public IndexBase {
   size_t GetVectorDataSize() const { return GetDataTypeSize() * dimensions_; }
 
   // Returns the neighbors within `radius` of `query`, unordered. FLAT scans
-  // every vector and ignores `epsilon`. HNSW also walks through nodes within
+  // every vector and ignores `epsilon` and `ef_runtime`. HNSW homes in on the
+  // query with an `ef_runtime`-wide beam, defaulting to the field's
+  // EF_RUNTIME. HNSW also walks through nodes within
   // radius * (1 + epsilon), without emitting them; it falls back to
   // SearchRangeExhaustive when its fetch of
   // search.max-nonvector-search-results-fetched candidates fills within
@@ -462,7 +464,8 @@ class VectorBase : public IndexBase {
   virtual absl::StatusOr<std::vector<Neighbor>> SearchRange(
       absl::string_view query, float radius, cancel::Token &cancellation_token,
       float epsilon,
-      std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr) = 0;
+      std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr,
+      std::optional<size_t> ef_runtime = std::nullopt) = 0;
 
   // Distance and internal label for `key`, or an error if untracked. Backs
   // IsWithinVectorRange. Search-phase only: lock-free, like

@@ -24,6 +24,7 @@
 #include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
+#include "src/commands/ft_create_parser.h"
 #include "src/index_schema.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
@@ -417,8 +418,8 @@ absl::StatusOr<std::unique_ptr<query::VectorRangePredicate>>
 FilterParser::ParseVectorRangePredicate(const std::string& attribute_alias) {
   // At entry: "@<attribute_alias>:[VECTOR_RANGE" has already been consumed by
   // ParseExpression. We now parse the remainder of the bracket contents:
-  //   <radius> $<blob_param> [AS <name>] ]
-  // (EF_RUNTIME is parsed and ignored), followed by optional suffix
+  //   <radius> $<blob_param> [EF_RUNTIME <ef>] [AS <name>] ]
+  // followed by optional suffix
   // query attributes: ]=>{$yield_distance_as: ...}
   auto index = index_schema_.GetIndex(attribute_alias);
   if (!index.ok()) {
@@ -470,16 +471,26 @@ FilterParser::ParseVectorRangePredicate(const std::string& attribute_alias) {
   // Parse optional parameters: EF_RUNTIME <value>, AS <name>
   std::optional<std::string> score_as;
   std::optional<double> epsilon;
+  std::optional<size_t> ef_runtime;
   SkipWhitespace();
   while (!IsEnd() && Peek() != ']') {
     // Try to match known optional parameter keywords
     if (MatchInsensitive("EF_RUNTIME")) {
-      // Parsed and ignored: the HNSW field's configured EF_RUNTIME supplies
-      // the initial range beam. search.max-nonvector-search-results-fetched
+      // Overrides the HNSW field's EF_RUNTIME for the initial range beam;
+      // FLAT ignores it. search.max-nonvector-search-results-fetched
       // separately caps shell candidates and triggers exact fallback.
       VMSDK_ASSIGN_OR_RETURN(auto ef_value,
                              ParseToken("]", "EF_RUNTIME argument is missing"));
-      (void)ef_value;
+      const auto max_ef_runtime = options::GetMaxEfRuntime().GetValue();
+      uint64_t ef = 0;
+      if (!absl::SimpleAtoi(ef_value, &ef) || ef < 1 ||
+          ef > static_cast<uint64_t>(max_ef_runtime)) {
+        return absl::InvalidArgumentError(absl::StrCat(
+            "`EF_RUNTIME` must be a positive integer greater than 0 and "
+            "cannot exceed ",
+            max_ef_runtime, "."));
+      }
+      ef_runtime = ef;
     } else if (MatchInsensitive("AS")) {
       VMSDK_ASSIGN_OR_RETURN(auto as_name,
                              ParseToken("]", "AS argument is missing"));
@@ -538,6 +549,7 @@ FilterParser::ParseVectorRangePredicate(const std::string& attribute_alias) {
   if (!radius_param_name.empty()) {
     predicate->SetRadiusParamName(std::move(radius_param_name));
   }
+  predicate->SetEfRuntime(ef_runtime);
   return predicate;
 }
 

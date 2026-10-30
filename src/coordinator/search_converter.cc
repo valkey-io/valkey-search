@@ -328,6 +328,9 @@ static absl::StatusOr<std::unique_ptr<query::Predicate>> BuildPredicateFromGRPC(
       if (!vr.radius_param_name().empty()) {
         vr_predicate->SetRadiusParamName(vr.radius_param_name());
       }
+      if (vr.has_ef_runtime()) {
+        vr_predicate->SetEfRuntime(vr.ef_runtime());
+      }
       return vr_predicate;
     }
     case Predicate::PREDICATE_NOT_SET:
@@ -559,6 +562,10 @@ static std::unique_ptr<Predicate> BuildGRPCPredicate(
       if (!vr_predicate->GetRadiusParamName().empty()) {
         proto->mutable_vector_range()->set_radius_param_name(
             std::string(vr_predicate->GetRadiusParamName()));
+      }
+      if (vr_predicate->GetEfRuntime().has_value()) {
+        proto->mutable_vector_range()->set_ef_runtime(
+            vr_predicate->GetEfRuntime().value());
       }
       return proto;
     }

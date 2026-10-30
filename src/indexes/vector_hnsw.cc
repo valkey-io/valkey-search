@@ -473,7 +473,8 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
 template <typename T>
 absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
     absl::string_view query, float radius, cancel::Token &cancellation_token,
-    float epsilon, std::unique_ptr<hnswlib::BaseFilterFunctor> filter) {
+    float epsilon, std::unique_ptr<hnswlib::BaseFilterFunctor> filter,
+    std::optional<size_t> ef_runtime) {
   VMSDK_ASSIGN_OR_RETURN(radius,
                          this->ValidateRangeSearchInputs(query, radius));
   const size_t max_candidates = static_cast<size_t>(
@@ -508,7 +509,8 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
                         nq.view.size(), normalize_, GetVectorDataType());
   std::vector<std::pair<float, hnswlib::labeltype>> raw_results;
   RangeStopCondition stop_condition(ComputeRangeShell(radius, epsilon),
-                                    GetEfRuntime(), max_candidates);
+                                    ef_runtime.value_or(GetEfRuntime()),
+                                    max_candidates);
   try {
     CancelCondition cancel_condition(cancellation_token);
     raw_results = algo_->searchStopConditionClosest(

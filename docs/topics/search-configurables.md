@@ -44,7 +44,7 @@ The search module uses the Valkey configuration mechanism. Thus each of the name
 | search.max-vector-dimensions                  | Number  |               | Controls the max dimensions for vector indices                                                                                    |
 | search.max-vector-m                           | Number  |               | Controls the max M parameter for HNSW algorithm                                                                                   |
 | search.max-vector-ef-construction             | Number  |               | Controls the max EF construction parameter for HNSW algorithm                                                                     |
-| search.max-vector-ef-runtime                  | Number  |               | Controls the max EF runtime parameter for HNSW algorithm                                                                          |
+| search.max-vector-ef-runtime                  | Number  |    1000000    | Maximum `EF_RUNTIME` accepted for an HNSW field or per-query KNN/`VECTOR_RANGE` override; valid range 1–1,000,000                    |
 | search.default-timeout-ms                     | Number  |               | Controls the default timeout in milliseconds for FT.SEARCH                                                                        |
 | search.max-timeout-ms                         | Number  |               | Controls the maximum allowed TIMEOUT value, in milliseconds, for FT.SEARCH and FT.AGGREGATE                                       |
 | search.max-search-result-record-size          | Number  |               | Controls the max content size for a record in the search response                                                                 |

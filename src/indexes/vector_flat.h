@@ -92,7 +92,8 @@ class VectorFlat : public VectorType<T> {
   absl::StatusOr<std::vector<Neighbor>> SearchRange(
       absl::string_view query, float radius, cancel::Token &cancellation_token,
       float epsilon,
-      std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr) override
+      std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr,
+      std::optional<size_t> ef_runtime = std::nullopt) override
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
  protected:

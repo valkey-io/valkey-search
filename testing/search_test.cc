@@ -1585,15 +1585,17 @@ TEST_F(GetVrScoreFieldNameTest, SingleVrUnderComposedAnd) {
   EXPECT_EQ(query::GetVrScoreFieldName(params), "dist");
 }
 
-// $EPSILON reaches the HNSW range walk, alone and under AND. The layout is the
-// one of SearchRangeFp32.HnswRangeReachesKeysThroughTheEpsilonShell: the graph
-// is the path start - bridge - target (M 2), the walk enters at start, and with
+// $EPSILON and EF_RUNTIME reach the HNSW range walk, alone and under AND. The
+// layout is the one of
+// SearchRangeFp32.HnswRangeReachesKeysThroughTheEpsilonShell: the graph is the
+// path start - bridge - target (M 2), the walk enters at start, and with field
 // EF_RUNTIME 1 it takes bridge, outside the radius (squared distance 1.44
-// against 1), as a candidate only when bridge is within radius * (1 + epsilon).
-// The query finds target with $EPSILON 0.5, and not with the default 0.01.
-// Under AND the walk's result is the candidate set only while it is smaller
-// than the tag's (all three keys); the default-epsilon AND query missing target
-// shows that it is.
+// against 1), as a candidate only when bridge is within radius * (1 + epsilon)
+// or the per-query EF_RUNTIME widens the locate beam. The query finds target
+// with $EPSILON 0.5 or EF_RUNTIME 2, and not with the default epsilon and field
+// EF_RUNTIME 1. Under AND the walk's result is the candidate set only while it
+// is smaller than the tag's (all three keys); the default-control AND query
+// missing target shows that it is.
 TEST_F(ValkeySearchTest, VectorRangeEpsilonReachesTheHnswWalk) {
   auto schema = CreateIndexSchema(kIndexSchemaName).value();
   EXPECT_CALL(*schema, GetIdentifier(::testing::_))
@@ -1665,6 +1667,10 @@ TEST_F(ValkeySearchTest, VectorRangeEpsilonReachesTheHnswWalk) {
               ::testing::SizeIs(1))
       << "the AND did not take the walk's result as its candidate set, the "
          "walk entered at bridge rather than start, or it did not stop";
+  EXPECT_THAT(search("@vector:[VECTOR_RANGE 1 $q EF_RUNTIME 2]"),
+              ::testing::ElementsAre("start", "target"));
+  EXPECT_THAT(search("@vector:[VECTOR_RANGE 1 $q EF_RUNTIME 2] @tag:{a}"),
+              ::testing::ElementsAre("start", "target"));
 }
 
 TEST_F(ValkeySearchTest, CompoundVectorRangeOrProcessesEveryFetcherPastCap)

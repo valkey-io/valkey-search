@@ -283,7 +283,8 @@ float VectorFlat<T>::ComputeDistance(absl::string_view query,
 template <typename T>
 absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::SearchRange(
     absl::string_view query, float radius, cancel::Token &cancellation_token,
-    float /*epsilon*/, std::unique_ptr<hnswlib::BaseFilterFunctor> filter) {
+    float /*epsilon*/, std::unique_ptr<hnswlib::BaseFilterFunctor> filter,
+    std::optional<size_t> /*ef_runtime*/) {
   VMSDK_ASSIGN_OR_RETURN(radius,
                          this->ValidateRangeSearchInputs(query, radius));
   auto nq = this->NormalizeQueryIfNeeded(query);

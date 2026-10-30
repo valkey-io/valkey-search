@@ -273,6 +273,11 @@ class VectorRangePredicate : public Predicate {
     score_as_ = std::move(score_as);
   }
   void SetEpsilon(std::optional<double> epsilon) { epsilon_ = epsilon; }
+  // Per-query HNSW beam; nullopt uses the field's EF_RUNTIME.
+  std::optional<size_t> GetEfRuntime() const { return ef_runtime_; }
+  void SetEfRuntime(std::optional<size_t> ef_runtime) {
+    ef_runtime_ = ef_runtime;
+  }
   // An infinite radius, or one too large for a float, is stored as the
   // largest float. It matches every finite distance, while the +inf that
   // VectorBase::ClampCosineDistance reports for a NaN or +inf distance stays
@@ -296,6 +301,7 @@ class VectorRangePredicate : public Predicate {
   std::string vector_param_name_;
   std::optional<std::string> score_as_;
   std::optional<double> epsilon_;
+  std::optional<size_t> ef_runtime_;
   std::string query_vector_;
   std::string radius_param_name_;  // non-empty when radius is a $param
 };

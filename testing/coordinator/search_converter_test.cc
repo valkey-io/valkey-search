@@ -337,6 +337,30 @@ TEST_F(SearchConverterTest, RejectsMalformedVectorRangeInputs) {
   EXPECT_EQ(vr->GetRadius(), std::numeric_limits<float>::max());
 }
 
+// A per-query VECTOR_RANGE EF_RUNTIME must reach the shard, and its absence
+// must stay absent so the shard uses the field's EF_RUNTIME.
+TEST_F(SearchConverterTest, VectorRangeEfRuntimeRoundTrips) {
+  auto index = indexes::VectorHNSW<float>::Create(
+                   CreateHNSWVectorIndexProto(2, data_model::DISTANCE_METRIC_L2,
+                                              10, 16, 200, 10),
+                   "vec", data_model::ATTRIBUTE_DATA_TYPE_HASH, 0)
+                   .value();
+  VMSDK_EXPECT_OK(index_schema_->AddIndex("vec", "vec", index));
+  const std::vector<float> query = {0.0f, 0.0f};
+  for (const std::optional<size_t> ef :
+       {std::optional<size_t>(), std::optional<size_t>(50)}) {
+    query::VectorRangePredicate predicate("vec", "vec", 1.0, "blob",
+                                          std::nullopt, std::nullopt);
+    predicate.SetQueryVector(std::string(VectorToStr(query)));
+    predicate.SetEfRuntime(ef);
+    std::unique_ptr<query::Predicate> decoded;
+    RoundTripIdentifiers(predicate, &decoded);
+    auto* vr = dynamic_cast<query::VectorRangePredicate*>(decoded.get());
+    ASSERT_NE(vr, nullptr);
+    EXPECT_EQ(vr->GetEfRuntime(), ef);
+  }
+}
+
 // Older nodes accept $epsilon values such as inf, nan and 1e40 and forward them
 // unchecked. A shard decoding one must answer an HNSW range query exactly.
 TEST_F(SearchConverterTest, VectorRangeOutOfRangeEpsilonSearchesExactly) {

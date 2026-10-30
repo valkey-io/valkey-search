@@ -1586,16 +1586,14 @@ TEST_F(GetVrScoreFieldNameTest, SingleVrUnderComposedAnd) {
 }
 
 // $EPSILON and EF_RUNTIME reach the HNSW range walk, alone and under AND. The
-// layout is the one of
-// SearchRangeFp32.HnswRangeReachesKeysThroughTheEpsilonShell: the graph is the
-// path start - bridge - target (M 2), the walk enters at start, and with field
-// EF_RUNTIME 1 it takes bridge, outside the radius (squared distance 1.44
-// against 1), as a candidate only when bridge is within radius * (1 + epsilon)
-// or the per-query EF_RUNTIME widens the locate beam. The query finds target
-// with $EPSILON 0.5 or EF_RUNTIME 2, and not with the default epsilon and field
-// EF_RUNTIME 1. Under AND the walk's result is the candidate set only while it
-// is smaller than the tag's (all three keys); the default-control AND query
-// missing target shows that it is.
+// graph is the path start - bridge-1 - bridge-2 - target (M 2), with field
+// EF_RUNTIME 1. Both bridges have squared distance 1.53 from the query against
+// radius 1. The first bridge fills the one-entry outside-shell beam and the
+// equal-distance second bridge cannot improve it, so the default shell misses
+// target. $EPSILON 0.6 puts both bridges in the shell; alternatively,
+// EF_RUNTIME 2 admits both to the beam. Under AND the walk's result is the
+// candidate set only while it is smaller than the tag's (all four keys); the
+// default-control AND query missing target shows that it is.
 TEST_F(ValkeySearchTest, VectorRangeEpsilonReachesTheHnswWalk) {
   auto schema = CreateIndexSchema(kIndexSchemaName).value();
   EXPECT_CALL(*schema, GetIdentifier(::testing::_))
@@ -1603,7 +1601,7 @@ TEST_F(ValkeySearchTest, VectorRangeEpsilonReachesTheHnswWalk) {
   auto vector_index =
       indexes::VectorHNSW<float>::Create(
           CreateHNSWVectorIndexProto(kVectorDimensions,
-                                     data_model::DISTANCE_METRIC_L2, 3,
+                                     data_model::DISTANCE_METRIC_L2, 4,
                                      /*m=*/2, 200, /*ef_runtime=*/1),
           "vector_attribute_identifier",
           data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
@@ -1616,7 +1614,8 @@ TEST_F(ValkeySearchTest, VectorRangeEpsilonReachesTheHnswWalk) {
   // Inserted first, start is the entry point.
   const std::pair<const char *, std::pair<float, float>> kKeys[] = {
       {"start", {-0.9f, 0.0f}},
-      {"bridge", {0.0f, 1.2f}},
+      {"bridge-1", {-0.3f, 1.2f}},
+      {"bridge-2", {0.3f, 1.2f}},
       {"target", {0.9f, 0.0f}}};
   for (const auto &[key, xy] : kKeys) {
     std::vector<float> v(kVectorDimensions, 0.0f);
@@ -1657,11 +1656,11 @@ TEST_F(ValkeySearchTest, VectorRangeEpsilonReachesTheHnswWalk) {
     }
     return keys;
   };
-  EXPECT_THAT(search("@vector:[VECTOR_RANGE 1 $q]=>{$EPSILON: 0.5}"),
+  EXPECT_THAT(search("@vector:[VECTOR_RANGE 1 $q]=>{$EPSILON: 0.6}"),
               ::testing::ElementsAre("start", "target"));
   EXPECT_THAT(search("@vector:[VECTOR_RANGE 1 $q]"), ::testing::SizeIs(1))
       << "the walk entered at bridge rather than start, or did not stop";
-  EXPECT_THAT(search("@vector:[VECTOR_RANGE 1 $q]=>{$EPSILON: 0.5} @tag:{a}"),
+  EXPECT_THAT(search("@vector:[VECTOR_RANGE 1 $q]=>{$EPSILON: 0.6} @tag:{a}"),
               ::testing::ElementsAre("start", "target"));
   EXPECT_THAT(search("@vector:[VECTOR_RANGE 1 $q] @tag:{a}"),
               ::testing::SizeIs(1))

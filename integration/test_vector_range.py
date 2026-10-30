@@ -2368,12 +2368,12 @@ class TestVectorRangeCluster(ValkeySearchClusterTestCase):
         The coordinator owns no documents. Each other primary owns 10k vectors,
         and the two clouds are far apart so each query's 10-key ball is served
         by one remote shard. If the optional predicate field is lost in fanout,
-        EF_RUNTIME 50 behaves like the field default of 5 and this test fails.
+        EF_RUNTIME 50 behaves like the field default of 1 and this test fails.
         """
         cluster_client = self.new_cluster_client()
         keys_per_shard = 10000
         dim = 32
-        field_ef = 5
+        field_ef = 1
         flat_index, hnsw_index = create_range_indexes(
             cluster_client, "L2", prefix="ef:", dim=dim,
             ef_runtime=field_ef)

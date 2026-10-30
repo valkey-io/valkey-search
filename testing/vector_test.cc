@@ -1125,6 +1125,35 @@ class SearchRangeTest : public VectorIndexTest {
       }
     }
   }
+
+  void KeepsBeamOutsideTheShell() ABSL_NO_THREAD_SAFETY_ANALYSIS {
+    auto created = VectorHNSW<T>::Create(
+        CreateHNSWVectorIndexProto(kDims, data_model::DISTANCE_METRIC_L2, 3,
+                                   /*m=*/2, 200, /*ef_runtime=*/1),
+        this->attribute_identifier, this->attribute_data_type, 0);
+    ASSERT_TRUE(created.ok()) << created.status();
+    auto &index = **created;
+    const std::pair<const char *, std::pair<float, float>> kKeys[] = {
+        {"start", {-0.9f, 0.0f}},
+        {"bridge", {0.0f, 1.2f}},
+        {"target", {0.9f, 0.0f}}};
+    for (const auto &[key, xy] : kKeys) {
+      std::vector<float> v(kDims, 0.0f);
+      v[0] = xy.first;
+      v[1] = xy.second;
+      VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(
+          index, StringInternStore::Intern(key), Bytes(v)));
+    }
+    const std::string query = Bytes(std::vector<float>(kDims, 0.0f));
+    constexpr float kRadius = 1.0f;
+    const auto expected = PerKeyReference(index, query, kRadius);
+    ASSERT_EQ(expected.size(), 2u);
+
+    auto searched =
+        index.SearchRange(query, kRadius, CancelNever(), /*epsilon=*/0.0f);
+    ASSERT_TRUE(searched.ok()) << searched.status();
+    EXPECT_EQ(ToMap(*searched), expected);
+  }
 };
 
 using SearchRangeFp32 = SearchRangeTest<float>;
@@ -1200,16 +1229,13 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   }
 }
 
-// A fetch that fills within radius * (1 + epsilon) is answered by the
-// exhaustive scan even when its farthest result is outside the radius: the walk
-// expands no node past that result, so keys in range behind it can be missed.
-// With M 2, hnswlib's neighbor heuristic drops start as target's neighbor
-// (start is nearer to bridge than to target), so the graph is the path start -
-// bridge - target, and start, inserted first, is the entry point (the level
-// generator is seeded). Squared distances from the query: start 1.44, in the
-// shell of radius 1.43 and the default epsilon; bridge 1.53, beyond it; target
-// 0.36, in the ball. A cap of 1 fills with start, so the walk never reaches
-// target.
+// A fetch that fills within radius * (1 + epsilon) is answered by an exhaustive
+// scan even when its retained result is outside the result radius. With M 2,
+// the graph is the path start - bridge - target and start is the entry point.
+// Squared distances from the query: start 1.44, in the shell of radius 1.43 and
+// the default epsilon; bridge 1.53, beyond it; target 0.36, in the ball. A cap
+// of 1 fills with start, so the fallback must return target and increment the
+// fetch-limited counter.
 TEST_F(SearchRangeFp32, HnswScansWhenTheFetchFillsWithinTheShell)
 ABSL_NO_THREAD_SAFETY_ANALYSIS {
   auto created = VectorHNSW<float>::Create(
@@ -1238,12 +1264,6 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   ASSERT_EQ(expected.size(), 1u);
   ASSERT_TRUE(expected.contains("target"));
 
-  // Below the cap the walk's result stands; this layout hides target from it.
-  auto walked = index.SearchRange(query, kRadius, CancelNever(), kEpsilon);
-  ASSERT_TRUE(walked.ok()) << walked.status();
-  ASSERT_TRUE(walked->empty())
-      << "the walk reached target: start is not the entry point";
-
   auto &fetch_cap = options::GetMaxNonVectorSearchResultsFetched();
   const auto saved_cap = fetch_cap.GetValue();
   absl::Cleanup restore = [&] {
@@ -1252,7 +1272,8 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   VMSDK_EXPECT_OK(fetch_cap.SetValue(1));
   const int64_t counter_before =
       query::GetNonVectorResultsFetchedLimitedCount();
-  auto searched = index.SearchRange(query, kRadius, CancelNever(), kEpsilon);
+  auto searched = index.SearchRange(query, kRadius, CancelNever(), kEpsilon,
+                                    /*filter=*/nullptr, /*ef_runtime=*/10);
   ASSERT_TRUE(searched.ok()) << searched.status();
   EXPECT_EQ(ToMap(*searched), expected);
   EXPECT_EQ(query::GetNonVectorResultsFetchedLimitedCount(),
@@ -1613,27 +1634,26 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
 }
 
 // The range walk reaches keys in range through nodes in the shell between
-// radius and radius * (1 + epsilon). With M 2, hnswlib's neighbor heuristic
-// keeps bridge and drops start as target's neighbor (start is nearer to bridge
-// than to target), so the graph is the path start - bridge - target. hnswlib's
-// level generator, seeded with 100, draws level 2 for the first insert (start)
-// and level 0 for the other two (libstdc++'s default_random_engine), so start
-// is the entry point. With ef_runtime 1 the beam, holding start, does not take
-// bridge, outside the radius, as a candidate: the walk reaches target only when
-// epsilon puts bridge in the shell.
+// radius and radius * (1 + epsilon). With M 2, the graph is the path start -
+// bridge-1 - bridge-2 - target and start is the entry point. Both bridges have
+// equal squared distance 1.53 from the query against radius 1. With ef_runtime
+// 1, the first bridge fills the outside-shell beam and the second cannot
+// improve it, so target is reached only when epsilon 0.6 puts both bridges in
+// the shell.
 TEST_F(SearchRangeFp32, HnswRangeReachesKeysThroughTheEpsilonShell)
 ABSL_NO_THREAD_SAFETY_ANALYSIS {
   auto created = VectorHNSW<float>::Create(
-      CreateHNSWVectorIndexProto(kDims, data_model::DISTANCE_METRIC_L2, 3,
+      CreateHNSWVectorIndexProto(kDims, data_model::DISTANCE_METRIC_L2, 4,
                                  /*m=*/2, 200, /*ef_runtime=*/1),
       attribute_identifier, attribute_data_type, 0);
   ASSERT_TRUE(created.ok()) << created.status();
   auto &index = **created;
   // Squared distances from the query, the origin: start and target 0.81,
-  // bridge 1.44; radius 1.
+  // both bridges 1.53; radius 1.
   const std::pair<const char *, std::pair<float, float>> kKeys[] = {
       {"start", {-0.9f, 0.0f}},
-      {"bridge", {0.0f, 1.2f}},
+      {"bridge-1", {-0.3f, 1.2f}},
+      {"bridge-2", {0.3f, 1.2f}},
       {"target", {0.9f, 0.0f}}};
   for (const auto &[key, xy] : kKeys) {
     std::vector<float> v(kDims, 0.0f);
@@ -1648,7 +1668,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   ASSERT_EQ(expected.size(), 2u);
 
   auto wide =
-      index.SearchRange(query, kRadius, CancelNever(), /*epsilon=*/0.5f);
+      index.SearchRange(query, kRadius, CancelNever(), /*epsilon=*/0.6f);
   ASSERT_TRUE(wide.ok()) << wide.status();
   EXPECT_EQ(ToMap(*wide), expected);
   // Without the shell, the walk returns only the key it enters at.
@@ -1659,6 +1679,20 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
       << "with epsilon 0 the walk reached both keys: either the beam does not "
          "stop it, or its entry point is bridge rather than start (the level "
          "generator draws differently), which reaches both at any epsilon";
+}
+
+// The outside-shell ef beam remains active while the shell is flooded. With M
+// 2, this graph is the path start - bridge - target. Start and target are in
+// the radius, while bridge is outside even an epsilon-zero shell. At ef 1 the
+// beam must admit and expand that one outside node to reach target.
+TEST_F(SearchRangeFp32, HnswRangeKeepsBeamOutsideTheShell) {
+  KeepsBeamOutsideTheShell();
+}
+TEST_F(SearchRangeFp16, HnswRangeKeepsBeamOutsideTheShell) {
+  KeepsBeamOutsideTheShell();
+}
+TEST_F(SearchRangeBf16, HnswRangeKeepsBeamOutsideTheShell) {
+  KeepsBeamOutsideTheShell();
 }
 
 // A full HNSW fetch that holds a NaN or infinite distance also takes the

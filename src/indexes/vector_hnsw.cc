@@ -343,12 +343,12 @@ float ComputeRangeShell(float radius, float epsilon) {
 }
 
 // Stop condition of the HNSW range traversal. A node is expanded while it is
-// within `shell` of the query or could still improve the `ef` nearest results,
-// so the walk first homes in on the query as an ef-bounded KNN search does,
-// whatever the radius, and then covers the ball. Results within the shell are
-// kept, at most `max_results` of the nearest. Once that many are held within
-// the shell the walk stops (SearchRange then scans); while the farthest held
-// result is beyond the shell, it only looks for nearer ones.
+// within `shell` of the query or could still improve the `ef` nearest results
+// beyond the shell. Results within the shell do not occupy the ef beam, so the
+// walk homes in on the query as an ef-bounded KNN search does, floods the ball,
+// and keeps an ef-wide beam around it to follow paths that leave the shell.
+// Results within the shell are kept, at most `max_results` of the nearest. Once
+// that many are held within the shell the walk stops (SearchRange then scans).
 class RangeStopCondition : public hnswlib::BaseSearchStopCondition<float> {
  public:
   RangeStopCondition(float shell, size_t ef, size_t max_results)
@@ -374,9 +374,12 @@ class RangeStopCondition : public hnswlib::BaseSearchStopCondition<float> {
       encountered_nan_ = true;
       return;
     }
+    if (dist <= shell_) {
+      return;
+    }
     if (nearest_.size() < ef_) {
       nearest_.push(dist);
-    } else if (nearest_.top() > shell_ && dist < nearest_.top()) {
+    } else if (dist < nearest_.top()) {
       nearest_.pop();
       nearest_.push(dist);
     }

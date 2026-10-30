@@ -292,6 +292,10 @@ absl::StatusOr<RecordResult> Tag::ModifyRecord(const InternedStringPtr &key,
           absl::StrCat("Key `", key->Str(), "` not found"));
     }
     auto &tag_info = it->second;
+    // Interning makes equal values share a pointer.
+    if (tag_info.raw_tag_string == interned_data) {
+      return RecordResult::kAdded;
+    }
     auto old_parsed_tags =
         ParseRecordTagsInto<TagSet>(*tag_info.raw_tag_string, separator_);
 

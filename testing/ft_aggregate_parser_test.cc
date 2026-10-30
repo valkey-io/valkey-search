@@ -606,11 +606,13 @@ TEST_F(AggregateTest, GetSerializationRange_OtherStagesBeforeLimit) {
 }
 
 TEST_F(AggregateTest, ExpressionDepthAtLimit) {
-  // A smaller limit than the default keeps the parser's recursion within the
-  // stack under ASAN.
   auto &depth = options::GetQueryStringDepth();
   auto original = depth.GetValue();
+#ifdef SAN_BUILD
+  // A sanitizer's larger stack frames overflow the stack before the parser's
+  // recursion reaches the default limit, so test a smaller one.
   VMSDK_EXPECT_OK(depth.SetValue(500));
+#endif
   auto limit = depth.GetValue();
   std::string deep_expr(limit - 1, '(');
   deep_expr += "1";
@@ -622,11 +624,13 @@ TEST_F(AggregateTest, ExpressionDepthAtLimit) {
 }
 
 TEST_F(AggregateTest, ExpressionDepthExceedsLimit) {
-  // A smaller limit than the default keeps the parser's recursion within the
-  // stack under ASAN.
   auto &depth = options::GetQueryStringDepth();
   auto original = depth.GetValue();
+#ifdef SAN_BUILD
+  // A sanitizer's larger stack frames overflow the stack before the parser's
+  // recursion reaches the default limit, so test a smaller one.
   VMSDK_EXPECT_OK(depth.SetValue(500));
+#endif
   auto limit = depth.GetValue();
   std::string deep_expr(limit, '(');
   deep_expr += "1";

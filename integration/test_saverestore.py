@@ -435,6 +435,46 @@ class TestLoadTrackedKeyMissingFromKeyspace(ValkeySearchTestCaseDebugMode):
             deleter.join()
         assert self.reload_and_get_keys() == {b"k:0", b"k:2", b"k:3"}
 
+    @pytest.mark.parametrize("algo", ["FLAT", "HNSW"])
+    @pytest.mark.parametrize("change", ["hdel", "wrong_size"])
+    @pytest.mark.parametrize("read_v2", ["yes", "no"])
+    def test_invalid_vector_queued_at_save(self, algo, change, read_v2):
+        # The key still exists at load, but its vector is gone or has the wrong
+        # size. V2 drops it by replaying the saved key list, V1 by backfilling.
+        self.client.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "k:",
+            "SCHEMA", "t", "TAG",
+            "v", "VECTOR", algo, "6", "TYPE", "FLOAT32", "DIM", "2",
+            "DISTANCE_METRIC", "L2",
+        )
+        for i in range(4):
+            self.client.hset(
+                f"k:{i}",
+                mapping={"v": float_to_bytes([float(i), 1.0]), "t": "x"})
+        waiters.wait_for_true(self.index_idle)
+        self.client.execute_command(
+            "FT._DEBUG", "PAUSEPOINT", "SET", "block_mutation_queue")
+        writer_client = self.server.get_new_client()
+        if change == "hdel":
+            writer = threading.Thread(
+                target=writer_client.hdel, args=("k:1", "v"))
+        else:
+            writer = threading.Thread(
+                target=writer_client.hset, args=("k:1", "v", "bad"))
+        writer.start()
+        try:
+            waiters.wait_for_true(lambda: self.info().mutation_queue_size == 1)
+            self.client.execute_command("SAVE")
+        finally:
+            self.client.execute_command(
+                "FT._DEBUG", "PAUSEPOINT", "RESET", "block_mutation_queue")
+            writer.join()
+        self.client.execute_command(
+            "CONFIG", "SET", "search.rdb-read-v2", read_v2)
+        assert self.reload_and_get_keys() == {b"k:0", b"k:2", b"k:3"}
+        # Search results alone could hide a stale entry; check the index too.
+        assert self.info().get_attribute_by_name("v")["index"]["size"] == 3
+
 
 class TestMutationQueue(ValkeySearchTestCaseDebugMode):
     def append_startup_args(self, args):

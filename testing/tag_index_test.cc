@@ -16,6 +16,7 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/tag.h"
 #include "src/query/predicate.h"
+#include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
 #include "testing/common.h"
 #include "vmsdk/src/testing_infra/utils.h"
@@ -170,6 +171,88 @@ TEST_F(TagIndexTest, ModifyRecordWithEmptyString) {
 
   EXPECT_EQ(entries_fetcher->Size(), 0);
   EXPECT_EQ(index->GetTrackedKeyCount(), 0);
+}
+
+TEST_F(TagIndexTest, ModifyRecordCaseOnlyChangeRetainsMembership) {
+  EXPECT_TRUE(index->AddRecord("key1", "Red").value());
+  EXPECT_TRUE(index->ModifyRecord("key1", "red").value());
+  EXPECT_EQ(index->GetTagValueDocCount("red"), 1u);
+
+  std::string filter_tag_string = "red";
+  auto parsed_tags = FilterParser::ParseQueryTags(filter_tag_string).value();
+  query::TagPredicate predicate(index.get(), alias, identifier,
+                                filter_tag_string, parsed_tags);
+  auto entries_fetcher = index->Search(predicate, false);
+  EXPECT_EQ(entries_fetcher->Size(), 1);
+  EXPECT_THAT(Fetch(*entries_fetcher), testing::UnorderedElementsAre("key1"));
+}
+
+TEST_F(TagIndexTest, ModifyRecordCaseOnlyChangeRetainsMembershipReverse) {
+  EXPECT_TRUE(index->AddRecord("key1", "red").value());
+  EXPECT_TRUE(index->ModifyRecord("key1", "RED").value());
+  EXPECT_EQ(index->GetTagValueDocCount("red"), 1u);
+
+  std::string filter_tag_string = "red";
+  auto parsed_tags = FilterParser::ParseQueryTags(filter_tag_string).value();
+  query::TagPredicate predicate(index.get(), alias, identifier,
+                                filter_tag_string, parsed_tags);
+  auto entries_fetcher = index->Search(predicate, false);
+  EXPECT_EQ(entries_fetcher->Size(), 1);
+  EXPECT_THAT(Fetch(*entries_fetcher), testing::UnorderedElementsAre("key1"));
+}
+
+TEST_F(TagIndexTest, ModifyRecordCaseOnlyChangeMovesKeyWhenCaseSensitive) {
+  data_model::TagIndex proto;
+  proto.set_separator(",");
+  proto.set_case_sensitive(true);
+  IndexTeser<Tag, data_model::TagIndex> sensitive(proto);
+  EXPECT_TRUE(sensitive.AddRecord("key1", "Red").value());
+  EXPECT_TRUE(sensitive.ModifyRecord("key1", "red").value());
+  EXPECT_EQ(sensitive.GetTagValueDocCount("Red"), 0u);
+  EXPECT_EQ(sensitive.GetTagValueDocCount("red"), 1u);
+}
+
+TEST_F(TagIndexTest, ModifyRecordMultiValueCollisionAfterNormalization) {
+  EXPECT_TRUE(index->AddRecord("key1", "a,B").value());
+  EXPECT_TRUE(index->ModifyRecord("key1", "A,b,b").value());
+  EXPECT_EQ(index->GetTagValueDocCount("a"), 1u);
+  EXPECT_EQ(index->GetTagValueDocCount("b"), 1u);
+
+  std::string filter_tag_string = "a|b";
+  auto parsed_tags = FilterParser::ParseQueryTags(filter_tag_string).value();
+  query::TagPredicate predicate(index.get(), alias, identifier,
+                                filter_tag_string, parsed_tags);
+  auto entries_fetcher = index->Search(predicate, false);
+  EXPECT_THAT(Fetch(*entries_fetcher), testing::UnorderedElementsAre("key1"));
+}
+
+TEST_F(TagIndexTest, ModifyRecordMultiValueCollisionToSingleValue) {
+  EXPECT_TRUE(index->AddRecord("key1", "Red,red").value());
+  EXPECT_TRUE(index->ModifyRecord("key1", "RED").value());
+  EXPECT_EQ(index->GetTagValueDocCount("red"), 1u);
+
+  std::string filter_tag_string = "red";
+  auto parsed_tags = FilterParser::ParseQueryTags(filter_tag_string).value();
+  query::TagPredicate predicate(index.get(), alias, identifier,
+                                filter_tag_string, parsed_tags);
+  auto entries_fetcher = index->Search(predicate, false);
+  EXPECT_THAT(Fetch(*entries_fetcher), testing::UnorderedElementsAre("key1"));
+}
+
+TEST_F(TagIndexTest, ModifyRecordCaseOnlyChangeKeepsRawValue) {
+  EXPECT_TRUE(index->AddRecord("key1", "Red").value());
+  EXPECT_TRUE(index->ModifyRecord("key1", "red").value());
+  auto raw = index->GetRawValue(StringInternStore::Intern("key1"));
+  ASSERT_TRUE(raw);
+  EXPECT_EQ(raw->Str(), "red");
+}
+
+TEST_F(TagIndexTest, ModifyRecordCaseOnlyAndValueChangeTogether) {
+  EXPECT_TRUE(index->AddRecord("key1", "Red,blue").value());
+  EXPECT_TRUE(index->ModifyRecord("key1", "red,green").value());
+  EXPECT_EQ(index->GetTagValueDocCount("red"), 1u);
+  EXPECT_EQ(index->GetTagValueDocCount("blue"), 0u);
+  EXPECT_EQ(index->GetTagValueDocCount("green"), 1u);
 }
 
 TEST_F(TagIndexTest, KeyTrackingTest) {

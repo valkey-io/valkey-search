@@ -6,6 +6,7 @@
 
 #include "src/indexes/tag.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -15,6 +16,7 @@
 
 #include "absl/base/optimization.h"
 #include "absl/container/flat_hash_set.h"
+#include "absl/hash/hash.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/ascii.h"
@@ -57,6 +59,52 @@ bool RejectNonUtf8(absl::string_view data) {
   }
   tag_rejects_non_utf8_compat_counter.Increment();
   return false;
+}
+
+// Treats ASCII case variants as one tag without lowercase copies. Uses absl's
+// seeded hash so crafted tags cannot be made to collide.
+struct AsciiFolded {
+  absl::string_view value;
+
+  template <typename H>
+  friend H AbslHashValue(H h, AsciiFolded v) {
+    absl::string_view s = v.value;
+    char buf[64];
+    while (!s.empty()) {
+      const size_t n = std::min(s.size(), sizeof(buf));
+      for (size_t i = 0; i < n; ++i) {
+        buf[i] = static_cast<char>(
+            absl::ascii_tolower(static_cast<unsigned char>(s[i])));
+      }
+      h = H::combine_contiguous(std::move(h), buf, n);
+      s.remove_prefix(n);
+    }
+    return h;
+  }
+};
+struct AsciiFoldHash {
+  size_t operator()(absl::string_view s) const {
+    return absl::HashOf(AsciiFolded{s});
+  }
+};
+struct AsciiFoldEq {
+  bool operator()(absl::string_view a, absl::string_view b) const {
+    return absl::EqualsIgnoreCase(a, b);
+  }
+};
+using FoldedTagSet =
+    absl::flat_hash_set<absl::string_view, AsciiFoldHash, AsciiFoldEq>;
+
+template <class TagSet>
+TagSet ParseRecordTagsInto(absl::string_view data, char separator) {
+  TagSet parsed_tags;
+  for (const auto &part : absl::StrSplit(data, separator)) {
+    auto tag = absl::StripAsciiWhitespace(part);
+    if (!tag.empty()) {
+      parsed_tags.insert(tag);
+    }
+  }
+  return parsed_tags;
 }
 
 inline uintptr_t SlotToStorage(void *p) {
@@ -230,14 +278,8 @@ absl::StatusOr<absl::flat_hash_set<absl::string_view>> Tag::ParseSearchTags(
 
 absl::flat_hash_set<absl::string_view> Tag::ParseRecordTags(
     absl::string_view data, char separator) {
-  absl::flat_hash_set<absl::string_view> parsed_tags;
-  for (const auto &part : absl::StrSplit(data, separator)) {
-    auto tag = absl::StripAsciiWhitespace(part);
-    if (!tag.empty()) {
-      parsed_tags.insert(tag);
-    }
-  }
-  return parsed_tags;
+  return ParseRecordTagsInto<absl::flat_hash_set<absl::string_view>>(data,
+                                                                     separator);
 }
 
 absl::StatusOr<RecordResult> Tag::ModifyRecord(const InternedStringPtr &key,
@@ -251,7 +293,20 @@ absl::StatusOr<RecordResult> Tag::ModifyRecord(const InternedStringPtr &key,
   }
 
   auto interned_data = StringInternStore::Intern(data_sv);
-  auto new_parsed_tags = ParseRecordTags(*interned_data, separator_);
+  // Case-insensitive diffs use folded sets: a case-only change is no change.
+  if (case_sensitive_) {
+    auto new_parsed_tags = ParseRecordTags(*interned_data, separator_);
+    return DiffTags(key, std::move(interned_data), new_parsed_tags);
+  }
+  auto new_parsed_tags =
+      ParseRecordTagsInto<FoldedTagSet>(*interned_data, separator_);
+  return DiffTags(key, std::move(interned_data), new_parsed_tags);
+}
+
+template <class TagSet>
+absl::StatusOr<RecordResult> Tag::DiffTags(const InternedStringPtr &key,
+                                           InternedStringPtr &&interned_data,
+                                           const TagSet &new_parsed_tags) {
   if (new_parsed_tags.empty()) {
     [[maybe_unused]] auto res =
         RemoveRecord(key, indexes::DeletionType::kIdentifier);
@@ -265,7 +320,12 @@ absl::StatusOr<RecordResult> Tag::ModifyRecord(const InternedStringPtr &key,
         absl::StrCat("Key `", key->Str(), "` not found"));
   }
   auto &tag_info = it->second;
-  auto old_parsed_tags = ParseRecordTags(*tag_info.raw_tag_string, separator_);
+  // Interning makes equal values share a pointer.
+  if (tag_info.raw_tag_string == interned_data) {
+    return RecordResult::kAdded;
+  }
+  auto old_parsed_tags =
+      ParseRecordTagsInto<TagSet>(*tag_info.raw_tag_string, separator_);
 
   // insert new tags that are not present in the old tags.
   for (const auto &tag : new_parsed_tags) {

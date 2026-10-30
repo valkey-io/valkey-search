@@ -183,6 +183,11 @@ class Tag : public IndexBase {
       absl::string_view value) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
  private:
+  template <class TagSet>
+  absl::StatusOr<RecordResult> DiffTags(const InternedStringPtr &key,
+                                        InternedStringPtr &&interned_data,
+                                        const TagSet &new_parsed_tags)
+      ABSL_LOCKS_EXCLUDED(index_mutex_);
   void IndexTagForKey(absl::string_view tag, const InternedStringPtr &key)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(index_mutex_);
   void DeindexTagForKey(absl::string_view tag, const InternedStringPtr &key)

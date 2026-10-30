@@ -226,10 +226,19 @@ absl::Status Filter::Execute(RecordSet &records) const {
 template <typename T>
 struct SortFunctor {
   const absl::InlinedVector<SortBy::SortKey, 4> *sortkeys_;
+  // The first evaluation error seen. A comparator cannot fail, so SortBy
+  // reports it once the sort is done: an error fails the query, as in APPLY
+  // and FILTER.
+  absl::Status *error_;
   bool operator()(const T &l, const T &r) const {
     for (auto &sk : *sortkeys_) {
       auto lvalue = sk.expr_->Evaluate(ctx, *l);
       auto rvalue = sk.expr_->Evaluate(ctx, *r);
+      for (const auto *v : {&lvalue, &rvalue}) {
+        if (v->IsError() && error_->ok()) {
+          *error_ = absl::InvalidArgumentError(v->GetNil().GetReason());
+        }
+      }
       // A record that has no value for this key sorts after one that does,
       // ascending and descending alike, which is what Redisearch does.
       //
@@ -275,7 +284,8 @@ absl::Status SortBy::Execute(RecordSet &records) const {
   if (records.size() > max_) {
     // Sadly std::priority_queue can't operate on unique_ptr's. so we need an
     // extra copy
-    SortFunctor<Record *> sorter{&sortkeys_};
+    absl::Status error;
+    SortFunctor<Record *> sorter{&sortkeys_, &error};
     std::priority_queue<Record *, std::vector<Record *>, SortFunctor<Record *>>
         heap(sorter);
     absl::Status status = absl::OkStatus();
@@ -307,7 +317,8 @@ absl::Status SortBy::Execute(RecordSet &records) const {
       records.emplace_front(RecordPtr(heap.top()));
       heap.pop();
     }
-    return status;
+    VMSDK_RETURN_IF_ERROR(status);
+    return error;
   }
   // A std::stable_sort cannot be interrupted without replacing the comparator
   // or chunking the input, neither of which is worth the cost here, so this
@@ -315,9 +326,15 @@ absl::Status SortBy::Execute(RecordSet &records) const {
   // during the sort is not seen until it finishes. It is bounded by SORTBY's
   // MAX (this branch only runs when the input is already no larger than it).
   VMSDK_RETURN_IF_ERROR(CheckCancelled(records));
-  SortFunctor<RecordPtr> sorter{&sortkeys_};
+  absl::Status error;
+  SortFunctor<RecordPtr> sorter{&sortkeys_, &error};
+  if (records.size() == 1) {
+    // Nothing to compare it with, so the comparator would never see its keys.
+    sorter(records.front(), records.front());
+  }
   std::stable_sort(records.begin(), records.end(), sorter);
-  return CheckCancelled(records);
+  VMSDK_RETURN_IF_ERROR(CheckCancelled(records));
+  return error;
 }
 
 // Redisearch treats an array group key as a multi-value field: the record joins
@@ -401,6 +418,10 @@ absl::Status GroupBy::Execute(RecordSet &records) const {
       ArgVector args;
       for (auto &nargs : reducer->args_) {
         args.emplace_back(nargs->Evaluate(ctx, *record));
+        // An evaluation error fails the query, as in APPLY and FILTER.
+        if (args.back().IsError()) {
+          return absl::InvalidArgumentError(args.back().GetNil().GetReason());
+        }
       }
       args_by_reducer.emplace_back(std::move(args));
     }

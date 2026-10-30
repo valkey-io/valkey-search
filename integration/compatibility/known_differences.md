@@ -276,8 +276,9 @@ that weights an OR group as `excluded`, 764 of 14504 answers. See
 ### 1.11 What counts as a number in a comparison
 
 A comparison with a numeric operand converts the other operand without falling
-back to comparing strings, and fails the query when it cannot ("Error
-converting string"). Redis's conversion is stricter than valkey-search's
+back to comparing strings. When it cannot, `<`, `<=`, `>` and `>=` fail the
+query ("Error converting string"), while `==` is false and `!=` is true.
+Redis's conversion is stricter than valkey-search's
 (`Value::AsDouble`, which uses `strtod`): Redis rejects leading whitespace and
 hex, so `5 < ' 7'` and `5 < '0x10'` are errors on Redis 8 and compare as
 numbers on valkey-search.

@@ -558,6 +558,12 @@ class HierarchicalNSW
         visited_list_pool_->releaseVisitedList(vl);
         return top_candidates;
       }
+      if (!bare_bone_search && stop_condition &&
+          stop_condition->observe_result(GetExternalLabel(ep_id),
+                                         ep_data.GetRawVector(), dist)) {
+        visited_list_pool_->releaseVisitedList(vl);
+        return top_candidates;
+      }
       lowerBound = dist;
       top_candidates.emplace(dist, ep_id);
       if (!bare_bone_search && stop_condition) {
@@ -703,6 +709,18 @@ class HierarchicalNSW
         }
 
         if (flag_consider_candidate) {
+          const bool is_result =
+              bare_bone_search ||
+              (!isMarkedDeleted(candidate_id) &&
+               ((!isIdAllowed) ||
+                (*isIdAllowed)(GetExternalLabel(candidate_id))));
+          if (!bare_bone_search && stop_condition && is_result &&
+              stop_condition->observe_result(GetExternalLabel(candidate_id),
+                                             vec, dist)) {
+            stop_search = true;
+            break;
+          }
+
           candidate_set.emplace(-dist, candidate_id);
 #ifdef USE_PREFETCH
           __builtin_prefetch(
@@ -711,10 +729,7 @@ class HierarchicalNSW
               0, 3);              ////////////////////////
 #endif
 
-          if (bare_bone_search ||
-              (!isMarkedDeleted(candidate_id) &&
-               ((!isIdAllowed) ||
-                (*isIdAllowed)(GetExternalLabel(candidate_id))))) {
+          if (is_result) {
             top_candidates.emplace(dist, candidate_id);
             if (!bare_bone_search && stop_condition) {
               stop_condition->add_point_to_result(

@@ -668,13 +668,14 @@ absl::StatusOr<float> VectorBase::ValidateRangeSearchInputs(
 
 std::vector<Neighbor> VectorBase::SearchRangeExhaustive(
     absl::string_view query, float radius, cancel::Token &cancellation_token,
+    size_t max_results, bool *truncated,
     hnswlib::BaseFilterFunctor *filter) const {
   auto nq = NormalizeQueryIfNeeded(query);
   const float query_magnitude =
       normalize_ ? CalcReciprocalMagnitude(nq.view, GetVectorDataType())
                  : kDefaultMagnitude;
   std::vector<Neighbor> neighbors;
-  neighbors.reserve(kRangeReserve);
+  neighbors.reserve(std::min(kRangeReserve, max_results));
   for (const auto &[key, metadata] : tracked_metadata_by_key_) {
     if (cancellation_token->IsCancelled()) {
       break;
@@ -688,6 +689,12 @@ std::vector<Neighbor> VectorBase::SearchRangeExhaustive(
     }
     float distance = RangeDistance(nq.view, query_magnitude, vector_record);
     if (distance <= radius) {
+      if (neighbors.size() >= max_results) {
+        if (truncated != nullptr) {
+          *truncated = true;
+        }
+        break;
+      }
       neighbors.emplace_back(key, distance);
     }
   }

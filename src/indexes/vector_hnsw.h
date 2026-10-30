@@ -159,8 +159,8 @@ class VectorHNSW : public VectorType<T> {
       absl::string_view query, float radius, cancel::Token &cancellation_token,
       float epsilon,
       std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr,
-      std::optional<size_t> ef_runtime = std::nullopt) override
-      ABSL_NO_THREAD_SAFETY_ANALYSIS;
+      std::optional<size_t> ef_runtime = std::nullopt,
+      bool *truncated = nullptr) override ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
  protected:
   absl::Status ResizeIfFull() ABSL_LOCKS_EXCLUDED(resize_mutex_);

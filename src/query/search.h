@@ -420,7 +420,7 @@ class Predicate;
 size_t EvaluateFilterAsPrimary(
     const SearchParameters &parameters, const Predicate *predicate,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
-    bool negate, float or_weight_multiplier = 1.0f);
+    bool negate, float or_weight_multiplier = 1.0f, bool *truncated = nullptr);
 
 // Defined in the header to support testing
 absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
@@ -458,10 +458,7 @@ size_t CountVectorRangePredicates(const Predicate *predicate);
 bool ShouldReturnNoResults(const SearchParameters &parameters);
 
 // Increments the developer-visible "nonvector_results_fetched_limited_count"
-// INFO counter. The counter object is file-static to search.cc; this accessor
-// lets other translation units (e.g. the HNSW range search) report the same
-// "fetch hit the max-candidates cap" signal against the one shared counter,
-// rather than registering a duplicate field.
+// INFO counter when a query confirms that its final result is truncated.
 void RecordNonVectorResultsFetchedLimited();
 
 // Returns the shared fetch-cap counter for behavioral tests and diagnostics.

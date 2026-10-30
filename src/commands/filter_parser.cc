@@ -477,8 +477,8 @@ FilterParser::ParseVectorRangePredicate(const std::string& attribute_alias) {
     // Try to match known optional parameter keywords
     if (MatchInsensitive("EF_RUNTIME")) {
       // Overrides the HNSW field's EF_RUNTIME for the initial range beam;
-      // FLAT ignores it. search.max-nonvector-search-results-fetched
-      // separately caps shell candidates and triggers exact fallback.
+      // FLAT ignores it. search.max-nonvector-search-results-fetched caps the
+      // results retained by either algorithm.
       VMSDK_ASSIGN_OR_RETURN(auto ef_value,
                              ParseToken("]", "EF_RUNTIME argument is missing"));
       const auto max_ef_runtime = options::GetMaxEfRuntime().GetValue();

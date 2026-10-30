@@ -372,7 +372,10 @@ BuildTextIterator(const Predicate *predicate, bool negate,
 size_t EvaluateFilterAsPrimary(
     const SearchParameters &parameters, const Predicate *predicate,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
-    bool negate, float or_weight_multiplier) {
+    bool negate, float or_weight_multiplier, bool *truncated) {
+  if (truncated != nullptr) {
+    *truncated = false;
+  }
   const QueryOperations query_operations =
       parameters.filter_parse_results.query_operations;
   const IndexSchema *index_schema = parameters.index_schema.get();
@@ -406,16 +409,23 @@ size_t EvaluateFilterAsPrimary(
         return size;
       }
       size_t min_size = SIZE_MAX;
+      bool best_truncated = false;
       std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> best_fetchers;
       for (const auto &child : composed_predicate->GetChildren()) {
         std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> child_fetchers;
-        size_t child_size =
-            EvaluateFilterAsPrimary(parameters, child.get(), child_fetchers,
-                                    negate, or_weight_multiplier);
-        if (child_size < min_size) {
+        bool child_truncated = false;
+        size_t child_size = EvaluateFilterAsPrimary(
+            parameters, child.get(), child_fetchers, negate,
+            or_weight_multiplier, &child_truncated);
+        if (min_size == SIZE_MAX || (best_truncated && !child_truncated) ||
+            (best_truncated == child_truncated && child_size < min_size)) {
           min_size = child_size;
+          best_truncated = child_truncated;
           best_fetchers = std::move(child_fetchers);
         }
+      }
+      if (truncated != nullptr) {
+        *truncated = best_truncated;
       }
       AppendQueue(entries_fetchers, best_fetchers);
       return min_size;
@@ -426,12 +436,19 @@ size_t EvaluateFilterAsPrimary(
       const float child_multiplier =
           or_weight_multiplier * composed_predicate->GetWeight();
       size_t total_size = 0;
+      bool any_child_truncated = false;
       for (const auto &child : composed_predicate->GetChildren()) {
         std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> child_fetchers;
-        size_t child_size = EvaluateFilterAsPrimary(
-            parameters, child.get(), child_fetchers, negate, child_multiplier);
+        bool child_truncated = false;
+        size_t child_size =
+            EvaluateFilterAsPrimary(parameters, child.get(), child_fetchers,
+                                    negate, child_multiplier, &child_truncated);
         AppendQueue(entries_fetchers, child_fetchers);
         total_size += child_size;
+        any_child_truncated |= child_truncated;
+      }
+      if (truncated != nullptr) {
+        *truncated = any_child_truncated;
       }
       return total_size;
     }
@@ -468,7 +485,7 @@ size_t EvaluateFilterAsPrimary(
     auto negate_predicate = dynamic_cast<const NegatePredicate *>(predicate);
     size_t result = EvaluateFilterAsPrimary(
         parameters, negate_predicate->GetPredicate(), entries_fetchers, !negate,
-        or_weight_multiplier);
+        or_weight_multiplier, truncated);
     return result;
   }
   if (predicate->GetType() == PredicateType::kVectorRange) {
@@ -487,12 +504,16 @@ size_t EvaluateFilterAsPrimary(
         auto *vector_index =
             dynamic_cast<indexes::VectorBase *>(index_result.value().get());
         if (vector_index != nullptr && !vr_pred->GetQueryVector().empty()) {
+          bool range_truncated = false;
           auto range_result = vector_index->SearchRange(
               vr_pred->GetQueryVector(),
               static_cast<float>(vr_pred->GetRadius()),
               parameters.cancellation_token, vr_pred->GetSearchEpsilon(),
-              /*filter=*/nullptr, vr_pred->GetEfRuntime());
+              /*filter=*/nullptr, vr_pred->GetEfRuntime(), &range_truncated);
           if (range_result.ok()) {
+            if (truncated != nullptr) {
+              *truncated = range_truncated;
+            }
             auto fetcher =
                 std::make_unique<VectorRangeFetcher>(std::move(*range_result));
             size_t size = fetcher->Size();
@@ -801,13 +822,17 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
       auto *vector_index =
           dynamic_cast<indexes::VectorBase *>(index_result.value().get());
       if (vector_index != nullptr) {
+        bool truncated = false;
         VMSDK_ASSIGN_OR_RETURN(
             auto raw_neighbors,
             vector_index->SearchRange(
                 vr_pred->GetQueryVector(),
                 static_cast<float>(vr_pred->GetRadius()),
                 parameters.cancellation_token, vr_pred->GetSearchEpsilon(),
-                /*filter=*/nullptr, vr_pred->GetEfRuntime()));
+                /*filter=*/nullptr, vr_pred->GetEfRuntime(), &truncated));
+        if (truncated) {
+          RecordNonVectorResultsFetchedLimited();
+        }
         // Key order keeps SORTBY ties and FT.AGGREGATE working sets
         // deterministic regardless of scan order.
         std::sort(raw_neighbors.begin(), raw_neighbors.end(),
@@ -824,6 +849,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
   // check, for each fetched key.
   std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
   size_t qualified_entries = 0;
+  bool child_truncated = false;
   if (parameters.filter_parse_results.is_match_all) {
     auto universal_fetcher = std::make_unique<indexes::UniversalSetFetcher>(
         parameters.index_schema.get());
@@ -832,14 +858,16 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
   } else {
     qualified_entries = EvaluateFilterAsPrimary(
         parameters, parameters.filter_parse_results.root_predicate.get(),
-        entries_fetchers, false);
+        entries_fetchers, false, /*or_weight_multiplier=*/1.0f,
+        &child_truncated);
   }
 
-  const size_t fetch_threshold = static_cast<size_t>(
+  const size_t max_results = static_cast<size_t>(
       options::GetMaxNonVectorSearchResultsFetched().GetValue());
   std::vector<indexes::Neighbor> neighbors;
-  neighbors.reserve(std::min(qualified_entries, kInitialNeighborReserveSize));
-  bool fetch_threshold_crossed = false;
+  neighbors.reserve(
+      std::min({qualified_entries, kInitialNeighborReserveSize, max_results}));
+  bool final_truncated = false;
   bool cancelled = false;
 
   // Deduplication setup
@@ -847,8 +875,8 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
       NeedsDeduplication(parameters.filter_parse_results.query_operations);
   absl::flat_hash_set<const char *> result_keys;
   if (needs_dedup) {
-    result_keys.reserve(
-        std::min(qualified_entries, kInitialNeighborReserveSize));
+    result_keys.reserve(std::min(
+        {qualified_entries, kInitialNeighborReserveSize, max_results}));
   }
 
   // TODO: this drain duplicates EvaluatePrefilteredKeys; it exists only
@@ -906,11 +934,9 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
       auto eval_result = key_evaluator.EvaluateFull(
           *parameters.filter_parse_results.root_predicate, key);
       if (eval_result.matches) {
-        if (neighbors.size() >= fetch_threshold) {
-          // The threshold is diagnostic for compound VECTOR_RANGE queries.
-          // Continue every fetcher so an early OR branch cannot hide unique
-          // matches from a later branch.
-          fetch_threshold_crossed = true;
+        if (neighbors.size() >= max_results) {
+          final_truncated = true;
+          break;
         }
         // Single-VR model: EvaluateFull propagates the matched VectorRange
         // distance up through AND/OR composition, so write it straight into
@@ -954,13 +980,13 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
         break;
       }
     }
-    if (cancelled) {
+    if (cancelled || final_truncated) {
       break;
     }
   }
 
-  if (fetch_threshold_crossed) {
-    nonvector_results_fetched_limited_count.Increment();
+  if (child_truncated || final_truncated) {
+    RecordNonVectorResultsFetchedLimited();
   }
 
   // Key order keeps SORTBY ties and FT.AGGREGATE working sets deterministic

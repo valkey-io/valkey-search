@@ -178,8 +178,12 @@ TEST_F(VectorIndexTest, HnswStopConditionObservesEntryAndUpperLayerDistances) {
   class RecordingStopCondition
       : public hnswlib::BaseSearchStopCondition<float> {
    public:
-    explicit RecordingStopCondition(bool stop_on_observation)
-        : stop_on_observation_(stop_on_observation) {}
+    explicit RecordingStopCondition(bool stop_on_observation,
+                                    int stop_before_result = 0,
+                                    bool stop_after_first_stored_result = true)
+        : stop_on_observation_(stop_on_observation),
+          stop_before_result_(stop_before_result),
+          stop_after_first_stored_result_(stop_after_first_stored_result) {}
 
     bool observe_distance(float) override {
       ++observations_;
@@ -188,6 +192,13 @@ TEST_F(VectorIndexTest, HnswStopConditionObservesEntryAndUpperLayerDistances) {
       }
       return stop_on_observation_;
     }
+    bool observe_result(hnswlib::labeltype, const void *, float) override {
+      if (++eligible_results_ == stop_before_result_) {
+        observations_at_result_stop_ = observations_;
+        return true;
+      }
+      return false;
+    }
     void add_point_to_result(hnswlib::labeltype, const void *, float) override {
       ++result_count_;
     }
@@ -195,8 +206,12 @@ TEST_F(VectorIndexTest, HnswStopConditionObservesEntryAndUpperLayerDistances) {
                                   float) override {
       --result_count_;
     }
-    bool should_stop_search(float, float) override { return result_count_ > 0; }
-    bool should_consider_candidate(float, float) override { return false; }
+    bool should_stop_search(float, float) override {
+      return stop_after_first_stored_result_ && result_count_ > 0;
+    }
+    bool should_consider_candidate(float, float) override {
+      return stop_before_result_ > 0;
+    }
     bool should_remove_extra() override { return false; }
     void filter_results(
         std::vector<std::pair<float, hnswlib::labeltype>> &) override {}
@@ -206,12 +221,20 @@ TEST_F(VectorIndexTest, HnswStopConditionObservesEntryAndUpperLayerDistances) {
       return observations_before_first_result_;
     }
     int result_count() const { return result_count_; }
+    int eligible_results() const { return eligible_results_; }
+    int observations_at_result_stop() const {
+      return observations_at_result_stop_;
+    }
 
    private:
     const bool stop_on_observation_;
+    const int stop_before_result_;
+    const bool stop_after_first_stored_result_;
     int observations_{0};
     int observations_before_first_result_{0};
     int result_count_{0};
+    int eligible_results_{0};
+    int observations_at_result_stop_{0};
   };
 
   constexpr size_t kPoints = 64;
@@ -251,6 +274,18 @@ TEST_F(VectorIndexTest, HnswStopConditionObservesEntryAndUpperLayerDistances) {
   EXPECT_FALSE(searched.empty());
   EXPECT_GT(record_layers.observations_before_first_result(), 2)
       << "expected entrypoint, upper-layer neighbor, and base entry distances";
+
+  RecordingStopCondition stop_before_second(
+      /*stop_on_observation=*/false, /*stop_before_result=*/2,
+      /*stop_after_first_stored_result=*/false);
+  auto retained =
+      algo.searchStopConditionClosest(embedding, stop_before_second);
+  EXPECT_EQ(retained.size(), 1u);
+  EXPECT_EQ(stop_before_second.result_count(), 1);
+  EXPECT_EQ(stop_before_second.eligible_results(), 2);
+  EXPECT_EQ(stop_before_second.observations(),
+            stop_before_second.observations_at_result_stop())
+      << "distance work continued after the unstored result witness";
 }
 
 enum class ExpectedResults { kSuccess, kMissing, kInvalidData, kError };
@@ -906,6 +941,16 @@ TEST_F(RecomputeDistanceBf16, AnswersForBytesTheIndexHasNeverSeen) {
 TEST_F(RecomputeDistanceBf16, RecomputedDistancesRankTheSameWayTheIndexDoes) {
   RecomputedDistancesRankTheSameWayTheIndexDoes();
 }
+// Counts cancellation polls and never fires.
+class CountingToken : public cancel::Base {
+ public:
+  bool IsCancelled() override {
+    ++polls;
+    return false;
+  }
+  void Cancel() override {}
+  int polls = 0;
+};
 
 // Range search over every storage type, metric and algorithm. The expected
 // neighbors come from scoring each tracked key with IsWithinVectorRange
@@ -995,6 +1040,52 @@ class SearchRangeTest : public VectorIndexTest {
     return index.ok() ? *index : nullptr;
   }
 
+  void EnforcesHardCapAndStopsAfterWitness(bool hnsw)
+      ABSL_NO_THREAD_SAFETY_ANALYSIS {
+    constexpr int kCap = 5;
+    static_assert(kCap + 1 < kVectors);
+    auto &fetch_cap = options::GetMaxNonVectorSearchResultsFetched();
+    const auto saved_cap = fetch_cap.GetValue();
+    absl::Cleanup restore = [&] {
+      VMSDK_EXPECT_OK(fetch_cap.SetValue(saved_cap));
+    };
+    std::vector<float> query_vector(kDims, 0.0f);
+    query_vector[0] = 1.0f;
+    const std::string query = Bytes(query_vector);
+
+    auto run = [&](int count, int cap, bool expected_truncated,
+                   int expected_polls) {
+      SCOPED_TRACE(absl::StrCat("hnsw ", hnsw, " count ", count, " cap ", cap));
+      VMSDK_EXPECT_OK(fetch_cap.SetValue(cap));
+      auto index = MakeIndex(hnsw, data_model::DISTANCE_METRIC_COSINE);
+      ASSERT_NE(index, nullptr);
+      for (int i = 0; i < count; ++i) {
+        VMSDK_EXPECT_OK(
+            testing_infra::AddVectorRecord(*index, IndexToKey(i), query));
+      }
+      auto counting = std::make_shared<CountingToken>();
+      cancel::Token token = counting;
+      bool truncated = !expected_truncated;
+      auto searched = index->SearchRange(
+          query, /*radius=*/2.0f, token, /*epsilon=*/0.01f,
+          /*filter=*/nullptr, /*ef_runtime=*/std::nullopt, &truncated);
+      ASSERT_TRUE(searched.ok()) << searched.status();
+      EXPECT_EQ(searched->size(), static_cast<size_t>(std::min(count, cap)));
+      EXPECT_LE(searched->size(), static_cast<size_t>(cap));
+      EXPECT_EQ(truncated, expected_truncated);
+      EXPECT_EQ(counting->polls, expected_polls);
+    };
+
+    run(/*count=*/kCap, /*cap=*/kCap, /*expected_truncated=*/false,
+        /*expected_polls=*/kCap);
+    run(/*count=*/kCap + 1, /*cap=*/kCap, /*expected_truncated=*/true,
+        /*expected_polls=*/kCap + 1);
+    run(/*count=*/1, /*cap=*/0, /*expected_truncated=*/true,
+        /*expected_polls=*/1);
+    run(/*count=*/kVectors, /*cap=*/kCap, /*expected_truncated=*/true,
+        /*expected_polls=*/kCap + 1);
+  }
+
   // Per-key reference: IsWithinVectorRange over the tracked keys.
   static std::map<std::string, float> PerKeyReference(const VectorBase &index,
                                                       absl::string_view query,
@@ -1032,15 +1123,12 @@ class SearchRangeTest : public VectorIndexTest {
 
   void MatchesPerKeyReferenceAndBruteForce(bool hnsw)
       ABSL_NO_THREAD_SAFETY_ANALYSIS {
-    // A fetch cap of 0 sends every HNSW range query to the exhaustive scan.
     auto &fetch_cap = options::GetMaxNonVectorSearchResultsFetched();
     const auto saved_cap = fetch_cap.GetValue();
     absl::Cleanup restore = [&] {
       VMSDK_EXPECT_OK(fetch_cap.SetValue(saved_cap));
     };
-    if (hnsw) {
-      VMSDK_EXPECT_OK(fetch_cap.SetValue(0));
-    }
+    VMSDK_EXPECT_OK(fetch_cap.SetValue(kVectors));
     for (auto metric :
          {data_model::DISTANCE_METRIC_L2, data_model::DISTANCE_METRIC_IP,
           data_model::DISTANCE_METRIC_COSINE}) {
@@ -1170,63 +1258,60 @@ TEST_F(SearchRangeBf16, MatchesPerKeyReferenceAndBruteForce) {
   MatchesPerKeyReferenceAndBruteForce(/*hnsw=*/false);
 }
 
-// The exhaustive scan an HNSW range search runs past the fetch cap answers
-// with the same per-key exactness.
-TEST_F(SearchRangeFp32, HnswScanMatchesPerKeyReferenceAndBruteForce) {
+// HNSW range search answers with the same per-key exactness while all expected
+// results fit under the configured cap.
+TEST_F(SearchRangeFp32, HnswMatchesPerKeyReferenceAndBruteForce) {
   MatchesPerKeyReferenceAndBruteForce(/*hnsw=*/true);
 }
-TEST_F(SearchRangeFp16, HnswScanMatchesPerKeyReferenceAndBruteForce) {
+TEST_F(SearchRangeFp16, HnswMatchesPerKeyReferenceAndBruteForce) {
   MatchesPerKeyReferenceAndBruteForce(/*hnsw=*/true);
 }
-TEST_F(SearchRangeBf16, HnswScanMatchesPerKeyReferenceAndBruteForce) {
+TEST_F(SearchRangeBf16, HnswMatchesPerKeyReferenceAndBruteForce) {
   MatchesPerKeyReferenceAndBruteForce(/*hnsw=*/true);
 }
 
-// HNSW range search fetches at most max-nonvector-search-results-fetched
-// candidates. Once they fill within radius * (1 + epsilon), the radius is
-// covered by an exhaustive scan, so every live key in range is returned.
-TEST_F(SearchRangeFp32, HnswReturnsEveryMatchPastTheFetchCap)
+// Both direct implementations store at most N results, distinguish exactly N
+// matches from an N+1 truncation witness, and stop a broad scan at that
+// witness. COSINE radius 2 deliberately takes HNSW's exact fallback path.
+TEST_F(SearchRangeFp32, FlatEnforcesHardCapAndStopsAfterWitness)
 ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  EnforcesHardCapAndStopsAfterWitness(/*hnsw=*/false);
+}
+
+TEST_F(SearchRangeFp32, HnswWalkEnforcesHardCap)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  constexpr int kCap = 5;
   auto &fetch_cap = options::GetMaxNonVectorSearchResultsFetched();
   const auto saved_cap = fetch_cap.GetValue();
   absl::Cleanup restore = [&] {
     VMSDK_EXPECT_OK(fetch_cap.SetValue(saved_cap));
   };
-  for (auto metric :
-       {data_model::DISTANCE_METRIC_L2, data_model::DISTANCE_METRIC_IP,
-        data_model::DISTANCE_METRIC_COSINE}) {
-    SCOPED_TRACE(absl::StrCat("metric ", static_cast<int>(metric)));
-    auto index = MakeIndex(/*hnsw=*/true, metric);
-    ASSERT_NE(index, nullptr);
-    uint64_t seed = 7;
-    for (int i = 0; i < kVectors; ++i) {
-      VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(
-          *index, IndexToKey(i), Bytes(RandomVector(seed))));
-    }
-    for (int i = 0; i < kVectors; i += 5) {
-      VMSDK_EXPECT_OK(
-          index->RemoveRecord(IndexToKey(i), DeletionType::kRecord));
-    }
-    const std::string query = Bytes(RandomVector(seed));
-    std::vector<float> distances;
-    for (const auto &[_, distance] :
-         PerKeyReference(*index, query, std::numeric_limits<float>::max())) {
-      distances.push_back(distance);
-    }
-    ASSERT_EQ(distances.size(), 240u);
-    std::sort(distances.begin(), distances.end());
-    for (int cap : {0, 1, 50}) {
-      VMSDK_EXPECT_OK(fetch_cap.SetValue(cap));
-      for (float radius :
-           {(distances[99] + distances[100]) / 2, distances.back() + 1.0f}) {
-        SCOPED_TRACE(absl::StrCat("cap ", cap, " radius ", radius));
-        auto searched =
-            index->SearchRange(query, radius, CancelNever(), /*epsilon=*/0.01f);
-        ASSERT_TRUE(searched.ok()) << searched.status();
-        EXPECT_EQ(ToMap(*searched), PerKeyReference(*index, query, radius));
-      }
-    }
+  VMSDK_EXPECT_OK(fetch_cap.SetValue(kCap));
+
+  auto index = MakeIndex(/*hnsw=*/true, data_model::DISTANCE_METRIC_L2,
+                         /*ef_runtime=*/10);
+  ASSERT_NE(index, nullptr);
+  const std::string query = Bytes(std::vector<float>(kDims, 0.0f));
+  for (int i = 0; i < kVectors; ++i) {
+    VMSDK_EXPECT_OK(
+        testing_infra::AddVectorRecord(*index, IndexToKey(i), query));
   }
+  auto counting = std::make_shared<CountingToken>();
+  cancel::Token token = counting;
+  bool truncated = false;
+  auto searched =
+      index->SearchRange(query, /*radius=*/0.0f, token, /*epsilon=*/0.01f,
+                         /*filter=*/nullptr, /*ef_runtime=*/10, &truncated);
+  ASSERT_TRUE(searched.ok()) << searched.status();
+  EXPECT_EQ(searched->size(), static_cast<size_t>(kCap));
+  EXPECT_TRUE(truncated);
+  EXPECT_LT(counting->polls, kCap + 1)
+      << "the normal walk entered the bounded exact fallback";
+}
+
+TEST_F(SearchRangeFp32, HnswExactFallbackEnforcesHardCapAndStopsAfterWitness)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  EnforcesHardCapAndStopsAfterWitness(/*hnsw=*/true);
 }
 
 // A fetch that fills within radius * (1 + epsilon) is answered by an exhaustive
@@ -1234,9 +1319,9 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
 // the graph is the path start - bridge - target and start is the entry point.
 // Squared distances from the query: start 1.44, in the shell of radius 1.43 and
 // the default epsilon; bridge 1.53, beyond it; target 0.36, in the ball. A cap
-// of 1 fills with start, so the fallback must return target and increment the
-// fetch-limited counter.
-TEST_F(SearchRangeFp32, HnswScansWhenTheFetchFillsWithinTheShell)
+// of 1 fills with start, so the fallback returns the one exact match without
+// reporting truncation or incrementing the final-query counter.
+TEST_F(SearchRangeFp32, HnswExactFallbackAtCapIsNotTruncated)
 ABSL_NO_THREAD_SAFETY_ANALYSIS {
   auto created = VectorHNSW<float>::Create(
       CreateHNSWVectorIndexProto(kDims, data_model::DISTANCE_METRIC_L2, 3,
@@ -1272,12 +1357,18 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   VMSDK_EXPECT_OK(fetch_cap.SetValue(1));
   const int64_t counter_before =
       query::GetNonVectorResultsFetchedLimitedCount();
-  auto searched = index.SearchRange(query, kRadius, CancelNever(), kEpsilon,
-                                    /*filter=*/nullptr, /*ef_runtime=*/10);
+  auto counting = std::make_shared<CountingToken>();
+  cancel::Token token = counting;
+  bool truncated = true;
+  auto searched = index.SearchRange(query, kRadius, token, kEpsilon,
+                                    /*filter=*/nullptr,
+                                    /*ef_runtime=*/10, &truncated);
   ASSERT_TRUE(searched.ok()) << searched.status();
   EXPECT_EQ(ToMap(*searched), expected);
-  EXPECT_EQ(query::GetNonVectorResultsFetchedLimitedCount(),
-            counter_before + 1);
+  EXPECT_FALSE(truncated);
+  EXPECT_GT(counting->polls, std::size(kKeys))
+      << "the full HNSW fetch did not run its bounded exact fallback";
+  EXPECT_EQ(query::GetNonVectorResultsFetchedLimitedCount(), counter_before);
 }
 
 TEST_F(SearchRangeFp32, RejectsMalformedRangeInputs) {
@@ -1315,6 +1406,64 @@ TEST_F(SearchRangeFp32, RejectsMalformedRangeInputs) {
     ASSERT_TRUE(result.ok()) << result.status();
     EXPECT_TRUE(result->empty());
   }
+}
+
+TEST_F(SearchRangeFp32, HnswCosineNonFiniteDistanceIsNotATruncationWitness)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  auto &fetch_cap = options::GetMaxNonVectorSearchResultsFetched();
+  const auto saved_cap = fetch_cap.GetValue();
+  absl::Cleanup restore = [&] {
+    VMSDK_EXPECT_OK(fetch_cap.SetValue(saved_cap));
+  };
+  VMSDK_EXPECT_OK(fetch_cap.SetValue(1));
+
+  auto flat = MakeIndex(/*hnsw=*/false, data_model::DISTANCE_METRIC_COSINE);
+  auto hnsw = MakeIndex(/*hnsw=*/true, data_model::DISTANCE_METRIC_COSINE);
+  ASSERT_NE(flat, nullptr);
+  ASSERT_NE(hnsw, nullptr);
+
+  std::vector<float> overflow(kDims, 0.0f);
+  overflow[0] = std::numeric_limits<float>::max();
+  std::vector<float> finite(kDims, 0.0f);
+  finite[1] = 1.0f;
+  const auto overflow_key = StringInternStore::Intern("overflow");
+  const auto finite_key = StringInternStore::Intern("finite");
+  for (auto *index : {flat.get(), hnsw.get()}) {
+    VMSDK_EXPECT_OK(
+        testing_infra::AddVectorRecord(*index, overflow_key, Bytes(overflow)));
+    VMSDK_EXPECT_OK(
+        testing_infra::AddVectorRecord(*index, finite_key, Bytes(finite)));
+  }
+
+  std::vector<float> query_vector(kDims, 0.0f);
+  query_vector[0] = std::numeric_limits<float>::max();
+  query_vector[1] = std::numeric_limits<float>::max();
+  const std::string query = Bytes(query_vector);
+  auto raw_overflow = hnsw->ComputeDistanceFromRecord(overflow_key, query);
+  ASSERT_TRUE(raw_overflow.ok()) << raw_overflow.status();
+  EXPECT_TRUE(scoring::IsNaN(raw_overflow->first) ||
+              scoring::IsInf(raw_overflow->first));
+  auto raw_finite = hnsw->ComputeDistanceFromRecord(finite_key, query);
+  ASSERT_TRUE(raw_finite.ok()) << raw_finite.status();
+  EXPECT_FALSE(scoring::IsNaN(raw_finite->first));
+  EXPECT_FALSE(scoring::IsInf(raw_finite->first));
+  EXPECT_LE(raw_finite->first, 1.5f);
+
+  bool flat_truncated = true;
+  auto expected = flat->SearchRange(
+      query, /*radius=*/1.5f, CancelNever(), /*epsilon=*/0.01f,
+      /*filter=*/nullptr, /*ef_runtime=*/std::nullopt, &flat_truncated);
+  ASSERT_TRUE(expected.ok()) << expected.status();
+  ASSERT_EQ(expected->size(), 1u);
+  EXPECT_FALSE(flat_truncated);
+
+  bool hnsw_truncated = true;
+  auto actual = hnsw->SearchRange(
+      query, /*radius=*/1.5f, CancelNever(), /*epsilon=*/0.01f,
+      /*filter=*/nullptr, /*ef_runtime=*/std::nullopt, &hnsw_truncated);
+  ASSERT_TRUE(actual.ok()) << actual.status();
+  EXPECT_EQ(ToMap(*actual), ToMap(*expected));
+  EXPECT_FALSE(hnsw_truncated);
 }
 
 // The shell calculation remains finite when either multiplication would
@@ -1846,17 +1995,6 @@ class CancelAfter : public cancel::Base {
   int polls_;
 };
 
-// Counts its polls and never fires.
-class CountingToken : public cancel::Base {
- public:
-  bool IsCancelled() override {
-    ++polls;
-    return false;
-  }
-  void Cancel() override {}
-  int polls = 0;
-};
-
 // Parks the scan at its first poll until released.
 class ParkingToken : public cancel::Base {
  public:
@@ -1874,8 +2012,8 @@ class ParkingToken : public cancel::Base {
 
 // A cancelled range search stops early and returns what it found so far, not
 // an error: nothing when the token is already cancelled, everything when it
-// never fires, and a partial result in between. The exhaustive scan an HNSW
-// range search runs when the fetch cap is 0 behaves the same.
+// never fires, and a partial result in between. HNSW's exact COSINE fallback
+// behaves the same.
 TEST_F(VectorIndexTest, SearchRangeStopsWhenCancelled)
 ABSL_NO_THREAD_SAFETY_ANALYSIS {
   constexpr int kDim = 4;
@@ -1885,11 +2023,12 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
                                  kBlockSize),
       attribute_identifier, attribute_data_type, 0);
   auto hnsw = VectorHNSW<float>::Create(
-      CreateHNSWVectorIndexProto(kDim, data_model::DISTANCE_METRIC_L2, kCount,
-                                 kM, kEFConstruction, kEFRuntime),
+      CreateHNSWVectorIndexProto(kDim, data_model::DISTANCE_METRIC_COSINE,
+                                 kCount, kM, kEFConstruction, kEFRuntime),
       attribute_identifier, attribute_data_type, 0);
   ASSERT_TRUE(flat.ok() && hnsw.ok());
-  const std::vector<float> zero(kDim, 0.0f);
+  std::vector<float> zero(kDim, 0.0f);
+  zero[0] = 1.0f;
   for (int i = 0; i < kCount; ++i) {
     VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(**flat, IndexToKey(i),
                                                    VectorToStr(zero)));
@@ -1908,9 +2047,13 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   for (int polls : {0, 1, 50, kCount}) {
     SCOPED_TRACE(absl::StrCat("polls ", polls));
     cancel::Token token = std::make_shared<CancelAfter>(polls);
-    auto res = (*flat)->SearchRange(query, 1.0f, token, /*epsilon=*/0.01f);
+    bool truncated = true;
+    auto res = (*flat)->SearchRange(query, 1.0f, token, /*epsilon=*/0.01f,
+                                    /*filter=*/nullptr,
+                                    /*ef_runtime=*/std::nullopt, &truncated);
     ASSERT_TRUE(res.ok()) << res.status();
     check(res->size(), polls);
+    EXPECT_FALSE(truncated);
   }
 
   auto &fetch_cap = options::GetMaxNonVectorSearchResultsFetched();
@@ -1918,14 +2061,18 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   absl::Cleanup restore = [&] {
     VMSDK_EXPECT_OK(fetch_cap.SetValue(saved_cap));
   };
-  VMSDK_EXPECT_OK(fetch_cap.SetValue(0));
-  // Cap 0 goes straight to the scan, which polls once per tracked key.
+  VMSDK_EXPECT_OK(fetch_cap.SetValue(kCount));
+  // COSINE radius 2 takes the exact fallback, which polls once per tracked key.
   for (int polls : {0, 1, 50, kCount}) {
     SCOPED_TRACE(absl::StrCat("scan polls ", polls));
     cancel::Token token = std::make_shared<CancelAfter>(polls);
-    auto res = (*hnsw)->SearchRange(query, 1.0f, token, /*epsilon=*/0.01f);
+    bool truncated = true;
+    auto res = (*hnsw)->SearchRange(query, 2.0f, token, /*epsilon=*/0.01f,
+                                    /*filter=*/nullptr,
+                                    /*ef_runtime=*/std::nullopt, &truncated);
     ASSERT_TRUE(res.ok()) << res.status();
     check(res->size(), polls);
+    EXPECT_FALSE(truncated);
   }
 }
 
@@ -1968,6 +2115,12 @@ TEST_F(SearchRangeFp32, HnswRangeTraversalStaysBounded)
 ABSL_NO_THREAD_SAFETY_ANALYSIS {
   constexpr int kEf = 20;
   static_assert(4 * kEf < kVectors);
+  auto &fetch_cap = options::GetMaxNonVectorSearchResultsFetched();
+  const auto saved_cap = fetch_cap.GetValue();
+  absl::Cleanup restore = [&] {
+    VMSDK_EXPECT_OK(fetch_cap.SetValue(saved_cap));
+  };
+  VMSDK_EXPECT_OK(fetch_cap.SetValue(kEf));
   auto index = MakeIndex(/*hnsw=*/true, data_model::DISTANCE_METRIC_L2, kEf);
   ASSERT_NE(index, nullptr);
   uint64_t seed = 9;

@@ -27,7 +27,7 @@ FT.SEARCH <index> <query>
 - `CONSISTENT` (Optional): If specified, the command is terminated with an error if the cluster is in an inconsistent state. This is the default when `search.enable-consistent-results` is `yes`; otherwise `INCONSISTENT` is the default.
 - `DIALECT <dialect>` (optional): Specifies your dialect. The only supported dialect is 2.
 - `INCONSISTENT` (Optional): If specified, the command will generate a best-effort reply if the cluster remains inconsistent within the timeout interval.
-- `INKEYS <count> <key> [<key> ...]` (optional): Restricts results to the specified set of document keys. `<count>` is the number of keys that follow and must be a non-negative integer. Duplicate keys are deduplicated. If `<count>` is 0, no results are returned. The filter is applied as a post-filter after the search, so `total_count` in the response reflects only the keys that matched both the query and the INKEYS set.
+- `INKEYS <count> <key> [<key> ...]` (optional): Restricts results to the specified set of document keys. `<count>` is the number of keys that follow and must be a non-negative integer. Duplicate keys are deduplicated. If `<count>` is 0, no results are returned. The filter is applied as a post-filter after the search, so `total_count` in the response reflects only the keys that matched both the query and the INKEYS set. For a query containing `VECTOR_RANGE`, this post-filter sees only the keys retained under the per-shard result cap.
 - `LIMIT <offset> <count>` (optional): Lets you choose a portion of the result. The first `<offset>` keys are skipped and only a maximum of `<count>` keys are included. The default is LIMIT 0 10, which returns at most 10 keys.
 - `NOCONTENT` (optional): When present, only the resulting key names are returned, no key values are included.
 - `PARAMS <count> <name> <value> [<name> <value> ...]` (optional): `count` is of the number of arguments, i.e., twice the number of value/name pairs. [Search - query language](../topics/search-query.md) for details.
@@ -47,6 +47,7 @@ Response
 
 The shape and contents of the response depend on the options specified in the command.
 In all cases, the response is an array whose first element is the number of keys matched by the completed search work. For a best-effort partial response, such as `SOMESHARDS` when a shard times out or cancellation interrupts local query execution, this count can be lower than the number that would match a completed query.
+For a query containing `VECTOR_RANGE`, each shard silently retains at most `search.max-nonvector-search-results-fetched` matches. The count includes only those retained matches; in a cluster it is the sum of the retained shard counts. `SORTBY`, `LIMIT`, pagination, and `WITHCURSOR` operate on the retained set and cannot recover matches discarded by this cap. See [Vector Range Match](../topics/search-query.md#vector-range-match).
 The value of this count is unaffected by the presence of the `LIMIT` clause.
 
 The `LIMIT` clause trims the list of matched keys to generate a list of returned keys. The remainder of the response array is for the returned keys.

@@ -453,19 +453,18 @@ class VectorBase : public IndexBase {
       const InternedStringPtr &key) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
   size_t GetVectorDataSize() const { return GetDataTypeSize() * dimensions_; }
 
-  // Returns the neighbors within `radius` of `query`, unordered. FLAT scans
-  // every vector and ignores `epsilon` and `ef_runtime`. HNSW homes in on the
-  // query with an `ef_runtime`-wide beam, defaulting to the field's
-  // EF_RUNTIME. HNSW also walks through nodes within
-  // radius * (1 + epsilon), without emitting them; it falls back to
-  // SearchRangeExhaustive when its fetch of
-  // search.max-nonvector-search-results-fetched candidates fills within
-  // radius * (1 + epsilon).
+  // Returns up to search.max-nonvector-search-results-fetched neighbors within
+  // `radius`, unordered, and sets `truncated` after observing an additional
+  // matching neighbor. FLAT scans exhaustively until that witness. HNSW homes
+  // in on the query with an `ef_runtime`-wide beam, defaulting to the field's
+  // EF_RUNTIME, and also walks through nodes within radius * (1 + epsilon)
+  // without emitting them. HNSW exact fallbacks obey the same result cap.
   virtual absl::StatusOr<std::vector<Neighbor>> SearchRange(
       absl::string_view query, float radius, cancel::Token &cancellation_token,
       float epsilon,
       std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr,
-      std::optional<size_t> ef_runtime = std::nullopt) = 0;
+      std::optional<size_t> ef_runtime = std::nullopt,
+      bool *truncated = nullptr) = 0;
 
   // Distance and internal label for `key`, or an error if untracked. Backs
   // IsWithinVectorRange. Search-phase only: lock-free, like
@@ -610,6 +609,7 @@ class VectorBase : public IndexBase {
   // mutually exclusive, so key_to_metadata_mutex_ is not needed here.
   std::vector<Neighbor> SearchRangeExhaustive(
       absl::string_view query, float radius, cancel::Token &cancellation_token,
+      size_t max_results, bool *truncated,
       hnswlib::BaseFilterFunctor *filter = nullptr) const
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
 

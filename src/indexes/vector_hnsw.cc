@@ -347,12 +347,17 @@ float ComputeRangeShell(float radius, float epsilon) {
 // beyond the shell. Results within the shell do not occupy the ef beam, so the
 // walk homes in on the query as an ef-bounded KNN search does, floods the ball,
 // and keeps an ef-wide beam around it to follow paths that leave the shell.
-// Results within the shell are kept, at most `max_results` of the nearest. Once
-// that many are held within the shell the walk stops (SearchRange then scans).
+// Results within the shell are kept, at most `max_results` of the nearest. An
+// eligible in-radius result beyond that limit is observed but not stored, and
+// immediately stops the current adjacency scan. A full fetch without that
+// witness still requests a bounded exact fallback from SearchRange.
 class RangeStopCondition : public hnswlib::BaseSearchStopCondition<float> {
  public:
-  RangeStopCondition(float shell, size_t ef, size_t max_results)
+  RangeStopCondition(float shell, float radius, bool normalize, size_t ef,
+                     size_t max_results)
       : shell_(shell),
+        radius_(radius),
+        normalize_(normalize),
         ef_(std::clamp<size_t>(ef, 1, max_results)),
         max_results_(max_results) {
     CHECK(!scoring::IsNaN(shell_));
@@ -360,18 +365,29 @@ class RangeStopCondition : public hnswlib::BaseSearchStopCondition<float> {
   }
 
   bool observe_distance(float dist) override {
-    if (!scoring::IsNaN(dist)) {
+    if (!scoring::IsNaN(dist) && !(normalize_ && scoring::IsInf(dist))) {
       return false;
     }
-    encountered_nan_ = true;
+    requires_exact_fallback_ = true;
     return true;
+  }
+
+  bool observe_result(hnswlib::labeltype, const void *, float dist) override {
+    if (dist <= shell_) {
+      ++shell_results_seen_;
+    }
+    if (dist <= radius_ && ++matching_results_seen_ > max_results_) {
+      truncated_ = true;
+      return true;
+    }
+    return false;
   }
 
   void add_point_to_result(hnswlib::labeltype, const void *,
                            float dist) override {
     ++num_results_;
     if (scoring::IsNaN(dist)) {
-      encountered_nan_ = true;
+      requires_exact_fallback_ = true;
       return;
     }
     if (dist <= shell_) {
@@ -389,11 +405,11 @@ class RangeStopCondition : public hnswlib::BaseSearchStopCondition<float> {
     --num_results_;
   }
   bool should_stop_search(float candidate_dist, float lower_bound) override {
-    if (encountered_nan_) {
+    if (requires_exact_fallback_) {
       return true;
     }
-    // Once the fetch is full within the shell it stays so (later results only
-    // displace farther ones), and SearchRange then scans exhaustively.
+    // Once the fetch is full it stays so (later results only displace farther
+    // ones), and SearchRange then resolves the N+1 witness or fallback.
     if (num_results_ >= max_results_ &&
         (candidate_dist > lower_bound || lower_bound <= shell_)) {
       return true;
@@ -402,12 +418,15 @@ class RangeStopCondition : public hnswlib::BaseSearchStopCondition<float> {
            candidate_dist > nearest_.top();
   }
   bool should_consider_candidate(float dist, float lower_bound) override {
-    // A NaN cannot enter the distance-ordered candidate queue, but silently
-    // dropping it can hide in-radius keys reachable only through that node.
-    // Record it so SearchRange can use the exact scan instead.
-    if (scoring::IsNaN(dist)) {
-      encountered_nan_ = true;
+    // A non-finite value cannot safely participate in COSINE result ordering,
+    // and a NaN cannot enter any distance-ordered candidate queue. Record it
+    // so SearchRange can use the bounded exact scan instead.
+    if (scoring::IsNaN(dist) || (normalize_ && scoring::IsInf(dist))) {
+      requires_exact_fallback_ = true;
       return false;
+    }
+    if (dist <= radius_) {
+      return true;
     }
     if (num_results_ >= max_results_ && dist >= lower_bound) {
       return false;
@@ -421,7 +440,9 @@ class RangeStopCondition : public hnswlib::BaseSearchStopCondition<float> {
       results.pop_back();
     }
   }
-  bool EncounteredNaN() const { return encountered_nan_; }
+  bool RequiresExactFallback() const { return requires_exact_fallback_; }
+  bool Truncated() const { return truncated_; }
+  bool ShellFilled() const { return shell_results_seen_ >= max_results_; }
 
  private:
   // Compares the count, not a distance against a sentinel: a stored vector
@@ -430,10 +451,15 @@ class RangeStopCondition : public hnswlib::BaseSearchStopCondition<float> {
   bool EfFull() const { return nearest_.size() >= ef_; }
 
   const float shell_;
+  const float radius_;
+  const bool normalize_;
   const size_t ef_;
   const size_t max_results_;
   size_t num_results_{0};
-  bool encountered_nan_{false};
+  size_t shell_results_seen_{0};
+  size_t matching_results_seen_{0};
+  bool requires_exact_fallback_{false};
+  bool truncated_{false};
   std::priority_queue<float> nearest_;  // The ef nearest distances, max on top.
 };
 
@@ -477,24 +503,26 @@ template <typename T>
 absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
     absl::string_view query, float radius, cancel::Token &cancellation_token,
     float epsilon, std::unique_ptr<hnswlib::BaseFilterFunctor> filter,
-    std::optional<size_t> ef_runtime) {
+    std::optional<size_t> ef_runtime, bool *truncated) {
+  if (truncated != nullptr) {
+    *truncated = false;
+  }
   VMSDK_ASSIGN_OR_RETURN(radius,
                          this->ValidateRangeSearchInputs(query, radius));
   const size_t max_candidates = static_cast<size_t>(
       options::GetMaxNonVectorSearchResultsFetched().GetValue());
 
-  // A cap of 0 fills the fetch at once: scan exhaustively.
+  // A cap of 0 uses the bounded exact scan to look for one witness.
   if (max_candidates == 0) {
-    query::RecordNonVectorResultsFetchedLimited();
     return this->SearchRangeExhaustive(query, radius, cancellation_token,
-                                       filter.get());
+                                       max_candidates, truncated, filter.get());
   }
   // COSINE distances clamp into [0, 2], so radius 2 holds every key: scan,
   // rather than walk the whole graph and depend on the shell reaching
   // unclamped distances just above 2.
   if (this->normalize_ && radius >= 2.0f) {
     return this->SearchRangeExhaustive(query, radius, cancellation_token,
-                                       filter.get());
+                                       max_candidates, truncated, filter.get());
   }
 
   auto nq = this->NormalizeQueryIfNeeded(query);
@@ -511,9 +539,10 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
                                                 GetVectorAllocator()),
                         nq.view.size(), normalize_, GetVectorDataType());
   std::vector<std::pair<float, hnswlib::labeltype>> raw_results;
-  RangeStopCondition stop_condition(ComputeRangeShell(radius, epsilon),
-                                    ef_runtime.value_or(GetEfRuntime()),
-                                    max_candidates);
+  const size_t effective_ef =
+      std::min(ef_runtime.value_or(GetEfRuntime()), max_candidates);
+  RangeStopCondition stop_condition(ComputeRangeShell(radius, epsilon), radius,
+                                    normalize_, effective_ef, max_candidates);
   try {
     CancelCondition cancel_condition(cancellation_token);
     raw_results = algo_->searchStopConditionClosest(
@@ -527,22 +556,15 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
   // scan do; the reply is a timeout error unless partial results are enabled.
   const bool cancelled = cancellation_token->IsCancelled();
 
-  // A NaN rejected before entering a priority queue can hide keys reachable
-  // only through that graph node. Scan exactly unless cancellation requests a
-  // partial result, but do not count this as a fetch-cap fallback.
-  if (!cancelled && stop_condition.EncounteredNaN()) {
+  // A rejected NaN, or a non-finite COSINE traversal distance, can hide keys
+  // reachable only through that graph node. Scan exactly unless cancellation
+  // requests a partial result, but do not count this as a fetch-cap fallback.
+  if (!cancelled && stop_condition.RequiresExactFallback()) {
     return this->SearchRangeExhaustive(query, radius, cancellation_token,
-                                       filter.get());
+                                       max_candidates, truncated, filter.get());
   }
-  // A full fetch may have stopped before visiting every in-radius key.
-  if (!cancelled && raw_results.size() >= max_candidates) {
-    query::RecordNonVectorResultsFetchedLimited();
-    return this->SearchRangeExhaustive(query, radius, cancellation_token,
-                                       filter.get());
-  }
-
   std::vector<Neighbor> neighbors;
-  neighbors.reserve(raw_results.size());
+  neighbors.reserve(std::min(raw_results.size(), max_candidates));
   for (const auto &[dist, label] : raw_results) {
     // NaN breaks the traversal's ordering, so the walk cannot be trusted to
     // have reached every key in range. A +inf distance is within no radius
@@ -554,6 +576,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
         continue;
       }
       return this->SearchRangeExhaustive(query, radius, cancellation_token,
+                                         max_candidates, truncated,
                                          filter.get());
     }
     const float clamped_dist = this->ClampCosineDistance(dist);
@@ -564,7 +587,27 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
     if (!key.ok()) {
       continue;
     }
+    if (neighbors.size() >= max_candidates) {
+      if (truncated != nullptr) {
+        *truncated = true;
+      }
+      return neighbors;
+    }
     neighbors.emplace_back(*key, clamped_dist);
+  }
+  if (stop_condition.Truncated()) {
+    DCHECK_EQ(neighbors.size(), max_candidates);
+    if (truncated != nullptr) {
+      *truncated = true;
+    }
+    return neighbors;
+  }
+  // A full shell fetch with at most N in-radius keys may have stopped before
+  // reaching more matches. Preserve the exact fallback, but bound its result
+  // collection to the same N+1 witness.
+  if (!cancelled && stop_condition.ShellFilled()) {
+    return this->SearchRangeExhaustive(query, radius, cancellation_token,
+                                       max_candidates, truncated, filter.get());
   }
   return neighbors;
 }

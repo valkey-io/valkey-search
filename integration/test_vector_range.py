@@ -441,137 +441,120 @@ class TestVectorRange(ValkeySearchTestCaseBase):
     # HNSW candidate cap and the fetch-limited counter
     # =================================================================
 
-    def test_hnsw_fetch_limited_counter(self):
-        """
-        An HNSW range query counts toward
-        search_nonvector_results_fetched_limited_count only when the
-        max-nonvector-search-results-fetched cap may have dropped in-radius
-        docs: the cap was hit within radius * (1 + epsilon). Such a query
-        falls back to an exhaustive scan and returns every doc in range.
-        Each index holds fewer than M (16) vectors, so the HNSW graph is
-        complete and the fetch returns exactly the `cap` nearest.
-        """
+    def test_flat_range_hard_cap_and_counter(self):
+        """FLAT distinguishes exactly N matches from an N+1 witness."""
         client = self.server.get_new_client()
-        # L2 distances from QUERY_VEC: 0, 1, 4, 4, 9, 100 (doc:5 ties doc:2).
-        self._create_hnsw_index(client)
+        client.config_set("search.info-developer-visible", "yes")
+        client.config_set("search.max-nonvector-search-results-fetched", "3")
+        self._create_flat_index(client, dim=2)
+        vectors = {
+            "doc:0": [0.0, 0.0],
+            "doc:1": [1.0, 0.0],
+            "doc:2": [2.0, 0.0],
+            "doc:3": [3.0, 0.0],
+        }
         self._load_vector_data(
-            client, vectors={**VECTORS, "doc:5": [-2.0, 0.0, 0.0]})
-        # COSINE: c:0 is the query of the clamping case below; the nearest
-        # doc to the opposite query [-1, -2, -3] is at distance ~1.08.
-        self._create_hnsw_index(
-            client, index_name="cidx", prefix="c:", distance="COSINE")
-        self._load_vector_data(client, vectors={
-            "c:0": [1.0, 2.0, 3.0],
-            "c:1": [3.0, -1.0, 0.0],
-            "c:2": [0.0, 0.0, 1.0],
-        })
-        client.execute_command(
-            "CONFIG", "SET", "search.info-developer-visible", "yes")
-        cap_config = "search.max-nonvector-search-results-fetched"
+            client, vectors={key: vectors[key] for key in list(vectors)[:3]})
+        IndexingTestHelper.wait_for_indexing_complete_on_node(client, "idx")
 
-        def search_and_count(index, radius, query_vec, cap):
-            """Return (result count, fetch-limited counter increment)."""
-            client.execute_command("CONFIG", "SET", cap_config, str(cap))
-            counter = "search_nonvector_results_fetched_limited_count"
-            before = client.info("search").get(counter, 0)
-            result = self._search(
-                client, index,
-                f"@vec:[VECTOR_RANGE {radius} $blob]",
-                "PARAMS", "2", "blob", float_to_bytes(query_vec),
-                "NOCONTENT",
-            )
-            return result[0], client.info("search").get(counter, 0) - before
+        counter = "search_nonvector_results_fetched_limited_count"
+        query = "@vec:[VECTOR_RANGE 100 $blob]=>{$yield_distance_as: dist}"
+        args = (
+            "PARAMS", "2", "blob", float_to_bytes([0.0, 0.0]),
+            "RETURN", "1", "dist", "LIMIT", "0", "10",
+        )
+        before = client.info("search").get(counter, 0)
+        exact = self._search(client, "idx", query, *args)
+        assert exact[0] == 3
+        assert len(parse_result_with_fields(exact)) == 3
+        assert client.info("search").get(counter, 0) == before
 
-        # A cap of 3 fetches doc:0, doc:1 and one of doc:2 / doc:5.
-        # doc:3 (distance 9) and the other distance-4 doc are in range
-        # but the cap cut them off, so the exhaustive scan returns them.
-        assert search_and_count("idx", 10, QUERY_VEC, 3) == (5, 1)
-        # A distance equal to the radius is in range, as in the result
-        # filter, so the cut-off distance-4 doc counts.
-        assert search_and_count("idx", 4, QUERY_VEC, 3) == (4, 1)
-        # The distance-4 docs are beyond the shell (3.9 * 1.01), so the
-        # fetch is not full and nothing in range was dropped.
-        assert search_and_count("idx", 3.9, QUERY_VEC, 3) == (2, 0)
-        # The shell (3.99 * 1.01) holds them, so the fetch fills with a
-        # distance-4 doc out of range; keys behind it could be missed, so it
-        # scans.
-        assert search_and_count("idx", 3.99, QUERY_VEC, 3) == (2, 1)
-        assert search_and_count("idx", 0, QUERY_VEC, 3) == (1, 0)
-        # The cap is above the index size.
-        assert search_and_count("idx", 1000, QUERY_VEC, 100) == (6, 0)
-        # A cap of 0 fetches nothing, so every query counts and scans.
-        assert search_and_count("idx", 1000, QUERY_VEC, 0) == (6, 1)
-        # The only candidate is out of range.
-        assert search_and_count(
-            "cidx", 0.5, [-1.0, -2.0, -3.0], 1) == (0, 0)
-        # The self-distance of c:0 is usually not exactly 0 in float
-        # arithmetic, so whether it is within radius 0 depends on the
-        # cosine clamping, and that decides both the scan and the result.
-        count, delta = search_and_count("cidx", 0, [1.0, 2.0, 3.0], 1)
-        assert delta == count
+        self._load_vector_data(client, vectors={"doc:3": vectors["doc:3"]})
+        IndexingTestHelper.wait_for_indexing_complete_on_node(client, "idx")
+        truncated = self._search(client, "idx", query, *args)
+        retained = parse_result_with_fields(truncated)
+        assert truncated[0] == len(retained) == 3
+        assert retained.keys() <= vectors.keys()
+        for key, fields in retained.items():
+            assert float(fields["dist"]) == pytest.approx(
+                l2_distance([0.0, 0.0], vectors[key]))
+        after_truncated = client.info("search").get(counter, 0)
+        assert after_truncated == before + 1
 
-    def test_hnsw_vector_range_complete_past_fetch_cap(self):
-        """
-        With more docs in range than max-nonvector-search-results-fetched,
-        HNSW range search returns all of them, as FLAT does, alone and
-        combined with a tag by AND and by OR. The cap is lowered to 1000 at
-        runtime over 3000 docs, and restored afterwards.
-        """
+        client.config_set("search.max-nonvector-search-results-fetched", "0")
+        assert self._search(client, "idx", query, *args) == [0]
+        assert client.info("search").get(counter, 0) == after_truncated + 1
+
+    def test_hnsw_range_hard_cap_walk_and_exact_fallback(self):
+        """The HNSW walk and its COSINE radius-2 exact fallback cap at N."""
         client = self.server.get_new_client()
-        schema = ["t", "TAG", "z", "TAG"]
-        self._create_hnsw_index(client, "hidx", extra_fields=schema, dim=2)
-        self._create_flat_index(client, "fidx", extra_fields=schema, dim=2)
-        # A 60 x 50 grid of integer points, so the squared L2 distances from
-        # the origin are exact in float32 and in the brute force below. Tag z
-        # marks 250 docs outside the radius.
-        docs = {}
-        pipe = client.pipeline(transaction=False)
-        for i in range(3000):
-            vec = [float(i % 60), float(i // 60)]
-            mapping = {"vec": float_to_bytes(vec), "t": "x" if i % 2 else "y"}
-            if i % 60 >= 55:
-                mapping["z"] = "z"
-            docs[f"doc:{i}"] = (vec, mapping)
-            pipe.hset(f"doc:{i}", mapping=mapping)
-        pipe.execute()
-        for index in ("hidx", "fidx"):
-            IndexingTestHelper.wait_for_indexing_complete_on_node(client, index)
+        client.config_set("search.info-developer-visible", "yes")
+        client.config_set("search.max-nonvector-search-results-fetched", "5")
+        self._create_hnsw_index(
+            client, index_name="walk", prefix="walk:", dim=2)
+        self._create_hnsw_index(
+            client, index_name="exact", prefix="exact:", dim=2,
+            distance="COSINE")
+        for i in range(6):
+            client.hset(
+                f"walk:{i}", mapping={"vec": float_to_bytes([0.0, 0.0])})
+            client.hset(
+                f"exact:{i}", mapping={"vec": float_to_bytes([1.0, 0.0])})
+        wait_indexed([client], ("walk", "exact"))
 
-        radius = 2500.5
-        query = [0.0, 0.0]
+        counter = "search_nonvector_results_fetched_limited_count"
+        before = client.info("search").get(counter, 0)
+        for index, radius, query in (
+                ("walk", 0, [0.0, 0.0]),
+                ("exact", 2, [1.0, 0.0])):
+            result = self._search(
+                client, index, f"@vec:[VECTOR_RANGE {radius} $blob]",
+                "PARAMS", "2", "blob", float_to_bytes(query),
+                "NOCONTENT", "LIMIT", "0", "10",
+            )
+            assert result[0] == 5
+            assert len(result) == 6
+            after = client.info("search").get(counter, 0)
+            assert after == before + 1
+            before = after
 
-        def matching(pred):
-            return {k for k, (vec, fields) in docs.items() if pred(vec, fields)}
+    def test_hnsw_pagination_matches_flat_at_cap(self):
+        """When the true count is at most N, HNSW pages match exact FLAT."""
+        client = self.server.get_new_client()
+        client.config_set("search.info-developer-visible", "yes")
+        client.config_set("search.max-nonvector-search-results-fetched", "4")
+        flat_index, hnsw_index = create_range_indexes(
+            client, "L2", prefix="page:", dim=2)
+        vectors = np.array([
+            [0.0, 0.0],
+            [1.0, 0.0],
+            [2.0, 0.0],
+            [3.0, 0.0],
+            [10.0, 0.0],
+            [11.0, 0.0],
+        ], dtype=np.float32)
+        write_vectors(client, range(len(vectors)), vectors, prefix="page:")
+        wait_indexed([client], (flat_index, hnsw_index))
 
-        def in_range(vec):
-            return l2_distance(vec, query) <= radius
+        counter = "search_nonvector_results_fetched_limited_count"
+        before = client.info("search").get(counter, 0)
+        query = "@v:[VECTOR_RANGE 10 $blob]=>{$yield_distance_as: dist}"
 
-        vr = f"@vec:[VECTOR_RANGE {radius} $blob]"
-        cases = [
-            (vr, matching(lambda v, f: in_range(v))),
-            ("@vec:[VECTOR_RANGE 10000 $blob]", set(docs)),
-            (vr + " @t:{x}", matching(
-                lambda v, f: in_range(v) and f["t"] == "x")),
-            ("@z:{z} | " + vr, matching(
-                lambda v, f: in_range(v) or "z" in f)),
-        ]
-        assert [len(expected) for _, expected in cases] == [
-            2011, 3000, 995, 2261]
-        cap_config = "search.max-nonvector-search-results-fetched"
-        original_cap = client.execute_command("CONFIG", "GET", cap_config)[1]
-        client.execute_command("CONFIG", "SET", cap_config, "1000")
-        try:
-            for query_string, expected in cases:
-                for index in ("hidx", "fidx"):
-                    result = self._search(
-                        client, index, query_string,
-                        "PARAMS", "2", "blob", float_to_bytes(query),
-                        "NOCONTENT", "LIMIT", "0", "3000",
-                    )
-                    assert result[0] == len(expected), (index, query_string)
-                    assert parse_result_keys(result) == expected
-        finally:
-            client.execute_command("CONFIG", "SET", cap_config, original_cap)
+        def page(index, offset, count):
+            return self._search(
+                client, index, query,
+                "PARAMS", "2", "blob", float_to_bytes([0.0, 0.0]),
+                "SORTBY", "dist", "ASC", "NOCONTENT",
+                "LIMIT", str(offset), str(count),
+            )
+
+        for offset, count, expected_keys in (
+                (0, 2, [b"page:0", b"page:1"]),
+                (2, 2, [b"page:2", b"page:3"])):
+            flat = page(flat_index, offset, count)
+            hnsw = page(hnsw_index, offset, count)
+            assert flat == hnsw == [4, *expected_keys]
+        assert client.info("search").get(counter, 0) == before
 
     @pytest.mark.parametrize("metric", ["L2", "IP", "COSINE"])
     def test_hnsw_range_matches_flat_at_scale(self, metric):
@@ -791,92 +774,35 @@ class TestVectorRange(ValkeySearchTestCaseBase):
         keys = parse_result_keys(result)
         assert keys == {"doc:0", "doc:1", "doc:3"}
 
-    @pytest.mark.parametrize("algorithm", ["FLAT", "HNSW"])
-    def test_vector_range_or_processes_all_fetchers_past_cap(self, algorithm):
-        """A full early OR branch must not hide unique matches from a later
-        branch after the non-vector fetch threshold is reached."""
+    def test_vector_range_or_hard_cap_has_unspecified_survivors(self):
+        """OR retains N unspecified survivors and records one truncation."""
         client = self.server.get_new_client()
         client.config_set("search.info-developer-visible", "yes")
         client.config_set("search.max-nonvector-search-results-fetched", "3")
-        create = (self._create_flat_index if algorithm == "FLAT"
-                  else self._create_hnsw_index)
-        create(client, extra_fields=["category", "TAG", "body", "TEXT"])
+        self._create_flat_index(client, extra_fields=["category", "TAG"])
         vectors = {f"doc:v{i}": [i * 0.1, 0.0, 0.0] for i in range(6)}
-        extra = {
-            key: {
-                "category": "special" if key == "doc:v0" else "ordinary",
-                "body": "late" if key == "doc:v0" else "ordinary",
-            }
-            for key in vectors
-        }
+        extra = {key: {"category": "ordinary"} for key in vectors}
         self._load_vector_data(client, vectors=vectors, extra_data=extra)
-        client.hset(
-            "doc:a-special", mapping={"category": "special", "body": "late"})
+        client.hset("doc:special", mapping={"category": "special"})
+        IndexingTestHelper.wait_for_indexing_complete_on_node(client, "idx")
 
-        expected = {*vectors, "doc:a-special"}
-        blob = float_to_bytes(QUERY_VEC)
-        params = ["PARAMS", "2", "blob", blob]
+        expected_union = {*vectors, "doc:special"}
         counter = "search_nonvector_results_fetched_limited_count"
-        before = client.info("SEARCH").get(counter, 0)
-        queries = (
-            "@vec:[VECTOR_RANGE 1 $blob] | @category:{special}",
-            "@category:{special} | @vec:[VECTOR_RANGE 1 $blob]",
-        )
-        for query in queries:
+        params = ("PARAMS", "2", "blob", float_to_bytes(QUERY_VEC))
+        for query in (
+                "@vec:[VECTOR_RANGE 1 $blob] | @category:{special}",
+                "@category:{special} | @vec:[VECTOR_RANGE 1 $blob]"):
+            before = client.info("search").get(counter, 0)
             result = self._search(
                 client, "idx", query, *params,
-                "NOCONTENT", "LIMIT", "0", "100")
-            assert result[0] == len(expected), (algorithm, query, result)
-            assert parse_result_keys(result) == expected, (algorithm, query)
-
-        sorted_queries = (
-            "@vec:[VECTOR_RANGE 1 $blob]=>{$yield_distance_as: dist}"
-            " | @category:{special}",
-            "@category:{special} | "
-            "@vec:[VECTOR_RANGE 1 $blob]=>{$yield_distance_as: dist}",
-        )
-        expected_order = [f"doc:v{i}".encode() for i in range(6)]
-        expected_order.append(b"doc:a-special")
-        for query in sorted_queries:
-            result = self._search(
-                client, "idx", query, *params, "SORTBY", "dist", "ASC",
-                "NOCONTENT", "LIMIT", "0", "100")
-            assert result == [len(expected), *expected_order], (algorithm, query)
-
-        text_result = self._search(
-            client, "idx", "@vec:[VECTOR_RANGE 1 $blob] | @body:late",
-            *params, "WITHSCORES", "NOCONTENT", "LIMIT", "0", "100")
-        assert text_result[0] == len(expected), (algorithm, text_result)
-        key_scores = {
-            text_result[i].decode(): float(text_result[i + 1])
-            for i in range(1, len(text_result), 2)
-        }
-        assert set(key_scores) == expected
-        assert {key for key, score in key_scores.items() if score > 0} == {
-            "doc:a-special", "doc:v0"}
-
-        aggregate = self._aggregate(
-            client, "idx", sorted_queries[0], *params,
-            "LOAD", "2", "__key", "dist")
-        assert aggregate[0] == len(expected), (algorithm, aggregate)
-        rows = []
-        for row in aggregate[1:]:
-            fields = {
-                row[i].decode(): row[i + 1]
-                for i in range(0, len(row), 2)
-            }
-            rows.append(fields)
-        assert {fields["__key"].decode() for fields in rows} == expected
-        for fields in rows:
-            if fields["__key"] == b"doc:a-special":
-                assert "dist" not in fields
-            else:
-                assert "dist" in fields
-
-        # Each of the six compound queries crosses its fetch threshold once.
-        # HNSW also records its internal shell-cap fallback before each drain.
-        expected_delta = 6 if algorithm == "FLAT" else 12
-        assert client.info("SEARCH")[counter] - before == expected_delta
+                "NOCONTENT", "LIMIT", "0", "100",
+            )
+            survivors = parse_result_keys(result)
+            assert result[0] == len(survivors) == 3
+            assert survivors <= expected_union
+            # The VECTOR_RANGE child and the final OR union both have more
+            # matches than the cap, but one query increments the counter once.
+            assert client.info("search").get(counter, 0) == before + 1
 
 
     # =================================================================
@@ -2190,6 +2116,46 @@ class TestVectorRange(ValkeySearchTestCaseBase):
             f"Distances not in ASC order after SORTBY: {distances}"
         )
 
+    def test_aggregate_hard_cap_reducer_and_cursor(self):
+        """Reducers and cursors consume only the N retained range matches."""
+        client = self.server.get_new_client()
+        client.config_set("search.info-developer-visible", "yes")
+        client.config_set("search.max-nonvector-search-results-fetched", "3")
+        self._create_flat_index(client)
+        vectors = {f"doc:{i}": [float(i), 0.0, 0.0] for i in range(5)}
+        self._load_vector_data(client, vectors=vectors)
+        IndexingTestHelper.wait_for_indexing_complete_on_node(client, "idx")
+
+        counter = "search_nonvector_results_fetched_limited_count"
+        query = "@vec:[VECTOR_RANGE 100 $blob]"
+        params = ("PARAMS", "2", "blob", float_to_bytes(QUERY_VEC))
+        before = client.info("search").get(counter, 0)
+        reduced = self._aggregate(
+            client, "idx", query, *params,
+            "GROUPBY", "0", "REDUCE", "COUNT", "0", "AS", "count",
+        )
+        assert reduced == [1, [b"count", b"3"]]
+        after_reducer = client.info("search").get(counter, 0)
+        assert after_reducer == before + 1
+
+        batch, cursor = self._aggregate(
+            client, "idx", query, *params,
+            "LOAD", "1", "@__key", "SORTBY", "2", "@__key", "ASC",
+            "WITHCURSOR", "COUNT", "2",
+        )
+        assert batch[0] == 2
+        assert len(batch[1:]) == 2
+        assert cursor != 0
+        rows = list(batch[1:])
+        batch, cursor = client.execute_command(
+            "FT.CURSOR", "READ", "idx", cursor, "COUNT", "2")
+        assert batch[0] == 1
+        assert cursor == 0
+        rows.extend(batch[1:])
+        assert len(rows) == 3
+        assert {row[1].decode() for row in rows} <= vectors.keys()
+        assert client.info("search").get(counter, 0) == after_reducer + 1
+
     # =================================================================
     # KNN pre-filter containing a VECTOR_RANGE predicate (rejected)
     # =================================================================
@@ -2287,80 +2253,63 @@ class TestVectorRangeCluster(ValkeySearchClusterTestCase):
             primaries[0], "L2", scale_queries(rng, vectors, "L2"),
             flat_index, hnsw_index)
 
-    def test_hnsw_range_complete_past_shard_fetch_cap(self):
-        """
-        With max-nonvector-search-results-fetched lowered on every primary
-        below each shard's count of keys in range, an HNSW range query still
-        returns every key in range, as FLAT does, and each shard counts the
-        exhaustive scan in search_nonvector_results_fetched_limited_count.
-        """
+    def test_flat_range_hard_cap_is_per_shard(self):
+        """The cap applies independently on shards, not to the global total."""
         cluster_client = self.new_cluster_client()
-        flat_index, hnsw_index = create_range_indexes(
-            cluster_client, "L2", dim=2)
-        # A 60 x 50 grid of integer points: squared L2 distances from the
-        # origin are exact, and 2011 of them are within the radius.
-        grid = np.array([[i % 60, i // 60] for i in range(3000)],
-                        dtype=np.float32)
-        write_vectors(cluster_client, range(3000), grid)
+        flat_index, _ = create_range_indexes(cluster_client, "L2", dim=2)
         primaries = self._primaries()
-        wait_indexed(primaries, (flat_index, hnsw_index))
-        radius = 2500.5
-        expected = {f"sc:{i}" for i, p in enumerate(grid)
-                    if float(p[0]) ** 2 + float(p[1]) ** 2 <= radius}
-        assert len(expected) == 2011
+        cap = 3
+        tags = [find_local_key(primary, f"vr-cap-owner-{i}:")
+                for i, primary in enumerate(primaries)]
 
-        # Each shard holds about 1000 keys, about 670 of them in range: more
-        # than the cap of 300.
+        def add(shard, indexes):
+            keys = set()
+            pipe = primaries[shard].pipeline(transaction=False)
+            for i in indexes:
+                key = f"sc:{{{tags[shard]}}}:{i}"
+                keys.add(key)
+                pipe.hset(key, mapping={"v": float_to_bytes([0.0, 0.0])})
+            pipe.execute()
+            return keys
+
+        shard_keys = [add(shard, range(2)) for shard in range(len(primaries))]
+        wait_indexed(primaries, (flat_index,))
         counter = "search_nonvector_results_fetched_limited_count"
         for primary in primaries:
-            primary.execute_command(
-                "CONFIG", "SET", "search.info-developer-visible", "yes")
-            primary.execute_command(
-                "CONFIG", "SET", "search.max-nonvector-search-results-fetched",
-                "300")
+            primary.config_set("search.info-developer-visible", "yes")
+            primary.config_set(
+                "search.max-nonvector-search-results-fetched", str(cap))
 
         def counts():
-            return [p.info("search").get(counter, 0) for p in primaries]
+            return [primary.info("search").get(counter, 0)
+                    for primary in primaries]
 
         before = counts()
         query = np.zeros(2, dtype=np.float32)
-        hnsw = range_distances(primaries[0], hnsw_index, "v", query, radius)
-        assert hnsw.keys() == expected
-        assert [a - b for a, b in zip(counts(), before)] == [1, 1, 1]
-        flat = range_distances(primaries[0], flat_index, "v", query, radius)
-        assert flat.keys() == expected
-        assert hnsw == pytest.approx(flat)
+        below_cap = range_distances(
+            primaries[0], flat_index, "v", query, radius=0)
+        assert below_cap.keys() == set().union(*shard_keys)
+        assert len(below_cap) == 2 * len(primaries) > cap
+        assert counts() == before
 
-    def test_compound_or_processes_all_shard_fetchers_past_cap(self):
-        """A full vector branch on each shard must not hide a tag-only match
-        from a later compound OR branch."""
-        cluster_client = self.new_cluster_client()
-        assert cluster_client.execute_command(
-            "FT.CREATE", "compound_or", "ON", "HASH", "PREFIX", "1", "co:",
-            "SCHEMA", "vec", "VECTOR", "HNSW", "6", "TYPE", "FLOAT32",
-            "DIM", "3", "DISTANCE_METRIC", "L2", "category", "TAG") == b"OK"
-        vectors = [f"co:v{i}" for i in range(60)]
-        blob = float_to_bytes(QUERY_VEC)
-        for key in vectors:
-            cluster_client.hset(key, mapping={"vec": blob, "category": "ordinary"})
-        cluster_client.hset("co:a-special", mapping={"category": "special"})
-        primaries = self._primaries()
-        wait_indexed(primaries, ("compound_or",))
-        assert sum(primary.dbsize() for primary in primaries) == 61
-        for primary in primaries:
-            primary.config_set(
-                "search.max-nonvector-search-results-fetched", "3")
-
-        expected = {*vectors, "co:a-special"}
-        for query_string in (
-                "@vec:[VECTOR_RANGE 1 $blob] | @category:{special}",
-                "@category:{special} | @vec:[VECTOR_RANGE 1 $blob]"):
-            result = primaries[0].execute_command(
-                "FT.SEARCH", "compound_or", query_string,
-                "PARAMS", "2", "blob", blob,
-                "NOCONTENT", "LIMIT", "0", "100", "DIALECT", "2")
-            assert result[0] == len(expected), (query_string, result)
-            assert parse_result_keys(result) == expected, query_string
+        overloaded = 1
+        shard_keys[overloaded] |= add(overloaded, range(2, 5))
+        wait_indexed(primaries, (flat_index,))
+        before = counts()
+        capped = range_distances(
+            primaries[0], flat_index, "v", query, radius=0)
+        assert capped.keys() <= set().union(*shard_keys)
+        for shard, keys in enumerate(shard_keys):
+            retained = capped.keys() & keys
+            if shard == overloaded:
+                assert len(retained) == cap
+            else:
+                assert retained == keys
+        assert len(capped) == cap + 2 * (len(primaries) - 1)
+        deltas = [after - old
+                  for after, old in zip(counts(), before, strict=True)]
+        assert deltas == [1 if i == overloaded else 0
+                          for i in range(len(primaries))]
 
     def test_query_ef_runtime_reaches_non_owner_shards(self):
         """A per-query EF_RUNTIME reaches remote shards and raises recall.

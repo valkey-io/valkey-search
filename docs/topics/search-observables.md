@@ -6,7 +6,7 @@ description: Valkey Search Module INFO SEARCH Metrics
 # INFO SEARCH metrics
 
 Only Application metrics are listed here. These are kept compatible across releases. Developer metrics are hidden unless
-`search.info-developer-visible` is set to `yes`, and may change or be removed in any release without notice.
+`search.info-developer-visible` is set to `yes`, and may change or be removed in any release without notice. The developer metric `search_nonvector_results_fetched_limited_count` increments once on a shard when a query is actually truncated by `search.max-nonvector-search-results-fetched`, including a query containing `VECTOR_RANGE`; merely returning exactly the configured maximum does not increment it.
 
 Some metrics are reported only when they apply. The `coordinator_*` metrics appear only when the module is loaded with
 `--use-coordinator`. Metrics ending in `_latency_usec` additionally appear only after at least one sample has been recorded.

@@ -160,9 +160,8 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
                     },
                     []() -> absl::StatusOr<bool> { return false; }));
           }
-          // Redisearch never moves a vector query's score: renaming the KNN
-          // score is ignored, and a rename onto the score's name is dropped
-          // so the score keeps it.
+          // RediSearch keeps a vector score's name: it ignores a rename of the
+          // score and drops a rename onto it.
           if (renamed) {
             const absl::string_view score_name =
                 parameters.score_as == nullptr
@@ -184,9 +183,8 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
               continue;
             }
           }
-          // Redisearch keeps the first claim of an output name and drops the
-          // rest. Two plain loads of one field already collapse into one
-          // column, so only a claim involving a rename is dropped here.
+          // RediSearch keeps the first claim of an output name. Plain
+          // duplicates already share a column.
           auto earlier = std::find_if(
               parameters.loads_.begin(), parameters.loads_.end(),
               [&](const LoadField &f) {
@@ -194,8 +192,7 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
                        !f.after_groupby && (renamed || f.renamed);
               });
           if (earlier != parameters.loads_.end()) {
-            // Measured on Redisearch: under `LOAD *`, a name claimed in two
-            // different clauses shows the stored field instead.
+            // Measured, not explained: RediSearch then shows the stored field.
             if (earlier - parameters.loads_.begin() <
                 static_cast<std::ptrdiff_t>(clause_start)) {
               earlier->claimed_again = true;
@@ -208,15 +205,12 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
                           .duplicate = true});
             continue;
           }
-          // A name outside the schema is read straight from the document.
-          // Later stages resolve names at parse time, so its column has to
-          // exist before they are parsed.
+          // Later stages resolve names while parsing, so make the column now.
           if (!in_schema && !after_groupby) {
             VMSDK_RETURN_IF_ERROR(
                 parameters.MakeReference(identifier, true).status());
           }
-          // FT.HYBRID ignores a LOAD after GROUPBY, so its rename must not
-          // reach the group's columns either.
+          // FT.HYBRID ignores a late LOAD, its rename included.
           if (renamed && !(after_groupby && parameters.embedded_in_hybrid_)) {
             // LOAD precedes APPLY/SORTBY/FILTER in the command, so register
             // the rename now to make `@alias` resolvable in those later

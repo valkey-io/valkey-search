@@ -64,21 +64,14 @@ struct LoadField {
   // from `alias != identifier`, which no longer implies a rename now that a
   // resolved JSON path leaves the two legitimately different.
   bool renamed{false};
-  // After a GROUPBY each record is a group, not a document, so there is no
-  // field to fetch.
   bool after_groupby{false};
-  // Whether a `LOAD *` follows the entry. Clauses apply in command order, so
-  // that `LOAD *` overwrites this entry's output column with the stored field
-  // of the same name.
+  // A later `LOAD *` overwrites this entry's column.
   bool before_loadall{false};
-  // A rename onto the score's own name. Redisearch keeps the score there and
-  // drops the entry; it stays in the list only for the after-GROUPBY check.
+  // A rename onto the score's name; dropped, kept for the after-GROUPBY check.
   bool yields_to_score{false};
-  // A later claim of an output name already taken; Redisearch drops it. Kept
-  // in the list only for the after-GROUPBY check.
+  // A repeated output name; dropped, kept for the after-GROUPBY check.
   bool duplicate{false};
-  // The output name is claimed again by a later LOAD clause. Under `LOAD *`
-  // Redisearch then shows the stored field of that name.
+  // Claimed again by a later clause; under `LOAD *` the stored field then wins.
   bool claimed_again{false};
 };
 
@@ -101,12 +94,8 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   void ReplyRecords(ValkeyModuleCtx* ctx, RecordSet& records, size_t count);
   bool loadall_{false};
   bool loadall_after_groupby_{false};
-  // FT.HYBRID accepts and ignores any LOAD placed after a GROUPBY, where
-  // FT.AGGREGATE rejects it.
   bool embedded_in_hybrid_{false};
-  // Set from 1.3.0 when a `LOAD *` command also renames a field or loads
-  // `__key`: fetched fields then pass through under their own name unless a
-  // column emits that name.
+  // The 1.3.0 rule for named loads under `LOAD *`.
   bool loadall_named_loads_{false};
   // A record column the pipeline needs but the reply must not carry.
   // FT.HYBRID registers its fused score as a column so SORTBY/APPLY/FILTER
@@ -167,8 +156,7 @@ struct AggregateParameters : public expr::Expression::CompileContext,
     // rename overrides it with the requested alias.
     std::string output_name_;
     indexes::IndexerType data_type_;
-    // A renamed column loaded before `LOAD *`: the stored field named like
-    // the column wins over the renamed source.
+    // Loaded before `LOAD *`, so the stored field of the same name wins.
     bool yields_to_loadall_{false};
   };
 

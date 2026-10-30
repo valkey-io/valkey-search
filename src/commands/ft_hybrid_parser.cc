@@ -1000,8 +1000,7 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
   // That is as explicit a request as COMBINE ... YIELD_SCORE_AS, and the
   // reference honours it, so it must not be suppressed.
   //
-  // A rename onto the score's name (`LOAD 3 @price AS __score`) counts too:
-  // the parser drops that entry, and the reference shows the fused score.
+  // So does a rename onto it: RediSearch then shows the fused score.
   bool a_load_names_the_score = false;
   for (const auto &load : env.agg->loads_) {
     if (load.identifier == env.output_score_name || load.yields_to_score) {

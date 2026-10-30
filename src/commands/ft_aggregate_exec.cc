@@ -1063,14 +1063,11 @@ bool ReplyWithValue(ValkeyModuleCtx *ctx,
                     std::string_view name, indexes::IndexerType indexer_type,
                     const expr::Value &value, int dialect) {
   if (value.IsNil()) {
-    // Both releases leave out a field the key never had, so it must not tick
-    // the counter.
+    // Both releases omit a missing field, so there is no difference to count.
     if (value.IsMissing()) {
       return false;
     }
-    // 1.3.0 fix: something that evaluated to nothing is named with a nil
-    // value, which is what Redisearch does. Before the fix every nil was left
-    // out.
+    // RediSearch names an expression that evaluated to nil; 1.2.1 omits it.
     return VALKEY_SEARCH_COMPATIBILITY_FIX(
         1, 3, 0, "aggregate_nil_alias_named",
         [&] {
@@ -1170,6 +1167,9 @@ absl::Status CreateRecordsFromNeighbors(
     std::vector<indexes::Neighbor> &neighbors, AggregateParameters &parameters,
     size_t key_index, size_t scores_index, RecordSet &records) {
   auto data_type = parameters.index_schema->GetAttributeDataType().ToProto();
+  // On JSON, `LOAD *` is the `$` root; named paths only feed columns.
+  const bool is_json =
+      data_type == data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON;
   absl::flat_hash_set<std::string_view> output_names;
   if (parameters.loadall_named_loads_) {
     for (const auto &info : parameters.record_info_by_index_) {
@@ -1241,9 +1241,8 @@ absl::Status CreateRecordsFromNeighbors(
         const auto &info = parameters.record_info_by_index_[i];
         auto itr = n.attribute_contents->find(info.identifier_);
         auto field_type = info.data_type_;
-        // A renamed column shares its output name with `LOAD *`'s copy of the
-        // stored field of that name; the clause later in the command wins,
-        // and a clause with no value leaves the other one in place.
+        // RediSearch applies LOAD clauses in command order; a missing value
+        // keeps the earlier one.
         if (parameters.loadall_named_loads_ && i != key_index &&
             info.output_name_ != info.identifier_) {
           auto stored = n.attribute_contents->find(info.output_name_);
@@ -1280,7 +1279,7 @@ absl::Status CreateRecordsFromNeighbors(
       //    still appears under its own.
       for (auto &[name, records_map_value] : *n.attribute_contents) {
         bool sourced;
-        if (parameters.loadall_named_loads_) {
+        if (parameters.loadall_named_loads_ && !is_json) {
           sourced = output_names.contains(name);
         } else {
           sourced = parameters.record_identifiers_.contains(name);

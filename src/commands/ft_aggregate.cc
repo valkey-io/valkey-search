@@ -42,8 +42,8 @@ struct RealIndexInterface : public IndexInterface {
 
 namespace {
 
-// After GROUPBY each record is a group, so a later LOAD has nothing to read.
-// RediSearch rejects it in FT.AGGREGATE and ignores it in FT.HYBRID.
+// RediSearch rejects a LOAD after GROUPBY in FT.AGGREGATE but ignores it in
+// FT.HYBRID.
 absl::Status CheckLoadAfterGroupby(const AggregateParameters &params) {
   if (params.embedded_in_hybrid_) {
     return absl::OkStatus();
@@ -64,10 +64,7 @@ absl::Status CheckLoadAfterGroupby(const AggregateParameters &params) {
       [] { return absl::OkStatus(); });
 }
 
-// Under `LOAD *` RediSearch applies the LOAD clauses in command order, each
-// writing the column of its output name, so a rename adds a column instead of
-// hiding the field it reads. Only a rename or `__key` makes the reply differ
-// from the legacy one, so only those commands reach the counter.
+// Only a rename or `__key` changes the 1.2.1 reply, so only they are counted.
 absl::Status ResolveLoadsUnderLoadAll(AggregateParameters &params) {
   const bool reply_differs = std::any_of(
       params.loads_.begin(), params.loads_.end(), [](const LoadField &f) {
@@ -186,7 +183,10 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
     // Skip loading of the score and the key, we always get those...
     //
     if (identifier == "__key") {
-      params.load_key = true;
+      // 1.2.1 ignored `__key` under `LOAD *`; this is gated later.
+      if (!params.loadall_) {
+        params.load_key = true;
+      }
       if (renamed) {
         apply_rename(params.record_indexes_by_alias_.at("__key"));
       }
@@ -206,6 +206,10 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
       if (renamed) {
         apply_rename(params.record_indexes_by_alias_.at(identifier));
       }
+      continue;
+    }
+    // 1.2.1 accepted these; CheckLoadAfterGroupby decides.
+    if (params.loadall_ && load.after_groupby) {
       continue;
     }
     content = true;
@@ -228,14 +232,13 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
           renamed ? alias : OutputNameFor(alias, schema_identifier),
           (*indexer)->GetIndexerType());
     } else {
-      // Below 1.3.0 `AS` is read as a field name; keep the unknown-field
-      // error so the ignored rename is not silent.
-      if (!options::EnabledInVersion(1, 3, 0) &&
+      // Below 1.3.0 `AS` is a field name; 1.2.1 rejected it, but not under
+      // `LOAD *`.
+      if (!params.loadall_ && !options::EnabledInVersion(1, 3, 0) &&
           absl::EqualsIgnoreCase(identifier, kAsParam)) {
         return indexer.status();
       }
-      // An FT.HYBRID per-arm score alias passes the parser's lookup but is
-      // not a document field; keep the unknown-field error for it.
+      // A per-arm score alias passes the parser's lookup but is no field.
       const auto *index_interface = params.parse_vars_.index_interface_;
       if (index_interface != nullptr &&
           index_interface->GetFieldType(identifier).ok()) {
@@ -256,8 +259,7 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
       apply_rename(record_index);
     }
   }
-  // Checked after the loop so that only a command that is otherwise valid
-  // reaches the counter.
+  // After the loop, so a command another check rejects is not counted.
   VMSDK_RETURN_IF_ERROR(CheckLoadAfterGroupby(params));
   if (params.loadall_) {
     VMSDK_RETURN_IF_ERROR(ResolveLoadsUnderLoadAll(params));

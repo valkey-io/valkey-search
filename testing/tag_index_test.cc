@@ -16,6 +16,7 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/tag.h"
 #include "src/query/predicate.h"
+#include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
 #include "testing/common.h"
 #include "vmsdk/src/testing_infra/utils.h"
@@ -236,6 +237,22 @@ TEST_F(TagIndexTest, ModifyRecordMultiValueCollisionToSingleValue) {
                                 filter_tag_string, parsed_tags);
   auto entries_fetcher = index->Search(predicate, false);
   EXPECT_THAT(Fetch(*entries_fetcher), testing::UnorderedElementsAre("key1"));
+}
+
+TEST_F(TagIndexTest, ModifyRecordCaseOnlyChangeKeepsRawValue) {
+  EXPECT_TRUE(index->AddRecord("key1", "Red").value());
+  EXPECT_TRUE(index->ModifyRecord("key1", "red").value());
+  auto raw = index->GetRawValue(StringInternStore::Intern("key1"));
+  ASSERT_TRUE(raw);
+  EXPECT_EQ(raw->Str(), "red");
+}
+
+TEST_F(TagIndexTest, ModifyRecordCaseOnlyAndValueChangeTogether) {
+  EXPECT_TRUE(index->AddRecord("key1", "Red,blue").value());
+  EXPECT_TRUE(index->ModifyRecord("key1", "red,green").value());
+  EXPECT_EQ(index->GetTagValueDocCount("red"), 1u);
+  EXPECT_EQ(index->GetTagValueDocCount("blue"), 0u);
+  EXPECT_EQ(index->GetTagValueDocCount("green"), 1u);
 }
 
 TEST_F(TagIndexTest, KeyTrackingTest) {

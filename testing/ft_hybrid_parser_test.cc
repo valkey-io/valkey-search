@@ -548,6 +548,37 @@ TEST_F(FTHybridParserTest, CombineFunctionWithNoAliasKeepsTheDefaultName) {
   EXPECT_FALSE((*params)->output_score_name_explicit);
 }
 
+// The expression computes the fused score, so it has to produce a number.
+TEST_F(FTHybridParserTest, CombineFunctionMustProduceANumber) {
+  for (const char *expr : {"'abc'", "lower('a')", "concat(@__search_score)"}) {
+    auto params =
+        Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K",
+               "5", "COMBINE", "FUNCTION", "2", "EXPR", expr});
+    EXPECT_FALSE(params.ok()) << expr;
+  }
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "2", "K", "5", "COMBINE", "FUNCTION", "2", "EXPR",
+                       "strlen(concat(@__search_score))"});
+  VMSDK_EXPECT_OK(params);
+}
+
+// An argument of a type a string function never accepts is refused when the
+// command is parsed, instead of erroring on every scored document.
+TEST_F(FTHybridParserTest, CombineFunctionRejectsArgumentTypeErrors) {
+  for (const char *expr :
+       {"strlen(@__vector_score)", "startswith(@__search_score, 'a')",
+        "contains('a', @__vector_score)", "substr('abc', '0', 1)"}) {
+    auto params =
+        Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K",
+               "5", "COMBINE", "FUNCTION", "2", "EXPR", expr});
+    EXPECT_FALSE(params.ok()) << expr;
+  }
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "2", "K", "5", "COMBINE", "FUNCTION", "2", "EXPR",
+                       "strlen(substr('abc', @__search_score, 1))"});
+  VMSDK_EXPECT_OK(params);
+}
+
 // ---------------------------------------------------------------------
 // COMBINE scalar arguments.
 //

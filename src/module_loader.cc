@@ -56,6 +56,7 @@ vmsdk::module::Options options = {
                 .flags = {vmsdk::module::kWriteFlag, vmsdk::module::kFastFlag},
                 .cmd_func =
                     &vmsdk::CreateCommand<valkey_search::FTDropIndexCmd>,
+                .arity = 2,
             },
             {
                 .cmd_name = valkey_search::kInfoCommand,
@@ -64,6 +65,7 @@ vmsdk::module::Options options = {
                 .flags = {vmsdk::module::kReadOnlyFlag,
                           vmsdk::module::kFastFlag},
                 .cmd_func = &vmsdk::CreateCommand<valkey_search::FTInfoCmd>,
+                .arity = -2,
             },
             {
                 .cmd_name = valkey_search::kListCommand,
@@ -72,6 +74,7 @@ vmsdk::module::Options options = {
                 .flags = {vmsdk::module::kReadOnlyFlag,
                           vmsdk::module::kAdminFlag},
                 .cmd_func = &vmsdk::CreateCommand<valkey_search::FTListCmd>,
+                .arity = 1,
             },
             {
                 .cmd_name = valkey_search::kSearchCommand,

@@ -55,9 +55,6 @@ class ValkeyServerUnderTest:
     def __init__(self, process_handle: subprocess.Popen[Any], port: int):
         self.process_handle = process_handle
         self.port = port
-        # Set by terminate() when SIGTERM was ignored; exit_code() cannot show
-        # this, since by then it reports the SIGKILL we sent.
-        self.needed_sigkill = False
 
     def terminate(self):
         try:
@@ -67,7 +64,6 @@ class ValkeyServerUnderTest:
         except ProcessLookupError:
             return
         except subprocess.TimeoutExpired:
-            self.needed_sigkill = True
             logging.warning(
                 "Process on port %d did not exit within 5s of SIGTERM; escalating to SIGKILL",
                 self.port,
@@ -96,15 +92,6 @@ class ValkeyServerUnderTest:
 
     def terminated(self):
         return self.process_handle.poll() is not None
-
-    def exit_code(self) -> int | None:
-        """Exit status, or None while still running.
-
-        Negative values are `-signum` (e.g. -11 for SIGSEGV, -6 for SIGABRT),
-        which is how a crashed node is distinguished from one that was asked to
-        shut down.
-        """
-        return self.process_handle.poll()
 
     def ping(self, timeout_sec: float = 5.0) -> Any:
         """PING this node directly, raising on failure.
@@ -334,14 +321,6 @@ class ValkeyClusterUnderTest:
                 )
         return sorted(s.port for s in suspects)
 
-    def get_servers_needing_sigkill(self) -> List[int]:
-        """Ports that ignored SIGTERM at teardown and had to be SIGKILLed.
-
-        Only meaningful after terminate(). Catches a wedge that started after
-        the in-run get_unresponsive_servers() check passed.
-        """
-        return sorted(s.port for s in self.servers if s.needed_sigkill)
-
     def ping_all(self):
         result = []
         for server in self.servers:
@@ -565,7 +544,6 @@ class HNSWVectorDefinition(AttributeDefinition):
         distance_metric="COSINE",
         ef_construction=5,
         ef_runtime=10,
-        initial_cap=None,
     ):
         self.vector_dimensions = vector_dimensions
         self.m = m
@@ -573,13 +551,12 @@ class HNSWVectorDefinition(AttributeDefinition):
         self.distance_metric = distance_metric
         self.ef_construction = ef_construction
         self.ef_runtime = ef_runtime
-        # Omitted unless set, so the engine default still applies. A small value
-        # keeps the index near capacity, which is the only state in which
-        # VectorHNSW::AddRecordImpl takes its resize-retry path.
-        self.initial_cap = initial_cap
 
     def to_arguments(self) -> List[Any]:
-        params: List[Any] = [
+        return [
+            "VECTOR",
+            "HNSW",
+            12,
             "M",
             self.m,
             "TYPE",
@@ -593,11 +570,6 @@ class HNSWVectorDefinition(AttributeDefinition):
             "EF_RUNTIME",
             self.ef_runtime,
         ]
-        if self.initial_cap is not None:
-            params += ["INITIAL_CAP", self.initial_cap]
-        # Counted rather than hardcoded, so an optional parameter cannot desync
-        # the declared argument count from the list that follows it.
-        return ["VECTOR", "HNSW", len(params)] + params
 
 
 class FlatVectorDefinition(AttributeDefinition):

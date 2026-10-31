@@ -24,15 +24,6 @@ class StabilityTests(parameterized.TestCase):
     def tearDown(self):
         if self.valkey_cluster_under_test:
             self.valkey_cluster_under_test.terminate()
-            # Logged, not asserted: raising in tearDown would mask whichever
-            # assertion actually failed.
-            wedged = self.valkey_cluster_under_test.get_servers_needing_sigkill()
-            if wedged:
-                logging.error(
-                    "Nodes ignored SIGTERM and had to be SIGKILLed, so "
-                    "their main thread was blocked at teardown: %s",
-                    wedged,
-                )
         super().tearDown()
 
 

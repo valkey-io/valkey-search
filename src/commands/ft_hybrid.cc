@@ -341,12 +341,14 @@ absl::StatusOr<RecordsMap> FetchRecordForRevalidation(
 // entry does not just misreport one row, it shifts every row below it. That is
 // why this runs before the merge rather than patching the merged list.
 //
-// Only keys whose mutation sequence number moved are touched. For every other
-// neighbor this is one integer compare, and an arm that holds no mutated
-// document is handed to fusion exactly as its search produced it -- nothing is
-// dropped, rewritten or re-sorted. Re-sorting one on the strength of having
-// looked at it would be a bug, not a no-op: an arm's order carries meaning
-// fusion reads, and only the arm itself knows how it was ordered.
+// Only keys whose mutation sequence number moved are touched, with one
+// exception: a mutation moves the corpus statistics every relevance score
+// depends on, so once any arm holds a mutated document, every relevance arm is
+// rescored in full. Otherwise an arm that holds no mutated document is handed
+// to fusion exactly as its search produced it -- nothing is dropped, rewritten
+// or re-sorted. Re-sorting one on the strength of having looked at it would be
+// a bug, not a no-op: an arm's order carries meaning fusion reads, and only the
+// arm itself knows how it was ordered.
 //
 // What it deliberately does not do: recover a document the mutation made newly
 // matching, or newly near enough to enter the vector arm's top K. Those were
@@ -390,6 +392,23 @@ void RevalidateArmsBeforeFusion(MultiSearchParameters &params) {
     }
   }
 
+  // Across all arms: ArmGate waited on every arm's keys, so a mutation found
+  // in any of them is one this query crossed.
+  bool any_mutated = false;
+  for (const auto &result : params.per_arm_results) {
+    for (const auto &n : result.neighbors) {
+      auto db_seq =
+          params.index_schema->TryGetDbMutationSequenceNumber(n.external_id);
+      if (!db_seq.has_value() || *db_seq != n.sequence_number) {
+        any_mutated = true;
+        break;
+      }
+    }
+    if (any_mutated) {
+      break;
+    }
+  }
+
   auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
   const auto &attribute_data_type = params.index_schema->GetAttributeDataType();
   for (size_t i = 0; i < arms.size(); ++i) {
@@ -430,6 +449,7 @@ void RevalidateArmsBeforeFusion(MultiSearchParameters &params) {
     std::vector<char> drop(neighbors.size(), 0);
     size_t dropped = 0;
     bool rescored = false;
+    const bool rescore_unchanged = any_mutated && !arm_score_is_distance;
 
     for (size_t j = 0; j < neighbors.size(); ++j) {
       auto &n = neighbors[j];
@@ -442,7 +462,7 @@ void RevalidateArmsBeforeFusion(MultiSearchParameters &params) {
         ++dropped;
         continue;
       }
-      if (*db_seq == n.sequence_number) {
+      if (*db_seq == n.sequence_number && !rescore_unchanged) {
         continue;
       }
       // Read per arm rather than once per key: the two arms ask for the
@@ -461,7 +481,8 @@ void RevalidateArmsBeforeFusion(MultiSearchParameters &params) {
       const RecordsMap &records = *fetched;
       auto verification = query::VerifyFilter(
           *arm, records, n, query_ctx,
-          /*recompute_score_override=*/!arm_score_is_distance);
+          /*recompute_score_override=*/!arm_score_is_distance,
+          /*rescore_unchanged=*/rescore_unchanged);
       if (!verification.matches) {
         drop[j] = 1;
         ++dropped;

@@ -238,6 +238,108 @@ const absl::NoDestructor<
     absl::flat_hash_map<absl::string_view, data_model::AttributeDataType>>
     kOnDataTypeByStr({{"HASH", data_model::ATTRIBUTE_DATA_TYPE_HASH},
                       {"JSON", data_model::ATTRIBUTE_DATA_TYPE_JSON}});
+
+// Configurable-limit checks shared by the FT.CREATE argument parser and
+// ValidateIndexSchemaLimits(). Each limit is read and compared in exactly one
+// place so the two paths cannot drift.
+
+// The incorrectly named max_vector_attributes is kept for backward
+// compatibility and takes precedence when set.
+long MaxAttributesLimit() {
+  return options::GetMaxVectorAttributes().WasSet()
+             ? options::GetMaxVectorAttributes().GetValue()
+             : options::GetMaxAttributes().GetValue();
+}
+
+absl::Status VerifyPrefixCount(long long prefixes_cnt) {
+  const auto max_prefixes = options::GetMaxPrefixes().GetValue();
+  VMSDK_RETURN_IF_ERROR(
+      vmsdk::VerifyRange(prefixes_cnt, std::nullopt, max_prefixes))
+      << "Number of prefixes (" << prefixes_cnt
+      << ") exceeds the maximum allowed (" << max_prefixes << ")";
+  return absl::OkStatus();
+}
+
+absl::Status VerifyAttributeCount(long long attributes_cnt) {
+  const auto max_attributes = MaxAttributesLimit();
+  VMSDK_RETURN_IF_ERROR(
+      vmsdk::VerifyRange(attributes_cnt, std::nullopt, max_attributes))
+      << "The maximum number of attributes cannot exceed " << max_attributes
+      << ".";
+  return absl::OkStatus();
+}
+
+absl::Status VerifyTagIdentifierLength(long long length) {
+  const auto max_len = options::GetMaxTagFieldLen().GetValue();
+  VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(length, std::nullopt, max_len))
+      << "A tag field can have a maximum length of " << max_len << ".";
+  return absl::OkStatus();
+}
+
+absl::Status VerifyNumericIdentifierLength(long long length) {
+  const auto max_len = options::GetMaxNumericFieldLen().GetValue();
+  VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(length, std::nullopt, max_len))
+      << "A numeric field can have a maximum length of " << max_len << ".";
+  return absl::OkStatus();
+}
+
+absl::Status VerifyDimensions(long long dimensions) {
+  const auto max_dimensions_value = options::GetMaxDimensions().GetValue();
+  VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(dimensions, 1, max_dimensions_value))
+      << "The dimensions value must be a positive integer greater than 0 and "
+         "less than or equal to "
+      << max_dimensions_value << ".";
+  return absl::OkStatus();
+}
+
+// FT.CREATE bounds INITIAL_CAP by kMaxInitialCap. A serialized schema instead
+// carries the index's grown capacity (VectorBase::ToProto emits GetCapacity()),
+// which legitimately exceeds that cap, so the proto validator passes
+// std::nullopt and only rejects a malformed (< 1) value.
+absl::Status VerifyInitialCap(long long initial_cap,
+                              std::optional<long long> max_initial_cap) {
+  VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(initial_cap, 1, max_initial_cap))
+      << kInitialCapParam << " must be a positive integer greater than 0"
+      << (max_initial_cap.has_value()
+              ? absl::StrCat(" and cannot exceed ", *max_initial_cap)
+              : "")
+      << ".";
+  return absl::OkStatus();
+}
+
+absl::Status VerifyHnswParameters(long long m, long long ef_construction,
+                                  long long ef_runtime) {
+  const auto max_m_value = options::GetMaxM().GetValue();
+  VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(m, 2, max_m_value))
+      << kMParam
+      << " must be a positive integer greater than or equal to 2 and cannot "
+         "exceed "
+      << max_m_value << ".";
+
+  const auto max_ef_construction_value =
+      options::GetMaxEfConstruction().GetValue();
+  VMSDK_RETURN_IF_ERROR(
+      vmsdk::VerifyRange(ef_construction, 1, max_ef_construction_value))
+      << kEfConstructionParam
+      << " must be a positive integer greater than 0 and cannot exceed "
+      << max_ef_construction_value << ".";
+
+  const auto max_ef_runtime_value = options::GetMaxEfRuntime().GetValue();
+  VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(ef_runtime, 1, max_ef_runtime_value))
+      << kEfRuntimeParam
+      << " must be a positive integer greater than 0 and cannot exceed "
+      << max_ef_runtime_value << ".";
+  return absl::OkStatus();
+}
+
+absl::Status VerifyFlatBlockSize(long long block_size) {
+  VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(block_size, 1, kMaxBlockSize))
+      << kBlockSizeParam
+      << " must be a positive integer greater than 0 and cannot exceed "
+      << kMaxBlockSize << ".";
+  return absl::OkStatus();
+}
+
 // PREFIX <count> <prefix>...: parsed from the flexible pre-SCHEMA ordering
 // loop, so it may appear anywhere before SCHEMA relative to the other
 // options. `seen` tracks whether a PREFIX clause has been consumed; the
@@ -269,12 +371,7 @@ absl::Status ParsePrefixes(vmsdk::ArgsIterator &itr,
         absl::StrCat("Bad arguments for PREFIX: `", prefixes_cnt,
                      "` is outside acceptable bounds"));
   }
-  // Check if the number of prefixes exceeds the configured maximum
-  const auto max_prefixes = options::GetMaxPrefixes().GetValue();
-  VMSDK_RETURN_IF_ERROR(
-      vmsdk::VerifyRange(prefixes_cnt, std::nullopt, max_prefixes))
-      << "Number of prefixes (" << prefixes_cnt
-      << ") exceeds the maximum allowed (" << max_prefixes << ")";
+  VMSDK_RETURN_IF_ERROR(VerifyPrefixCount(prefixes_cnt));
   //
   // Parse prefixes and ensure they match the index hash tag constraints
   //
@@ -429,12 +526,8 @@ absl::Status ParseVector(vmsdk::ArgsIterator &itr,
 absl::Status ParseNumeric(vmsdk::ArgsIterator &itr,
                           data_model::Index &index_proto,
                           absl::string_view attribute_identifier) {
-  const auto max_numeric_identifier_len =
-      options::GetMaxNumericFieldLen().GetValue();
-  VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(
-      attribute_identifier.length(), std::nullopt, max_numeric_identifier_len))
-      << "A numeric field can have a maximum length of "
-      << max_numeric_identifier_len << ".";
+  VMSDK_RETURN_IF_ERROR(
+      VerifyNumericIdentifierLength(attribute_identifier.length()));
   auto numeric_index_proto = std::make_unique<data_model::NumericIndex>();
   index_proto.set_allocated_numeric_index(numeric_index_proto.release());
   return absl::OkStatus();
@@ -450,11 +543,8 @@ vmsdk::KeyValueParser<FTCreateTagParameters> CreateTagParser() {
 }
 absl::Status ParseTag(vmsdk::ArgsIterator &itr, data_model::Index &index_proto,
                       absl::string_view attribute_identifier) {
-  const auto max_tag_identifier_len = options::GetMaxTagFieldLen().GetValue();
-  VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(
-      attribute_identifier.length(), std::nullopt, max_tag_identifier_len))
-      << "A tag field can have a maximum length of " << max_tag_identifier_len
-      << ".";
+  VMSDK_RETURN_IF_ERROR(
+      VerifyTagIdentifierLength(attribute_identifier.length()));
   auto tag_index_proto = std::make_unique<data_model::TagIndex>();
   static auto parser = CreateTagParser();
   FTCreateTagParameters parameters;
@@ -662,14 +752,6 @@ bool HasVectorIndex(const data_model::IndexSchema &index_schema_proto) {
 }  // namespace
 absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
     ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
-  // Get configuration values
-  // The incorrectly named max_vector_attributes is kept for backward
-  // compatibility.
-  const auto max_attributes_value =
-      options::GetMaxVectorAttributes().WasSet()
-          ? options::GetMaxVectorAttributes().GetValue()
-          : options::GetMaxAttributes().GetValue();
-
   data_model::IndexSchema index_schema_proto;
   // Set default language
   index_schema_proto.set_language(data_model::LANGUAGE_ENGLISH);
@@ -829,10 +911,7 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
       return absl::InvalidArgumentError(
           absl::StrCat("Duplicate field in schema - ", attribute->alias()));
     }
-    VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(
-        attribute_aliases.size() + 1, std::nullopt, max_attributes_value))
-        << "The maximum number of attributes cannot exceed "
-        << max_attributes_value << ".";
+    VMSDK_RETURN_IF_ERROR(VerifyAttributeCount(attribute_aliases.size() + 1));
     if (attribute->index().index_type_case() ==
         data_model::Index::IndexTypeCase::kTextIndex) {
       VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(
@@ -859,17 +938,8 @@ absl::Status FTCreateVectorParameters::Verify() const {
   if (!dimensions) {
     return absl::InvalidArgumentError("Missing dimensions parameter.");
   }
-  const auto max_dimensions_value = options::GetMaxDimensions().GetValue();
-  VMSDK_RETURN_IF_ERROR(
-      vmsdk::VerifyRange(dimensions.value(), 1, max_dimensions_value))
-      << "The dimensions value must be a positive integer greater than 0 and "
-         "less than or equal to "
-      << max_dimensions_value << ".";
-
-  VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(initial_cap, 1, kMaxInitialCap))
-      << kInitialCapParam
-      << " must be a positive integer greater than 0 and cannot exceed "
-      << kMaxInitialCap << ".";
+  VMSDK_RETURN_IF_ERROR(VerifyDimensions(dimensions.value()));
+  VMSDK_RETURN_IF_ERROR(VerifyInitialCap(initial_cap, kMaxInitialCap));
   FTCreateVectorParameters default_values;
   if (vector_data_type == default_values.vector_data_type) {
     return absl::InvalidArgumentError("Missing vector TYPE parameter.");
@@ -891,33 +961,11 @@ std::unique_ptr<data_model::VectorIndex> HNSWParameters::ToProto() const {
 }
 absl::Status HNSWParameters::Verify() const {
   VMSDK_RETURN_IF_ERROR(FTCreateVectorParameters::Verify());
-  const auto max_m_value = options::GetMaxM().GetValue();
-  VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(m, 2, max_m_value))
-      << kMParam
-      << " must be a positive integer greater than 2 and cannot exceed "
-      << max_m_value << ".";
-
-  const auto max_ef_construction_value =
-      options::GetMaxEfConstruction().GetValue();
-  VMSDK_RETURN_IF_ERROR(
-      vmsdk::VerifyRange(ef_construction, 1, max_ef_construction_value))
-      << kEfConstructionParam
-      << " must be a positive integer greater than 0 and cannot exceed "
-      << max_ef_construction_value << ".";
-  const auto max_ef_runtime_value = options::GetMaxEfRuntime().GetValue();
-  VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(ef_runtime, 1, max_ef_runtime_value))
-      << kEfRuntimeParam
-      << " must be a positive integer greater than 0 and cannot exceed "
-      << max_ef_runtime_value << ".";
-  return absl::OkStatus();
+  return VerifyHnswParameters(m, ef_construction, ef_runtime);
 }
 absl::Status FlatParameters::Verify() const {
   VMSDK_RETURN_IF_ERROR(FTCreateVectorParameters::Verify());
-  VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(block_size, 1, kMaxBlockSize))
-      << kBlockSizeParam
-      << " must be a positive integer greater than 0 and cannot exceed "
-      << kMaxBlockSize << ".";
-  return absl::OkStatus();
+  return VerifyFlatBlockSize(block_size);
 }
 std::unique_ptr<data_model::VectorIndex> FlatParameters::ToProto() const {
   auto vector_index_proto = FTCreateVectorParameters::ToProto();
@@ -926,6 +974,58 @@ std::unique_ptr<data_model::VectorIndex> FlatParameters::ToProto() const {
   vector_index_proto->set_allocated_flat_algorithm(
       flat_algorithm_proto.release());
   return vector_index_proto;
+}
+
+namespace {
+// Only the numeric range limits are checked; required-field presence (TYPE,
+// DISTANCE_METRIC) is not re-verified because a serialized schema always
+// carries them.
+absl::Status ValidateVectorIndexLimits(
+    const data_model::VectorIndex &vector_index_proto) {
+  VMSDK_RETURN_IF_ERROR(VerifyDimensions(vector_index_proto.dimension_count()));
+  VMSDK_RETURN_IF_ERROR(
+      VerifyInitialCap(vector_index_proto.initial_cap(), std::nullopt));
+  switch (vector_index_proto.algorithm_case()) {
+    case data_model::VectorIndex::kHnswAlgorithm: {
+      const auto &hnsw = vector_index_proto.hnsw_algorithm();
+      return VerifyHnswParameters(hnsw.m(), hnsw.ef_construction(),
+                                  hnsw.ef_runtime());
+    }
+    case data_model::VectorIndex::kFlatAlgorithm:
+      return VerifyFlatBlockSize(
+          vector_index_proto.flat_algorithm().block_size());
+    case data_model::VectorIndex::ALGORITHM_NOT_SET:
+      return absl::InvalidArgumentError("vector index has no algorithm set.");
+  }
+  return absl::OkStatus();
+}
+
+absl::Status ValidateAttributeLimits(const data_model::Attribute &attribute) {
+  switch (attribute.index().index_type_case()) {
+    case data_model::Index::kVectorIndex:
+      return ValidateVectorIndexLimits(attribute.index().vector_index());
+    case data_model::Index::kTagIndex:
+      return VerifyTagIdentifierLength(attribute.identifier().length());
+    case data_model::Index::kNumericIndex:
+      return VerifyNumericIdentifierLength(attribute.identifier().length());
+    default:
+      return absl::OkStatus();
+  }
+}
+}  // namespace
+
+absl::Status ValidateIndexSchemaLimits(
+    const data_model::IndexSchema &index_schema_proto) {
+  VMSDK_RETURN_IF_ERROR(
+      VerifyPrefixCount(index_schema_proto.subscribed_key_prefixes_size()));
+  VMSDK_RETURN_IF_ERROR(
+      VerifyAttributeCount(index_schema_proto.attributes_size()));
+  for (const auto &attribute : index_schema_proto.attributes()) {
+    VMSDK_RETURN_IF_ERROR(ValidateAttributeLimits(attribute)).SetPrepend()
+        << "Attribute `" << vmsdk::config::RedactIfNeeded(attribute.alias())
+        << "`: ";
+  }
+  return absl::OkStatus();
 }
 
 namespace options {

@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <iterator>
 #include <stdexcept>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 
@@ -68,8 +69,63 @@ struct HugeFlatHashMapTestPeer;
 
 namespace internal {
 
+// A key with its hash already computed, so an operation that probes both
+// tables, or probes before inserting, hashes the caller's key only once.
+template <typename Q>
+struct Prehashed {
+  const Q &key;
+  size_t hash;
+};
+
+template <typename T>
+struct IsPrehashed : std::false_type {};
+template <typename Q>
+struct IsPrehashed<Prehashed<Q>> : std::true_type {};
+
+// The tables' hasher: the stored hash for a Prehashed key, the user's Hash for
+// anything else (such as entries being migrated). Being transparent makes absl
+// accept Prehashed keys in find, erase and lazy_emplace.
+template <typename Hash>
+struct PrehashedHash : Hash {
+  using is_transparent = void;
+  using Inner = Hash;
+
+  template <typename Q>
+  size_t operator()(const Prehashed<Q> &p) const {
+    return p.hash;
+  }
+  template <typename T>
+    requires(!IsPrehashed<T>::value)
+  size_t operator()(const T &t) const {
+    return static_cast<const Hash &>(*this)(t);
+  }
+};
+
+// The tables' key_equal: the user's Eq, with Prehashed keys unwrapped.
+template <typename Eq>
+struct PrehashedEq : Eq {
+  using is_transparent = void;
+  using Inner = Eq;
+
+  template <typename A, typename B>
+  bool operator()(const A &a, const B &b) const {
+    return static_cast<const Eq &>(*this)(Unwrap(a), Unwrap(b));
+  }
+
+ private:
+  template <typename T>
+  static const T &Unwrap(const T &t) {
+    return t;
+  }
+  template <typename Q>
+  static const Q &Unwrap(const Prehashed<Q> &p) {
+    return p.key;
+  }
+};
+
 // The shared implementation of HugeFlatHashMap and HugeFlatHashSet. `Table` is
-// the absl::flat_hash_map or absl::flat_hash_set holding the entries.
+// the absl::flat_hash_map or absl::flat_hash_set holding the entries, with the
+// user's hasher and key_equal wrapped in PrehashedHash and PrehashedEq.
 //
 // Two tables are kept. New entries always go to the foreground. When the
 // foreground would have to grow (or has become mostly empty), it becomes the
@@ -96,14 +152,17 @@ namespace internal {
 // all of them. A background lingers until enough insertions or erases have
 // drained it. Moving the container also invalidates its iterators; it moves
 // no entries.
+//
+// Each operation hashes the caller's key once and probes both tables, and the
+// insert that follows, with that hash.
 template <typename Table>
 class HugeHashTable {
  public:
   using key_type = typename Table::key_type;
   using value_type = typename Table::value_type;
   using size_type = size_t;
-  using hasher = typename Table::hasher;
-  using key_equal = typename Table::key_equal;
+  using hasher = typename Table::hasher::Inner;
+  using key_equal = typename Table::key_equal::Inner;
   using allocator_type = typename Table::allocator_type;
 
   template <bool Const>
@@ -230,27 +289,11 @@ class HugeHashTable {
   // for.
   template <typename Q = key_type>
   iterator find(const Q &key) {
-    if (auto it = fg_.find(key); it != fg_.end()) {
-      return iterator(this, false, it);
-    }
-    if (!bg_.empty()) {
-      if (auto it = bg_.find(key); it != bg_.end()) {
-        return iterator(this, true, it);
-      }
-    }
-    return end();
+    return Find(Prehash<LookupKey<Q>>(key));
   }
   template <typename Q = key_type>
   const_iterator find(const Q &key) const {
-    if (auto it = fg_.find(key); it != fg_.end()) {
-      return const_iterator(this, false, it);
-    }
-    if (!bg_.empty()) {
-      if (auto it = bg_.find(key); it != bg_.end()) {
-        return const_iterator(this, true, it);
-      }
-    }
-    return end();
+    return Find(Prehash<LookupKey<Q>>(key));
   }
 
   template <typename Q = key_type>
@@ -263,7 +306,7 @@ class HugeHashTable {
   }
 
   size_t erase(const key_type &key) {
-    size_t erased = EraseKey(key);
+    size_t erased = EraseKey(Prehash(key));
     Migrate(internal::g_huge_map_migrate_batch);
     return erased;
   }
@@ -278,12 +321,66 @@ class HugeHashTable {
   }
 
  protected:
-  std::pair<iterator, bool> Wrap(std::pair<typename Table::iterator, bool> r) {
-    return {iterator(this, false, r.first), r.second};
+  template <typename Q>
+  internal::Prehashed<Q> Prehash(const Q &key) const {
+    return {key, fg_.hash_function()(key)};
+  }
+
+  // Inserts the entry for `key` into fg_ unless it is already present,
+  // calling construct(ctor) to build it in place, where ctor is absl's
+  // lazy_emplace constructor.
+  template <typename F>
+  std::pair<iterator, bool> Emplace(const internal::Prehashed<key_type> &key,
+                                    F &&construct) {
+    PrepareInsert(key);
+    bool inserted = false;
+    auto it = fg_.lazy_emplace(key, [&](const auto &ctor) {
+      construct(ctor);
+      inserted = true;
+    });
+    return {iterator(this, false, it), inserted};
+  }
+
+  Table fg_;
+
+ private:
+  friend struct vmsdk::HugeFlatHashMapTestPeer;
+
+  // Lookups with a key of another type convert it to key_type first unless
+  // the user's hasher and key_equal are transparent, as absl does.
+  static constexpr bool kTransparent =
+      absl::container_internal::IsTransparent<hasher>::value &&
+      absl::container_internal::IsTransparent<key_equal>::value;
+  template <typename Q>
+  using LookupKey = std::conditional_t<kTransparent, Q, key_type>;
+
+  template <typename Q>
+  iterator Find(const internal::Prehashed<Q> &key) {
+    if (auto it = fg_.find(key); it != fg_.end()) {
+      return iterator(this, false, it);
+    }
+    if (!bg_.empty()) {
+      if (auto it = bg_.find(key); it != bg_.end()) {
+        return iterator(this, true, it);
+      }
+    }
+    return end();
+  }
+  template <typename Q>
+  const_iterator Find(const internal::Prehashed<Q> &key) const {
+    if (auto it = fg_.find(key); it != fg_.end()) {
+      return const_iterator(this, false, it);
+    }
+    if (!bg_.empty()) {
+      if (auto it = bg_.find(key); it != bg_.end()) {
+        return const_iterator(this, true, it);
+      }
+    }
+    return end();
   }
 
   // Called before an insertion of `key` into fg_.
-  void PrepareInsert(const key_type &key) {
+  void PrepareInsert(const internal::Prehashed<key_type> &key) {
     if (bg_.empty()) {
       if (Budget() > early_start_ || fg_.contains(key)) {
         return;
@@ -293,7 +390,7 @@ class HugeHashTable {
         return;
       }
     } else if (auto it = bg_.find(key); it != bg_.end()) {
-      MoveToForeground(it);
+      MoveToForeground(it, key);
     }
     // A cycle reserves fg_ for twice the live entries, so bg_ starts no larger
     // than the budget. Each insert, including the one that starts the cycle,
@@ -305,12 +402,7 @@ class HugeHashTable {
     Migrate(internal::g_huge_map_migrate_batch);
   }
 
-  Table fg_;
-
- private:
-  friend struct vmsdk::HugeFlatHashMapTestPeer;
-
-  size_t EraseKey(const key_type &key) {
+  size_t EraseKey(const internal::Prehashed<key_type> &key) {
     if (fg_.erase(key) != 0) {
       ErasedFromForeground();
       return 1;
@@ -368,11 +460,20 @@ class HugeHashTable {
     }
   }
 
-  void MoveToForeground(typename Table::iterator it) {
+  // Moves the bg_ entry for `key` to fg_ without hashing it again.
+  void MoveToForeground(typename Table::iterator it,
+                        const internal::Prehashed<key_type> &key) {
     if (it == bg_it_) {
       ++bg_it_;
     }
-    fg_.insert(bg_.extract(it));
+    auto node = bg_.extract(it);
+    fg_.lazy_emplace(key, [&](const auto &ctor) {
+      if constexpr (requires { node.mapped(); }) {
+        ctor(std::move(node.key()), std::move(node.mapped()));
+      } else {
+        ctor(std::move(node.value()));
+      }
+    });
     if (bg_.empty()) {
       ResetBackground();
     }
@@ -422,10 +523,12 @@ template <typename K, typename V,
           typename Hash = typename absl::flat_hash_map<K, V>::hasher,
           typename Eq = typename absl::flat_hash_map<K, V>::key_equal,
           typename Alloc = HugeAllocator<std::pair<const K, V>>>
-class HugeFlatHashMap : public internal::HugeHashTable<
-                            absl::flat_hash_map<K, V, Hash, Eq, Alloc>> {
-  using Base =
-      internal::HugeHashTable<absl::flat_hash_map<K, V, Hash, Eq, Alloc>>;
+class HugeFlatHashMap
+    : public internal::HugeHashTable<
+          absl::flat_hash_map<K, V, internal::PrehashedHash<Hash>,
+                              internal::PrehashedEq<Eq>, Alloc>> {
+  using Base = internal::HugeHashTable<absl::flat_hash_map<
+      K, V, internal::PrehashedHash<Hash>, internal::PrehashedEq<Eq>, Alloc>>;
 
  public:
   using mapped_type = V;
@@ -449,23 +552,26 @@ class HugeFlatHashMap : public internal::HugeHashTable<
 
   template <typename... Args>
   std::pair<iterator, bool> try_emplace(const K &key, Args &&...args) {
-    this->PrepareInsert(key);
-    return this->Wrap(this->fg_.try_emplace(key, std::forward<Args>(args)...));
+    return this->Emplace(this->Prehash(key), [&](const auto &ctor) {
+      ctor(std::piecewise_construct, std::forward_as_tuple(key),
+           std::forward_as_tuple(std::forward<Args>(args)...));
+    });
   }
   template <typename... Args>
   std::pair<iterator, bool> try_emplace(K &&key, Args &&...args) {
-    this->PrepareInsert(key);
-    return this->Wrap(
-        this->fg_.try_emplace(std::move(key), std::forward<Args>(args)...));
+    return this->Emplace(this->Prehash(key), [&](const auto &ctor) {
+      ctor(std::piecewise_construct, std::forward_as_tuple(std::move(key)),
+           std::forward_as_tuple(std::forward<Args>(args)...));
+    });
   }
 
   std::pair<iterator, bool> insert(const value_type &value) {
-    this->PrepareInsert(value.first);
-    return this->Wrap(this->fg_.insert(value));
+    return this->Emplace(this->Prehash(value.first),
+                         [&](const auto &ctor) { ctor(value); });
   }
   std::pair<iterator, bool> insert(value_type &&value) {
-    this->PrepareInsert(value.first);
-    return this->Wrap(this->fg_.insert(std::move(value)));
+    return this->Emplace(this->Prehash(value.first),
+                         [&](const auto &ctor) { ctor(std::move(value)); });
   }
 
   template <typename... Args>
@@ -475,8 +581,13 @@ class HugeFlatHashMap : public internal::HugeHashTable<
 
   template <typename M>
   std::pair<iterator, bool> insert_or_assign(const K &key, M &&obj) {
-    this->PrepareInsert(key);
-    return this->Wrap(this->fg_.insert_or_assign(key, std::forward<M>(obj)));
+    auto result = this->Emplace(this->Prehash(key), [&](const auto &ctor) {
+      ctor(key, std::forward<M>(obj));
+    });
+    if (!result.second) {
+      result.first->second = std::forward<M>(obj);
+    }
+    return result;
   }
 
   V &operator[](const K &key) { return try_emplace(key).first->second; }
@@ -488,19 +599,21 @@ template <typename T, typename Hash = typename absl::flat_hash_set<T>::hasher,
           typename Eq = typename absl::flat_hash_set<T>::key_equal,
           typename Alloc = HugeAllocator<T>>
 class HugeFlatHashSet
-    : public internal::HugeHashTable<absl::flat_hash_set<T, Hash, Eq, Alloc>> {
-  using Base = internal::HugeHashTable<absl::flat_hash_set<T, Hash, Eq, Alloc>>;
+    : public internal::HugeHashTable<absl::flat_hash_set<
+          T, internal::PrehashedHash<Hash>, internal::PrehashedEq<Eq>, Alloc>> {
+  using Base = internal::HugeHashTable<absl::flat_hash_set<
+      T, internal::PrehashedHash<Hash>, internal::PrehashedEq<Eq>, Alloc>>;
 
  public:
   using typename Base::iterator;
 
   std::pair<iterator, bool> insert(const T &value) {
-    this->PrepareInsert(value);
-    return this->Wrap(this->fg_.insert(value));
+    return this->Emplace(this->Prehash(value),
+                         [&](const auto &ctor) { ctor(value); });
   }
   std::pair<iterator, bool> insert(T &&value) {
-    this->PrepareInsert(value);
-    return this->Wrap(this->fg_.insert(std::move(value)));
+    return this->Emplace(this->Prehash(value),
+                         [&](const auto &ctor) { ctor(std::move(value)); });
   }
 };
 

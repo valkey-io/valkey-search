@@ -515,6 +515,105 @@ TEST_F(FlatHashMapTest, HeterogeneousLookup) {
   EXPECT_FALSE(m.contains(absl::string_view("missing")));
 }
 
+// Counts how often each key is hashed. Not transparent, like most hashers.
+absl::flat_hash_map<int64_t, int> g_hashes;
+struct CountingHash {
+  size_t operator()(int64_t key) const {
+    ++g_hashes[key];
+    return absl::Hash<int64_t>()(key);
+  }
+};
+using HashCountedMap =
+    HugeFlatHashMap<int64_t, int64_t, CountingHash, std::equal_to<int64_t>>;
+using HashCountedSet =
+    HugeFlatHashSet<int64_t, CountingHash, std::equal_to<int64_t>>;
+
+// Runs `op` and returns how often it hashed `key`.
+template <typename F>
+int HashesOf(int64_t key, F op) {
+  g_hashes.clear();
+  op();
+  return g_hashes[key];
+}
+
+// Fills past absl's small tables, then until a cycle leaves a background.
+template <typename M>
+int64_t FillPastSmallUntilBackground(M &m) {
+  int64_t next = 0;
+  for (; next < 1000 || Peer::Bg(m).empty(); ++next) {
+    if constexpr (requires { m[next]; }) {
+      m[next] = next;
+    } else {
+      m.insert(next);
+    }
+  }
+  return next;
+}
+
+TEST_F(FlatHashMapTest, HashesInputOncePerOperation) {
+  SetBatch(1);
+  HashCountedMap m;
+  int64_t next = FillPastSmallUntilBackground(m);
+  auto bg_key = [&] { return Peer::Bg(m).begin()->first; };
+  auto fg_key = [&] { return Peer::Fg(m).begin()->first; };
+
+  int64_t k = fg_key();
+  EXPECT_EQ(HashesOf(k, [&] { EXPECT_NE(m.find(k), m.end()); }), 1);
+  k = bg_key();
+  EXPECT_EQ(HashesOf(k, [&] { EXPECT_NE(m.find(k), m.end()); }), 1);
+  EXPECT_EQ(HashesOf(-1, [&] { EXPECT_EQ(m.find(-1), m.end()); }), 1);
+  EXPECT_EQ(HashesOf(-1, [&] { EXPECT_FALSE(m.contains(-1)); }), 1);
+  k = bg_key();
+  EXPECT_EQ(HashesOf(k, [&] { EXPECT_EQ(m.at(k), k); }), 1);
+
+  k = fg_key();
+  EXPECT_EQ(HashesOf(k, [&] { EXPECT_EQ(m.erase(k), 1); }), 1);
+  k = bg_key();
+  EXPECT_EQ(HashesOf(k, [&] { EXPECT_EQ(m.erase(k), 1); }), 1);
+  EXPECT_EQ(HashesOf(-1, [&] { EXPECT_EQ(m.erase(-1), 0); }), 1);
+
+  k = next++;
+  EXPECT_EQ(HashesOf(k, [&] { EXPECT_TRUE(m.try_emplace(k, k).second); }), 1);
+  k = bg_key();
+  EXPECT_EQ(HashesOf(k, [&] { EXPECT_FALSE(m.try_emplace(k, 0).second); }), 1);
+  EXPECT_TRUE(Peer::Fg(m).contains(k));
+  EXPECT_EQ(m.at(k), k);
+  k = next++;
+  EXPECT_EQ(HashesOf(k, [&] { EXPECT_TRUE(m.insert({k, k}).second); }), 1);
+  k = next++;
+  EXPECT_EQ(HashesOf(k, [&] { EXPECT_TRUE(m.insert_or_assign(k, k).second); }),
+            1);
+  k = bg_key();
+  EXPECT_EQ(
+      HashesOf(k, [&] { EXPECT_FALSE(m.insert_or_assign(k, -k).second); }), 1);
+  EXPECT_EQ(m.at(k), -k);
+  k = bg_key();
+  EXPECT_EQ(HashesOf(k, [&] { EXPECT_EQ(m[k], k); }), 1);
+  ASSERT_FALSE(Peer::Bg(m).empty());
+
+  HashCountedSet s;
+  next = FillPastSmallUntilBackground(s);
+  k = *Peer::Bg(s).begin();
+  EXPECT_EQ(HashesOf(k, [&] { EXPECT_TRUE(s.contains(k)); }), 1);
+  EXPECT_EQ(HashesOf(k, [&] { EXPECT_FALSE(s.insert(k).second); }), 1);
+  EXPECT_TRUE(Peer::Fg(s).contains(k));
+  k = next++;
+  EXPECT_EQ(HashesOf(k, [&] { EXPECT_TRUE(s.insert(k).second); }), 1);
+  k = *Peer::Bg(s).begin();
+  EXPECT_EQ(HashesOf(k, [&] { EXPECT_EQ(s.erase(k), 1); }), 1);
+  ASSERT_FALSE(Peer::Bg(s).empty());
+}
+
+// Covers the inserts that start a cycle, where fg_ is probed before the
+// insert, and the ones during a drain.
+TEST_F(FlatHashMapTest, EveryInsertHashesOnce) {
+  HashCountedMap m;
+  for (int64_t k = 0; k < 20000; ++k) {
+    ASSERT_EQ(HashesOf(k, [&] { m[k] = k; }), 1) << k;
+  }
+  EXPECT_GT(Peer::Cycles(m), 5);
+}
+
 TEST_F(FlatHashMapTest, SetBasicOperations) {
   Set s;
   EXPECT_TRUE(s.empty());

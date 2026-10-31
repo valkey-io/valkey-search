@@ -107,10 +107,12 @@ struct AggregateExecTest : public vmsdk::ValkeyTest {
     auto params = std::make_unique<AggregateParameters>(0);
     params->parse_vars_.index_interface_ = &fakeIndex;
     EXPECT_EQ(params->AddRecordAttribute("n1", "n1", "n1",
-                                         indexes::IndexerType::kNumeric),
+                                         indexes::IndexerType::kNumeric,
+                                         expr::Expression::Type::kNumber),
               0);
     EXPECT_EQ(params->AddRecordAttribute("n2", "n2", "n2",
-                                         indexes::IndexerType::kNumeric),
+                                         indexes::IndexerType::kNumeric,
+                                         expr::Expression::Type::kNumber),
               1);
     // params->attr_record_indexes_["n1"] = 0;
     // params->attr_record_indexes_["n2"] = 1;
@@ -136,13 +138,16 @@ struct AggregateExecTest : public vmsdk::ValkeyTest {
     auto params = std::make_unique<AggregateParameters>(0);
     params->parse_vars_.index_interface_ = &fakeIndex;
     EXPECT_EQ(params->AddRecordAttribute("n1", "n1", "n1",
-                                         indexes::IndexerType::kNumeric),
+                                         indexes::IndexerType::kNumeric,
+                                         expr::Expression::Type::kNumber),
               0);
     EXPECT_EQ(params->AddRecordAttribute("n2", "n2", "n2",
-                                         indexes::IndexerType::kNumeric),
+                                         indexes::IndexerType::kNumeric,
+                                         expr::Expression::Type::kNumber),
               1);
     EXPECT_EQ(params->AddRecordAttribute("n3", "n3", "n3",
-                                         indexes::IndexerType::kNumeric),
+                                         indexes::IndexerType::kNumeric,
+                                         expr::Expression::Type::kNumber),
               2);
 
     auto parser = CreateAggregateParser();
@@ -166,8 +171,10 @@ struct AggregateExecTest : public vmsdk::ValkeyTest {
     AggregateParameters params(0);
     params.parse_vars_.index_interface_ = &fakeIndex;
     // Two numeric columns so the parsed stages can resolve both @n1 and @n2.
-    params.AddRecordAttribute("n1", "n1", "n1", indexes::IndexerType::kNumeric);
-    params.AddRecordAttribute("n2", "n2", "n2", indexes::IndexerType::kNumeric);
+    params.AddRecordAttribute("n1", "n1", "n1", indexes::IndexerType::kNumeric,
+                              expr::Expression::Type::kNumber);
+    params.AddRecordAttribute("n2", "n2", "n2", indexes::IndexerType::kNumeric,
+                              expr::Expression::Type::kNumber);
 
     auto parser = CreateAggregateParser();
     auto status = parser.Parse(params, itr);
@@ -233,6 +240,83 @@ TEST_F(AggregateExecTest, ApplyTest) {
   r1->fields_[2] = expr::Value(double(2.0));
   EXPECT_EQ(*records[0], *r0);
   EXPECT_EQ(*records[1], *r1);
+}
+
+// An evaluation error fails the query, as in Redisearch, from 1.3.0 on. That
+// includes a reducer argument or sort key, which Redisearch allows only as a
+// field name and valkey-search allows as an expression.
+TEST_F(AggregateExecTest, EvaluationErrorFailsTheStage) {
+  const auto saved = options::GetEmulateRelease().GetValue();
+  for (absl::string_view stage :
+       {"APPLY strlen(@n1) AS x", "FILTER strlen(@n1)",
+        "GROUPBY 0 REDUCE SUM 1 strlen(@n1) AS s", "SORTBY 1 strlen(@n1)",
+        // No two records tie on @n1, so a comparator would never need the
+        // second key; it fails all the same.
+        "SORTBY 4 @n1 ASC strlen(@n1) ASC"}) {
+    // One record too: SORTBY has nothing to compare it with. Twenty is more
+    // than SORTBY's default MAX, which takes its bounded-heap path.
+    for (size_t count : {1, 2, 20}) {
+      VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue({1, 3, 0}));
+      auto records = MakeData(count);
+      auto status = MakeStages(stage)->stages_[0]->Execute(records);
+      EXPECT_EQ(status.code(), absl::StatusCode::kInvalidArgument)
+          << stage << " over " << count;
+      EXPECT_NE(status.message().find("strlen"), absl::string_view::npos)
+          << status;
+
+      VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue({1, 2, 0}));
+      records = MakeData(count);
+      VMSDK_EXPECT_OK(MakeStages(stage)->stages_[0]->Execute(records));
+    }
+  }
+  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue(saved));
+}
+
+// A null (lower() of a number) is a value that orders below every other one:
+// first ASC, last DESC. A missing value goes last either way. Measured on
+// Redis 8 with nulls mixed with strings and with numbers.
+TEST_F(AggregateExecTest, SortOrdersNullsFirstAndMissingLast) {
+  struct Case {
+    std::vector<expr::Value> input;
+    std::vector<std::string> asc, desc;  // sort keys, as printed below
+  };
+  auto name = [](const expr::Value &v) -> std::string {
+    if (v.IsNull()) {
+      return "null";
+    }
+    if (v.IsNil()) {
+      return "missing";
+    }
+    return std::string(*v.AsStringView());
+  };
+  std::vector<Case> cases = {
+      {{expr::Value("b"), expr::Value::Null(), expr::Value("a"),
+        expr::Value::Missing(), expr::Value("c"), expr::Value::Null()},
+       {"null", "null", "a", "b", "c", "missing"},
+       {"c", "b", "a", "null", "null", "missing"}},
+      {{expr::Value(3.0), expr::Value::Null(), expr::Value(1.0),
+        expr::Value::Missing(), expr::Value(2.0)},
+       {"null", "1", "2", "3", "missing"},
+       {"3", "2", "1", "null", "missing"}},
+  };
+  for (auto &c : cases) {
+    for (bool asc : {true, false}) {
+      RecordSet records(nullptr);
+      for (auto &v : c.input) {
+        auto rec = std::make_unique<Record>(2);
+        rec->fields_[0] = v;
+        rec->fields_[1] = expr::Value(0.0);
+        records.emplace_back(std::move(rec));
+      }
+      auto param = MakeStages(asc ? "SORTBY 2 @n1 ASC" : "SORTBY 2 @n1 DESC");
+      VMSDK_EXPECT_OK(param->stages_[0]->Execute(records));
+      std::vector<std::string> got;
+      for (auto &r : records) {
+        got.push_back(name(r->fields_[0]));
+      }
+      EXPECT_EQ(got, asc ? c.asc : c.desc);
+    }
+  }
 }
 
 TEST_F(AggregateExecTest, SortTest) {
@@ -496,12 +580,14 @@ TEST_F(AggregateExecTest, OutputNameReuseCollapsesOntoOneColumn) {
   params->parse_vars_.index_interface_ = &fakeIndex;
 
   EXPECT_EQ(params->AddRecordAttribute("n1", "n1", "n1",
-                                       indexes::IndexerType::kNumeric),
+                                       indexes::IndexerType::kNumeric,
+                                       expr::Expression::Type::kNumber),
             0);
   // Re-using the output name n1 for a different field resolves to the column
   // already emitting that name; no second n1 column is created.
   EXPECT_EQ(params->AddRecordAttribute("n2", "n1", "n1",
-                                       indexes::IndexerType::kNumeric),
+                                       indexes::IndexerType::kNumeric,
+                                       expr::Expression::Type::kNumber),
             0);
   EXPECT_EQ(params->record_info_by_index_.size(), 1);
   ASSERT_TRUE(params->record_indexes_by_alias_.contains("n1"));
@@ -512,7 +598,8 @@ TEST_F(AggregateExecTest, OutputNameReuseCollapsesOntoOneColumn) {
   // record_info_by_index_ -- what records are sized by -- stays the count of
   // columns actually emitted.
   EXPECT_EQ(params->AddRecordAttribute("n1", "n1", "alias_of_n1",
-                                       indexes::IndexerType::kNumeric),
+                                       indexes::IndexerType::kNumeric,
+                                       expr::Expression::Type::kNumber),
             1);
   EXPECT_EQ(params->record_info_by_index_.size(), 2);
   EXPECT_EQ(params->record_info_by_index_[1].identifier_, "n1");
@@ -520,7 +607,8 @@ TEST_F(AggregateExecTest, OutputNameReuseCollapsesOntoOneColumn) {
 
   // Re-adding a pair currently in effect is idempotent -- no new column.
   EXPECT_EQ(params->AddRecordAttribute("n1", "n1", "n1",
-                                       indexes::IndexerType::kNumeric),
+                                       indexes::IndexerType::kNumeric,
+                                       expr::Expression::Type::kNumber),
             0);
   EXPECT_EQ(params->record_info_by_index_.size(), 2);
 }
@@ -639,12 +727,15 @@ class CreateRecordsFromNeighborsTest : public ValkeySearchTest {
     params->index_schema = schema;
 
     params->AddRecordAttribute("__key", "__key", "__key",
-                               indexes::IndexerType::kNone);
+                               indexes::IndexerType::kNone,
+                               expr::Expression::Type::kString);
     params->AddRecordAttribute(score_name, score_name, score_name,
-                               indexes::IndexerType::kNone);
+                               indexes::IndexerType::kNone,
+                               expr::Expression::Type::kNumber);
     if (register_vr_column && !vr_name.empty()) {
       params->AddRecordAttribute(vr_name, vr_name, vr_name,
-                                 indexes::IndexerType::kNone);
+                                 indexes::IndexerType::kNone,
+                                 expr::Expression::Type::kNumber);
     }
     params->vr_score_field_name_ = vr_name;
     return params;
@@ -787,9 +878,11 @@ TEST_F(AggregateExecTest, FirstValueReducerTest) {
       auto params = std::make_unique<AggregateParameters>(0);
       params->parse_vars_.index_interface_ = &fakeIndex;
       params->AddRecordAttribute("n1", "n1", "n1",
-                                 indexes::IndexerType::kNumeric);
+                                 indexes::IndexerType::kNumeric,
+                                 expr::Expression::Type::kNumber);
       params->AddRecordAttribute("n2", "n2", "n2",
-                                 indexes::IndexerType::kNumeric);
+                                 indexes::IndexerType::kNumeric,
+                                 expr::Expression::Type::kNumber);
       auto parser = CreateAggregateParser();
       auto result = parser.Parse(*params, itr);
       EXPECT_FALSE(result.ok()) << tc.text_ << ": expected parse failure";
@@ -1277,10 +1370,12 @@ TEST_F(NeighborRecordTest, LoadAllDoesNotOverwriteTheScoreColumn) {
   params.loadall_ = true;
   params.no_content = false;
   ASSERT_EQ(params.AddRecordAttribute("__key", "__key", "__key",
-                                      indexes::IndexerType::kNone),
+                                      indexes::IndexerType::kNone,
+                                      expr::Expression::Type::kString),
             AggregateParameters::kKeyColumn);
   ASSERT_EQ(params.AddRecordAttribute("__score", "__score", "__score",
-                                      indexes::IndexerType::kNone),
+                                      indexes::IndexerType::kNone,
+                                      expr::Expression::Type::kNumber),
             AggregateParameters::kScoreColumn);
 
   std::vector<indexes::Neighbor> neighbors;

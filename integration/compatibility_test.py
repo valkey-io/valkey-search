@@ -13,7 +13,8 @@ ALL_ANSWER_FILES = [g["answers"] for g in GENERATORS]
 CLUSTER_ANSWER_FILES = [g["answers"] for g in GENERATORS if g["cluster"]]
 MULTILANG_ANSWER_FILES = [g["answers"] for g in GENERATORS if "multilang" in g["answers"]]
 # Non-multilang pickles run separately for organizational clarity
-BASE_ANSWER_FILES = [g["answers"] for g in GENERATORS if "multilang" not in g["answers"]]
+BASE_ANSWER_FILES = [g["answers"] for g in GENERATORS
+                     if "multilang" not in g["answers"] and g.get("standalone", True)]
 TEST_MARKER = "*" * 100
 from valkey_search_test_case import (
     ValkeySearchClusterTestCase,
@@ -936,7 +937,8 @@ def drop_index_cluster(test_case, key_type):
 def do_answer_cluster(cluster_client, expected, data_set, test_case):
     global correct_answers, failed_tests, passed_tests
 
-    next_data_set = (expected["data_set_name"], expected["key_type"])
+    next_data_set = (expected["data_set_name"], expected["key_type"],
+                     expected.get("schema_type"))
 
     if data_set != next_data_set:
         print(
@@ -955,6 +957,7 @@ def do_answer_cluster(cluster_client, expected, data_set, test_case):
             test_case,
             expected["data_set_name"],
             expected["key_type"],
+            schema_type=expected.get("schema_type", "default"),
         )
 
         # Wait for indexing to complete on all primary nodes before querying.

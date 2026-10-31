@@ -109,6 +109,9 @@ class BaseCompatibilityTest:
     # exists in the Redis 8.4+ query engine. The container name carries the
     # class name and a random suffix, so two generators never collide on it.
     
+    # Capture from a 3-primary Redis cluster instead of a single server.
+    CLUSTER = False
+
     @classmethod
     def setup_class(cls):
         if cls.ANSWER_FILE_NAME is None:
@@ -118,18 +121,27 @@ class BaseCompatibilityTest:
         # --search-workers 0 makes every write search-visible before the next
         # command, so no sleep is needed between loading data and querying it:
         # https://redis.io/docs/latest/develop/ai/redisvl/concepts/search-and-indexing/#search-visibility-after-writes
-        if os.system(f"docker run --rm -d --name {cls.container_name} "
-                     f"-p 0:6379 redis:latest "
-                     f"redis-server --search-workers 0") != 0:
-            print("Failed to start Redis server, please check your Docker setup.")
-            sys.exit(1)
-        port = cls._published_port()
-        if port is None:
-            os.system(f"docker stop {cls.container_name}")
-            print(f"Could not read the published port of {cls.container_name}.")
-            sys.exit(1)
-        cls.address = ("localhost", port)
-        print(f"Started {cls.container_name} server on port {port}")
+        server_args = " redis-server --search-workers 0"
+        cls.containers = [cls.container_name]
+        if cls.CLUSTER:
+            try:
+                cls._create_cluster(server_args + " --cluster-enabled yes")
+            except Exception as e:
+                os.system(f"docker stop {' '.join(cls.containers)}")
+                print(f"Failed to create the Redis cluster: {e}")
+                sys.exit(1)
+        else:
+            if os.system(f"docker run --rm -d --name {cls.container_name} "
+                         f"-p 0:6379 redis:latest{server_args}") != 0:
+                print("Failed to start Redis server, please check your Docker setup.")
+                sys.exit(1)
+            port = cls._published_port()
+            if port is None:
+                os.system(f"docker stop {cls.container_name}")
+                print(f"Could not read the published port of {cls.container_name}.")
+                sys.exit(1)
+            cls.address = ("localhost", port)
+            print(f"Started {cls.container_name} server on port {port}")
         # teardown_class has no route to the pytest session, and it must not
         # write an answer file from a run that did not finish. Set it up front
         # so that a run which never reaches a test is treated as incomplete.
@@ -139,7 +151,8 @@ class BaseCompatibilityTest:
         cls.replied_count = 0
         cls.client = ClientRSystem(cls.address)
         # The same commands are recorded over RESP3 to check RESP3 replies.
-        cls.client_resp3 = valkey.Valkey(
+        # Only the standalone replay compares RESP3.
+        cls.client_resp3 = None if cls.CLUSTER else valkey.Valkey(
             host=cls.address[0], port=cls.address[1], protocol=3
         )
         while True:
@@ -149,7 +162,50 @@ class BaseCompatibilityTest:
             except ConnectionError:
                 print("Waiting for R system to be ready...")
                 time.sleep(.25)
+        if cls.CLUSTER:
+            cls.client.client = valkey.ValkeyCluster(host=cls.address[0], port=6379)
         print("Done initializing")
+
+    @classmethod
+    def _create_cluster(cls, server_args):
+        """Start 3 primaries with ValkeySearchClusterTestCase's slot split.
+
+        The host reaches the nodes on their docker bridge IPs, which only a
+        Linux host can route to -- Docker Desktop cannot.
+        """
+        cls.containers += [f"{cls.container_name}-{i}" for i in (1, 2)]
+        for node in cls.containers:
+            if os.system(f"docker run --rm -d --name {node} redis:latest{server_args}") != 0:
+                raise RuntimeError(f"could not start {node}")
+        ips = [os.popen("docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "
+                        + node).read().strip() for node in cls.containers]
+        nodes = [valkey.Valkey(host=ip, port=6379) for ip in ips]
+        for node in nodes:
+            cls._wait_for(node.ping, "a node to answer PING")
+        # Same ranges as _split_range_pairs(0, 16384, 3). redis-cli --cluster
+        # create rounds the boundaries differently, which would move a slot
+        # to another shard and change both shards' BM25 statistics.
+        points = [i * 16384 // 3 for i in range(4)]
+        for node, start, end in zip(nodes, points, points[1:]):
+            node.execute_command("CLUSTER ADDSLOTSRANGE", start, end - 1)
+        for node in nodes[1:]:
+            node.execute_command("CLUSTER MEET", ips[0], 6379)
+        cls._wait_for(lambda: all(node.execute_command("CLUSTER INFO")["cluster_state"] == "ok"
+                                  for node in nodes), "the cluster to be up")
+        cls.address = (ips[0], 6379)
+        print(f"Started cluster {' '.join(cls.containers)}")
+
+    @staticmethod
+    def _wait_for(check, what, timeout=30):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                if check():
+                    return
+            except ConnectionError:
+                pass
+            time.sleep(.25)
+        raise RuntimeError(f"timed out waiting for {what}")
 
     @classmethod
     def _published_port(cls):
@@ -173,8 +229,8 @@ class BaseCompatibilityTest:
 
     @classmethod
     def teardown_class(cls):
-        print(f"Stopping {cls.container_name} server")
-        os.system(f"docker stop {cls.container_name}")
+        print(f"Stopping {' '.join(cls.containers)}")
+        os.system(f"docker stop {' '.join(cls.containers)}")
 
         # A generator that died part way collected only some of its answers.
         # Writing them replaces a complete answer file with a short one that
@@ -258,7 +314,10 @@ class BaseCompatibilityTest:
     def record_results(self, answer, cmd):
         """Runs cmd over RESP2 ("result") and RESP3 ("result_resp3")."""
         print("Cmd:", *cmd)
-        for suffix, client in (("", self.client), ("_resp3", self.client_resp3)):
+        clients = [("", self.client)]
+        if self.client_resp3 is not None:
+            clients.append(("_resp3", self.client_resp3))
+        for suffix, client in clients:
             try:
                 answer["result" + suffix] = client.execute_command(*cmd)
                 answer["exception" + suffix] = False
@@ -774,6 +833,106 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         self.checkvec(dialect, f"ft.aggregate {key_type}_idx1  *")
         self.checkvec(dialect, f"ft.aggregate {key_type}_idx1  * load *")
 
+    def test_aggregate_loadall_stage(self, key_type, dialect, vector_data_type):
+        """One pipeline stage after `LOAD *`, once per stage.
+
+        `LOAD *` asks for the whole record, and on a JSON index the whole
+        record is a single `$` column holding the root document. A `@name` in
+        a following stage resolves against no column of that blob, so the
+        field has to be fetched alongside it -- Redisearch emits the named
+        field *and* `$` together. HASH is run too so both key types are held
+        to one expectation, and on HASH it already works: the whole record
+        arrives keyed by field name.
+
+        The stage list is the five that build a pipeline stage in
+        `CreateAggregateParser`: APPLY, FILTER, GROUPBY, LIMIT and SORTBY.
+        Everything else that parser accepts (DIALECT, TIMEOUT, PARAMS,
+        SCORER, ADDSCORES, SLOP, INORDER, VERBATIM) is a query-level option
+        and builds no stage.
+
+        Redisearch auto-loads for SORTBY and for GROUPBY/REDUCE, but NOT for
+        APPLY or FILTER: those error with "Property `n1` not loaded nor in
+        pipeline", and the error has nothing to do with `LOAD *` -- plain
+        `load 1 @__key apply @n1*2 as doubled` errors the same way. So the
+        APPLY and FILTER cases below record an error, not a loaded column.
+        `compare_results` passes unconditionally whenever the reference
+        engine raised, so those two cases can never fail; they are here to
+        pin the reference behavior in the answer file, and a regeneration
+        that stops recording an error is the signal to revisit them. The
+        GROUPBY, SORTBY and LIMIT cases are the ones that actually measure.
+
+        Row alignment: `LOAD *` takes no field list, so `@__key` cannot be
+        loaded to align on and the reference answers carry no `__key` column.
+        The GROUPBY and SORTBY cases give the harness their own sort keys;
+        the rest fall back to the whole-row-content tiebreak in
+        `row_sort_key`, which is unique per row here because every document's
+        `$` blob is distinct.
+        """
+        self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
+
+        # APPLY over a field that only `LOAD *` brings in.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load * apply 1+@n1 as computed"
+        )
+        # FILTER over two such fields. n1 < n2 is n1 < -n1, so the surviving
+        # set is the negative half of n1 -- a deterministic subset, not an
+        # arbitrary one.
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load * filter @n1<@n2")
+        # GROUPBY on a field only `LOAD *` brings in. t1 is unique per
+        # document, so a working group key yields one group per document and
+        # a broken one collapses them into a single group -- a difference the
+        # harness reports as a row-count mismatch rather than a value one.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load * groupby 1 @t1 reduce count 0 as cnt"
+        )
+        # LIMIT wider than the data set. A narrower one would take an
+        # arbitrary slice, since nothing has ordered the rows yet; the
+        # SORTBY-then-LIMIT case below covers a real truncation.
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load * limit 0 100")
+        # SORTBY on a field only `LOAD *` brings in. Excluded on HASH: Redis
+        # sorts a `LOAD *` HASH field as a string even when it is declared
+        # NUMERIC, so -1 comes before -5; valkey-search sorts it as a number.
+        # See unsupported_tests.md 8.1.
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load * sortby 2 @n1 asc",
+                   excluded=(key_type == "hash"))
+        # SORTBY on a tag field, so the name survives a string stage too.
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load * sortby 2 @t1 asc")
+
+    def test_aggregate_loadall_two_stages(self, key_type, dialect, vector_data_type):
+        """Two pipeline stages after `LOAD *`.
+
+        A second stage reads what the first one produced, so these pin that
+        the field `LOAD *` had to bring in survives one hop further down the
+        pipeline than the single-stage cases above.
+
+        As above, the APPLY-then-SORTBY case records a reference error and so
+        cannot fail; APPLY does not auto-load its operand on either engine.
+        The GROUPBY-then-APPLY case does measure, because there the APPLY
+        reads a reducer output that is already in the pipeline rather than a
+        stored field.
+        """
+        self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
+
+        # APPLY then SORTBY: the sort key is the APPLY output, which exists
+        # only if the APPLY could read the field `LOAD *` brought in.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load * apply @n1*2 as dbl sortby 2 @dbl asc"
+        )
+        # SORTBY then LIMIT: a real truncation, made deterministic by the sort
+        # in front of it.
+        # Excluded on HASH for the same reason as the single-stage SORTBY on
+        # @n1 above (unsupported_tests.md 8.1).
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load * sortby 2 @n1 asc limit 0 5",
+            excluded=(key_type == "hash"),
+        )
+        # GROUPBY then APPLY: the reducer argument is a second field that
+        # `LOAD *` has to bring in, and the APPLY re-reads the reducer's own
+        # output name afterwards.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load * groupby 1 @t1 reduce sum 1 @n1 as total apply 1+@total as bumped"
+        )
+
     def test_aggregate_autoload_groupby(self, key_type, dialect, vector_data_type):
         """A field named by GROUPBY or by a REDUCE argument must be fetched even
         when no LOAD clause covers it. Redisearch loads such fields implicitly;
@@ -882,7 +1041,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 4 @__key @n1 as n2")
         # ... including for later pipeline stages.
         self.check(dialect,
-            f"ft.aggregate {key_type}_idx1 * load 4 @__key @n1 as n2 apply @n2+100 as r"
+            f"ft.aggregate {key_type}_idx1 * load 4 @__key @n1 as n2 apply 100+@n2 as r"
         )
         # Hiding a declared field of a different type (numeric hides a tag).
         self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 4 @__key @n1 as t1")
@@ -920,7 +1079,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
             excluded=True,
         )
         self.check(dialect,
-            f"ft.aggregate {key_type}_idx1 * load 7 @__key @n1 as x @n2 as x apply @x+1 as y",
+            f"ft.aggregate {key_type}_idx1 * load 7 @__key @n1 as x @n2 as x apply 1+@x as y",
             excluded=True,
         )
 
@@ -931,7 +1090,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
         # Load by JSON path with a rename, then use the rename in APPLY.
         self.check(dialect,
-            f"ft.aggregate {key_type}_idx1 * load 4 @__key $.n1 as a apply @a+1 as b"
+            f"ft.aggregate {key_type}_idx1 * load 4 @__key $.n1 as a apply 1+@a as b"
         )
         # Load by JSON path without a rename: emitted under the path.
         self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 2 @__key $.n1")
@@ -954,11 +1113,11 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
 
         # --- APPLY: both the source name and the computed name.
         self.check(dialect,
-            f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1 apply @n1+1 as computed"
+            f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1 apply 1+@n1 as computed"
         )
         # APPLY writing back over the loaded field's own name.
         self.check(dialect,
-            f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1 apply @n1+1 as n1"
+            f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1 apply 1+@n1 as n1"
         )
         # APPLY over a field that is not named in the LOAD clause.
         self.check(dialect,
@@ -1001,7 +1160,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         )
         # A reducer feeding a later APPLY, so the reducer's name is re-read.
         self.check(dialect,
-            f"ft.aggregate {key_type}_idx1 * load 2 @t1 @n1 groupby 1 @t1 reduce sum 1 @n1 as total apply @total+1 as bumped"
+            f"ft.aggregate {key_type}_idx1 * load 2 @t1 @n1 groupby 1 @t1 reduce sum 1 @n1 as total apply 1+@total as bumped"
         )
 
         # --- SORTBY does not rename what it sorts on.
@@ -1022,10 +1181,10 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
 
         # --- Multi-stage pipelines, end to end.
         self.check(dialect,
-            f"ft.aggregate {key_type}_idx1 * load 3 @__key @n1 @t1 apply @n1+10 as bumped filter @bumped>0"
+            f"ft.aggregate {key_type}_idx1 * load 3 @__key @n1 @t1 apply 10+@n1 as bumped filter @bumped>0"
         )
         self.check(dialect,
-            f"ft.aggregate {key_type}_idx1 * load 2 @t1 @n1 apply @n1+10 as bumped groupby 1 @t1 reduce max 1 @bumped as peak"
+            f"ft.aggregate {key_type}_idx1 * load 2 @t1 @n1 apply 10+@n1 as bumped groupby 1 @t1 reduce max 1 @bumped as peak"
         )
 
     def test_aggregate_numeric_dyadic_operators(self, key_type, dialect, vector_data_type):

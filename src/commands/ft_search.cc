@@ -61,11 +61,6 @@ size_t TotalResults(const query::SearchResult &search_result,
   return std::min(search_result.total_count, static_cast<size_t>(parameters.k));
 }
 
-bool HasTextRelevance(const SearchCommand &parameters) {
-  return parameters.IsNonVectorQuery() ||
-         query::QueryHasTextPredicate(parameters);
-}
-
 void ReplyScore(ValkeyModuleCtx *ctx, ValkeyModuleString &score_as,
                 const indexes::Neighbor &neighbor) {
   ValkeyModule_ReplyWithString(ctx, &score_as);
@@ -329,7 +324,7 @@ class CursorSearchResult : public Cursor {
 SearchCommand::RowFormat SearchCommand::GetRowFormat(int resp_version) const {
   const bool resp3 = resp_version == ResultsReply::kResp3;
   RowFormat format;
-  format.has_relevance = HasTextRelevance(*this);
+  format.has_relevance = ScoreIsRelevance();
   // The vector-distance sort key is numeric ('#').
   format.sort_by_vec_score =
       !IsNonVectorQuery() && sortby_parameter.has_value() && score_as &&

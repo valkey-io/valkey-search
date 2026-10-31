@@ -118,12 +118,6 @@ function(valkey_search_target_update_compile_flags TARGET)
     target_compile_options(${TARGET}
                            PRIVATE -ffile-prefix-map=${CMAKE_SOURCE_DIR}=)
   endif()
-  # -ffast-math is intentionally NOT used. It implies -ffinite-math-only, so the
-  # compiler assumes NaN never occurs. On aarch64 that turned the HNSW greedy
-  # descent compare into fcmpe + b.ge, which loops forever on a NaN distance.
-  # Measured cost of removing it (200k x 128-dim, HNSW M=16 EF_C=200):
-  #   ARM: search +/-0.6%, index build ~2% slower; x86: within noise.
-  #   Recall unchanged on both.
   target_compile_options(${TARGET} PRIVATE -funroll-loops)
   target_compile_options(${TARGET} PRIVATE -ftree-vectorize)
   if(UNIX AND NOT APPLE)

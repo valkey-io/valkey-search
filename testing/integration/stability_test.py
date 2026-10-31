@@ -681,10 +681,7 @@ class StabilityTests(parameterized.TestCase):
                 "loglevel": "debug",
                 "enable-debug-command": "yes",
                 "repl-diskless-load": config.repl_diskless_load,
-                # Capped by the failover path: promotion needs at least
-                # cluster-node-timeout, and periodic_failover_task allows only
-                # 30s for it (wait_for_new_primary). Raise those timeouts first
-                # if this needs to go higher.
+                # Must stay below the 30s failover wait (wait_for_new_primary).
                 "cluster-node-timeout": "15000",
             },
             {

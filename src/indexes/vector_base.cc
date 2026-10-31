@@ -581,6 +581,25 @@ absl::StatusOr<float> VectorBase::RecomputeDistance(
   return ComputeDistance(query, vector_record, query_magnitude);
 }
 
+absl::StatusOr<float> VectorBase::RecomputeDistance(
+    const AttributeDataType &data_type, const RecordsMap &records,
+    absl::string_view query) const {
+  auto it = records.find(attribute_identifier_);
+  if (it == records.end() || !it->second.value) {
+    return absl::NotFoundError("Missing vector attribute");
+  }
+  if (!data_type.AttributesProvidedAsString()) {
+    return RecomputeDistance(vmsdk::ToStringView(it->second.value.get()),
+                             query);
+  }
+  auto record = NormalizeStringAttribute(
+      vmsdk::RetainUniqueValkeyString(it->second.value.get()));
+  if (!record) {
+    return absl::InvalidArgumentError("Invalid vector array");
+  }
+  return RecomputeDistance(vmsdk::ToStringView(record.get()), query);
+}
+
 bool VectorBase::AddPrefilteredKey(
     absl::string_view query, float query_magnitude,
     const InternedStringPtr &key, uint64_t count,

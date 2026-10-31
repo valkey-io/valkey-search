@@ -13,6 +13,8 @@ range.
 
 import struct
 
+import pytest
+
 from valkey.client import Valkey
 from valkey_search_test_case import ValkeySearchTestCaseDebugMode
 from valkeytestframework.util import waiters
@@ -158,6 +160,145 @@ class TestVectorMutationRescore(ValkeySearchTestCaseDebugMode):
         self._release(client, thread, err)
 
         assert [k for k, _ in during] == [b"d:2", b"d:3", b"d:4"]
+
+    @pytest.mark.parametrize("missing", [True, False])
+    @pytest.mark.parametrize("filtered", [True, False])
+    @pytest.mark.parametrize("return_fields", [True, False])
+    def test_knn_drops_a_document_without_a_valid_current_vector(
+            self, missing, filtered, return_fields):
+        client: Valkey = self.server.get_new_client()
+        self.setup_index(client)
+        write = (("HDEL", "d:1", "vec") if missing else
+                 ("HSET", "d:1", "vec", _vec(1.0, 0.0, 0.0)))
+        thread, err = self._park_mutation(client, *write)
+        try:
+            predicate = "@price:[0 100]" if filtered else "*"
+            fields = ("RETURN", "2", "dist", "price") if return_fields else ()
+            result = client.execute_command(
+                "FT.SEARCH", self.INDEX,
+                f"{predicate}=>[KNN 4 @vec $q AS dist]", *fields,
+                "DIALECT", "2", "PARAMS", "2", "q", self.Q)
+            assert result[0] == 3, result
+            assert result[1::2] == [b"d:2", b"d:3", b"d:4"], result
+        finally:
+            self._release(client, thread, err)
+
+    def setup_json_index(self, client: Valkey, data_type="FLOAT32"):
+        self.Q = struct.pack("<4e" if data_type == "FLOAT16" else "<4f",
+                             0, 0, 0, 0)
+        client.execute_command(
+            "FT.CREATE", self.INDEX, "ON", "JSON", "PREFIX", "1", "j:",
+            "SCHEMA", "$.price", "AS", "price", "NUMERIC",
+            "$.vec", "AS", "vec", "VECTOR", "FLAT", "6",
+            "TYPE", data_type, "DIM", "4", "DISTANCE_METRIC", "L2")
+        for i in range(1, 5):
+            client.execute_command(
+                "JSON.SET", f"j:{i}", "$",
+                f'{{"price": {i}, "vec": [{i}, 0, 0, 0]}}')
+        IndexingTestHelper.wait_for_indexing_complete_on_node(client, self.INDEX)
+
+    @pytest.mark.parametrize("mutation", [
+        "vector", "other_field", "missing", "wrong_dimension", "non_numeric"])
+    @pytest.mark.parametrize("return_fields", ["all", "price", "vector"])
+    @pytest.mark.parametrize("data_type", ["FLOAT32", "FLOAT16"])
+    def test_knn_revalidates_json_vectors(self, mutation, return_fields, data_type):
+        client: Valkey = self.server.get_new_client()
+        self.setup_json_index(client, data_type)
+        writes = {
+            "vector": ("JSON.SET", "j:1", "$.vec", "[5, 0, 0, 0]"),
+            "other_field": ("JSON.SET", "j:1", "$.price", "10"),
+            "missing": ("JSON.DEL", "j:1", "$.vec"),
+            "wrong_dimension": ("JSON.SET", "j:1", "$.vec", "[1, 0, 0]"),
+            "non_numeric": ("JSON.SET", "j:1", "$.vec", '["bad", 0, 0, 0]'),
+        }
+        fields = {
+            "all": (),
+            "price": ("RETURN", "2", "dist", "price"),
+            "vector": ("RETURN", "2", "dist", "vec"),
+        }
+        thread, err = self._park_mutation(client, *writes[mutation])
+        try:
+            result = client.execute_command(
+                "FT.SEARCH", self.INDEX,
+                "@price:[0 100]=>[KNN 4 @vec $q AS dist]",
+                *fields[return_fields],
+                "DIALECT", "2", "PARAMS", "2", "q", self.Q)
+            expected = [(b"j:2", 4), (b"j:3", 9), (b"j:4", 16)]
+            if mutation == "vector":
+                expected.append((b"j:1", 25))
+            elif mutation == "other_field":
+                expected.insert(0, (b"j:1", 1))
+            rows = []
+            for i in range(1, len(result), 2):
+                attributes = dict(zip(result[i + 1][::2], result[i + 1][1::2]))
+                rows.append((result[i], float(attributes[b"dist"])))
+                if return_fields == "vector":
+                    coordinate = int(result[i].split(b":")[1])
+                    if result[i] == b"j:1" and mutation == "vector":
+                        coordinate = 5
+                    # Reading binary bytes must not replace response content.
+                    assert attributes[b"vec"] == (
+                        f"[{coordinate},0,0,0]".encode())
+            assert result[0] == len(expected), result
+            assert rows == expected, result
+        finally:
+            self._release(client, thread, err)
+
+    @pytest.mark.parametrize("mutation", [
+        "vector", "other_field", "missing", "wrong_dimension", "non_numeric"])
+    def test_hybrid_revalidates_json_vectors(self, mutation):
+        client: Valkey = self.server.get_new_client()
+        self.setup_json_index(client)
+        writes = {
+            "vector": ("JSON.SET", "j:1", "$.vec", "[5, 0, 0, 0]"),
+            "other_field": ("JSON.SET", "j:1", "$.price", "10"),
+            "missing": ("JSON.DEL", "j:1", "$.vec"),
+            "wrong_dimension": ("JSON.SET", "j:1", "$.vec", "[1, 0, 0]"),
+            "non_numeric": ("JSON.SET", "j:1", "$.vec", '["bad", 0, 0, 0]'),
+        }
+        thread, err = self._park_mutation(client, *writes[mutation])
+        query_thread = None
+        try:
+            blocked_before = client.info("SEARCH").get(
+                "search_text_query_blocked_count", 0)
+            query_thread, out, query_err = run_in_thread(
+                lambda: self._hybrid_rows(self.server.get_new_client()))
+            # Ensure the arms searched the old index before releasing the write.
+            waiters.wait_for_true(
+                lambda: client.info("SEARCH").get(
+                    "search_text_query_blocked_count", 0) > blocked_before,
+                timeout=5)
+        finally:
+            self._release(client, thread, err)
+            if query_thread is not None:
+                query_thread.join()
+        assert query_err[0] is None, query_err[0]
+        during = out[0]
+        assert sorted(during) == [b"j:1", b"j:2", b"j:3", b"j:4"]
+        if mutation in ("vector", "other_field"):
+            expected_distance = 25 if mutation == "vector" else 1
+            # VSIM exposes L2 similarity, not the raw distance.
+            assert float(during[b"j:1"][b"vdist"]) == pytest.approx(
+                1 / (1 + expected_distance))
+        else:
+            assert b"vdist" not in during[b"j:1"]
+        assert during == self._hybrid_rows(client)
+
+    @pytest.mark.parametrize("value,expected", [
+        ("[0.5, 0, 0, 0]", [b"j:1", b"j:2"]),
+        ("[5, 0, 0, 0]", [b"j:2"]),
+        ("[1, 0, 0]", [b"j:2"]),
+        ('["bad", 0, 0, 0]', [b"j:2"]),
+    ])
+    def test_vector_range_revalidates_json_vectors(self, value, expected):
+        client: Valkey = self.server.get_new_client()
+        self.setup_json_index(client)
+        thread, err = self._park_mutation(
+            client, "JSON.SET", "j:1", "$.vec", value)
+        try:
+            assert self.vr(client) == expected
+        finally:
+            self._release(client, thread, err)
 
     def _hybrid_rows(self, client: Valkey):
         """{key: fields} from FT.HYBRID.

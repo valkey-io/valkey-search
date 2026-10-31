@@ -19,6 +19,7 @@
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "testing/common.h"
+#include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -135,6 +136,184 @@ TEST_F(KeyspaceEventManagerTest, RemoveSubscriptionNotExists) {
                 .RemoveSubscription((KeyspaceEventSubscription *)0xBAADF00D)
                 .code(),
             absl::StatusCode::kNotFound);
+}
+
+TEST_F(KeyspaceEventManagerTest, DoesNotBlockForSubscriptionInOtherDatabase) {
+  TestableKeyspaceEventManager keyspace_event_manager;
+  MockKeyspaceEventSubscription subscription;
+  MockAttributeDataType attribute_data_type;
+  std::vector<std::string> prefixes = {"prefix:"};
+  subscription.db_num_ = 1;
+
+  EXPECT_CALL(attribute_data_type, GetValkeyEventTypes())
+      .WillRepeatedly(Return(VALKEYMODULE_NOTIFY_HASH));
+  EXPECT_CALL(attribute_data_type, ToProto())
+      .WillRepeatedly(Return(data_model::ATTRIBUTE_DATA_TYPE_HASH));
+  EXPECT_CALL(subscription, GetAttributeDataType())
+      .WillRepeatedly(ReturnRef(attribute_data_type));
+  EXPECT_CALL(subscription, GetKeyPrefixes())
+      .WillRepeatedly(ReturnRef(prefixes));
+  EXPECT_CALL(*kMockValkeyModule,
+              SubscribeToKeyspaceEvents(&fake_ctx_, VALKEYMODULE_NOTIFY_HASH,
+                                        testing::_))
+      .WillOnce(Return(VALKEYMODULE_OK));
+  VMSDK_EXPECT_OK(
+      keyspace_event_manager.InsertSubscription(&fake_ctx_, &subscription));
+
+  auto key = vmsdk::MakeUniqueValkeyString("prefix:key");
+  EXPECT_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx_))
+      .WillOnce(Return(0));
+  EXPECT_CALL(*kMockValkeyModule, GetClientId(&fake_ctx_))
+      .WillRepeatedly(Return(1));
+  EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx_))
+      .WillRepeatedly(Return(0));
+  EXPECT_CALL(
+      *kMockValkeyModule,
+      BlockClient(&fake_ctx_, testing::_, testing::_, testing::_, testing::_))
+      .Times(0);
+  EXPECT_CALL(subscription,
+              OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_HASH,
+                                     testing::StrEq("event"), key.get()))
+      .Times(0);
+
+  keyspace_event_manager.NotifySubscribers(&fake_ctx_, VALKEYMODULE_NOTIFY_HASH,
+                                           "event", key.get());
+
+  VMSDK_EXPECT_OK(keyspace_event_manager.RemoveSubscription(&subscription));
+}
+
+TEST_F(KeyspaceEventManagerTest, CommandBlockReleasedBeforeNextCommand) {
+  auto &manager = KeyspaceEventManager::Instance();
+  const ClientBlockingContext blocking_context(&fake_ctx_, manager);
+  EXPECT_CALL(*kMockValkeyModule, GetClientId(&fake_ctx_))
+      .WillRepeatedly(Return(1));
+  EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx_))
+      .WillRepeatedly(Return(0));
+  EXPECT_CALL(*kMockValkeyModule, BlockClient(&fake_ctx_, _, _, _, _))
+      .WillOnce(Return(reinterpret_cast<ValkeyModuleBlockedClient *>(1)))
+      .WillOnce(Return(reinterpret_cast<ValkeyModuleBlockedClient *>(2)));
+  EXPECT_CALL(*kMockValkeyModule, UnblockClient(_, nullptr)).Times(2);
+  for (int command = 0; command < 2; ++command) {
+    auto first =
+        blocking_context.AcquireBlock(vmsdk::BlockedClientCategory::kHash);
+    auto second =
+        blocking_context.AcquireBlock(vmsdk::BlockedClientCategory::kHash);
+    ASSERT_NE(first, nullptr);
+    EXPECT_EQ(first, second);
+    manager.OnExecutionUnitEnd();
+    EXPECT_EQ(vmsdk::BlockedClient::GetActiveClientCount(
+                  vmsdk::BlockedClientCategory::kHash),
+              1);
+  }
+  EXPECT_EQ(vmsdk::BlockedClient::GetActiveClientCount(
+                vmsdk::BlockedClientCategory::kHash),
+            0);
+}
+
+TEST_F(KeyspaceEventManagerTest, RegistrationSurvivesEarlyMutationCompletion) {
+  auto &manager = KeyspaceEventManager::Instance();
+  const ClientBlockingContext blocking_context(&fake_ctx_, manager);
+  ValkeyModulePostNotificationJobFunc finish = nullptr;
+  void *data = nullptr;
+  EXPECT_CALL(*kMockValkeyModule, GetClientId(&fake_ctx_))
+      .WillRepeatedly(Return(1));
+  EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx_))
+      .WillRepeatedly(Return(0));
+  EXPECT_CALL(*kMockValkeyModule,
+              AddPostNotificationJob(&fake_ctx_, _, _, nullptr))
+      .WillOnce([&](ValkeyModuleCtx *,
+                    ValkeyModulePostNotificationJobFunc callback,
+                    void *privdata, void (*)(void *)) {
+        finish = callback;
+        data = privdata;
+        return VALKEYMODULE_OK;
+      });
+  EXPECT_CALL(*kMockValkeyModule, BlockClient(&fake_ctx_, _, _, _, _))
+      .WillOnce(Return(reinterpret_cast<ValkeyModuleBlockedClient *>(1)));
+  EXPECT_CALL(*kMockValkeyModule, UnblockClient(_, nullptr)).Times(0);
+  auto apple =
+      blocking_context.AcquireBlock(vmsdk::BlockedClientCategory::kHash);
+  std::weak_ptr<vmsdk::BlockedClient> original = apple;
+  apple.reset();
+  EXPECT_FALSE(original.expired());
+  auto banana =
+      blocking_context.AcquireBlock(vmsdk::BlockedClientCategory::kHash);
+  EXPECT_EQ(banana, original.lock());
+  ASSERT_NE(finish, nullptr);
+  finish(&fake_ctx_, data);
+  EXPECT_FALSE(original.expired());
+  testing::Mock::VerifyAndClearExpectations(kMockValkeyModule);
+  EXPECT_CALL(*kMockValkeyModule, UnblockClient(_, nullptr)).Times(1);
+  banana.reset();
+  EXPECT_TRUE(original.expired());
+}
+
+TEST_F(KeyspaceEventManagerTest, CompletedWorkReleasedAtExecutionUnitEnd) {
+  auto &manager = KeyspaceEventManager::Instance();
+  const ClientBlockingContext blocking_context(&fake_ctx_, manager);
+  ValkeyModulePostNotificationJobFunc finish = nullptr;
+  void *data = nullptr;
+  EXPECT_CALL(*kMockValkeyModule, GetClientId(&fake_ctx_))
+      .WillRepeatedly(Return(1));
+  EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx_))
+      .WillRepeatedly(Return(0));
+  EXPECT_CALL(*kMockValkeyModule,
+              AddPostNotificationJob(&fake_ctx_, _, _, nullptr))
+      .WillOnce([&](ValkeyModuleCtx *,
+                    ValkeyModulePostNotificationJobFunc callback,
+                    void *privdata, void (*)(void *)) {
+        finish = callback;
+        data = privdata;
+        return VALKEYMODULE_OK;
+      });
+  EXPECT_CALL(*kMockValkeyModule, BlockClient(&fake_ctx_, _, _, _, _))
+      .WillOnce(Return(reinterpret_cast<ValkeyModuleBlockedClient *>(1)));
+  EXPECT_CALL(*kMockValkeyModule, UnblockClient(_, nullptr)).Times(1);
+  auto mutation =
+      blocking_context.AcquireBlock(vmsdk::BlockedClientCategory::kHash);
+  std::weak_ptr<vmsdk::BlockedClient> owner = mutation;
+  mutation.reset();
+  ASSERT_NE(finish, nullptr);
+  finish(&fake_ctx_, data);
+  EXPECT_TRUE(owner.expired());
+}
+
+TEST_F(KeyspaceEventManagerTest, RejectedCleanupDoesNotBlockClient) {
+  const ClientBlockingContext blocking_context(
+      &fake_ctx_, KeyspaceEventManager::Instance());
+  EXPECT_CALL(*kMockValkeyModule, GetClientId(&fake_ctx_))
+      .WillRepeatedly(Return(1));
+  EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx_))
+      .WillRepeatedly(Return(0));
+  EXPECT_CALL(*kMockValkeyModule,
+              AddPostNotificationJob(&fake_ctx_, _, _, nullptr))
+      .WillOnce(Return(VALKEYMODULE_ERR));
+  EXPECT_CALL(*kMockValkeyModule, BlockClient(_, _, _, _, _)).Times(0);
+  EXPECT_EQ(blocking_context.AcquireBlock(vmsdk::BlockedClientCategory::kHash),
+            nullptr);
+}
+
+TEST_F(KeyspaceEventManagerTest, IneligibleContextsDoNotBlockClients) {
+  const ClientBlockingContext blocking_context(
+      &fake_ctx_, KeyspaceEventManager::Instance());
+  int context_flags = 0;
+  unsigned long long client_id = 0;
+  EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx_))
+      .WillRepeatedly([&](ValkeyModuleCtx *) { return context_flags; });
+  EXPECT_CALL(*kMockValkeyModule, GetClientId(&fake_ctx_))
+      .WillRepeatedly([&](ValkeyModuleCtx *) { return client_id; });
+  EXPECT_CALL(*kMockValkeyModule, AddPostNotificationJob(_, _, _, _)).Times(0);
+  EXPECT_CALL(*kMockValkeyModule, BlockClient(_, _, _, _, _)).Times(0);
+  EXPECT_EQ(blocking_context.AcquireBlock(vmsdk::BlockedClientCategory::kHash),
+            nullptr);
+  client_id = 1;
+  for (int flags : {VALKEYMODULE_CTX_FLAGS_MULTI, VALKEYMODULE_CTX_FLAGS_LUA,
+                    VALKEYMODULE_CTX_FLAGS_REPLICATED}) {
+    context_flags = flags;
+    EXPECT_EQ(
+        blocking_context.AcquireBlock(vmsdk::BlockedClientCategory::kHash),
+        nullptr);
+  }
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -404,10 +583,6 @@ TEST_F(KeyspaceEventManagerTest, RenameLifecycleCrossDatabaseMove) {
       .WillOnce(Return());
   EXPECT_CALL(*kMockValkeyModule, SelectDb(&fake_ctx_, 1))
       .WillOnce(Return(VALKEYMODULE_OK));
-  EXPECT_CALL(*mock_sub_db0,
-              OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_GENERIC,
-                                     testing::StrEq("rename_to"), testing::_))
-      .WillOnce(Return());
   EXPECT_CALL(*mock_sub_db1,
               OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_GENERIC,
                                      testing::StrEq("rename_to"), testing::_))
@@ -477,10 +652,6 @@ TEST_F(KeyspaceEventManagerTest, MoveLifecycleCrossDatabaseMove) {
       .WillOnce(Return());
   EXPECT_CALL(*kMockValkeyModule, SelectDb(&fake_ctx_, 1))
       .WillOnce(Return(VALKEYMODULE_OK));
-  EXPECT_CALL(*mock_sub_db0,
-              OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_GENERIC,
-                                     testing::StrEq("move_to"), testing::_))
-      .WillOnce(Return());
   EXPECT_CALL(*mock_sub_db1,
               OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_GENERIC,
                                      testing::StrEq("move_to"), testing::_))

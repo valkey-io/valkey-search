@@ -13,12 +13,18 @@
 #include <string>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "src/attribute_data_type.h"
 #include "src/utils/patricia_tree.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
+
+namespace vmsdk {
+class BlockedClient;
+enum class BlockedClientCategory;
+}  // namespace vmsdk
 
 namespace valkey_search {
 namespace indexes {
@@ -27,6 +33,21 @@ class VectorBase;
 
 using StartSubscriptionFunction =
     std::function<absl::Status(ValkeyModuleCtx *, int)>;
+using SharedBlockedClient = std::shared_ptr<vmsdk::BlockedClient>;
+
+class KeyspaceEventManager;
+
+class ClientBlockingContext {
+ public:
+  ClientBlockingContext(ValkeyModuleCtx *ctx, KeyspaceEventManager &manager)
+      : ctx_(ctx), manager_(manager) {}
+
+  SharedBlockedClient AcquireBlock(vmsdk::BlockedClientCategory category) const;
+
+ private:
+  ValkeyModuleCtx *ctx_;
+  KeyspaceEventManager &manager_;
+};
 
 // KeyspaceEventSubscription is an interface for classes that want to subscribe
 // to keyspace events.
@@ -34,6 +55,7 @@ class KeyspaceEventSubscription {
  public:
   virtual ~KeyspaceEventSubscription() = default;
   virtual const AttributeDataType &GetAttributeDataType() const = 0;
+  vmsdk::BlockedClientCategory GetBlockedClientCategory() const;
 
   // GetKeyPrefixes should return a vector containing >= 1 prefixes to subscribe
   // to. Note that this should not be empty. If no prefixes are needed, this
@@ -46,9 +68,10 @@ class KeyspaceEventSubscription {
   // completely prefixed by B. Otherwise, duplicate events may fire.
   virtual const std::vector<std::string> &GetKeyPrefixes() const = 0;
 
-  virtual void OnKeyspaceNotification(ValkeyModuleCtx *ctx, int type,
-                                      const char *event,
-                                      ValkeyModuleString *key) = 0;
+  virtual void OnKeyspaceNotification(
+      ValkeyModuleCtx *ctx, int type, const char *event,
+      ValkeyModuleString *key,
+      const ClientBlockingContext &blocking_context) = 0;
   virtual std::vector<const indexes::VectorBase *> GetVectorIndexes() const = 0;
   virtual bool IsInDB(int db_num) const { return true; }
   virtual bool IsInCurrentDB(ValkeyModuleCtx *ctx) const {
@@ -61,6 +84,7 @@ class KeyspaceEventManager {
   KeyspaceEventManager() = default;
   void NotifySubscribers(ValkeyModuleCtx *ctx, int type, const char *event,
                          ValkeyModuleString *key);
+  void OnExecutionUnitEnd();
 
   absl::Status InsertSubscription(ValkeyModuleCtx *ctx,
                                   KeyspaceEventSubscription *subscription);
@@ -76,6 +100,11 @@ class KeyspaceEventManager {
   static KeyspaceEventManager &Instance();
 
  private:
+  friend class ClientBlockingContext;
+
+  SharedBlockedClient AcquireBlockedClient(
+      ValkeyModuleCtx *ctx, vmsdk::BlockedClientCategory category);
+
   absl::Status StartValkeySubscriptionIfNeeded(ValkeyModuleCtx *ctx, int types);
 
   static inline int OnValkeyKeyspaceNotification(ValkeyModuleCtx *ctx, int type,
@@ -85,9 +114,17 @@ class KeyspaceEventManager {
     return VALKEYMODULE_OK;
   }
 
-  void ProcessMoveNotification(ValkeyModuleCtx *ctx, int type,
-                               ValkeyModuleString *dst_key,
-                               const char *dst_event);
+  void ProcessMoveNotification(
+      ValkeyModuleCtx *ctx, int type, ValkeyModuleString *dst_key,
+      const char *dst_event, int dst_db_num,
+      const std::vector<KeyspaceEventSubscription *> &src_subscriptions,
+      const ClientBlockingContext &blocking_context);
+
+  // Keep registration open across all notifications in an execution unit.
+  // Post-notification cleanup releases this hold; mutations own their work.
+  vmsdk::MainThreadAccessGuard<
+      absl::flat_hash_map<unsigned long long, SharedBlockedClient>>
+      command_blocks_;
 
   vmsdk::MainThreadAccessGuard<absl::flat_hash_set<KeyspaceEventSubscription *>>
       subscriptions_;

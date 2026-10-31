@@ -146,6 +146,23 @@ TEST_F(SafeRDBTest, LoadStringFailure) {
             absl::StatusCode::kInternal);
 }
 
+TEST_F(SafeRDBTest, SupplementalContentChunkIterSurvivesLoadFailure) {
+  ValkeyModuleString* expected_value =
+      TestValkeyModule_CreateStringPrintf(nullptr, "test");
+  EXPECT_CALL(*kMockValkeyModule, LoadString(fake_valkey_module_io_))
+      .WillOnce(testing::Return(expected_value));
+  EXPECT_CALL(*kMockValkeyModule, IsIOError(fake_valkey_module_io_))
+      .WillOnce(testing::Return(1));
+  SafeRDB rdb(fake_valkey_module_io_);
+  {
+    SupplementalContentChunkIter iter(&rdb);
+    EXPECT_TRUE(iter.HasNext());
+    EXPECT_EQ(iter.Next().status().code(), absl::StatusCode::kInternal);
+    // Scope exit is the point of this test: the destructor must stay quiet
+    // while done_ is false, and a debug build aborts here without the guard.
+  }
+}
+
 TEST_F(SafeRDBTest, SaveSizeTSuccess) {
   size_t value = 34;
   EXPECT_CALL(*kMockValkeyModule, SaveUnsigned(fake_valkey_module_io_, value));

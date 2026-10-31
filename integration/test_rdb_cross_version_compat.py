@@ -12,6 +12,7 @@ so adding a new version boundary is a single row.
 """
 
 import os
+import struct
 
 import pytest
 from valkey import Valkey
@@ -53,6 +54,17 @@ def _create_french_text_index(client):
     _compat_index_french.load_data(client, 10)
 
 
+def _create_svs_vamana_index(client):
+    """Create an SVS_VAMANA vector index -- stamps kRelease13."""
+    client.execute_command(
+        "FT.CREATE", "compat_idx", "SCHEMA", "v", "VECTOR", "SVS_VAMANA", "6",
+        "TYPE", "FLOAT32", "DIM", "4", "DISTANCE_METRIC", "L2")
+    for i in range(10):
+        client.execute_command(
+            "HSET", f"svs:{i}", "v", struct.pack("<4f", float(i), 0, 0, 0))
+    IndexingTestHelper.wait_for_indexing_complete_on_node(client, "compat_idx")
+
+
 # The stamp follows the features used, not the module version: the same
 # current module writes an RDB that 1.2.0 accepts (English) or rejects (French).
 CURRENT_RDB_ON_OLD_MODULE_CASES = [
@@ -67,6 +79,10 @@ CURRENT_RDB_ON_OLD_MODULE_CASES = [
     pytest.param(
         "1.2.0", _create_french_text_index, "reject",
         id="french_rdb_rejected_by_v1.2",
+    ),
+    pytest.param(
+        "1.2.0", _create_svs_vamana_index, "reject",
+        id="svs_vamana_rdb_rejected_by_v1.2",
     ),
 ]
 

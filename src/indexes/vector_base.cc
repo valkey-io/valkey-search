@@ -238,7 +238,8 @@ VectorBase::~VectorBase() {
 absl::StatusOr<RecordResult> VectorBase::AddRecord(const InternedStringPtr &key,
                                                    AttributeData &&data) {
   CHECK(data.IsVector());
-  if (!IsValidSizeVector(data.GetLength())) {
+  if (!IsValidSizeVector(data.GetLength()) ||
+      !IsValidVectorData(data.GetStringView())) {
     return RecordResult::kInvalidData;
   }
   auto vector_record = data.ConsumeVector();
@@ -283,7 +284,8 @@ absl::StatusOr<InternedStringPtr> VectorBase::GetKeyDuringSearch(
 absl::StatusOr<RecordResult> VectorBase::ModifyRecord(
     const InternedStringPtr &key, AttributeData &&data) {
   CHECK(data.IsVector());
-  if (!IsValidSizeVector(data.GetLength())) {
+  if (!IsValidSizeVector(data.GetLength()) ||
+      !IsValidVectorData(data.GetStringView())) {
     [[maybe_unused]] auto res =
         RemoveRecord(key, indexes::DeletionType::kRecord);
     return RecordResult::kInvalidData;
@@ -517,11 +519,12 @@ absl::Status VectorBase::LoadTrackedKeys(
     auto vector_record_with_size = VectorRegistry::Instance().DedupOrConstruct(
         interned_key, attribute_val.get(), attribute_data_type->ToProto(),
         db_num_, this);
-    auto &save_vector = GetVectorLockFree(tracked_key_metadata.internal_id());
+    auto &save_vector =
+        GetOrCreateVectorLockFree(tracked_key_metadata.internal_id());
     save_vector = std::move(vector_record_with_size.vector_record);
   }
   inc_id_ = GetMaxLoadedLabel() + 1;
-  return absl::OkStatus();
+  return OnTrackedKeysLoaded();
 }
 
 std::unique_ptr<data_model::Index> VectorBase::ToProto() const {

@@ -38,27 +38,36 @@ struct TokenImpl : public Base {
 
   bool IsCancelled() override {
     if (++count_ > TimeoutPollFrequency.GetValue()) {
-      count_ = 0;
-      if (!is_cancelled_) {
-        if (ValkeyModule_Milliseconds() >= deadline_ms_) {
-          is_cancelled_ = true;  // Operation should be cancelled
-          Timeouts.Increment(1);
-          VMSDK_LOG(DEBUG, nullptr)
-              << "CANCEL: Timeout reached, cancelling operation";
-        } else if (context_ && context_->IsCancelled()) {
-          is_cancelled_ = true;  // Operation should be cancelled
-          gRPCCancels.Increment(1);
-          VMSDK_LOG(DEBUG, nullptr) << "CANCEL: gRPC context cancelled";
-        } else if (ForceTimeout.GetValue()) {
-          is_cancelled_ = true;  // Operation should be cancelled
-          ForceCancels.Increment(1);
-          VMSDK_LOG(WARNING, nullptr) << "CANCEL: Timeout forced";
-        } else if (!vmsdk::IsMainThread()) {
-          PAUSEPOINT("Cancel");
-        }
-      }
+      Check();
     }
     return is_cancelled_;
+  }
+
+  bool IsCancelledNow() override {
+    Check();
+    return is_cancelled_;
+  }
+
+  void Check() {
+    count_ = 0;
+    if (!is_cancelled_) {
+      if (ValkeyModule_Milliseconds() >= deadline_ms_) {
+        is_cancelled_ = true;  // Operation should be cancelled
+        Timeouts.Increment(1);
+        VMSDK_LOG(DEBUG, nullptr)
+            << "CANCEL: Timeout reached, cancelling operation";
+      } else if (context_ && context_->IsCancelled()) {
+        is_cancelled_ = true;  // Operation should be cancelled
+        gRPCCancels.Increment(1);
+        VMSDK_LOG(DEBUG, nullptr) << "CANCEL: gRPC context cancelled";
+      } else if (ForceTimeout.GetValue()) {
+        is_cancelled_ = true;  // Operation should be cancelled
+        ForceCancels.Increment(1);
+        VMSDK_LOG(WARNING, nullptr) << "CANCEL: Timeout forced";
+      } else if (!vmsdk::IsMainThread()) {
+        PAUSEPOINT("Cancel");
+      }
+    }
   }
 
   bool is_cancelled_{false};  // Once cancelled, stay cancelled

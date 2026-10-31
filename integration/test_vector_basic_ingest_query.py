@@ -3,7 +3,7 @@ Basic ingest + KNN smoke tests across the full vector data-type matrix.
 
 Covers the cartesian product
     data_type  ∈ {FLOAT32, FLOAT16, BFLOAT16}
-    algorithm  ∈ {HNSW, FLAT}
+    algorithm  ∈ {HNSW, FLAT, SVS_VAMANA}
     key_kind   ∈ {HASH,  JSON}
 
 For each combination the test ingests a deterministic small dataset and
@@ -45,11 +45,17 @@ from indexes import (
 
 
 DATA_TYPES = ["FLOAT32", "FLOAT16", "BFLOAT16"]
-ALGORITHMS = ["HNSW", "FLAT"]
+ALGORITHMS = ["HNSW", "FLAT", "SVS_VAMANA"]
 KEY_KINDS = [KeyDataType.HASH, KeyDataType.JSON]
 
 # Engine's default --max-vector-dimensions ceiling (src/commands/ft_create_parser.cc).
 MAX_DIM = 32768
+
+
+def _skip_unsupported(algorithm: str, data_type: str):
+    """SVS_VAMANA rejects BFLOAT16 input at FT.CREATE."""
+    if algorithm == "SVS_VAMANA" and data_type == "BFLOAT16":
+        pytest.skip("SVS_VAMANA doesn't accept BFLOAT16 input")
 
 
 def _encode_query(values: List[float], data_type: str) -> bytes:
@@ -89,7 +95,8 @@ def _build_index(name: str, dim: int, algorithm: str, data_type: str,
         vec = Vector("v", dim, type="HNSW", distance="L2", m=8, efc=32,
                      data_type=data_type)
     else:
-        vec = Vector("v", dim, type="FLAT", distance="L2", data_type=data_type)
+        vec = Vector("v", dim, type=algorithm, distance="L2",
+                     data_type=data_type)
     return Index(name, [vec], type=key_kind)
 
 
@@ -267,6 +274,7 @@ class TestVectorBasicIngestQuery(ValkeySearchTestCaseBase):
     @pytest.mark.parametrize("algorithm", ALGORITHMS)
     @pytest.mark.parametrize("data_type", DATA_TYPES)
     def test_small_dataset_ingest_query(self, data_type, algorithm, key_kind):
+        _skip_unsupported(algorithm, data_type)
         client = self.server.get_new_client()
         dim = 4
         num_vectors = 50
@@ -284,6 +292,7 @@ class TestVectorBasicIngestQuery(ValkeySearchTestCaseBase):
     @pytest.mark.parametrize("data_type", DATA_TYPES)
     @pytest.mark.parametrize("dim", [2, 3, 7])
     def test_short_dim(self, dim, data_type, algorithm, key_kind):
+        _skip_unsupported(algorithm, data_type)
         client = self.server.get_new_client()
         num_vectors = 50
         vectors = _make_vectors(num_vectors, dim, seed=2 + dim)
@@ -299,6 +308,7 @@ class TestVectorBasicIngestQuery(ValkeySearchTestCaseBase):
     @pytest.mark.parametrize("algorithm", ALGORITHMS)
     @pytest.mark.parametrize("data_type", DATA_TYPES)
     def test_max_dim(self, data_type, algorithm, key_kind):
+        _skip_unsupported(algorithm, data_type)
         client = self.server.get_new_client()
         # MAX_DIM is the engine's default cap (configurable to 64000 via
         # --max-vector-dimensions, but we test at default).

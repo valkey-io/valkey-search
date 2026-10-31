@@ -29,6 +29,8 @@ jobs:
     # Checkout the code from the repository
     - name: Checkout Code
       uses: actions/checkout@v3
+      with:
+        submodules: recursive
 
     # The runner image links Homebrew openssl@4 as the default OpenSSL since
     # 2026-10-13; gRPC v1.70.1 does not build against OpenSSL 4. openssl@3 stays

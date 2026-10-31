@@ -28,6 +28,7 @@
 #include "src/coordinator/metadata_manager.h"
 #include "src/coordinator/server.h"
 #include "src/coordinator/util.h"
+#include "src/indexes/vector_svs.h"
 #include "src/metrics.h"
 #include "src/rdb_serialization.h"
 #include "src/schema_manager.h"
@@ -541,6 +542,54 @@ static vmsdk::info_field::Integer hnsw_duplicate_label_on_load_count(
       return Metrics::GetStats().hnsw_duplicate_label_on_load_cnt;
     }));
 
+static vmsdk::info_field::Integer svs_add_exceptions_count(
+    "svs", "svs_add_exceptions_count",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      return Metrics::GetStats().svs_add_exceptions_cnt;
+    }));
+
+static vmsdk::info_field::Integer svs_remove_exceptions_count(
+    "svs", "svs_remove_exceptions_count",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      return Metrics::GetStats().svs_remove_exceptions_cnt;
+    }));
+
+static vmsdk::info_field::Integer svs_modify_exceptions_count(
+    "svs", "svs_modify_exceptions_count",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      return Metrics::GetStats().svs_modify_exceptions_cnt;
+    }));
+
+static vmsdk::info_field::Integer svs_search_exceptions_count(
+    "svs", "svs_search_exceptions_count",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      return Metrics::GetStats().svs_search_exceptions_cnt;
+    }));
+
+static vmsdk::info_field::Integer svs_create_exceptions_count(
+    "svs", "svs_create_exceptions_count",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      return Metrics::GetStats().svs_create_exceptions_cnt;
+    }));
+
+static vmsdk::info_field::Integer svs_duplicate_label_on_load_count(
+    "svs", "svs_duplicate_label_on_load_count",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      return Metrics::GetStats().svs_duplicate_label_on_load_cnt;
+    }));
+
+static vmsdk::info_field::Integer svs_conversions_count(
+    "svs", "svs_conversions_count",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      return Metrics::GetStats().svs_conversions_cnt;
+    }));
+
+static vmsdk::info_field::Integer svs_conversion_failures_count(
+    "svs", "svs_conversion_failures_count",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      return Metrics::GetStats().svs_conversion_failures_cnt;
+    }));
+
 static vmsdk::info_field::Integer string_interning_store_size(
     "string_interning", "string_interning_store_size",
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
@@ -913,6 +962,19 @@ static vmsdk::info_field::String flat_vector_index_search_latency_usec(
               .flat_vector_index_search_latency.HasSamples();
         }));
 
+static vmsdk::info_field::String svs_vector_index_search_latency_usec(
+    "latency", "svs_vector_index_search_latency_usec",
+    vmsdk::info_field::StringBuilder()
+        .App()
+        .ComputedString([]() -> std::string {
+          auto &sampler = Metrics::GetStats().svs_vector_index_search_latency;
+          return sampler.GetStatsString();
+        })
+        .VisibleIf([]() -> bool {
+          return Metrics::GetStats()
+              .svs_vector_index_search_latency.HasSamples();
+        }));
+
 static vmsdk::info_field::Integer info_fanout_retry_count(
     "fanout", "info_fanout_retry_count",
     vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
@@ -1256,6 +1318,8 @@ void ValkeySearch::ResumeWriterThreadPool(ValkeyModuleCtx *ctx,
 absl::Status ValkeySearch::OnLoad(ValkeyModuleCtx *ctx,
                                   ValkeyModuleString **argv, int argc) {
   ctx_ = ValkeyModule_GetDetachedThreadSafeContext(ctx);
+
+  indexes::InitSvsLogging();
 
   // Register a single module type for Aux load/save callbacks.
   VMSDK_RETURN_IF_ERROR(RegisterModuleType(ctx));

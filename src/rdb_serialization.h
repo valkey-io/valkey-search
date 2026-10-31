@@ -188,7 +188,9 @@ class SupplementalContentChunkIter {
   absl::StatusOr<std::unique_ptr<data_model::SupplementalContentChunk>> Next();
   bool HasNext() const { return !done_; }
   ~SupplementalContentChunkIter() {
-    if (!done_) {
+    // A read error in curr_chunk_ is sticky and leaves done_ false forever,
+    // so without this guard every failed RDB load would warn and abort here.
+    if (!done_ && curr_chunk_.ok()) {
       VMSDK_LOG(WARNING, nullptr)
           << "SupplementalContentChunkIter was not fully iterated";
       DCHECK(done_);

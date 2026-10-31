@@ -13,7 +13,10 @@
 #include <cstring>
 #include <type_traits>
 
-// Keep IEEE binary16 storage independent of compiler half-float support and
+// float16: 1 sign + 5 exponent + 10 mantissa, IEEE 754 binary16.
+// Like bfloat16, use a distinct two-byte storage type with explicit FLOAT32
+// conversions. Their bit layouts differ and must remain distinct for template
+// dispatch. Keep storage independent of compiler half-float support and
 // libgcc's half-float conversion helpers. Conversions round to nearest, ties
 // to even, including subnormals.
 struct float16 {
@@ -112,6 +115,6 @@ static_assert(std::is_trivially_copyable_v<float16>);
 static_assert(std::is_standard_layout_v<float16>);
 
 inline float float16_to_float(float16 v) { return static_cast<float>(v); }
-inline float16 float_to_float16(float v) { return static_cast<float16>(v); }
+inline float16 float_to_float16(float v) { return float16{v}; }
 
 #endif  // VALKEYSEARCH_SRC_INDEXES_FP16_H_

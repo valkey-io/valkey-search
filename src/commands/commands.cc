@@ -94,6 +94,33 @@ void Free([[maybe_unused]] ValkeyModuleCtx *ctx, void *privdata) {
 CONTROLLED_BOOLEAN(ForceReplicasOnly, false);
 DEV_INTEGER_COUNTER(stats, single_slot_queries);
 
+// Separates request-derived routing policy from target selection. Client mode
+// controls the eligible node roles; ClusterMap applies that policy to the
+// current topology. Additional inputs such as remote load or health belong in
+// this policy rather than in ComputeSearchTargetsT().
+struct SearchRoutingPolicy {
+  vmsdk::cluster_map::FanoutTargetMode target_mode;
+  bool prefer_local;
+};
+
+SearchRoutingPolicy ComputeSearchRoutingPolicy(ValkeyModuleCtx *ctx) {
+  // Replica-only modes never select a primary, so prefer_local only takes
+  // effect on a replica coordinator. READONLY searches landing on a primary
+  // still offload the local shard to one of its replicas.
+  const bool prefer_local = query::fanout::IsSystemUnderLowUtilization();
+  if (ForceReplicasOnly.GetValue()) {
+    return {.target_mode =
+                vmsdk::cluster_map::FanoutTargetMode::kOneReplicaPerShard,
+            .prefer_local = prefer_local};
+  }
+
+  return {.target_mode =
+              vmsdk::IsReadOnly(ctx)
+                  ? vmsdk::cluster_map::FanoutTargetMode::kReplicaPreferred
+                  : vmsdk::cluster_map::FanoutTargetMode::kPrimary,
+          .prefer_local = prefer_local};
+}
+
 // Duck-typed over Cmd: only requires an `index_schema` member. Used by
 // ExecuteCommand<Cmd>; declared before that template so its body is visible
 // at the template's point of instantiation.
@@ -120,20 +147,18 @@ bool IsSingleSlotQueryRoutedToLocalNode(ValkeyModuleCtx *ctx,
 template <typename Cmd>
 std::vector<vmsdk::cluster_map::NodeInfo> ComputeSearchTargetsT(
     ValkeyModuleCtx *ctx, const Cmd &parameters) {
-  auto mode = ForceReplicasOnly.GetValue()
-                  ? vmsdk::cluster_map::FanoutTargetMode::kOneReplicaPerShard
-                  : vmsdk::cluster_map::FanoutTargetMode::kRandom;
+  const auto routing_policy = ComputeSearchRoutingPolicy(ctx);
   auto cluster_map = ValkeySearch::Instance().GetOrRefreshClusterMap(ctx);
   const auto &single_slot_number =
       parameters.index_schema->GetSingleSlotNumber();
   if (single_slot_number.has_value()) {
     single_slot_queries.Increment();
-    return cluster_map->GetTargetsForSlot(
-        mode, query::fanout::IsSystemUnderLowUtilization(),
-        *single_slot_number);
+    return cluster_map->GetTargetsForSlot(routing_policy.target_mode,
+                                          routing_policy.prefer_local,
+                                          *single_slot_number);
   } else {
-    return cluster_map->GetTargets(
-        mode, query::fanout::IsSystemUnderLowUtilization());
+    return cluster_map->GetTargets(routing_policy.target_mode,
+                                   routing_policy.prefer_local);
   }
 }
 

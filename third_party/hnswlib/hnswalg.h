@@ -161,7 +161,11 @@ class HierarchicalNSW
     offsetLevel0_ = 0;
 
     data_level0_memory_ = std::make_unique<ChunkedArray>(
-        size_data_per_element_, k_elements_per_chunk, max_elements);
+        size_data_per_element_,
+        ChunkedArray::GetElementsPerChunkForLargePages(
+            size_data_per_element_, k_elements_per_chunk),
+        max_elements,
+        /*use_large_pages=*/true);
 
     cur_element_count_ = 0;
 
@@ -1218,7 +1222,11 @@ class HierarchicalNSW
     }
 
     data_level0_memory_ = std::make_unique<ChunkedArray>(
-        size_data_per_element_, k_elements_per_chunk, max_elements);
+        size_data_per_element_,
+        ChunkedArray::GetElementsPerChunkForLargePages(
+            size_data_per_element_, k_elements_per_chunk),
+        max_elements,
+        /*use_large_pages=*/true);
 
     for (size_t i = 0; i < target_element_count; i++) {
       VMSDK_ASSIGN_OR_RETURN(auto chunk, input.LoadChunk());

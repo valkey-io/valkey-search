@@ -65,6 +65,18 @@ expr::Value FilterAttributeReference::GetValue(
   return expr::Value(data_view);
 }
 
+// Mirrors GetValue: only a JSON NUMERIC field reaches the filter as a number.
+expr::Expression::Type FilterAttributeReference::GetResultType() const {
+  if (indexes::IsVectorIndex(type_)) {
+    return expr::Expression::Type::kVector;
+  }
+  if (type_ == indexes::IndexerType::kNumeric &&
+      data_type_ == data_model::ATTRIBUTE_DATA_TYPE_JSON) {
+    return expr::Expression::Type::kNumber;
+  }
+  return expr::Expression::Type::kString;
+}
+
 void FilterAttributeReference::Dump(std::ostream& os) const {
   os << "@" << alias_;
 }

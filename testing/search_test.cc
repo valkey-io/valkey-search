@@ -47,6 +47,7 @@
 #include "src/metrics.h"
 #include "src/query/predicate.h"
 #include "src/utils/string_interning.h"
+#include "src/valkey_search_options.h"
 #include "testing/common.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/type_conversions.h"
@@ -1582,6 +1583,308 @@ TEST_F(GetVrScoreFieldNameTest, SingleVrUnderComposedAnd) {
   auto params = MakeParamsWithVrPredicates(std::move(root));
   EXPECT_TRUE(params.has_vector_range);
   EXPECT_EQ(query::GetVrScoreFieldName(params), "dist");
+}
+
+// $EPSILON and EF_RUNTIME reach the HNSW range walk, alone and under AND. The
+// graph is the path start - bridge-1 - bridge-2 - target (M 2), with field
+// EF_RUNTIME 1. Both bridges have squared distance 1.53 from the query against
+// radius 1. The first bridge fills the one-entry outside-shell beam and the
+// equal-distance second bridge cannot improve it, so the default shell misses
+// target. $EPSILON 0.6 puts both bridges in the shell; alternatively,
+// EF_RUNTIME 2 admits both to the beam. Under AND the walk's result is the
+// candidate set only while it is smaller than the tag's (all four keys); the
+// default-control AND query missing target shows that it is.
+TEST_F(ValkeySearchTest, VectorRangeEpsilonReachesTheHnswWalk) {
+  auto schema = CreateIndexSchema(kIndexSchemaName).value();
+  EXPECT_CALL(*schema, GetIdentifier(::testing::_))
+      .Times(::testing::AnyNumber());
+  auto vector_index =
+      indexes::VectorHNSW<float>::Create(
+          CreateHNSWVectorIndexProto(kVectorDimensions,
+                                     data_model::DISTANCE_METRIC_L2, 4,
+                                     /*m=*/2, 200, /*ef_runtime=*/1),
+          "vector_attribute_identifier",
+          data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
+          .value();
+  VMSDK_EXPECT_OK(schema->AddIndex(kVectorAttributeAlias, kVectorAttributeAlias,
+                                   vector_index));
+  auto tag_index = std::make_shared<indexes::Tag>(
+      CreateTagIndexProto(/*separator=*/",", /*case_sensitive=*/false));
+  VMSDK_EXPECT_OK(schema->AddIndex("tag", "tag", tag_index));
+  // Inserted first, start is the entry point.
+  const std::pair<const char *, std::pair<float, float>> kKeys[] = {
+      {"start", {-0.9f, 0.0f}},
+      {"bridge-1", {-0.3f, 1.2f}},
+      {"bridge-2", {0.3f, 1.2f}},
+      {"target", {0.9f, 0.0f}}};
+  for (const auto &[key, xy] : kKeys) {
+    std::vector<float> v(kVectorDimensions, 0.0f);
+    v[0] = xy.first;
+    v[1] = xy.second;
+    auto interned = StringInternStore::Intern(key);
+    schema->SetIndexMutationSequenceNumber(interned, 0);
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(*vector_index, interned,
+                                                   VectorToStr(v)));
+    VMSDK_EXPECT_OK(tag_index->AddRecord(
+        interned, AttributeData(vmsdk::MakeUniqueValkeyString("a"))));
+  }
+  const std::vector<float> query_vector(kVectorDimensions, 0.0f);
+  auto search = [&](absl::string_view filter) {
+    UnitTestSearchParameters params;
+    params.index_schema_name = kIndexSchemaName;
+    params.index_schema = schema;
+    params.dialect = kDialect;
+    TextParsingOptions options{};
+    params.filter_parse_results =
+        std::move(FilterParser(*schema, filter, options).Parse().value());
+    params.has_vector_range = true;
+    query::Predicate *vr = params.filter_parse_results.root_predicate.get();
+    if (vr->GetType() == query::PredicateType::kComposedAnd) {
+      for (const auto &child :
+           static_cast<query::ComposedPredicate *>(vr)->GetChildren()) {
+        if (child->GetType() == query::PredicateType::kVectorRange) {
+          vr = child.get();
+        }
+      }
+    }
+    static_cast<query::VectorRangePredicate *>(vr)->SetQueryVector(
+        std::string(VectorToStr(query_vector)));
+    VMSDK_EXPECT_OK(Search(params, query::SearchMode::kLocal));
+    std::vector<std::string> keys;
+    for (const auto &neighbor : params.search_result.neighbors) {
+      keys.emplace_back(neighbor.external_id->Str());
+    }
+    return keys;
+  };
+  EXPECT_THAT(search("@vector:[VECTOR_RANGE 1 $q]=>{$EPSILON: 0.6}"),
+              ::testing::ElementsAre("start", "target"));
+  EXPECT_THAT(search("@vector:[VECTOR_RANGE 1 $q]"), ::testing::SizeIs(1))
+      << "the walk entered at bridge rather than start, or did not stop";
+  EXPECT_THAT(search("@vector:[VECTOR_RANGE 1 $q]=>{$EPSILON: 0.6} @tag:{a}"),
+              ::testing::ElementsAre("start", "target"));
+  EXPECT_THAT(search("@vector:[VECTOR_RANGE 1 $q] @tag:{a}"),
+              ::testing::SizeIs(1))
+      << "the AND did not take the walk's result as its candidate set, the "
+         "walk entered at bridge rather than start, or it did not stop";
+  EXPECT_THAT(search("@vector:[VECTOR_RANGE 1 $q EF_RUNTIME 2]"),
+              ::testing::ElementsAre("start", "target"));
+  EXPECT_THAT(search("@vector:[VECTOR_RANGE 1 $q EF_RUNTIME 2] @tag:{a}"),
+              ::testing::ElementsAre("start", "target"));
+}
+
+TEST_F(ValkeySearchTest,
+       CompoundVectorRangeAndPrefersCompleteFetcherOverTruncatedVector)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  constexpr int kCap = 3;
+  auto &fetch_cap = options::GetMaxNonVectorSearchResultsFetched();
+  const auto saved_cap = fetch_cap.GetValue();
+  absl::Cleanup restore = [&] {
+    VMSDK_EXPECT_OK(fetch_cap.SetValue(saved_cap));
+  };
+  VMSDK_EXPECT_OK(fetch_cap.SetValue(kCap));
+
+  auto schema = CreateIndexSchema(kIndexSchemaName).value();
+  EXPECT_CALL(*schema, GetIdentifier(::testing::_))
+      .Times(::testing::AnyNumber());
+  auto vector_index =
+      indexes::VectorFlat<float>::Create(
+          CreateFlatVectorIndexProto(kVectorDimensions,
+                                     data_model::DISTANCE_METRIC_L2,
+                                     /*initial_cap=*/10, /*block_size=*/10),
+          kVectorAttributeAlias, data_model::ATTRIBUTE_DATA_TYPE_HASH, 0)
+          .value();
+  VMSDK_EXPECT_OK(schema->AddIndex(kVectorAttributeAlias, kVectorAttributeAlias,
+                                   vector_index));
+  auto tag_index = std::make_shared<indexes::Tag>(
+      CreateTagIndexProto(/*separator=*/",", /*case_sensitive=*/false));
+  VMSDK_EXPECT_OK(schema->AddIndex("tag", "tag", tag_index));
+
+  const std::vector<float> zero(kVectorDimensions, 0.0f);
+  for (int i = 0; i < 5; ++i) {
+    auto key = StringInternStore::Intern(absl::StrCat("v", i));
+    schema->SetIndexMutationSequenceNumber(key, 0);
+    VMSDK_EXPECT_OK(
+        testing_infra::AddVectorRecord(*vector_index, key, VectorToStr(zero)));
+    if (i >= kCap) {
+      VMSDK_EXPECT_OK(tag_index->AddRecord(
+          key, AttributeData(vmsdk::MakeUniqueValkeyString("keep"))));
+    }
+  }
+  for (int i = 0; i < 2; ++i) {
+    auto key = StringInternStore::Intern(absl::StrCat("tag-only-", i));
+    schema->SetIndexMutationSequenceNumber(key, 0);
+    VMSDK_EXPECT_OK(tag_index->AddRecord(
+        key, AttributeData(vmsdk::MakeUniqueValkeyString("keep"))));
+  }
+
+  cancel::Token direct_token = cancel::Make(1000000, nullptr);
+  bool vector_truncated = false;
+  auto vector_candidates = vector_index->SearchRange(
+      VectorToStr(zero), /*radius=*/1.0f, direct_token,
+      /*epsilon=*/0.01f, /*filter=*/nullptr, /*ef_runtime=*/std::nullopt,
+      &vector_truncated);
+  ASSERT_TRUE(vector_candidates.ok()) << vector_candidates.status();
+  EXPECT_EQ(vector_candidates->size(), static_cast<size_t>(kCap));
+  EXPECT_TRUE(vector_truncated);
+
+  UnitTestSearchParameters params;
+  params.index_schema = schema;
+  params.dialect = kDialect;
+  TextParsingOptions parsing_options{};
+  params.filter_parse_results =
+      std::move(FilterParser(*schema, "@vector:[VECTOR_RANGE 1 $q] @tag:{keep}",
+                             parsing_options)
+                    .Parse()
+                    .value());
+  params.has_vector_range = true;
+  auto *root = static_cast<query::ComposedPredicate *>(
+      params.filter_parse_results.root_predicate.get());
+  for (const auto &child : root->GetChildren()) {
+    if (child->GetType() == query::PredicateType::kVectorRange) {
+      static_cast<query::VectorRangePredicate *>(child.get())
+          ->SetQueryVector(std::string(VectorToStr(zero)));
+    }
+  }
+
+  const int64_t counter_before =
+      query::GetNonVectorResultsFetchedLimitedCount();
+  query::QueryContext query_ctx(*schema,
+                                indexes::scoring::GetScorer(params.scorer));
+  auto result = query::SearchVectorRangeQuery(params, query_ctx);
+  ASSERT_TRUE(result.ok()) << result.status();
+  std::vector<std::string> keys;
+  for (const auto &neighbor : *result) {
+    keys.emplace_back(neighbor.external_id->Str());
+    EXPECT_TRUE(neighbor.has_vr_distance);
+  }
+  EXPECT_THAT(keys, ::testing::ElementsAre("v3", "v4"));
+  EXPECT_EQ(query::GetNonVectorResultsFetchedLimitedCount(), counter_before);
+}
+
+TEST_F(ValkeySearchTest, CompoundVectorRangeOrHonorsHardCap)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  auto &fetch_cap = options::GetMaxNonVectorSearchResultsFetched();
+  const auto saved_cap = fetch_cap.GetValue();
+  absl::Cleanup restore = [&] {
+    VMSDK_EXPECT_OK(fetch_cap.SetValue(saved_cap));
+  };
+  VMSDK_EXPECT_OK(fetch_cap.SetValue(3));
+
+  auto schema = CreateIndexSchema(kIndexSchemaName).value();
+  EXPECT_CALL(*schema, GetIdentifier(::testing::_))
+      .Times(::testing::AnyNumber());
+  auto vector_index =
+      indexes::VectorFlat<float>::Create(
+          CreateFlatVectorIndexProto(kVectorDimensions,
+                                     data_model::DISTANCE_METRIC_L2,
+                                     /*initial_cap=*/10, /*block_size=*/10),
+          kVectorAttributeAlias, data_model::ATTRIBUTE_DATA_TYPE_HASH, 0)
+          .value();
+  VMSDK_EXPECT_OK(schema->AddIndex(kVectorAttributeAlias, kVectorAttributeAlias,
+                                   vector_index));
+  auto tag_index = std::make_shared<indexes::Tag>(
+      CreateTagIndexProto(/*separator=*/",", /*case_sensitive=*/false));
+  VMSDK_EXPECT_OK(schema->AddIndex("tag", "tag", tag_index));
+  auto late_tag_index = std::make_shared<indexes::Tag>(
+      CreateTagIndexProto(/*separator=*/",", /*case_sensitive=*/false));
+  VMSDK_EXPECT_OK(schema->AddIndex("late_tag", "late_tag", late_tag_index));
+
+  const std::vector<float> zero(kVectorDimensions, 0.0f);
+  for (int i = 0; i < 6; ++i) {
+    auto key = StringInternStore::Intern(absl::StrCat("v", i));
+    schema->SetIndexMutationSequenceNumber(key, 0);
+    VMSDK_EXPECT_OK(
+        testing_infra::AddVectorRecord(*vector_index, key, VectorToStr(zero)));
+    VMSDK_EXPECT_OK(tag_index->AddRecord(
+        key, AttributeData(vmsdk::MakeUniqueValkeyString(
+                 i == 0 ? "special,duplicates" : "ordinary,duplicates"))));
+  }
+  auto tag_only = StringInternStore::Intern("a-special");
+  schema->SetIndexMutationSequenceNumber(tag_only, 0);
+  VMSDK_EXPECT_OK(tag_index->AddRecord(
+      tag_only, AttributeData(vmsdk::MakeUniqueValkeyString("special"))));
+  VMSDK_EXPECT_OK(late_tag_index->AddRecord(
+      tag_only, AttributeData(vmsdk::MakeUniqueValkeyString("special"))));
+
+  class CancelAfterPolls : public cancel::Base {
+   public:
+    explicit CancelAfterPolls(int grace) : grace_(grace) {}
+    bool IsCancelled() override { return ++polls_ > grace_; }
+    void Cancel() override { grace_ = 0; }
+    int polls() const { return polls_; }
+
+   private:
+    int grace_;
+    int polls_{0};
+  };
+
+  auto search = [&](absl::string_view filter, cancel::Token token) {
+    UnitTestSearchParameters params;
+    if (token != nullptr) {
+      params.cancellation_token = std::move(token);
+    }
+    params.index_schema = schema;
+    params.dialect = kDialect;
+    TextParsingOptions parsing_options{};
+    params.filter_parse_results = std::move(
+        FilterParser(*schema, filter, parsing_options).Parse().value());
+    params.has_vector_range = true;
+    auto *root = static_cast<query::ComposedPredicate *>(
+        params.filter_parse_results.root_predicate.get());
+    for (const auto &child : root->GetChildren()) {
+      if (child->GetType() == query::PredicateType::kVectorRange) {
+        static_cast<query::VectorRangePredicate *>(child.get())
+            ->SetQueryVector(std::string(VectorToStr(zero)));
+      }
+    }
+    query::QueryContext query_ctx(*schema,
+                                  indexes::scoring::GetScorer(params.scorer));
+    auto result = query::SearchVectorRangeQuery(params, query_ctx);
+    EXPECT_TRUE(result.ok()) << result.status();
+    absl::flat_hash_map<std::string, bool> found;
+    if (result.ok()) {
+      for (const auto &neighbor : *result) {
+        found.emplace(neighbor.external_id->Str(), neighbor.has_vr_distance);
+      }
+    }
+    return found;
+  };
+
+  const int64_t counter_before =
+      query::GetNonVectorResultsFetchedLimitedCount();
+  const auto vector_first =
+      search("@vector:[VECTOR_RANGE 1 $q] | @tag:{special}", cancel::Token{});
+  ASSERT_EQ(vector_first.size(), 3u);
+  EXPECT_THAT(vector_first,
+              ::testing::UnorderedElementsAre(::testing::Pair("v0", true),
+                                              ::testing::Pair("v1", true),
+                                              ::testing::Pair("v2", true)));
+  EXPECT_EQ(query::GetNonVectorResultsFetchedLimitedCount(),
+            counter_before + 1);
+
+  const auto tag_first =
+      search("@tag:{special} | @vector:[VECTOR_RANGE 1 $q]", cancel::Token{});
+  ASSERT_EQ(tag_first.size(), 3u);
+  EXPECT_THAT(tag_first,
+              ::testing::UnorderedElementsAre(
+                  ::testing::Pair("a-special", false),
+                  ::testing::Pair("v0", true), ::testing::Pair("v1", true)));
+  EXPECT_EQ(query::GetNonVectorResultsFetchedLimitedCount(),
+            counter_before + 2);
+
+  VMSDK_EXPECT_OK(fetch_cap.SetValue(10));
+  const int64_t counter_before_duplicate_only =
+      query::GetNonVectorResultsFetchedLimitedCount();
+  auto token = std::make_shared<CancelAfterPolls>(12);
+  const auto partial = search(
+      "@vector:[VECTOR_RANGE 1 $q] | @tag:{duplicates} | "
+      "@late_tag:{special}",
+      token);
+  EXPECT_EQ(partial.size(), 6u);
+  EXPECT_FALSE(partial.contains("a-special"));
+  EXPECT_EQ(token->polls(), 13);
+  EXPECT_EQ(query::GetNonVectorResultsFetchedLimitedCount(),
+            counter_before_duplicate_only);
 }
 
 class ScoreTextQueryTestBase : public ValkeySearchTest {

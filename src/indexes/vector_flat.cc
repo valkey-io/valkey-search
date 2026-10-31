@@ -34,6 +34,7 @@
 #include "src/query/search.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/cancel.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/utils.h"
@@ -214,6 +215,8 @@ absl::Status VectorFlat<T>::RemoveRecordImpl(uint64_t internal_id) {
   return absl::OkStatus();
 }
 
+namespace {
+
 // Paper over the impedance mismatch between the
 // cancel::Token and hnswlib::BaseCancellationFunctor.
 class CancelCondition : public hnswlib::BaseCancellationFunctor {
@@ -226,6 +229,8 @@ class CancelCondition : public hnswlib::BaseCancellationFunctor {
  private:
   cancel::Token &token_;
 };
+
+}  // namespace
 
 template <typename T>
 absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::Search(
@@ -279,14 +284,22 @@ float VectorFlat<T>::ComputeDistance(absl::string_view query,
 template <typename T>
 absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::SearchRange(
     absl::string_view query, float radius, cancel::Token &cancellation_token,
-    std::unique_ptr<hnswlib::BaseFilterFunctor> filter) {
+    float /*epsilon*/, std::unique_ptr<hnswlib::BaseFilterFunctor> filter,
+    std::optional<size_t> /*ef_runtime*/, bool *truncated) {
+  if (truncated != nullptr) {
+    *truncated = false;
+  }
+  VMSDK_ASSIGN_OR_RETURN(radius,
+                         this->ValidateRangeSearchInputs(query, radius));
+  const size_t max_results = static_cast<size_t>(
+      options::GetMaxNonVectorSearchResultsFetched().GetValue());
   auto nq = this->NormalizeQueryIfNeeded(query);
   const float query_magnitude =
       normalize_ ? CalcReciprocalMagnitude(nq.view, this->GetVectorDataType())
                  : kDefaultMagnitude;
 
   std::vector<Neighbor> neighbors;
-  neighbors.reserve(kRangeReserve);
+  neighbors.reserve(std::min(kRangeReserve, max_results));
   for (size_t i = 0; i < algo_->cur_element_count_; ++i) {
     if (cancellation_token->IsCancelled()) {
       break;
@@ -300,6 +313,12 @@ absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::SearchRange(
         this->RangeDistance(nq.view, query_magnitude, *stored_vector);
     if (distance <= radius) {
       if (const auto *key = this->FindKeyDuringSearch(label)) {
+        if (neighbors.size() >= max_results) {
+          if (truncated != nullptr) {
+            *truncated = true;
+          }
+          break;
+        }
         neighbors.emplace_back(*key, distance);
       }
     }

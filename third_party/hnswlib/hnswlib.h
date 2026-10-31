@@ -159,6 +159,16 @@ class BaseCancellationFunctor {
 template <typename dist_t>
 class BaseSearchStopCondition {
  public:
+  // Called for every search distance before it enters a priority queue.
+  // Returning true requests immediate termination. The default preserves the
+  // behavior of stop conditions that do not need distance observation.
+  virtual bool observe_distance(dist_t) { return false; }
+
+  // Called after deletion/filter checks and before an eligible result enters a
+  // priority queue. Returning true requests immediate termination without
+  // storing that result. The default preserves existing stop conditions.
+  virtual bool observe_result(labeltype, const void *, dist_t) { return false; }
+
   virtual void add_point_to_result(labeltype label, const void *datapoint,
                                    dist_t dist) = 0;
 

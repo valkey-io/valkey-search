@@ -277,8 +277,13 @@ class MockIndex : public indexes::VectorBase {
     return std::vector<indexes::Neighbor>{};
   }
   absl::StatusOr<std::vector<indexes::Neighbor>> SearchRange(
-      absl::string_view, float, cancel::Token &,
-      std::unique_ptr<hnswlib::BaseFilterFunctor> = nullptr) override {
+      absl::string_view, float, cancel::Token &, float,
+      std::unique_ptr<hnswlib::BaseFilterFunctor> = nullptr,
+      std::optional<size_t> = std::nullopt,
+      bool *truncated = nullptr) override {
+    if (truncated != nullptr) {
+      *truncated = false;
+    }
     return std::vector<indexes::Neighbor>{};
   }
 };

@@ -65,6 +65,28 @@ def search(
             assert str(e) == "Search operation cancelled due to timeout"
         return []
 
+def range_search(client: valkey.client, index: str, timeout: bool,
+                 enable_partial_results: bool = True) -> list:
+    """VECTOR_RANGE on @v around [10, 10, 10]. With `timeout`, expects the
+    timeout error; otherwise returns the reply."""
+    # Squared L2 distance to row i is about 3 * (i - 9)^2: the radius holds
+    # rows 0 to 40. The long TIMEOUT leaves the cancellation to ForceTimeout,
+    # so slow (sanitizer) builds count it as a forced cancel, not a timeout.
+    command = [
+        "FT.SEARCH", index, "@v:[VECTOR_RANGE 3000 $BLOB]",
+        "PARAMS", "2", "BLOB", float_to_bytes([10.0, 10.0, 10.0]),
+        "NOCONTENT", "LIMIT", "0", "1000", "TIMEOUT", "10000",
+        "SOMESHARDS" if enable_partial_results else "ALLSHARDS",
+    ]
+    if not timeout:
+        return client.execute_command(*command)
+    try:
+        x = client.execute_command(*command)
+        assert False, "Expected timeout, but got result: " + str(x)
+    except ResponseError as e:
+        assert str(e) == "Search operation cancelled due to timeout"
+    return []
+
 def aggregate_command(index: str, filter: Union[int, None], stages: list[str] = None) -> list[str]:
     """Build FT.AGGREGATE command with specified stages and timeout."""
     predicate = "*" if filter is None else f"(@n:[0 {filter}])"
@@ -269,6 +291,60 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
             == b"OK"
         )
         assert(client.execute_command("FT._DEBUG PAUSEPOINT LIST") == [])
+
+    @wait_for_background_tasks()
+    def test_vector_range_timeoutCMD(self):
+        """
+        A VECTOR_RANGE query timing out mid-traversal (HNSW) or mid-scan
+        (FLAT) replies with the timeout error when partial results are
+        disabled, and with the keys reached so far when they are enabled.
+        """
+        client: Valkey = self.server.get_new_client()
+        assert (
+            client.execute_command(
+                "CONFIG SET search.info-developer-visible yes"
+            )
+            == b"OK"
+        )
+        hnsw_index = Index(
+            "hnsw", [Vector("v", 3, type="HNSW", m=2, efc=1), Numeric("n")]
+        )
+        flat_index = Index("flat", [Vector("v", 3, type="FLAT"), Numeric("n")])
+        hnsw_index.create(client)
+        flat_index.create(client)
+        hnsw_index.load_data(client, 1000)
+
+        nominal_hnsw_result = range_search(client, "hnsw", False)
+        nominal_flat_result = range_search(client, "flat", False)
+        assert nominal_flat_result[0] == 41
+        assert 0 < nominal_hnsw_result[0] <= 41
+        assert client.info("SEARCH")["search_test-counter-ForceCancels"] == 0
+
+        assert (
+            client.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET ForceTimeout yes")
+            == b"OK"
+        )
+        assert (
+            client.execute_command("ft._debug CONTROLLED_VARIABLE SET timeoutpollfrequency 1")
+            == b"OK"
+        )
+
+        range_search(client, "hnsw", True, enable_partial_results=False)
+        assert client.info("SEARCH")["search_test-counter-ForceCancels"] == 1
+        range_search(client, "flat", True, enable_partial_results=False)
+        assert client.info("SEARCH")["search_test-counter-ForceCancels"] == 2
+
+        hnsw_result = range_search(client, "hnsw", False, enable_partial_results=True)
+        assert client.info("SEARCH")["search_test-counter-ForceCancels"] == 3
+        assert hnsw_result[0] < nominal_hnsw_result[0]
+        flat_result = range_search(client, "flat", False, enable_partial_results=True)
+        assert client.info("SEARCH")["search_test-counter-ForceCancels"] == 4
+        assert flat_result[0] < nominal_flat_result[0]
+
+        assert (
+            client.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET ForceTimeout no")
+            == b"OK"
+        )
 
     @wait_for_background_tasks()
     def test_pausepoint_entries_fetcher(self):
@@ -568,6 +644,60 @@ class TestCancelCME(ValkeySearchClusterTestCaseDebugMode):
         hnsw_result = search(client, "hnsw", True, 10, enable_partial_results=False)
         self.check_info_sum("search_prefiltering_requests_count", 6)
         self.check_info_sum("search_test-counter-ForceCancels", 9)
+
+    @wait_for_background_tasks()
+    def test_vector_range_timeoutCME(self):
+        """
+        In cluster mode, a VECTOR_RANGE query whose shards all time out
+        replies with the timeout error when partial results are disabled, and
+        with a normal reply when they are enabled, on HNSW and FLAT.
+        """
+        self.config_set("search.info-developer-visible", "yes")
+        client: Valkey = self.new_cluster_client()
+
+        hnsw_index = Index("hnsw", [Vector("v", 3, type="HNSW"), Numeric("n")])
+        flat_index = Index("flat", [Vector("v", 3, type="FLAT"), Numeric("n")])
+        hnsw_index.create(client)
+        flat_index.create(client)
+        hnsw_index.load_data(client, 100)
+        waiters.wait_for_equal(lambda: self.sum_docs(hnsw_index), 100)
+        waiters.wait_for_equal(lambda: self.sum_docs(flat_index), 100)
+
+        assert range_search(client, "hnsw", False)[0] == 41
+        assert range_search(client, "flat", False)[0] == 41
+        self.check_info_sum("search_test-counter-ForceCancels", 0)
+
+        self.control_set("ForceTimeout", "yes")
+        self.control_set("TimeoutPollFrequency", "1")
+
+        range_search(client, "hnsw", True, enable_partial_results=False)
+        self.check_info_sum("search_test-counter-ForceCancels", 3)
+        range_search(client, "flat", True, enable_partial_results=False)
+        self.check_info_sum("search_test-counter-ForceCancels", 6)
+
+        hnsw_result = range_search(client, "hnsw", False, enable_partial_results=True)
+        self.check_info_sum("search_test-counter-ForceCancels", 9)
+        assert hnsw_result[0] < 41
+        flat_result = range_search(client, "flat", False, enable_partial_results=True)
+        self.check_info_sum("search_test-counter-ForceCancels", 12)
+        assert flat_result[0] < 41
+        self.control_set("ForceTimeout", "no")
+
+        # With only one shard timing out, partial results hold every key in
+        # range of the other shards, and only keys in range of that one.
+        expected = set(range_search(client, "hnsw", False)[1:])
+        timed_out = self.client_for_primary(1)
+        timed_out_keys = set(timed_out.keys("*"))
+        others = expected - timed_out_keys
+        assert others and others != expected
+        assert timed_out.execute_command(
+            "ft._debug", "CONTROLLED_VARIABLE", "set", "ForceTimeout", "yes") == b"OK"
+        for index in ("hnsw", "flat"):
+            range_search(client, index, True, enable_partial_results=False)
+            partial = range_search(client, index, False, enable_partial_results=True)
+            assert partial[0] == len(partial) - 1
+            assert others <= set(partial[1:]) < expected, index
+        self.control_set("ForceTimeout", "no")
 
     @wait_for_background_tasks()
     def test_aggregate_timeout_cluster(self):

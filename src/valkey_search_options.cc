@@ -48,15 +48,6 @@ void UpdateThreadPoolCount(vmsdk::ThreadPool *pool, long long new_value) {
   pool->Resize(new_value);
 }
 
-absl::Status ValidateLogLevel(const int value) {
-  if (value >= static_cast<int>(LogLevel::kWarning) &&
-      value <= static_cast<int>(LogLevel::kDebug)) {
-    return absl::OkStatus();
-  }
-  return absl::OutOfRangeError(
-      absl::StrFormat("Log level of: %d is out of range", value));
-}
-
 }  // namespace
 
 // Configuration entries
@@ -187,18 +178,6 @@ static auto hnsw_validation_enable =
         .Dev()
         .Build();
 
-// Register an enumerator for the log level
-static const std::vector<std::string_view> kLogLevelNames = {
-    VALKEYMODULE_LOGLEVEL_WARNING,
-    VALKEYMODULE_LOGLEVEL_NOTICE,
-    VALKEYMODULE_LOGLEVEL_VERBOSE,
-    VALKEYMODULE_LOGLEVEL_DEBUG,
-};
-
-static const std::vector<int> kLogLevelValues = {
-    static_cast<int>(LogLevel::kWarning), static_cast<int>(LogLevel::kNotice),
-    static_cast<int>(LogLevel::kVerbose), static_cast<int>(LogLevel::kDebug)};
-
 /// Should this instance skip loading index data from RDB?
 constexpr absl::string_view kReIndexVectorRDBLoad{"skip-rdb-load"};
 static auto rdb_load_skip_index =
@@ -211,30 +190,7 @@ static auto skip_corrupted_internal_update_entries =
     config::BooleanBuilder(kSkipCorruptedAOFEntries, false).Build();
 
 /// Control the modules log level verbosity
-constexpr absl::string_view kLogLevel{"log-level"};
-static auto log_level =
-    config::EnumBuilder(kLogLevel, static_cast<int>(LogLevel::kNotice),
-                        kLogLevelNames, kLogLevelValues)
-        .WithModifyCallback([](int value) {
-          auto res = ValidateLogLevel(value);
-          if (!res.ok()) {
-            VMSDK_LOG(WARNING, nullptr)
-                << "Invalid value: '" << value << "' provided to enum: '"
-                << kLogLevel << "'. " << res.message();
-            return;
-          }
-          // "value" is already validated using "ValidateLogLevel" callback
-          // below
-          auto log_level_str = kLogLevelNames[value];
-          res = vmsdk::InitLogging(nullptr, log_level_str.data());
-          if (!res.ok()) {
-            VMSDK_LOG(WARNING, nullptr)
-                << "Failed to initialize log with new value: " << log_level_str
-                << ". " << res.message();
-          }
-        })
-        .WithValidationCallback(ValidateLogLevel)
-        .Build();
+static auto log_level = config::LogLevelBuilder().Build();
 
 /// Scorer used by FT.SEARCH when the query omits SCORER.
 constexpr absl::string_view kDefaultScorer{"default-scorer"};

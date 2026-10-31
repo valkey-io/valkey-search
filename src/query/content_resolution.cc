@@ -16,11 +16,14 @@
 #include "src/query/response_generator.h"
 #include "src/query/search.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/scoped_thread_cpu_monitor.h"
 
 namespace valkey_search::query {
 
 void ResolveContent(std::unique_ptr<SearchParameters> params) {
   vmsdk::VerifyMainThread();
+  vmsdk::ScopedThreadCPUMonitor cpu_monitor(
+      params->content_resolution_cpu_time_usec);
   // 1. Check cancellation
   if (params->cancellation_token->IsCancelled()) {
     params->QueryCompleteMainThread(std::move(params));

@@ -110,6 +110,12 @@
         ]
       },
       {
+        "name": "LOCALONLY",
+        "type": "pure-token",
+        "optional": true,
+        "token": "LOCALONLY"
+      },
+      {
         "name": "NOCONTENT",
         "type": "pure-token",
         "optional": true,

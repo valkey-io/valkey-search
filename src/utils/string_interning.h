@@ -26,6 +26,7 @@
 #include "absl/synchronization/mutex.h"
 #include "gtest/gtest_prod.h"
 #include "src/utils/allocator.h"
+#include "vmsdk/src/huge/flat_hash_map.h"
 #include "vmsdk/src/memory_tracker.h"
 
 namespace valkey_search {
@@ -1067,8 +1068,8 @@ class StringInternStore {
       return lhs->Str() == rhs->Str();
     }
   };
-  absl::flat_hash_set<InternedStringPtr, InternedStringPtrFullHash,
-                      InternedStringPtrFullEqual>
+  vmsdk::HugeFlatHashSet<InternedStringPtr, InternedStringPtrFullHash,
+                         InternedStringPtrFullEqual>
       str_to_interned_ ABSL_GUARDED_BY(mutex_);
   mutable absl::Mutex mutex_;
 

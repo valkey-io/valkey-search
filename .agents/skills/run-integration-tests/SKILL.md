@@ -17,8 +17,15 @@ top-level integration harnesses:
 
 ## Common Steps
 
-1. Check the build prerequisites. If CMake reports a missing dependency from
-   `/opt/valkey-search-deps`, bootstrap with:
+1. Check the build prerequisites. Normal debug builds should use the packaged
+   dependencies without `--no-system-modules`:
+
+   ```bash
+   .devcontainer/run_in_docker.sh ./build.sh --debug
+   ```
+
+   If CMake reports a missing required dependency from
+   `/opt/valkey-search-deps`, use source dependencies as a recovery path:
 
    ```bash
    .devcontainer/run_in_docker.sh ./build.sh --no-system-modules --debug

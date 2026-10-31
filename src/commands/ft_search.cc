@@ -77,11 +77,7 @@ void ReplyScore(ValkeyModuleCtx *ctx, ValkeyModuleString &score_as,
       ctx, vmsdk::MakeUniqueValkeyString(score_value).get());
 }
 
-// Whether the SORTBY field is the VR distance alias and this neighbor has a
-// VR distance, whose formatted value is then the sort key (with the numeric
-// '#' prefix for WITHSORTKEYS). Otherwise callers fall back to
-// GetSortKeyValue(). vr_field is the single VR score field name (empty when
-// the query has no VR predicate).
+// Whether the sort key is the neighbor's VR distance (SORTBY on the VR alias).
 bool IsVrSortKey(const indexes::Neighbor &neighbor,
                  const SearchCommand &command, const std::string &vr_field) {
   return command.sortby_parameter.has_value() && !vr_field.empty() &&
@@ -338,15 +334,13 @@ SearchCommand::RowFormat SearchCommand::GetRowFormat(int resp_version) const {
   format.sort_by_vec_score =
       !IsNonVectorQuery() && sortby_parameter.has_value() && score_as &&
       sortby_parameter->field == vmsdk::ToStringView(score_as.get());
-  // RESP2 rows drop the sort key under NOCONTENT; RESP3 rows keep it, as
-  // Redis Search does. Resp2ResultsReply already leaves it out, but skipping
-  // here keeps the compatibility-fix counters below unchanged for RESP2.
+  // RESP2 drops the sort key under NOCONTENT. Skipping it here keeps the
+  // compatibility-fix counters below unchanged for RESP2.
   if (with_sort_keys && (resp3 || !no_content)) {
     auto type_prefix = [&]() {
       return IsSortByFieldNumeric(*this, format.sort_by_vec_score) ? '#' : '$';
     };
-    // RESP3 replies are newer than these fixes, so no client relies on the old
-    // sort keys there and they always follow Redis Search.
+    // RESP3 has no legacy clients, so it always follows Redis Search.
     format.sort_key_prefix = resp3
                                  ? type_prefix()
                                  : VALKEY_SEARCH_COMPATIBILITY_FIX(
@@ -364,19 +358,6 @@ SearchCommand::RowFormat SearchCommand::GetRowFormat(int resp_version) const {
   return format;
 }
 
-// Gets the document's WITHSORTKEYS value: the reply is prefix followed by
-// value, or nil when this returns false. The prefix is format.sort_key_prefix.
-//
-// When SORTBY names the vector distance (the KNN score field, or the VR
-// distance alias), the value is the formatted distance, written into buffer.
-// The distance is not a document field, so it cannot be looked up there.
-// Its prefix needs no special case: format.sort_key_prefix is already '#',
-// since IsSortByFieldNumeric() treats both distances as numeric, and without
-// the ft_search_sortkey_type_prefix fix the prefix is always '#'.
-//
-// Otherwise the value is the document's SORTBY field, pointing into neighbor.
-// A document without the field gets nil, or an empty value when
-// format.nil_absent_sort_key is unset.
 bool SearchCommand::SortKey(const indexes::Neighbor &neighbor,
                             const RowFormat &format, std::string &buffer,
                             char &prefix, absl::string_view &value) const {
@@ -417,8 +398,7 @@ size_t SearchCommand::ReplyAttributes(ValkeyModuleCtx *ctx,
       ++cnt;
     }
     for (const auto &attribute_content : contents) {
-      // Unique names leave out a field the distance is named like, as Redis
-      // Search does.
+      // A map can't repeat the distance's name; Redis Search drops the field.
       if (unique_names &&
           ((is_vector &&
             attribute_content.first == vmsdk::ToStringView(score_as.get())) ||
@@ -499,7 +479,6 @@ void SearchCommand::ReplyRows(ValkeyModuleCtx *ctx, ResultsReply &reply,
   }
 }
 
-// Replies through ResultsReply, see there for the RESP2 and RESP3 layouts.
 // SendReply respects the Limit, see https://valkey.io/commands/ft.search/
 void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
                               query::SearchResult &search_result) {

@@ -81,12 +81,11 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   AggregateParameters(int db_num) : QueryCommand(db_num){};
   absl::Status ParseCommand(vmsdk::ArgsIterator& itr) override;
   void SendReply(ValkeyModuleCtx* ctx, query::SearchResult& result) override;
-  // Replies the first `count` records, removing them, through ResultsReply.
-  // total_results is the total RESP3 reports.
+  // Replies and removes the first `count` records. Only RESP3 reports
+  // total_results.
   void ReplyRecords(ValkeyModuleCtx* ctx, RecordSet& records, size_t count,
                     size_t total_results);
-  // Whether RESP3 clients get the Redis Search envelope. FT.HYBRID, which
-  // replies through the same pipeline, keeps its own reply shape.
+  // False for FT.HYBRID, which keeps its RESP2 reply under RESP3.
   bool search_envelope_reply{true};
   bool loadall_{false};
   // A record column the pipeline needs but the reply must not carry.

@@ -42,10 +42,8 @@ struct SearchCommand : public QueryCommand {
 
   query::SerializationRange GetSerializationRange() const;
 
-  // The columns WITHSCORES, WITHSORTKEYS and NOCONTENT give each reply row.
   ResultsReply::Columns ReplyColumns() const;
 
-  // Adds a row to reply per document in search_result.neighbors[start, end).
   void ReplyRows(ValkeyModuleCtx *ctx, ResultsReply &reply,
                  const query::SearchResult &search_result, size_t start,
                  size_t end) const;
@@ -79,14 +77,13 @@ struct SearchCommand : public QueryCommand {
   // resp_version is ResultsReply::RespVersion(). RESP3 sort keys always
   // follow Redis Search (see GetRowFormat).
   RowFormat GetRowFormat(int resp_version) const;
-  // Gets the document's WITHSORTKEYS value, see the definition.
+  // Returns false for a nil sort key. A distance is formatted into buffer.
   bool SortKey(const indexes::Neighbor &neighbor, const RowFormat &format,
                std::string &buffer, char &prefix,
                absl::string_view &value) const;
-  // A document's fields, replied through ResultsReply.
   class RowFields;
-  // Replies the document's field/value pairs and returns their number. With
-  // unique_names, a field named like the reported distance is left out.
+  // Returns the number of pairs replied. unique_names skips a field named like
+  // the distance.
   size_t ReplyAttributes(ValkeyModuleCtx *ctx,
                          const indexes::Neighbor &neighbor,
                          const RowFormat &format, bool unique_names) const;

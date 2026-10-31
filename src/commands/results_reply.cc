@@ -49,7 +49,7 @@ class Resp2ResultsReply : public ResultsReply {
 
   void AddRow(const Row &row) override {
     if (!columns_.id) {
-      // A result without an id is the array of its field/value pairs.
+      // FT.AGGREGATE: [field, value...].
       ValkeyModule_ReplyWithArray(ctx_, VALKEYMODULE_POSTPONED_LEN);
       ValkeyModule_ReplySetArrayLength(ctx_,
                                        2 * row.fields->Reply(ctx_, false));
@@ -66,7 +66,7 @@ class Resp2ResultsReply : public ResultsReply {
       ReplyWithStringView(ctx_, expr::FormatDouble(row.score));
       ++elements;
     }
-    // NOCONTENT leaves out the sort key along with the fields.
+    // RESP2 drops the sort key under NOCONTENT.
     if (columns_.fields) {
       if (columns_.sort_key) {
         ReplySortKey(row);

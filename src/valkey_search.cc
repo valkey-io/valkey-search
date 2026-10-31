@@ -537,7 +537,7 @@ static vmsdk::info_field::Integer hnsw_create_exceptions_count(
 
 static vmsdk::info_field::Integer hnsw_duplicate_label_on_load_count(
     "hnswlib", "hnsw_duplicate_label_on_load_count",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return Metrics::GetStats().hnsw_duplicate_label_on_load_cnt;
     }));
 

@@ -9,6 +9,10 @@
       [
         "1.2.0", 
         "Added Text Indexing and Search support"
+      ],
+      [
+        "1.3.0-RC1",
+        "Added FILTER, SCORE_FIELD, NOHL and SORTABLE UNF options, FLOAT16 and BFLOAT16 vector types, and LANGUAGE values beyond ENGLISH, with per-language punctuation, stop words, and stemming"
       ]
     ],
     "arguments": [
@@ -52,6 +56,12 @@
             "multiple": true
           }
         ]
+      },
+      {
+        "name": "FILTER",
+        "token": "FILTER",
+        "type": "string",
+        "optional": true
       },
       {
         "name": "SCORE",
@@ -291,6 +301,16 @@
                                 "name": "float32",
                                 "type": "pure-token",
                                 "token": "FLOAT32"
+                              },
+                              {
+                                "name": "float16",
+                                "type": "pure-token",
+                                "token": "FLOAT16"
+                              },
+                              {
+                                "name": "bfloat16",
+                                "type": "pure-token",
+                                "token": "BFLOAT16"
                               }
                             ]
                           },

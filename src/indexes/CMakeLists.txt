@@ -31,6 +31,7 @@ target_link_libraries(vector_base PUBLIC attribute_data_type)
 target_link_libraries(vector_base PUBLIC index_schema_cc_proto)
 target_link_libraries(vector_base PUBLIC rdb_serialization)
 target_link_libraries(vector_base PUBLIC predicate)
+target_link_libraries(vector_base PUBLIC query_context)
 target_link_libraries(vector_base PUBLIC allocator)
 target_link_libraries(vector_base PUBLIC intrusive_ref_count)
 target_link_libraries(vector_base PUBLIC string_interning)
@@ -136,8 +137,12 @@ set(SRCS_TEXT ${CMAKE_CURRENT_LIST_DIR}/text/text_index.h
               ${CMAKE_CURRENT_LIST_DIR}/text/orproximity.cc
               ${CMAKE_CURRENT_LIST_DIR}/text/term.cc
               ${CMAKE_CURRENT_LIST_DIR}/text/term.h
-              ${CMAKE_CURRENT_LIST_DIR}/text/lexer.cc
-              ${CMAKE_CURRENT_LIST_DIR}/text/lexer.h
+              ${CMAKE_CURRENT_LIST_DIR}/text/language_registry.cc
+              ${CMAKE_CURRENT_LIST_DIR}/text/language_registry.h
+              ${CMAKE_CURRENT_LIST_DIR}/text/snowball_language.cc
+              ${CMAKE_CURRENT_LIST_DIR}/text/snowball_language.h
+              ${CMAKE_CURRENT_LIST_DIR}/text/snowball_stem.cc
+              ${CMAKE_CURRENT_LIST_DIR}/text/snowball_stem.h
               ${CMAKE_CURRENT_LIST_DIR}/text/unicode_normalizer.cc
               ${CMAKE_CURRENT_LIST_DIR}/text/unicode_normalizer.h
               ${CMAKE_CURRENT_LIST_DIR}/text/fuzzy.h

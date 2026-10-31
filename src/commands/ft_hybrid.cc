@@ -31,6 +31,7 @@
 #include "src/query/search.h"
 #include "src/utils/cancel.h"
 #include "src/valkey_search.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/cluster_map.h"
 #include "vmsdk/src/thread_pool.h"
@@ -92,6 +93,8 @@ void ConvertVectorArmScoresToSimilarity(std::vector<indexes::Neighbor> &ns,
 // aliases are injected into attribute_contents (see rank_fusion.cc).
 std::vector<indexes::Neighbor> BuildFusedNeighbors(
     MultiSearchParameters &params) {
+  // FT.HYBRID is new in 1.3.0, so it emulates at least 1.3.0.
+  options::ScopedMinimumRelease minimum(vmsdk::ValkeyVersion(1, 3, 0));
   std::vector<rank_fusion::ArmInput> arm_inputs;
   arm_inputs.reserve(params.arms.size());
   for (size_t i = 0; i < params.arms.size(); ++i) {
@@ -137,7 +140,8 @@ std::vector<indexes::Neighbor> BuildFusedNeighbors(
     CHECK(fn != nullptr) << "kFunction fusion without a compiled expression";
     fused = rank_fusion::Function(
         std::move(arm_inputs),
-        [fn](const std::vector<std::optional<double>> &per_arm) -> double {
+        [fn,
+         &params](const std::vector<std::optional<double>> &per_arm) -> double {
           ArmScoreRecord rec;
           rec.scores.reserve(per_arm.size());
           for (const auto &s : per_arm) {
@@ -146,6 +150,10 @@ std::vector<indexes::Neighbor> BuildFusedNeighbors(
           }
           expr::Expression::EvalContext eval_ctx;
           expr::Value v = fn->Evaluate(eval_ctx, rec);
+          if (v.IsError() && params.combine_error.ok()) {
+            params.combine_error =
+                absl::InvalidArgumentError(v.GetNil().GetReason());
+          }
           auto d = v.AsDouble();
           return d.has_value() ? *d : 0.0;
         });
@@ -163,6 +171,13 @@ std::vector<indexes::Neighbor> BuildFusedNeighbors(
 // this point (see the fused-resolution path below), so the aggregate's own
 // ProcessNeighborsForReply finds content present and does not re-fetch.
 void RunAggregateReply(ValkeyModuleCtx *ctx, MultiSearchParameters &params) {
+  // FT.HYBRID is new in 1.3.0, so it emulates at least 1.3.0.
+  options::ScopedMinimumRelease minimum(vmsdk::ValkeyVersion(1, 3, 0));
+  if (!params.combine_error.ok()) {
+    ++Metrics::GetStats().query_failed_requests_cnt;
+    ValkeyModule_ReplyWithError(ctx, params.combine_error.message().data());
+    return;
+  }
   if (params.agg == nullptr) {
     ValkeyModule_ReplyWithArray(ctx, 1);
     ValkeyModule_ReplyWithLongLong(ctx, 0);
@@ -262,10 +277,10 @@ void MarkContentResolved(std::vector<indexes::Neighbor> &neighbors) {
 }
 
 // Whether the resolved LOAD clause asks for any database field at all. `LOAD *`
-// asks for all of them and leaves the attribute list empty by convention, so it
-// is checked separately.
+// asks for the whole record through all_content, independently of the
+// attribute list, so it is checked separately.
 bool WantsNoDatabaseContent(const aggregate::AggregateParameters &agg) {
-  return !agg.loadall_ && agg.return_attributes.empty();
+  return !agg.all_content && agg.return_attributes.empty();
 }
 
 std::vector<query::ReturnAttribute> CopyReturnAttributes(
@@ -411,7 +426,7 @@ void RevalidateArmsBeforeFusion(MultiSearchParameters &params) {
     const bool can_recompute_distance = arm_score_is_distance &&
                                         vector_index != nullptr &&
                                         vector_identifier[i].has_value();
-    std::unique_ptr<query::SingleDocumentScorer> document_scorer;
+    std::unique_ptr<query::QueryContext> query_ctx;
     std::vector<char> drop(neighbors.size(), 0);
     size_t dropped = 0;
     bool rescored = false;
@@ -445,7 +460,7 @@ void RevalidateArmsBeforeFusion(MultiSearchParameters &params) {
       }
       const RecordsMap &records = *fetched;
       auto verification = query::VerifyFilter(
-          *arm, records, n, document_scorer,
+          *arm, records, n, query_ctx,
           /*recompute_score_override=*/!arm_score_is_distance);
       if (!verification.matches) {
         drop[j] = 1;
@@ -573,6 +588,7 @@ void FuseAndResolveLocal(std::unique_ptr<MultiSearchParameters> params) {
   if (params->agg != nullptr) {
     resolver->return_attributes =
         CopyReturnAttributes(params->agg->return_attributes);
+    resolver->all_content = params->agg->all_content;
     resolver->no_content = WantsNoDatabaseContent(*params->agg);
   }
   resolver->saved_aliases = SaveAndClearAliases(fused);
@@ -713,6 +729,8 @@ namespace query {
 
 absl::Status MultiSearchParameters::ParseAfterIndex(MultiSearchParameters &cmd,
                                                     vmsdk::ArgsIterator &itr) {
+  // FT.HYBRID is new in 1.3.0, so it emulates at least 1.3.0.
+  options::ScopedMinimumRelease minimum(vmsdk::ValkeyVersion(1, 3, 0));
   return ParseFtHybridCommand(cmd, itr);
 }
 

@@ -14,8 +14,10 @@ Two markers are used, and they mean different things:
   If one starts matching, the run prints a loud `XPASS` banner: the gap has
   been closed, and both the marker and the entry here should be removed.
 
-Sections 1-4 cover the text-search suite (`generate_text.py`); section 5 covers
-the FT.HYBRID suite (`generate_hybrid.py`).
+Sections 1-4 and 6 cover the text-search suite (`generate_text.py`); section 5
+covers the FT.HYBRID suite (`generate_hybrid.py`); section 7 covers the scoring
+suite (`generate_scoring.py`); section 8 covers the FT.AGGREGATE suite
+(`generate.py`).
 
 ## 1. Exact Phrase Query
 
@@ -124,51 +126,15 @@ subsets, `@__key`, `AS` renames of an existing field, a rename onto another
 field's name, two renames at once, and renames referenced by a following
 `SORTBY`, `APPLY` or `GROUPBY`.
 
-### 5.2. The suite sweeps HASH keys only — waiting on PR 1381
+### 5.2. The suite sweeps HASH keys only — resolved
 
-**Status:** open, fix identified and measured, not yet merged.
+**Status:** closed. Kept as a heading so the numbering of the sections below
+does not shift.
 
-`generate_hybrid.py` runs against HASH indexes and does not sweep JSON. Naming
-an indexed field in a pipeline stage — `GROUPBY 1 @color`, `SORTBY 2 @price
-ASC` — does not resolve under `LOAD *` on a JSON index, because the document
-arrives as a single `$` column. That is an FT.AGGREGATE limitation, not an
-FT.HYBRID one: the equivalent FT.AGGREGATE query has the same problem, and
-FT.HYBRID has no key-type-specific code of its own.
-
-The fix is PR 1381, "Ask for content with `all_content`, not by leaving the
-list empty". Today an empty `return_attributes` means two different things,
-"fetch nothing" and "fetch the whole record", so a stage that names a field
-cannot ask for it alongside `LOAD *`. 1381 splits them with an explicit flag.
-
-**FT.HYBRID does not get that fix for free.** `FusedResolver` in
-`src/commands/ft_hybrid.cc` copies `return_attributes` and `no_content` but
-not `all_content`, and `WantsNoDatabaseContent` still tests `loadall_`.
-Landing 1381 without that three-line follow-up silently *empties* `LOAD *`
-replies rather than fixing them — a JSON `LOAD *` returns no `$` column at
-all, and a HASH `LOAD * SORTBY 2 @price ASC` returns only `price`. There is no
-compile error to catch it; the flag just stays false.
-
-Measured on a merged build (hybrid + 1381 + that follow-up) against a redis:8
-reference, over the 15 cases in `test_loadall_feeding_a_stage`:
-
-| build | hash | json |
-|---|---|---|
-| `hybrid` alone | 10 pass / 1 fail | 4 pass / 7 fail |
-| merged + follow-up | 11 pass / 0 fail | 11 pass / 0 fail |
-
-(Four of the 15 record a reference error rather than an answer, so they pass
-unconditionally: Redis auto-loads for SORTBY and GROUPBY but not for APPLY or
-FILTER. They are kept to pin that, as 1381 does for FT.AGGREGATE.)
-
-`test_loadall_feeding_a_stage` carries those cases now, marked `skip`. When
-1381 and the follow-up land: drop the skip, delete this section, and
-parametrize `TestHybridCompatibility` over both key types — after gating
-`test_load_unknown_field`'s `LOAD 1 $.price` case to HASH, because that path
-resolves on a JSON index and would otherwise XPASS for the wrong reason.
-
-Note 1381 does **not** address 5.1: it never touches the schema lookup that
-produces "Index field `x` does not exist", and `LOAD 1 @nosuchfield` is
-rejected identically before and after the merge.
+`LOAD *` now asks for the whole record through `all_content`, and a field a
+pipeline stage names is fetched alongside it, so `generate_hybrid.py` sweeps
+both HASH and JSON. `test_load_unknown_field`'s `LOAD 1 $.price` case runs on
+HASH only, because that path resolves on a JSON index.
 
 ### 5.3. An incomplete KNN block — valkey accepts, Redis rejects
 
@@ -234,31 +200,29 @@ rather than computing anything, and a `GROUPBY` *reducer* over one returns
 still refused on both engines, which `test_sortby_every_kind_of_column` and
 `test_pipeline_stages_over_scores` pin.
 
-### 5.4b. `POLICY` — valkey accepts and discards, Redis rejects
+### 5.4b. `POLICY` — active inside the counted VSIM `FILTER`
 
-**Status:** deliberate leniency, not swept.
+**Status:** supported.
+
+The earlier probe placed `POLICY` directly after the KNN block. Redis rejects
+that placement because `POLICY` belongs inside the counted `FILTER` block; the
+rejection did not mean that FT.HYBRID lacked policy selection.
+
+Measured against Redis 8.10.2, Search module 81001:
 
 ```
-... VSIM @vec $q KNN 2 K 20 POLICY local ...
-Redis:  (error) SEARCH_PARSE_ARGS POLICY: Unknown argument
-Valkey: answers as if the clause were not there
+... VSIM @vec $q KNN 2 K 20 FILTER 3 @tag:{x} POLICY ADHOC
+... VSIM @vec $q KNN 2 K 20 FILTER 3 @tag:{x} POLICY BATCHES
 ```
 
-The Redis 8.4 query engine has no `POLICY` clause on FT.HYBRID and refuses the
-token outright, for every value tried. valkey-search parses it and throws the
-value away (ft_hybrid_parser.cc, the top-level walk), erroring only when the
-value is missing. Accepted so a command written for a coordinator dialect that
-does carry `POLICY` is not rejected here; it does not change an answer, so
-sweeping it would record an error-message mismatch and nothing else.
+`FT.PROFILE` reports `HYBRID_ADHOC_BF` for `ADHOC` and `HYBRID_BATCHES` for
+`BATCHES`. The FT.HYBRID spelling is `ADHOC`, not the `ADHOC_BF` used by the
+FT.SEARCH/FT.AGGREGATE `HYBRID_POLICY` modifier. `BATCH_SIZE` follows
+`POLICY BATCHES` inside the same counted block.
 
-Both engines take a `FILTER` inside the VSIM clause, where it pre-filters the
-vector search. It goes after the `KNN`/`RANGE` block and *before*
-`YIELD_SCORE_AS` -- placed after the alias it ends the clause and becomes the
-aggregate stage instead -- and it is written in the FT.SEARCH query language,
-not the aggregate FILTER's expression language. The count is optional. Note the
-command reference has the order the other way round, and its structured
-argument list omits `POLICY` entirely while the syntax line shows it; both were
-resolved by measurement.
+A policy outside `FILTER`, outside its count, or named `ADHOC_BF` is rejected.
+The FILTER expression remains in the FT.SEARCH query language, not the
+aggregate FILTER expression language.
 
 ### 5.4c. A pipeline stage naming a field no LOAD clause asked for
 
@@ -680,3 +644,55 @@ computation, or to capture a second set of reference answers from a Redis
 cluster. Until one of those happens, flipping the flag would record the
 divergence 169 times rather than test anything. Note the reference engine's own
 cluster behaviour is unmeasured here: this generator runs one container.
+
+## 6. Multi-language text search
+
+Excluded wholesale (`exclude_all=True`) because the engines differ by design;
+each is described, with the measured Redis behavior, in `known_differences.md`
+§4.
+
+- `test_multilang_unescaped` — Valkey splits on language-specific non-ASCII
+  punctuation; Redis treats it as word characters (§4.1).
+- `test_multilang_escaped` — Redis does not resolve backslash-escaped non-ASCII
+  punctuation (§4.2).
+- `test_multilang_turkish_uppercase` — Redis applies no Turkish casing, so
+  `IŞIK` does not match `ışık` (§4.4).
+
+## 7. Scoring
+
+### 7.1. A `$weight` over a stemmed term — excluded
+
+On the `default` index variant, which stems its text fields, every query
+containing `$weight` is marked `excluded`. valkey-search applies a term's
+weight to all of its stem leaves, Redis to the exact word only
+(`known_differences.md` §1.9). This covers the `weight` shape and any
+`text_numeric_tag`, `text_vector` or `text_numeric_tag_vector` query whose text
+part was drawn from it. Weighted queries on the `NOSTEM` variants (`nostem`,
+`docscore`, `stopwords`) are compared normally.
+
+### 7.2. A `$weight` over an OR group in cluster mode — excluded
+
+In `scoring-cluster-answers.pickle.gz`, every query that puts a `$weight` on an
+OR group is marked `excluded`. On a shard where only one branch of the OR
+matches any document, Redis ignores the group's weight and valkey-search
+applies it (`known_differences.md` §1.10). These queries are still compared in
+the standalone answers.
+
+## 8. FT.AGGREGATE
+
+### 8.1. `LOAD * SORTBY` on a NUMERIC HASH field — excluded
+
+In `test_aggregate_loadall_stage` and `test_aggregate_loadall_two_stages`, the
+`sortby 2 @n1 asc` cases are marked `excluded` on HASH. `n1` is declared
+NUMERIC, but under `LOAD *` on a HASH index Redis sorts it as a string:
+
+```
+FT.AGGREGATE hash_idx1 @n1:[-inf inf] LOAD * SORTBY 2 @n1 ASC
+Redis:  n1 = -1, -2, -3, -4, -5, 0, 1, 2, 3, 4
+Valkey: n1 = -5, -4, -3, -2, -1, 0, 1, 2, 3, 4
+```
+
+valkey-search types the field from the schema and sorts it as a number. That
+is a deliberate difference, not a gap, so the case is not compared. JSON is
+compared normally: there the value arrives as a JSON number and both engines
+sort it numerically.

@@ -213,6 +213,25 @@ class TestFTCreateFilter(ValkeySearchTestCaseBase):
         keys = keys_for("c_ne", "@memo != 5")
         assert keys == {b"conv:num", b"conv:bad"}, f"got {keys}"
 
+    def test_filter_applies_every_1_3_0_fix(self):
+        """FT.CREATE FILTER is new in 1.3.0, so it gets every compatibility
+        fix whatever search.emulate-release says -- here `&&` binding tighter
+        than `||`, which older releases evaluate left to right."""
+        client: Valkey = self.server.get_new_client()
+        release = client.execute_command("CONFIG", "GET", "search.emulate-release")
+        assert release[1] < b"1.3.0", f"test needs an older default, got {release}"
+        assert client.execute_command(
+            "FT.CREATE", "prec_idx", "ON", "HASH", "PREFIX", "1", "prec:",
+            "FILTER", "@a == 1 || @b == 1 && @c == 1",
+            "SCHEMA", "a", "NUMERIC"
+        ) == b"OK"
+        # 1 || (0 && 0) admits the key; (1 || 0) && 0 would not.
+        client.execute_command("HSET", "prec:1", "a", "1", "b", "0", "c", "0")
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "prec_idx")
+        res = client.execute_command(
+            "FT.SEARCH", "prec_idx", "@a:[-inf +inf]", "NOCONTENT")
+        assert res[0] == 1, f"got {res}"
+
     def test_filter_undeclared_hash_field(self):
         """For a HASH index, a FILTER may reference a field that is not declared
         in the schema; its value is read directly off the key."""

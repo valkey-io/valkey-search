@@ -11,6 +11,7 @@
 #include <limits>
 #include <queue>
 #include <random>
+#include <type_traits>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/log/check.h"
@@ -184,6 +185,10 @@ absl::Status Apply::Execute(RecordSet &records) const {
     }
     auto r = records.pop_front();
     auto value = expr_->Evaluate(ctx, *r);
+    // Redisearch fails the whole query on an evaluation error.
+    if (value.IsError()) {
+      return absl::InvalidArgumentError(value.GetNil().GetReason());
+    }
     if (value.IsMissing() && ApplyDropsMissingField()) {
       continue;
     }
@@ -206,6 +211,9 @@ absl::Status Filter::Execute(RecordSet &records) const {
     }
     auto r = records.pop_front();
     auto result = expr_->Evaluate(ctx, *r);
+    if (result.IsError()) {
+      return absl::InvalidArgumentError(result.GetNil().GetReason());
+    }
     if (result.IsTrue()) {
       filtered.push_back(std::move(r));
     }
@@ -215,13 +223,38 @@ absl::Status Filter::Execute(RecordSet &records) const {
   return absl::OkStatus();
 }
 
+// A record with its sort keys, evaluated once before sorting. Every key of
+// every record is evaluated, so whether a key's evaluation error fails the
+// query does not depend on which records happen to tie on an earlier key.
+template <typename T>
+struct KeyedRecord {
+  T record;
+  ArgVector keys;
+};
+
+// Evaluates every sort key of `record`. An evaluation error fails the query,
+// as in APPLY and FILTER.
+static absl::StatusOr<ArgVector> EvaluateSortKeys(
+    const absl::InlinedVector<SortBy::SortKey, 4> &sortkeys,
+    const Record &record) {
+  ArgVector keys;
+  for (auto &sk : sortkeys) {
+    keys.emplace_back(sk.expr_->Evaluate(ctx, record));
+    if (keys.back().IsError()) {
+      return absl::InvalidArgumentError(keys.back().GetNil().GetReason());
+    }
+  }
+  return keys;
+}
+
 template <typename T>
 struct SortFunctor {
   const absl::InlinedVector<SortBy::SortKey, 4> *sortkeys_;
-  bool operator()(const T &l, const T &r) const {
-    for (auto &sk : *sortkeys_) {
-      auto lvalue = sk.expr_->Evaluate(ctx, *l);
-      auto rvalue = sk.expr_->Evaluate(ctx, *r);
+  bool operator()(const KeyedRecord<T> &l, const KeyedRecord<T> &r) const {
+    for (size_t i = 0; i < sortkeys_->size(); ++i) {
+      const auto &sk = (*sortkeys_)[i];
+      const auto &lvalue = l.keys[i];
+      const auto &rvalue = r.keys[i];
       // A record that has no value for this key sorts after one that does,
       // ascending and descending alike, which is what Redisearch does.
       //
@@ -231,8 +264,12 @@ struct SortFunctor {
       // interleaved with the sorted ones. Answering the direction here rather
       // than through the switch below is deliberate -- "missing goes last" is
       // not a smaller-or-larger claim, so DESC must not flip it.
-      const bool l_missing = lvalue.IsNil();
-      const bool r_missing = rvalue.IsNil();
+      //
+      // A null -- lower() of a number -- is a value, not a missing one: it
+      // orders below every other value, first ASC and last DESC, as in
+      // Redisearch.
+      const bool l_missing = lvalue.IsNil() && !lvalue.IsNull();
+      const bool r_missing = rvalue.IsNil() && !rvalue.IsNull();
       if (l_missing != r_missing) {
         return r_missing;
       }
@@ -240,7 +277,8 @@ struct SortFunctor {
         // Both missing: undecided on this key, try the next one.
         continue;
       }
-      auto cmp = expr::Compare(lvalue, rvalue);
+      auto cmp = expr::CompareNulls(lvalue, rvalue)
+                     .value_or(expr::Compare(lvalue, rvalue));
       switch (cmp) {
         case expr::Ordering::kEQUAL:
         case expr::Ordering::kUNORDERED:
@@ -262,17 +300,28 @@ absl::Status SortBy::Execute(RecordSet &records) const {
   if (records.size() > max_) {
     // Sadly std::priority_queue can't operate on unique_ptr's. so we need an
     // extra copy
+    using Keyed = KeyedRecord<Record *>;
     SortFunctor<Record *> sorter{&sortkeys_};
-    std::priority_queue<Record *, std::vector<Record *>, SortFunctor<Record *>>
-        heap(sorter);
+    std::priority_queue<Keyed, std::vector<Keyed>, SortFunctor<Record *>> heap(
+        sorter);
     absl::Status status = absl::OkStatus();
     size_t polled = 0;
+    // Evaluates the front record's keys and pushes it onto the heap. On an
+    // error the record stays in `records`, where the caller discards it.
+    auto push_front = [&]() {
+      auto keys = EvaluateSortKeys(sortkeys_, *records.front());
+      if (!keys.ok()) {
+        status = keys.status();
+        return;
+      }
+      heap.push(Keyed{records.pop_front().release(), *std::move(keys)});
+    };
     for (auto i = 0; i < max_ && status.ok(); ++i) {
       if (++polled % kCancellationPollInterval == 0) {
         status = CheckCancelled(records);
       }
       if (status.ok()) {
-        heap.push(records.pop_front().release());
+        push_front();
       }
     }
     while (status.ok() && !records.empty()) {
@@ -282,16 +331,19 @@ absl::Status SortBy::Execute(RecordSet &records) const {
           break;
         }
       }
-      heap.push(records.pop_front().release());
-      auto top = RecordPtr(heap.top());  // no leak....
+      push_front();
+      if (!status.ok()) {
+        break;
+      }
+      auto top = RecordPtr(heap.top().record);  // no leak....
       heap.pop();
     }
-    // Drained even when cancelled: the heap holds raw pointers this function
-    // owns, so leaving early without handing them back would leak them. On the
-    // cancelled path the record set is left in whatever order the partial fill
-    // produced, which is fine -- the caller discards it with the error.
+    // Drained even when cancelled or failed: the heap holds raw pointers this
+    // function owns, so leaving early without handing them back would leak
+    // them. On that path the record set is left in whatever order the partial
+    // fill produced, which is fine -- the caller discards it with the error.
     while (!heap.empty()) {
-      records.emplace_front(RecordPtr(heap.top()));
+      records.emplace_front(RecordPtr(heap.top().record));
       heap.pop();
     }
     return status;
@@ -302,9 +354,23 @@ absl::Status SortBy::Execute(RecordSet &records) const {
   // during the sort is not seen until it finishes. It is bounded by SORTBY's
   // MAX (this branch only runs when the input is already no larger than it).
   VMSDK_RETURN_IF_ERROR(CheckCancelled(records));
-  SortFunctor<RecordPtr> sorter{&sortkeys_};
-  std::stable_sort(records.begin(), records.end(), sorter);
-  return CheckCancelled(records);
+  std::vector<KeyedRecord<RecordPtr>> keyed;
+  keyed.reserve(records.size());
+  for (const auto &record : records) {
+    VMSDK_ASSIGN_OR_RETURN(auto keys, EvaluateSortKeys(sortkeys_, *record));
+    keyed.push_back({nullptr, std::move(keys)});
+  }
+  // Moved only once every key is evaluated, so an error leaves `records` whole.
+  for (size_t i = 0; i < keyed.size(); ++i) {
+    keyed[i].record = std::move(records[i]);
+  }
+  std::stable_sort(keyed.begin(), keyed.end(),
+                   SortFunctor<RecordPtr>{&sortkeys_});
+  for (size_t i = 0; i < keyed.size(); ++i) {
+    records[i] = std::move(keyed[i].record);
+  }
+  VMSDK_RETURN_IF_ERROR(CheckCancelled(records));
+  return absl::OkStatus();
 }
 
 // Redisearch treats an array group key as a multi-value field: the record joins
@@ -388,6 +454,10 @@ absl::Status GroupBy::Execute(RecordSet &records) const {
       ArgVector args;
       for (auto &nargs : reducer->args_) {
         args.emplace_back(nargs->Evaluate(ctx, *record));
+        // An evaluation error fails the query, as in APPLY and FILTER.
+        if (args.back().IsError()) {
+          return absl::InvalidArgumentError(args.back().GetNil().GetReason());
+        }
       }
       args_by_reducer.emplace_back(std::move(args));
     }
@@ -834,6 +904,8 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> RandomSampleReducerParser(
         std::unique_ptr<Attribute>(dynamic_cast<Attribute *>(output.release()));
   }
 
+  parameters.record_info_by_index_[r->output_->record_index_].result_type_ =
+      expr::Expression::Type::kArray;
   return std::unique_ptr<GroupBy::Reducer>(std::move(r));
 }
 
@@ -903,6 +975,9 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> BasicReducerParser(
         std::unique_ptr<Attribute>(dynamic_cast<Attribute *>(output.release()));
   }
 
+  parameters.record_info_by_index_[r->output_->record_index_].result_type_ =
+      std::is_same_v<T, ToList> ? expr::Expression::Type::kArray
+                                : expr::Expression::Type::kNumber;
   return std::unique_ptr<GroupBy::Reducer>(std::move(r));
 }
 
@@ -1003,6 +1078,8 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> FirstValueReducerParser(
         std::unique_ptr<Attribute>(dynamic_cast<Attribute *>(output.release()));
   }
 
+  parameters.record_info_by_index_[r->output_->record_index_].result_type_ =
+      r->args_[0]->GetResultType();
   return std::unique_ptr<GroupBy::Reducer>(std::move(r));
 }
 
@@ -1181,7 +1258,11 @@ absl::Status CreateRecordsFromNeighbors(
       rec->fields_.at(key_index) = expr::Value(n.external_id->Str());
     }
 
-    if (parameters.IsVectorQuery() || parameters.addscores_) {
+    // A vector query's score column is its KNN distance alias. For a hybrid
+    // `text=>[KNN]` query Neighbor.score holds the text relevance instead.
+    if (parameters.IsVectorQuery()) {
+      rec->fields_.at(scores_index) = expr::Value(n.distance);
+    } else if (parameters.addscores_) {
       rec->fields_.at(scores_index) = expr::Value(n.score);
     }
 
@@ -1322,6 +1403,12 @@ class CursorAggregateResult : public Cursor {
 // Replies [count, row...] with the first `count` records, removing them.
 void AggregateParameters::ReplyRecords(ValkeyModuleCtx *ctx, RecordSet &records,
                                        size_t count) {
+  // An FT.HYBRID reply, including a later FT.CURSOR READ of one, is written
+  // emulating at least 1.3.0: FT.HYBRID is new in 1.3.0.
+  std::optional<options::ScopedMinimumRelease> minimum;
+  if (hybrid_) {
+    minimum.emplace(vmsdk::ValkeyVersion(1, 3, 0));
+  }
   auto &parameters = *this;
   ValkeyModule_ReplyWithArray(ctx, 1 + count);
   ValkeyModule_ReplyWithLongLong(ctx, static_cast<long long>(count));

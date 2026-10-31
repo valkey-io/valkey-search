@@ -9,14 +9,17 @@
 #include <thread>
 #include <vector>
 
-#include "absl/container/inlined_vector.h"
 #include "absl/strings/string_view.h"
+#include "absl/time/clock.h"
+#include "absl/time/time.h"
 #include "gtest/gtest.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/text.h"
+#include "src/indexes/text/language_registry.h"
 #include "src/indexes/text/text_index.h"
 #include "src/utils/string_interning.h"
 #include "testing/common.h"
+#include "vmsdk/src/debug.h"
 #include "vmsdk/src/testing_infra/utils.h"
 
 namespace valkey_search {
@@ -30,8 +33,8 @@ class TextIndexSchemaTest : public vmsdk::ValkeyTest {
   std::shared_ptr<TextIndexSchema> CreateSchema() {
     std::vector<std::string> empty_stop_words;
     return std::make_shared<TextIndexSchema>(
-        data_model::LANGUAGE_ENGLISH,
-        " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~", false, empty_stop_words,
+        LanguageRegistry::Instance().Get(data_model::LANGUAGE_ENGLISH),
+        " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~", empty_stop_words, false,
         4);
   }
 
@@ -49,13 +52,13 @@ class TextIndexSchemaTest : public vmsdk::ValkeyTest {
   // Returns nullopt when the root has no stem-tree entry.
   std::optional<uint32_t> StemDistinctDocs(TextIndexSchema &schema,
                                            absl::string_view word) {
-    absl::InlinedVector<absl::string_view, kStemVariantsInlineCapacity>
-        variants;
-    uint32_t distinct_docs = 0;
-    schema.GetAllStemVariants(word, variants, /*stem_enabled_mask=*/1,
-                              /*lock_needed=*/true, &distinct_docs);
-    if (variants.empty()) return std::nullopt;
-    return distinct_docs;
+    const std::string stemmed = schema.StemWord(word);
+    return schema.WithStemTreeLock(
+        [&](const Rax &stem_tree) -> std::optional<uint32_t> {
+          const auto root = stem_tree.FindStemParentsTarget(stemmed);
+          if (!root || root->parents.empty()) return std::nullopt;
+          return root->distinct_docs;
+        });
   }
 };
 
@@ -112,8 +115,58 @@ TEST_F(TextIndexSchemaTest, StemDistinctDocsDecrementsOnDelete) {
   EXPECT_EQ(StemDistinctDocs(*schema, "running"), std::nullopt);
 }
 
+// doc2 adds "runs" while doc1's delete has emptied it but not yet updated the
+// stem tree. The delete must not drop the root doc2 just counted.
+TEST_F(TextIndexSchemaTest, StemDistinctDocsSurvivesConcurrentDeleteAndAdd) {
+  auto schema = CreateSchema();
+  data_model::TextIndex proto;
+  auto text = std::make_shared<Text>(proto, schema);
+  schema->SetStemTextFieldMask(1);
+
+  auto key1 = StringInternStore::Intern("doc1");
+  auto key2 = StringInternStore::Intern("doc2");
+  CommitStemmed(*schema, key1, "runs");
+
+  constexpr absl::string_view kPausePoint = "delete_key_data_stem_update";
+  vmsdk::debug::PausePointControl(kPausePoint, true);
+  std::thread deleter([&] { schema->DeleteKeyData(key1); });
+  while (vmsdk::debug::PausePointWaiters(kPausePoint).value_or(0) == 0) {
+    absl::SleepFor(absl::Milliseconds(1));
+  }
+  CommitStemmed(*schema, key2, "runs");
+  vmsdk::debug::PausePointControl(kPausePoint, false);
+  deleter.join();
+
+  EXPECT_EQ(StemDistinctDocs(*schema, "runs"), 1);
+}
+
 // Concurrent CommitKeyData calls with overlapping words must
 //  not crash or corrupt the index.
+// Indexes using the language defaults share one TokenizerConfig owned by the
+// language; an index with custom settings builds its own.
+TEST_F(TextIndexSchemaTest, DefaultTokenizerConfigIsShared) {
+  auto language =
+      LanguageRegistry::Instance().Get(data_model::LANGUAGE_ENGLISH);
+  auto make = [&](const std::string &punctuation,
+                  const std::vector<std::string> &stop_words) {
+    return std::make_shared<TextIndexSchema>(language, punctuation, stop_words,
+                                             false, 4);
+  };
+  auto a =
+      make(language->GetDefaultPunctuation(), language->GetDefaultStopWords());
+  auto b =
+      make(language->GetDefaultPunctuation(), language->GetDefaultStopWords());
+  auto custom = make(" ,", {});
+
+  EXPECT_EQ(&a->GetTokenizerConfig(),
+            language
+                ->TokenizerConfigFor(language->GetDefaultPunctuation(),
+                                     language->GetDefaultStopWords())
+                .get());
+  EXPECT_EQ(&a->GetTokenizerConfig(), &b->GetTokenizerConfig());
+  EXPECT_NE(&custom->GetTokenizerConfig(), &a->GetTokenizerConfig());
+}
+
 TEST_F(TextIndexSchemaTest, ConcurrentCommitKeyData) {
   auto schema = CreateSchema();
   data_model::TextIndex proto;
@@ -238,8 +291,8 @@ TEST_F(TextIndexSchemaTest, NormReflectsMaxTermFrequency) {
   // with_offsets=true so duplicate tokens get distinct positions
   std::vector<std::string> empty_stop_words;
   auto schema = std::make_shared<TextIndexSchema>(
-      data_model::LANGUAGE_ENGLISH, " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",
-      true, empty_stop_words, 4);
+      LanguageRegistry::Instance().Get(data_model::LANGUAGE_ENGLISH),
+      " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~", empty_stop_words, true, 4);
   data_model::TextIndex proto;
   auto text = std::make_shared<Text>(proto, schema);
 

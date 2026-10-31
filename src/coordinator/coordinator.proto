@@ -150,6 +150,12 @@ enum Scorer {
   SCORER_TFIDF = 1;
 }
 
+enum HybridPolicy {
+  HYBRID_POLICY_AUTO = 0;
+  HYBRID_POLICY_BATCHES = 1;
+  HYBRID_POLICY_ADHOC_BF = 2;
+}
+
 message SearchIndexPartitionRequest {
   uint32 db_num = 1;
   string index_schema_name = 2;
@@ -158,7 +164,7 @@ message SearchIndexPartitionRequest {
   bytes query = 5;
   uint32 dialect = 6;
   uint32 k = 7;
-  uint64 ef = 8;
+  optional uint64 ef = 8;
   LimitParameter limit = 9;
   uint64 timeout_ms = 10;
   bool no_content = 11;
@@ -184,6 +190,13 @@ message SearchIndexPartitionRequest {
   // it has to cross the wire.
   bool is_match_all = 22;
   optional InkeysFilter inkeys = 23;
+  HybridPolicy hybrid_policy = 24;
+  // Whether the whole record was asked for, independently of
+  // return_parameters. A sender that predates this field leaves it false, and
+  // the receiver derives it from no_content instead -- see search_converter.cc
+  // -- so a mixed-version fanout does not turn `LOAD *` into a fetch of
+  // nothing.
+  bool all_content = 25;
 }
 
 message InkeysFilter {
@@ -241,8 +254,17 @@ message MultiSearchIndexPartitionResponse {
 }
 
 message GlobalMetadataVersionHeader {
+  // Deterministic aggregate hash of the metadata entries. Each entry contributes
+  // its type, ID, version, and fingerprint. Entry order does not affect the
+  // hash.
   uint64 top_level_fingerprint = 1;
+  // Logical clock used to order metadata states. Incremented on every local
+  // create or delete. On reconciliation, set to the maximum of the local and
+  // incoming values, plus one if the merged result matches neither side.
   uint32 top_level_version = 2;
+  // Minimum Valkey Search module version (as ValkeyVersion::ToInt(), e.g.
+  // 1.3.0 = 66304) required to interpret this metadata. Nodes running an older
+  // module reject it.
   uint32 top_level_min_version = 3;
 }
 

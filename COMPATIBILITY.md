@@ -106,6 +106,22 @@ This section describes areas where Valkey Search intentionally diverges from Red
 
 **Migration impact.** Log-scraping rules, alerting triggers keyed on specific log strings, log-shipping parsers, and runbooks that instruct operators to look for particular Redisearch log phrases all need to be reviewed and updated against Valkey Search's log output. Applications that do not consume logs programmatically are not affected.
 
+### Zero-relevance scores with an infinite document score
+
+**What differs.** When a document's summed relevance is `0` and its `SCORE_FIELD` value is `inf` or `-inf`, Valkey Search scores it `0`, while Redisearch scores it `nan` (0 × ±inf). Examples include a query whose only clause has `$weight: 0`, or a numeric-only query. When the summed relevance is non-zero, both return `inf` or `-inf`.
+
+**Why.** Zero relevance scores zero regardless of the document score, and a `nan` score has no defined sort order.
+
+**Migration impact.** Applications that check for `nan` scores should expect `0` instead.
+
+### Word-position queries on an index without offsets
+
+**What differs.** On an index created with `NOOFFSETS`, Valkey Search rejects a quoted phrase of two or more words (`FT.SEARCH` and `FT.AGGREGATE`) and the `INORDER` and `SLOP` arguments (`FT.SEARCH`) with `Index does not support offsets`. Redisearch answers these queries: a quoted phrase matches documents that contain all its words in any order and at any distance, and `INORDER` and `SLOP` are ignored. `FT.AGGREGATE` already ignores `INORDER` and `SLOP` on such an index, as Redisearch does.
+
+**Why.** Such an index stores no word positions, so word order and distance cannot be checked. This is a known defect, not a design choice; it will be removed when the queries are answered as Redisearch answers them.
+
+**Migration impact.** Until then, remove quotes and `INORDER` / `SLOP` from queries against `NOOFFSETS` indexes, or create the index with offsets.
+
 ## Extensions
 
 Valkey Search may extend functionality beyond what Redisearch provides. These extensions take two forms.
@@ -199,3 +215,7 @@ A list of the compatibility issues that have been fixed.
 | 1.3.0   | `compatibility-empty_string_not_numeric` | An empty string coerces to the number `0` in an `FT.AGGREGATE` expression, so `abs("")` is `0`, `timefmt("")` is a formatted epoch and `(0)==("")` is true. | An empty string is not numeric, matching Redisearch: `abs("")` is `nan`, `timefmt("")` is nil and `(0)==("")` is false. |
 | 1.3.0   | `compatibility-reduce_sum_avg_empty_nan` | `FT.AGGREGATE` `REDUCE SUM` and `REDUCE AVG` over a group that folded no value at all answer `0`, which is indistinguishable from a group whose values really did sum to zero. | Such a group answers `nan`, matching Redisearch. |
 | 1.3.0   | `compatibility-sortby_max_follows_limit` | `FT.AGGREGATE` `SORTBY` keeps at most its own `MAX`, defaulting to 10, no matter what follows it. A later `LIMIT` can only narrow that: `SORTBY @n1 ASC LIMIT 0 1000` returns 10 rows, and `LIMIT 500 100` returns none at all, because the offset falls past the ten records that survived. `MAX 0` returns nothing rather than being treated as absent. | The bound is taken from an adjacent `LIMIT`, matching Redisearch. A `LIMIT` immediately before or after the `SORTBY` raises it to that clause's offset plus count and outranks a smaller `MAX`. A `LIMIT` separated from the `SORTBY` by any other stage, such as `GROUPBY` or `APPLY`, does not affect it. `MAX 0` means no `MAX`, so the default of 10 applies, and `SORTBY` with neither still keeps 10. |
+| 1.3.0   | `compatibility-min_stem_size_code_points` | On an English index, `MINSTEMSIZE` is compared against a word's length in bytes, so with the default of 4 a word like `café` (4 characters, 5 bytes) is stemmed. | `MINSTEMSIZE` is compared against the length in characters (Unicode code points), so `café` is not stemmed. Non-English languages always count characters. The setting applies when a document is indexed, so documents indexed before the change keep their stem entries until they are re-indexed. |
+| 1.3.0   | `compatibility-fuzzy_code_point_distance` | On an English index, fuzzy (`%term%`) edit distance counts bytes, so replacing `é` with `è` costs 2 edits and `%hola%` does not match `¡hola`. | Edit distance counts characters (Unicode code points), so `é` to `è` costs 1 edit and `%hola%` matches `¡hola`. Non-English languages always count characters. Whether the result differs depends on the indexed words, so the INFO field counts every fuzzy term searched on an English index under the old behavior. |
+| 1.3.0   | `compatibility-filter_parser_invalid_utf8_expression` | A query expression containing malformed UTF-8 is accepted. In text terms each malformed sequence is replaced with U+FFFD, so the term matches only documents that contain U+FFFD; `TAG` values keep their raw bytes and match a tag stored with the same bytes. | The query is rejected with `Invalid UTF-8 in query expression`, matching how ingestion rejects malformed text. |
+| 1.3.0   | `compatibility-tag_rejects_non_utf8` | A `TAG` field value containing malformed UTF-8 is indexed with its raw bytes and matches a tag query with the same bytes. | The value is rejected as invalid data, matching Redisearch, and counted in `hash_indexing_failures`; with `compatibility-invalid_data_drops_key` the whole key is dropped from the index. The setting applies when a document is indexed, so documents indexed before the change stay indexed until they are re-indexed. |

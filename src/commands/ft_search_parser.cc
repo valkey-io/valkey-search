@@ -72,52 +72,6 @@ vmsdk::config::Number &GetMaxTimeoutMs() {
 
 namespace {
 
-absl::Status Verify(query::SearchParameters &parameters) {
-  // Only verify the vector KNN parameters for vector based queries.
-  if (!parameters.IsNonVectorQuery()) {
-    if (parameters.query.empty()) {
-      return absl::InvalidArgumentError("Invalid Query Syntax");
-    }
-    if (parameters.ef.has_value()) {
-      auto max_ef_runtime_value = options::GetMaxEfRuntime().GetValue();
-      VMSDK_RETURN_IF_ERROR(
-          vmsdk::VerifyRange(parameters.ef.value(), 1, max_ef_runtime_value))
-          << "`EF_RUNTIME` must be a positive integer greater than 0 and "
-             "cannot "
-             "exceed "
-          << max_ef_runtime_value << ".";
-    }
-    auto max_knn_value = options::GetMaxKnn().GetValue();
-    VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(parameters.k, 1, max_knn_value))
-        << "KNN parameter must be a positive integer greater than 0 and cannot "
-           "exceed "
-        << max_knn_value << ".";
-  }
-  const auto max_timeout_ms = options::GetMaxTimeoutMs().GetValue();
-  if (parameters.timeout_ms > static_cast<uint64_t>(max_timeout_ms)) {
-    return absl::InvalidArgumentError(
-        absl::StrCat(query::kTimeoutParam,
-                     " must be a positive integer greater than 0 and "
-                     "cannot exceed ",
-                     max_timeout_ms, "."));
-  }
-  if (parameters.dialect < 2 || parameters.dialect > 4) {
-    return absl::InvalidArgumentError(
-        "DIALECT requires a non negative integer >=2 and <= 4");
-  }
-
-  // Validate all parameters used, nuke the map to avoid dangling pointers
-  while (!parameters.parse_vars.params.empty()) {
-    auto begin = parameters.parse_vars.params.begin();
-    if (begin->second.first == 0) {
-      return absl::NotFoundError(
-          absl::StrCat("Parameter `", begin->first, "` not used."));
-    }
-    parameters.parse_vars.params.erase(begin);
-  }
-  return absl::OkStatus();
-}
-
 std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructLimitParser() {
   return std::make_unique<vmsdk::ParamParser<SearchCommand>>(
       [](SearchCommand &parameters, vmsdk::ArgsIterator &itr) -> absl::Status {
@@ -364,6 +318,15 @@ absl::Status SearchCommand::PostParseQueryString() {
     }
   }
 
+  // A bare FT.SEARCH returns the whole record; RETURN narrows it to a list and
+  // NOCONTENT / RETURN 0 asks for nothing. Those were previously distinguished
+  // downstream by `return_attributes` being empty, which FT.AGGREGATE can no
+  // longer rely on now that `LOAD *` pairs a whole-record request with the
+  // named paths its pipeline stages need. Deriving the flag here keeps
+  // FT.SEARCH behavior exactly as it was while letting the fetch path read one
+  // flag for both commands.
+  all_content = !no_content && return_attributes.empty();
+
   return absl::OkStatus();
 }
 
@@ -381,6 +344,10 @@ absl::Status VerifyQueryString(query::SearchParameters &parameters) {
              "cannot "
              "exceed "
           << max_ef_runtime_value << ".";
+      if (parameters.hybrid_policy == query::HybridPolicy::kAdHocBruteForce) {
+        return absl::InvalidArgumentError(
+            "EF_RUNTIME is irrelevant for the ADHOC_BF hybrid policy");
+      }
     }
     auto max_knn_value = options::GetMaxKnn().GetValue();
     VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(parameters.k, 1, max_knn_value))
@@ -401,15 +368,9 @@ absl::Status VerifyQueryString(query::SearchParameters &parameters) {
         "DIALECT requires a non negative integer >=2 and <= 4");
   }
 
-  // Validate all parameters used, nuke the map to avoid dangling pointers
-  while (!parameters.parse_vars.params.empty()) {
-    auto begin = parameters.parse_vars.params.begin();
-    if (begin->second.first == 0) {
-      return absl::NotFoundError(
-          absl::StrCat("Parameter `", begin->first, "` not used."));
-    }
-    parameters.parse_vars.params.erase(begin);
-  }
+  // An unused PARAM is allowed. Tear down parse_vars to avoid
+  // dangling pointers in the argument buffer.
+  parameters.parse_vars.ClearAtEndOfParse();
   return absl::OkStatus();
 }
 

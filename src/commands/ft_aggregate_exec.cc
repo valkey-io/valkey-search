@@ -1310,7 +1310,7 @@ class CursorAggregateResult : public Cursor {
                  const std::shared_ptr<IndexSchema> &index_schema,
                  size_t count) override {
     parameters_->index_schema = index_schema;
-    // Like Redis Search, a read reports no total under RESP3.
+    // RESP3 reports total_results 0, like Redis Search.
     parameters_->ReplyRecords(ctx, records_, std::min(count, records_.size()),
                               0);
     parameters_->index_schema = nullptr;

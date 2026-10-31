@@ -81,8 +81,7 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   AggregateParameters(int db_num) : QueryCommand(db_num){};
   absl::Status ParseCommand(vmsdk::ArgsIterator& itr) override;
   void SendReply(ValkeyModuleCtx* ctx, query::SearchResult& result) override;
-  // Replies and removes the first `count` records. Only RESP3 reports
-  // total_results.
+  // Replies and removes the first `count` records; total_results is RESP3-only.
   void ReplyRecords(ValkeyModuleCtx* ctx, RecordSet& records, size_t count,
                     size_t total_results);
   // False for FT.HYBRID, which keeps its RESP2 reply under RESP3.

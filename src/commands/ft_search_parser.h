@@ -74,16 +74,14 @@ struct SearchCommand : public QueryCommand {
     // Empty unless the query named the distance ($yield_distance_as or AS).
     std::string vr_field;
   };
-  // resp_version is ResultsReply::RespVersion(). RESP3 sort keys always
-  // follow Redis Search (see GetRowFormat).
+  // RESP3 sort keys always follow Redis Search.
   RowFormat GetRowFormat(int resp_version) const;
   // Returns false for a nil sort key. A distance is formatted into buffer.
   bool SortKey(const indexes::Neighbor &neighbor, const RowFormat &format,
                std::string &buffer, char &prefix,
                absl::string_view &value) const;
   class RowFields;
-  // Returns the number of pairs replied. unique_names skips a field named like
-  // the distance.
+  // Returns the pair count. unique_names skips a field named like the distance.
   size_t ReplyAttributes(ValkeyModuleCtx *ctx,
                          const indexes::Neighbor &neighbor,
                          const RowFormat &format, bool unique_names) const;

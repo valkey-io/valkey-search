@@ -18,10 +18,8 @@
 namespace valkey_search {
 
 // Replies FT.SEARCH, FT.AGGREGATE and FT.CURSOR READ results in RESP2 or RESP3.
-//
-// RESP3 follows Redis Search:
-//   {attributes: [], warning: [], total_results, format: "STRING", results}
-// with each result {id, score, sortkey, extra_attributes, values}.
+// RESP3 follows Redis Search: {attributes, warning, total_results, format,
+// results}, each result {[id], [score], [sortkey], [extra_attributes], values}.
 class ResultsReply {
  public:
   // The RESP2 layout. RESP3 always replies the envelope, as
@@ -42,14 +40,14 @@ class ResultsReply {
     bool score{false};
     // WITHSORTKEYS.
     bool sort_key{false};
-    // Unset under NOCONTENT.
+    // False under NOCONTENT.
     bool fields{true};
   };
 
   class Fields {
    public:
     virtual ~Fields() = default;
-    // Returns the number of pairs replied. unique_names is set for a RESP3 map.
+    // Returns the pair count. unique_names is set for a RESP3 map.
     virtual size_t Reply(ValkeyModuleCtx *ctx, bool unique_names) const = 0;
   };
 
@@ -57,7 +55,7 @@ class ResultsReply {
   struct Row {
     absl::string_view id;
     double score{0};
-    // sort_key_prefix + sort_key, or nil.
+    // sort_key_prefix + sort_key, or nil if sort_key_nil.
     char sort_key_prefix{0};
     absl::string_view sort_key;
     bool sort_key_nil{false};

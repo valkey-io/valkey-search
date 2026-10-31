@@ -51,8 +51,7 @@ inline bool HasVrDistance(const indexes::Neighbor &neighbor) {
 // FT.SEARCH idx "*=>[KNN 10 @vec $BLOB AS score]" PARAMS 2 BLOB
 // "\x12\xa9\xf5\x6c" DIALECT 2
 
-// The number of matches a reply reports. A fanout sums each shard's count, so
-// a vector query's is capped at K.
+// A fanout sums shard counts, so a vector query's total is capped at k.
 size_t TotalResults(const query::SearchResult &search_result,
                     const query::SearchParameters &parameters) {
   if (parameters.IsNonVectorQuery()) {
@@ -290,7 +289,7 @@ class CursorSearchResult : public Cursor {
                  const std::shared_ptr<IndexSchema> &index_schema,
                  size_t count) override {
     size_t n = std::min(count, RemainingRows());
-    // Like Redis Search, a read reports no total under RESP3.
+    // RESP3 reports total_results 0, like Redis Search.
     auto reply = ResultsReply::Create(ctx, ResultsReply::Layout::kRows,
                                       command_->ReplyColumns());
     reply->Begin(0, n);
@@ -329,8 +328,7 @@ SearchCommand::RowFormat SearchCommand::GetRowFormat(int resp_version) const {
   format.sort_by_vec_score =
       !IsNonVectorQuery() && sortby_parameter.has_value() && score_as &&
       sortby_parameter->field == vmsdk::ToStringView(score_as.get());
-  // RESP2 drops the sort key under NOCONTENT. Skipping it here keeps the
-  // compatibility-fix counters below unchanged for RESP2.
+  // RESP2 omits the sort key under NOCONTENT; skipping keeps compat counters.
   if (with_sort_keys && (resp3 || !no_content)) {
     auto type_prefix = [&]() {
       return IsSortByFieldNumeric(*this, format.sort_by_vec_score) ? '#' : '$';

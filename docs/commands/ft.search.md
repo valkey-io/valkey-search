@@ -29,7 +29,7 @@ FT.SEARCH <index> <query>
 - `INCONSISTENT` (Optional): If specified, the command will generate a best-effort reply if the cluster remains inconsistent within the timeout interval.
 - `INKEYS <count> <key> [<key> ...]` (optional): Restricts results to the specified set of document keys. `<count>` is the number of keys that follow and must be a non-negative integer. Duplicate keys are deduplicated. If `<count>` is 0, no results are returned. The filter is applied as a post-filter after the search, so `total_count` in the response reflects only the keys that matched both the query and the INKEYS set.
 - `LIMIT <offset> <count>` (optional): Lets you choose a portion of the result. The first `<offset>` keys are skipped and only a maximum of `<count>` keys are included. The default is LIMIT 0 10, which returns at most 10 keys.
-- `NOCONTENT` (optional): When present, only the resulting key names are returned, no key values are included.
+- `NOCONTENT` (optional): When present, only the resulting key names are returned, no key values are included. Without `SORTBY`, this also skips content processing and its post-search re-filtering and re-scoring; see [Query Operations](../topics/search.md#query-operations).
 - `PARAMS <count> <name> <value> [<name> <value> ...]` (optional): `count` is of the number of arguments, i.e., twice the number of value/name pairs. [Search - query language](../topics/search-query.md) for details.
 - `RETURN <count> <field> [AS <name>] <field> [AS <name>] ...` (options): `count` is the number of fields to return. Specifies the fields you want to retrieve from your documents, along with any renaming for the returned values. By default, all fields are returned unless the `NOCONTENT` option is set, in which case no fields are returned. If num is set to 0, it behaves the same as `NOCONTENT`.
 - `INORDER` (optional): Indicates that proximity matching of text terms in the query must be in order.
@@ -50,6 +50,8 @@ In all cases, the response is an array with the first element being a count of t
 The value of this count is unaffected by the presence of the `LIMIT` clause.
 
 The `LIMIT` clause trims the list of matched keys to generate a list of returned keys. The remainder of the response array is for the returned keys.
+
+Concurrent document changes can cause candidates to be removed or their scores and ordering to change during content processing. Removed candidates reduce the reported match count and can leave fewer returned keys than requested; the search is not rerun to find replacements. Results do not represent a database snapshot. See [Query Operations](../topics/search.md#query-operations) for the processing rules and the `NOCONTENT` exception.
 
 ### `NOCONTENT` or `RETURN 0` was specified.
 

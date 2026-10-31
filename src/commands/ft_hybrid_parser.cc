@@ -1208,6 +1208,11 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
 
   // Clear the now-stale stack-local index_interface_ pointer.
   env.agg->parse_vars_.index_interface_ = nullptr;
+  // The PARAMS maps view argv, which a parked cursor outlives.
+  env.agg->parse_vars.params.clear();
+  for (auto &arm : env.arms) {
+    arm->parse_vars.params.clear();
+  }
 
   // A score alias naming a column the LOAD clause explicitly emits is
   // rejected rather than silently resolved. Both would land in the same reply

@@ -301,6 +301,26 @@ class TestAggregateCursor(ValkeySearchTestCaseBase):
         finally:
             client.config_set("maxmemory", 0)
 
+    def test_param_survives_into_cursor_read(self):
+        # The APPLY $p value must not be a view into the creating command's
+        # argv, which is freed before FT.CURSOR READ replies with it.
+        client = self._client()
+        param = b"param-" + b"Z" * 75
+        batch, cursor = client.execute_command(
+            "FT.AGGREGATE", "idx", QUERY, "PARAMS", "2", "p", param,
+            "LOAD", "1", "@price", "APPLY", "$p", "AS", "tag",
+            "WITHCURSOR", "COUNT", "1")
+        assert cursor != 0
+        # Recycle the freed argv allocation.
+        client.execute_command("SET", "filler", b"X" * len(param))
+        tags = []
+        while cursor != 0:
+            batch, cursor = client.execute_command(
+                "FT.CURSOR", "READ", "idx", cursor)
+            tags += [dict(zip(row[::2], row[1::2]))[b"tag"] for row in batch[1:]]
+        assert tags == [param] * (NUM_DOCS - 1)
+
+
 
 class TestCursorCluster(ValkeySearchClusterTestCase):
     def test_cursor_is_node_local(self):

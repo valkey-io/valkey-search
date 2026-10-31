@@ -20,13 +20,13 @@ class FTInternalUpdateTest : public ValkeySearchTest {
   void SetUp() override {
     ValkeySearchTest::SetUp();
     // Ensure each test starts with the skip flag disabled (the default).
-    VMSDK_EXPECT_OK(const_cast<vmsdk::config::Boolean&>(
+    VMSDK_EXPECT_OK(const_cast<vmsdk::config::Boolean &>(
                         options::GetSkipCorruptedInternalUpdateEntries())
                         .SetValue(false));
   }
 
   void TearDown() override {
-    VMSDK_EXPECT_OK(const_cast<vmsdk::config::Boolean&>(
+    VMSDK_EXPECT_OK(const_cast<vmsdk::config::Boolean &>(
                         options::GetSkipCorruptedInternalUpdateEntries())
                         .SetValue(false));
     ValkeySearchTest::TearDown();
@@ -34,7 +34,7 @@ class FTInternalUpdateTest : public ValkeySearchTest {
 };
 
 TEST_F(FTInternalUpdateTest, WrongArguments) {
-  ValkeyModuleString* argv[2];
+  ValkeyModuleString *argv[2];
   argv[0] =
       TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.INTERNAL_UPDATE");
   argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_id");
@@ -51,7 +51,7 @@ TEST_F(FTInternalUpdateTest, ParseErrorMetadata) {
   EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx_))
       .WillRepeatedly(testing::Return(0));
 
-  ValkeyModuleString* argv[4];
+  ValkeyModuleString *argv[4];
   argv[0] =
       TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.INTERNAL_UPDATE");
   argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_id");
@@ -75,7 +75,7 @@ TEST_F(FTInternalUpdateTest, ParseErrorWhileLoadingReturnsErrorNoCrash) {
   EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx_))
       .WillRepeatedly(testing::Return(VALKEYMODULE_CTX_FLAGS_LOADING));
 
-  ValkeyModuleString* argv[4];
+  ValkeyModuleString *argv[4];
   argv[0] =
       TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.INTERNAL_UPDATE");
   argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_id");
@@ -95,16 +95,16 @@ TEST_F(FTInternalUpdateTest, ParseErrorWhileLoadingReturnsErrorNoCrash) {
 // With the skip flag enabled, a corrupt entry during loading is skipped: the
 // command returns OK, increments the skipped metric, and does not crash.
 TEST_F(FTInternalUpdateTest, ParseErrorWhileLoadingSkippedWhenConfigured) {
-  VMSDK_EXPECT_OK(const_cast<vmsdk::config::Boolean&>(
+  VMSDK_EXPECT_OK(const_cast<vmsdk::config::Boolean &>(
                       options::GetSkipCorruptedInternalUpdateEntries())
                       .SetValue(true));
   EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx_))
       .WillRepeatedly(testing::Return(VALKEYMODULE_CTX_FLAGS_LOADING));
 
   auto skipped_before =
-      Metrics::GetStats().ft_internal_update_skipped_entries_cnt.load();
+      Metrics::GetStats().ft_internal_update_skipped_entries_cnt.GetTotal();
 
-  ValkeyModuleString* argv[4];
+  ValkeyModuleString *argv[4];
   argv[0] =
       TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.INTERNAL_UPDATE");
   argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_id");
@@ -113,8 +113,9 @@ TEST_F(FTInternalUpdateTest, ParseErrorWhileLoadingSkippedWhenConfigured) {
 
   auto status = FTInternalUpdateCmd(&fake_ctx_, argv, 4);
   EXPECT_TRUE(status.ok());
-  EXPECT_EQ(Metrics::GetStats().ft_internal_update_skipped_entries_cnt.load(),
-            skipped_before + 1);
+  EXPECT_EQ(
+      Metrics::GetStats().ft_internal_update_skipped_entries_cnt.GetTotal(),
+      skipped_before + 1);
 
   for (int i = 0; i < 4; i++) {
     TestValkeyModule_FreeString(&fake_ctx_, argv[i]);
@@ -130,7 +131,7 @@ TEST_F(FTInternalUpdateTest, ValidEntryWhileLoadingWithoutCoordinatorNoCrash) {
       .WillRepeatedly(testing::Return(VALKEYMODULE_CTX_FLAGS_LOADING));
 
   // Empty strings parse as valid (empty) protobufs.
-  ValkeyModuleString* argv[4];
+  ValkeyModuleString *argv[4];
   argv[0] =
       TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.INTERNAL_UPDATE");
   argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_id");
@@ -149,13 +150,13 @@ TEST_F(FTInternalUpdateTest, ValidEntryWhileLoadingWithoutCoordinatorNoCrash) {
 // node without a coordinator returns OK instead of erroring.
 TEST_F(FTInternalUpdateTest, WithoutCoordinatorWhileLoadingSkippable) {
   ASSERT_FALSE(coordinator::MetadataManager::IsInitialized());
-  VMSDK_EXPECT_OK(const_cast<vmsdk::config::Boolean&>(
+  VMSDK_EXPECT_OK(const_cast<vmsdk::config::Boolean &>(
                       options::GetSkipCorruptedInternalUpdateEntries())
                       .SetValue(true));
   EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx_))
       .WillRepeatedly(testing::Return(VALKEYMODULE_CTX_FLAGS_LOADING));
 
-  ValkeyModuleString* argv[4];
+  ValkeyModuleString *argv[4];
   argv[0] =
       TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.INTERNAL_UPDATE");
   argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_id");
@@ -171,7 +172,7 @@ TEST_F(FTInternalUpdateTest, WithoutCoordinatorWhileLoadingSkippable) {
 }
 
 TEST_F(FTInternalUpdateTest, TooManyArguments) {
-  ValkeyModuleString* argv[5];
+  ValkeyModuleString *argv[5];
   argv[0] =
       TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.INTERNAL_UPDATE");
   argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_id");

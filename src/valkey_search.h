@@ -100,7 +100,7 @@ class ValkeySearch {
 
   IndexSchema::Stats::ResultCnt<uint64_t> AccumulateIndexSchemaResults(
       absl::AnyInvocable<const IndexSchema::Stats::ResultCnt<
-          std::atomic<uint64_t>> &(const IndexSchema::Stats &) const>
+          vmsdk::ShardedAtomic<uint64_t>> &(const IndexSchema::Stats &) const>
           get_result_cnt_func) const;
   void OnServerCronCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
                             uint64_t subevent, void *data);

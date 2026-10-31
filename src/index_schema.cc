@@ -543,7 +543,7 @@ static vmsdk::info_field::Integer invalid_data_drops_key_compat_counter(
 void TrackResults(
     ValkeyModuleCtx *ctx, const absl::StatusOr<bool> &status,
     const char *operation_str,
-    IndexSchema::Stats::ResultCnt<std::atomic<uint64_t>> &counter) {
+    IndexSchema::Stats::ResultCnt<vmsdk::ShardedAtomic<uint64_t>> &counter) {
   if (ABSL_PREDICT_FALSE(!status.ok())) {
     ++counter.failure_cnt;
     // Track global ingestion failures
@@ -572,7 +572,7 @@ void TrackResults(
 void TrackResults(
     ValkeyModuleCtx *ctx, const absl::StatusOr<indexes::RecordResult> &status,
     const char *operation_str,
-    IndexSchema::Stats::ResultCnt<std::atomic<uint64_t>> &counter) {
+    IndexSchema::Stats::ResultCnt<vmsdk::ShardedAtomic<uint64_t>> &counter) {
   if (ABSL_PREDICT_FALSE(!status.ok())) {
     ++counter.failure_cnt;
     // Track global ingestion failures
@@ -1367,7 +1367,9 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   // Text Index info fields end
   ValkeyModule_ReplyWithSimpleString(ctx, "hash_indexing_failures");
   ValkeyModule_ReplyWithCString(
-      ctx, absl::StrFormat("%lu", stats_.subscription_add.skipped_cnt).c_str());
+      ctx,
+      absl::StrFormat("%lu", stats_.subscription_add.skipped_cnt.GetTotal())
+          .c_str());
 
   ValkeyModule_ReplyWithSimpleString(ctx, "filter_rejected_keys");
   ValkeyModule_ReplyWithCString(

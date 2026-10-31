@@ -11,18 +11,12 @@
 // space.get_dist_func()(v1, v2, space.get_dist_func_param()) with hand-picked
 // vectors and assert the scalar result.
 //
-// Multi-dim coverage (dims 3, 4, 16, 17, 20) exercises the path-selection
-// logic inside the FP32 spaces:
-//   * dim=3  : pure scalar tail (no SIMD blocks, not 4-aligned)
-//   * dim=4  : SIMD4Ext path
-//   * dim=16 : full SIMD16Ext block
-//   * dim=20 : SIMD16Ext block + 4-tail
-//   * dim=17 : SIMD16Ext block + 1-element residual handler
-//
-// USE_SIMSIMD is now defined unconditionally in third_party/hnswlib/hnswlib.h,
-// so the FP16/BF16 spaces take the simsimd kernels here (simsimd does its own
-// runtime CPU dispatch). The dim sweep therefore exercises simsimd's own
-// blocked/tail handling as well.
+// USE_SIMSIMD is defined unconditionally in third_party/hnswlib/hnswlib.h, so
+// every space here, FP32 included, takes the simsimd kernels (simsimd does its
+// own runtime CPU dispatch). The dims (see AllDims) mix small sizes, multiples
+// of 16, and sizes one past a multiple of 4, 8 and 16, so each kernel's
+// blocked loop and its partially predicated or residual tail are both run on
+// NEON, SVE and x86 SIMD widths.
 //
 // All test inputs use values exactly representable in FP16 (small integers,
 // zero) so FP32 and FP16 expectations agree without precision drift.
@@ -57,8 +51,12 @@ constexpr float kFp16Tolerance = 1e-3f;
 // ~2^-7 relative error per term. 1e-2 absolute slack covers our test inputs.
 constexpr float kBf16Tolerance = 1e-2f;
 
+// Besides small and multiple-of-16 sizes, includes sizes one past a multiple
+// of every common SIMD width (4, 8 and 16 floats: NEON, 256-bit and 512-bit
+// SVE, AVX-512), so the final, partially predicated iteration of each kernel
+// runs with accumulator lanes that hold earlier partial sums but are inactive.
 const std::vector<size_t>& AllDims() {
-  static const std::vector<size_t> dims{3, 4, 16, 17, 20};
+  static const std::vector<size_t> dims{3, 4, 9, 16, 17, 20, 33, 100};
   return dims;
 }
 

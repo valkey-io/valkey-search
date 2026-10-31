@@ -40,11 +40,11 @@ bool CheckSlotOwnership(ValkeyModuleCtx *ctx, absl::string_view key);
 struct FilterVerification {
   bool matches{false};
   // Present only when the neighbor was reached via the mutation-walk
-  // (db_seq != sequence_number) and the caller asked for a score: the
-  // document's score recomputed through the same Scorer seam ScoreTextQuery
-  // uses, so it is on the same scale as the shard-side score. nullopt on the
-  // fast (no-mutation) path and wherever Neighbor.score is a KNN distance,
-  // which must never be overwritten with a relevance score.
+  // (db_seq != sequence_number, or rescore_unchanged) and the caller asked
+  // for a score: the document's score recomputed through the same Scorer seam
+  // ScoreTextQuery uses, so it is on the same scale as the shard-side score.
+  // nullopt on the fast (no-mutation) path and wherever Neighbor.score is a
+  // KNN distance, which must never be overwritten with a relevance score.
   std::optional<float> recomputed_score;
 };
 
@@ -62,10 +62,14 @@ struct FilterVerification {
 // Left unset it follows the query's own shape, rescoring unless the score is a
 // KNN distance. FT.HYBRID sets it per arm, because an arm's score is a raw
 // distance only when that arm is a pure vector search.
+//
+// `rescore_unchanged` takes an unmutated document through the same path, so a
+// reply that crossed a mutation is scored against one set of corpus statistics.
 FilterVerification VerifyFilter(
     const query::SearchParameters &parameters, const RecordsMap &records,
     const indexes::Neighbor &n, std::unique_ptr<query::QueryContext> &query_ctx,
-    std::optional<bool> recompute_score_override = std::nullopt);
+    std::optional<bool> recompute_score_override = std::nullopt,
+    bool rescore_unchanged = false);
 
 // Adds all local content for neighbors to the list of neighbors.
 // Skipping neighbors if one of the following:

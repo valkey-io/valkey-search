@@ -181,7 +181,8 @@ FilterVerification VerifyFilter(const query::SearchParameters &parameters,
                                 const RecordsMap &records,
                                 const indexes::Neighbor &n,
                                 std::unique_ptr<QueryContext> &query_ctx,
-                                std::optional<bool> recompute_score_override) {
+                                std::optional<bool> recompute_score_override,
+                                bool rescore_unchanged) {
   auto predicate = parameters.filter_parse_results.root_predicate.get();
   if (predicate == nullptr) {
     return {true, std::nullopt};
@@ -197,10 +198,13 @@ FilterVerification VerifyFilter(const query::SearchParameters &parameters,
     // so it does not match and the caller drops it.
     return {false, std::nullopt};
   }
-  if (*db_seq == n.sequence_number) {
+  const bool mutated = *db_seq != n.sequence_number;
+  if (!mutated && !rescore_unchanged) {
     return {true, std::nullopt};
   }
-  predicate_revalidation.Increment();
+  if (mutated) {
+    predicate_revalidation.Increment();
+  }
 
   const IndexSchema &index_schema = *parameters.index_schema;
   // One context per reply: leaves resolve on the first mutated document and are
@@ -252,7 +256,8 @@ absl::StatusOr<RecordsMap> GetContent(
     const indexes::Neighbor &neighbor,
     const std::optional<std::string> &vector_identifier,
     std::unique_ptr<query::QueryContext> &query_ctx,
-    std::optional<float> *out_recomputed_score = nullptr) {
+    std::optional<float> *out_recomputed_score = nullptr,
+    bool rescore_unchanged = false) {
   auto key = neighbor.external_id->Str();
   const bool is_json = attribute_data_type.ToProto() ==
                        data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON;
@@ -309,7 +314,8 @@ absl::StatusOr<RecordsMap> GetContent(
                              ctx, vector_identifier, key_obj.get(),
                              neighbor.external_id->Str(), identifiers));
   if (!parameters.filter_parse_results.filter_identifiers.empty()) {
-    auto verification = VerifyFilter(parameters, content, neighbor, query_ctx);
+    auto verification = VerifyFilter(parameters, content, neighbor, query_ctx,
+                                     std::nullopt, rescore_unchanged);
     if (!verification.matches) {
       return absl::NotFoundError("Verify filter failed");
     }
@@ -465,6 +471,24 @@ void ProcessNeighborsForReply(
   // the rest of the reply, so leaf resolution runs once instead of once per
   // recomputed document.
   std::unique_ptr<query::QueryContext> query_ctx;
+  // A mutated document moves the corpus statistics (e.g. average document
+  // length) every relevance score depends on, so once one is in the reply the
+  // unchanged ones are rescored too, keeping the reply on one scale.
+  bool rescore_unchanged = false;
+  if (parameters.ScoreIsRelevance() &&
+      parameters.filter_parse_results.root_predicate != nullptr) {
+    for (const auto &neighbor : neighbors) {
+      if (neighbor.attribute_contents.has_value()) {
+        continue;
+      }
+      auto db_seq = parameters.index_schema->TryGetDbMutationSequenceNumber(
+          neighbor.external_id);
+      if (!db_seq.has_value() || *db_seq != neighbor.sequence_number) {
+        rescore_unchanged = true;
+        break;
+      }
+    }
+  }
   for (auto &neighbor : neighbors) {
     // Remote neighbors (from fanout) always have attribute_contents populated,
     // so they skip this entire block. Only local neighbors without content
@@ -480,7 +504,8 @@ void ProcessNeighborsForReply(
     }
     std::optional<float> recomputed_score;
     auto content = GetContent(ctx, attribute_data_type, parameters, neighbor,
-                              vector_identifier, query_ctx, &recomputed_score);
+                              vector_identifier, query_ctx, &recomputed_score,
+                              rescore_unchanged);
     if (!content.ok()) {
       continue;
     }

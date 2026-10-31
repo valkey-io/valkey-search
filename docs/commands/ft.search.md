@@ -46,7 +46,7 @@ FT.SEARCH <index> <query>
 Response
 
 The shape and contents of the response depend on the options specified in the command.
-In all cases, the response is an array with the first element being a count of the number of keys which match the query.
+With RESP2, the response is an array with the first element being a count of the number of keys which match the query.
 The value of this count is unaffected by the presence of the `LIMIT` clause.
 
 The `LIMIT` clause trims the list of matched keys to generate a list of returned keys. The remainder of the response array is for the returned keys.
@@ -78,6 +78,25 @@ The response is a three element array:
 1. The count of the number of keys which match the query, as above.
 2. An array with one element per returned key. Each element is an array holding the entries for that key described above, e.g. the key name and its array of name/value pairs.
 3. The cursor id to pass to [`FT.CURSOR READ`](ft.cursor.md), or 0 if all keys were returned, in which case no cursor is created.
+
+### RESP3
+
+Clients using `HELLO 3` receive a Redis Search compatible map instead:
+
+```text
+{attributes: [], warning: [], total_results: 1, format: "STRING",
+ results: [{id: "key1", extra_attributes: {color: "blue"}, values: []}]}
+```
+
+`total_results` is the count of matching keys described above. `results` holds one map per returned key:
+
+- `id`: the key name.
+- `score`: the relevance score as a double, with `WITHSCORES`.
+- `sortkey`: the sort key, with `WITHSORTKEYS`. Unlike RESP2, it is also returned with `NOCONTENT`, and regardless of `search.emulate-release` it is prefixed with `#` for numeric fields and `$` otherwise, or null when the key has no sort value.
+- `extra_attributes`: the name/value pairs described above, omitted with `NOCONTENT` or `RETURN 0`. A field with the same name as the reported vector distance is left out.
+- `values`: always an empty array.
+
+With `WITHCURSOR`, the response is a two element array: the map, holding the first batch of keys, and the cursor id.
 
 # Examples
 

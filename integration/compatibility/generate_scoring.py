@@ -60,15 +60,14 @@ class TestScoringCompatibility(BaseCompatibilityTest):
     def capture(self, cmd):
         """Run one command and build its answer, without recording it."""
         # Not an execute_command override: a shape must see the reply before keeping it.
-        print("Cmd:", *cmd)
-        return {"cmd": cmd,
-                "key_type": self.key_type,
-                "data_set_name": self.data_set_name,
-                "schema_type": self.schema_type,
-                "testname": os.environ.get('PYTEST_CURRENT_TEST').split(':')[-1].split(' ')[0],
-                "traceback": "".join(traceback.format_stack()),
-                "result": self.client.execute_command(*cmd),
-                "exception": False}
+        answer = {"cmd": cmd,
+                  "key_type": self.key_type,
+                  "data_set_name": self.data_set_name,
+                  "schema_type": self.schema_type,
+                  "testname": os.environ.get('PYTEST_CURRENT_TEST').split(':')[-1].split(' ')[0],
+                  "traceback": "".join(traceback.format_stack())}
+        self.record_results(answer, cmd)
+        return answer
 
     @staticmethod
     def _scores_by_doc(result):

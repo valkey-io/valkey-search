@@ -16,6 +16,8 @@ set(SRCS_COMMANDS
     ${CMAKE_CURRENT_LIST_DIR}/ft_internal_update.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_list.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_search.cc
+    ${CMAKE_CURRENT_LIST_DIR}/results_reply.cc
+    ${CMAKE_CURRENT_LIST_DIR}/results_reply.h
     ${CMAKE_CURRENT_LIST_DIR}/commands.h
     ${CMAKE_CURRENT_LIST_DIR}/commands.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_search.h)

@@ -8,8 +8,10 @@
 #ifndef VALKEYSEARCH_SRC_COMMANDS_FT_SEARCH_PARSER_H_
 #define VALKEYSEARCH_SRC_COMMANDS_FT_SEARCH_PARSER_H_
 
-#include <optional>
+#include <string>
 
+#include "absl/strings/string_view.h"
+#include "results_reply.h"
 #include "src/commands/commands.h"
 #include "src/query/search.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -40,9 +42,11 @@ struct SearchCommand : public QueryCommand {
 
   query::SerializationRange GetSerializationRange() const;
 
-  // Replies one array per document in search_result.neighbors[start, end).
-  void ReplyRows(ValkeyModuleCtx *ctx, const query::SearchResult &search_result,
-                 size_t start, size_t end) const;
+  ResultsReply::Columns ReplyColumns() const;
+
+  void ReplyRows(ValkeyModuleCtx *ctx, ResultsReply &reply,
+                 const query::SearchResult &search_result, size_t start,
+                 size_t end) const;
 
   bool with_sort_keys{false};
   bool with_scores{false};
@@ -65,17 +69,22 @@ struct SearchCommand : public QueryCommand {
     bool has_relevance{false};
     bool sort_by_vec_score{false};
     bool nil_absent_sort_key{false};
-    std::string sort_key_prefix;
+    char sort_key_prefix{0};
     // The single VR distance field name (query::GetVrScoreFieldName).
     // Empty unless the query named the distance ($yield_distance_as or AS).
     std::string vr_field;
   };
-  RowFormat GetRowFormat() const;
-  // Replies a document's elements: key, [score], [sort key], fields. Returns
-  // the number of elements replied.
-  size_t ReplyRowElements(ValkeyModuleCtx *ctx,
-                          const indexes::Neighbor &neighbor,
-                          const RowFormat &format) const;
+  // RESP3 sort keys always follow Redis Search.
+  RowFormat GetRowFormat(int resp_version) const;
+  // Returns false for a nil sort key. A distance is formatted into buffer.
+  bool SortKey(const indexes::Neighbor &neighbor, const RowFormat &format,
+               std::string &buffer, char &prefix,
+               absl::string_view &value) const;
+  class RowFields;
+  // Returns the pair count. unique_names skips a field named like the distance.
+  size_t ReplyAttributes(ValkeyModuleCtx *ctx,
+                         const indexes::Neighbor &neighbor,
+                         const RowFormat &format, bool unique_names) const;
 };
 
 }  // namespace valkey_search

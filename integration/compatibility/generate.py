@@ -150,6 +150,11 @@ class BaseCompatibilityTest:
         # add reply count to check redis non-empty answer
         cls.replied_count = 0
         cls.client = ClientRSystem(cls.address)
+        # The same commands are recorded over RESP3 to check RESP3 replies.
+        # Only the standalone replay compares RESP3.
+        cls.client_resp3 = None if cls.CLUSTER else valkey.Valkey(
+            host=cls.address[0], port=cls.address[1], protocol=3
+        )
         while True:
             try:
                 cls.client.execute_command("PING")
@@ -303,19 +308,26 @@ class BaseCompatibilityTest:
             # replay does a no-crash check only. Used for BM-25 text scoring,
             # which is shard-local in cluster by design.
             answer["excluded_cluster"] = True
-        try:
-            print("Cmd:", *cmd)
-            answer["result"] = self.client.execute_command(*cmd)
-            answer["exception"] = False
-            if answer["result"] != [0]:
-                self.__class__.replied_count += 1  # ADD THIS LINE
-            print(f"replied: {answer['result']} (count: {self.__class__.replied_count})")
-            # print(f"replied: {answer['result']}")
-        except Exception as exc:
-            print(f"Got exception for Error: '{exc}', Cmd:{cmd}")
-            answer["result"] = {}
-            answer["exception"] = True
+        self.record_results(answer, cmd)
         self.answers.append(answer)
+
+    def record_results(self, answer, cmd):
+        """Runs cmd over RESP2 ("result") and RESP3 ("result_resp3")."""
+        print("Cmd:", *cmd)
+        clients = [("", self.client)]
+        if self.client_resp3 is not None:
+            clients.append(("_resp3", self.client_resp3))
+        for suffix, client in clients:
+            try:
+                answer["result" + suffix] = client.execute_command(*cmd)
+                answer["exception" + suffix] = False
+            except Exception as exc:
+                print(f"Got exception for Error: '{exc}', Cmd:{cmd}")
+                answer["result" + suffix] = {}
+                answer["exception" + suffix] = True
+        if not answer["exception"] and answer["result"] != [0]:
+            self.__class__.replied_count += 1
+        print(f"replied: {answer['result']} (count: {self.__class__.replied_count})")
 
     def check(self, *orig_cmd):
         """Non-vector command."""

@@ -81,8 +81,11 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   AggregateParameters(int db_num) : QueryCommand(db_num){};
   absl::Status ParseCommand(vmsdk::ArgsIterator& itr) override;
   void SendReply(ValkeyModuleCtx* ctx, query::SearchResult& result) override;
-  // Replies [count, row...] with the first `count` records, removing them.
-  void ReplyRecords(ValkeyModuleCtx* ctx, RecordSet& records, size_t count);
+  // Replies and removes the first `count` records; total_results is RESP3-only.
+  void ReplyRecords(ValkeyModuleCtx* ctx, RecordSet& records, size_t count,
+                    size_t total_results);
+  // False for FT.HYBRID, which keeps its RESP2 reply under RESP3.
+  bool search_envelope_reply{true};
   bool loadall_{false};
   // A record column the pipeline needs but the reply must not carry.
   // FT.HYBRID registers its fused score as a column so SORTBY/APPLY/FILTER

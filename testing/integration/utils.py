@@ -93,8 +93,36 @@ class ValkeyServerUnderTest:
     def terminated(self):
         return self.process_handle.poll() is not None
 
-    def ping(self) -> Any:
-        return valkey.Valkey(port=self.port).ping()
+    def ping(self, timeout_sec: float = 5.0) -> Any:
+        """PING this node directly, raising on failure.
+
+        Bounded because a wedged node still completes the TCP handshake (the
+        kernel backlog does that) and then never answers.
+        """
+        client = valkey.Valkey(
+            host="127.0.0.1",
+            port=self.port,
+            socket_timeout=timeout_sec,
+            socket_connect_timeout=timeout_sec,
+        )
+        try:
+            return client.ping()
+        finally:
+            try:
+                client.close()
+            except Exception:  # pylint: disable=broad-except
+                pass
+
+    def is_responsive(self, timeout_sec: float = 5.0) -> bool:
+        """True if this node answers PING, False for any failure.
+
+        Not the same as terminated(): a wedged node is a live process that
+        cannot serve.
+        """
+        try:
+            return bool(self.ping(timeout_sec=timeout_sec))
+        except Exception:  # pylint: disable=broad-except
+            return False
 
 
 def start_valkey_process(
@@ -255,6 +283,44 @@ class ValkeyClusterUnderTest:
                 result.append(server.port)
         return result
 
+    def get_unresponsive_servers(
+        self,
+        timeout_sec: float = 5.0,
+        attempts: int = 3,
+        retry_delay_sec: float = 2.0,
+    ) -> List[int]:
+        """Ports of nodes that are still running but no longer answer PING.
+
+        A wedged node is invisible to get_terminated_servers() (process still
+        alive), so without this the run is reported as whatever client errors
+        it caused.
+
+        Terminated nodes are skipped. A node must miss every attempt to be
+        reported, so a single slow PING under load is not enough.
+        """
+        suspects = [s for s in self.servers if not s.terminated()]
+        for attempt in range(attempts):
+            if not suspects:
+                return []
+            if attempt > 0:
+                time.sleep(retry_delay_sec)
+            still_mute = []
+            for server in suspects:
+                # Exited between rounds: terminated, not wedged.
+                if server.terminated():
+                    continue
+                if not server.is_responsive(timeout_sec=timeout_sec):
+                    still_mute.append(server)
+            suspects = still_mute
+            if suspects:
+                logging.warning(
+                    "Ports did not answer PING (attempt %d/%d): %s",
+                    attempt + 1,
+                    attempts,
+                    [s.port for s in suspects],
+                )
+        return sorted(s.port for s in suspects)
+
     def ping_all(self):
         result = []
         for server in self.servers:
@@ -382,7 +448,9 @@ def start_valkey_cluster(
             cluster_args["cluster-config-file"] = os.path.join(
                 node_dir, "nodes.conf"
             )
-            cluster_args["cluster-node-timeout"] = "10000"
+            # setdefault: this used to overwrite the caller's value, so the
+            # cluster never ran the timeout the test asked for.
+            cluster_args.setdefault("cluster-node-timeout", "10000")
             if os.path.exists(node_dir):
                 shutil.rmtree(node_dir, ignore_errors=True)
             os.makedirs(node_dir, exist_ok=True)

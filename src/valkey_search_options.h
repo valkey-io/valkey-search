@@ -48,6 +48,9 @@ config::Number &GetMaxWorkerSuspensionSecs();
 /// Return an immutable reference to the "use-coordinator" flag
 const config::Boolean &GetUseCoordinator();
 
+/// Return an immutable reference to the "coordinator-tls" flag
+const config::Boolean &GetCoordinatorTls();
+
 /// Return an immutable reference to the "enable-vector-sharing" flag
 const config::Boolean &GetEnableVectorSharing();
 

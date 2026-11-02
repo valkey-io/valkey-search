@@ -87,7 +87,7 @@ It's followed by these elements for each returned key, one after another:
 
 * String: the key name.
 * String: the key's relevance score, if `WITHSCORES` is specified.
-* String: the value of the `SORTBY` field, prefixed with `#` for a numeric field or `$` for a string field, if `WITHSORTKEYS` is specified and `NOCONTENT` isn't.
+* String: the value of the `SORTBY` field, prefixed with `#` for a numeric field or `$` for a string field, if `WITHSORTKEYS` is specified and neither `NOCONTENT` nor `RETURN 0` is specified.
   Null if the key doesn't have that field.
   Below `search.emulate-release` 1.3.0, the prefix is always `#` and a missing value is replied as `#`.
 * Array: the key's field/value pairs, unless `NOCONTENT` or `RETURN 0` is specified.

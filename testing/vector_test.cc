@@ -1410,51 +1410,70 @@ TEST_F(SearchRangeFp32, RejectsMalformedRangeInputs) {
 
 TEST_F(SearchRangeFp32, HnswCosineNonFiniteDistanceIsNotATruncationWitness)
 ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  // With a cap of 2 the walk goes on past the first in-radius key, so a
+  // non-finite distance counted as in range would make the second finite key
+  // an N+1 witness and report a truncated result.
   auto &fetch_cap = options::GetMaxNonVectorSearchResultsFetched();
   const auto saved_cap = fetch_cap.GetValue();
   absl::Cleanup restore = [&] {
     VMSDK_EXPECT_OK(fetch_cap.SetValue(saved_cap));
   };
-  VMSDK_EXPECT_OK(fetch_cap.SetValue(1));
+  VMSDK_EXPECT_OK(fetch_cap.SetValue(2));
 
   auto flat = MakeIndex(/*hnsw=*/false, data_model::DISTANCE_METRIC_COSINE);
   auto hnsw = MakeIndex(/*hnsw=*/true, data_model::DISTANCE_METRIC_COSINE);
   ASSERT_NE(flat, nullptr);
   ASSERT_NE(hnsw, nullptr);
 
+  // An infinite component overflows the dot product with any query that is
+  // non-zero in that dimension, so this record is at a NaN or -inf distance
+  // whatever its reciprocal magnitude comes out as. FLT_MAX is not enough: the
+  // squared magnitude overflows, its reciprocal then depends on -ffast-math
+  // and the optimisation level, and against the normalized range query the
+  // distance can be finite. Three records are few enough that inserting the
+  // infinite component does not hit the greedy-descent hang described at the
+  // DISABLED test below.
   std::vector<float> overflow(kDims, 0.0f);
-  overflow[0] = std::numeric_limits<float>::max();
+  overflow[0] = std::bit_cast<float>(uint32_t{0x7f800000});
   std::vector<float> finite(kDims, 0.0f);
   finite[1] = 1.0f;
+  std::vector<float> second(kDims, 0.0f);
+  second[1] = 1.0f;
+  second[2] = 0.5f;
   const auto overflow_key = StringInternStore::Intern("overflow");
   const auto finite_key = StringInternStore::Intern("finite");
+  const auto second_key = StringInternStore::Intern("second");
   for (auto *index : {flat.get(), hnsw.get()}) {
     VMSDK_EXPECT_OK(
         testing_infra::AddVectorRecord(*index, overflow_key, Bytes(overflow)));
     VMSDK_EXPECT_OK(
         testing_infra::AddVectorRecord(*index, finite_key, Bytes(finite)));
+    VMSDK_EXPECT_OK(
+        testing_infra::AddVectorRecord(*index, second_key, Bytes(second)));
   }
 
   std::vector<float> query_vector(kDims, 0.0f);
-  query_vector[0] = std::numeric_limits<float>::max();
-  query_vector[1] = std::numeric_limits<float>::max();
+  query_vector[0] = 1.0f;
+  query_vector[1] = 1.0f;
   const std::string query = Bytes(query_vector);
   auto raw_overflow = hnsw->ComputeDistanceFromRecord(overflow_key, query);
   ASSERT_TRUE(raw_overflow.ok()) << raw_overflow.status();
   EXPECT_TRUE(scoring::IsNaN(raw_overflow->first) ||
               scoring::IsInf(raw_overflow->first));
-  auto raw_finite = hnsw->ComputeDistanceFromRecord(finite_key, query);
-  ASSERT_TRUE(raw_finite.ok()) << raw_finite.status();
-  EXPECT_FALSE(scoring::IsNaN(raw_finite->first));
-  EXPECT_FALSE(scoring::IsInf(raw_finite->first));
-  EXPECT_LE(raw_finite->first, 1.5f);
+  for (const auto &key : {finite_key, second_key}) {
+    auto raw_finite = hnsw->ComputeDistanceFromRecord(key, query);
+    ASSERT_TRUE(raw_finite.ok()) << raw_finite.status();
+    EXPECT_FALSE(scoring::IsNaN(raw_finite->first));
+    EXPECT_FALSE(scoring::IsInf(raw_finite->first));
+    EXPECT_LE(raw_finite->first, 1.5f);
+  }
 
   bool flat_truncated = true;
   auto expected = flat->SearchRange(
       query, /*radius=*/1.5f, CancelNever(), /*epsilon=*/0.01f,
       /*filter=*/nullptr, /*ef_runtime=*/std::nullopt, &flat_truncated);
   ASSERT_TRUE(expected.ok()) << expected.status();
-  ASSERT_EQ(expected->size(), 1u);
+  ASSERT_EQ(expected->size(), 2u);
   EXPECT_FALSE(flat_truncated);
 
   bool hnsw_truncated = true;

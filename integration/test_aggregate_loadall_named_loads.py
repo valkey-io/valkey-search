@@ -124,5 +124,8 @@ class TestAggregateLoadallNamedLoads(ValkeySearchTestCaseDebugMode):
         loads = ["LOAD", "*", "LOAD", "3", "@extra", "AS", "x"]
         assert hybrid("1.3.0", *loads) == [
             {**stored(i), "x": f"e{i}".encode()} for i in range(2)]
-        # FT.HYBRID is new in 1.3.0 and always emulates at least 1.3.0.
+        # FT.HYBRID is new in 1.3.0 and always emulates at least 1.3.0, so
+        # nothing is counted.
+        before = client.info("SEARCH").get(COUNTER, 0)
         assert hybrid("1.0.0", *loads) == hybrid("1.3.0", *loads)
+        assert client.info("SEARCH").get(COUNTER, 0) == before

@@ -6,6 +6,8 @@
  */
 #pragma once
 
+#include <algorithm>
+
 #include "vmsdk/src/info.h"  // IWYU pragma: keep
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/utils.h"
@@ -186,10 +188,33 @@ config::Number &GetVectorUnshareBatchSize();
 /// See COMPATIBILITY.md for the semantics.
 config::Version &GetEmulateRelease();
 
-/// Return true if search.emulate-release >= version. Use this at sites that
+/// Return true if search.emulate-release >= version, or version is no later
+/// than the ScopedMinimumRelease alive on this thread. Use this at sites that
 /// gate the compatible vs legacy behavior of a fix described in
 /// COMPATIBILITY.md.
 bool EnabledInVersion(vmsdk::ValkeyVersion version);
+
+/// While one is alive on this thread, the code running emulates at least
+/// `minimum`, whatever search.emulate-release says: every fix up to that
+/// release is enabled, and later fixes still follow the setting. A command new
+/// in 1.3.0 (FT.CREATE FILTER, FT.HYBRID) has no older release to emulate, so
+/// it opens one with 1.3.0 around compiling and evaluating its expressions and
+/// around writing its reply. Nested guards keep the highest minimum.
+class ScopedMinimumRelease {
+ public:
+  explicit ScopedMinimumRelease(vmsdk::ValkeyVersion minimum)
+      : saved_(minimum_) {
+    minimum_ = std::max(minimum_, minimum);
+  }
+  ~ScopedMinimumRelease() { minimum_ = saved_; }
+  ScopedMinimumRelease(const ScopedMinimumRelease &) = delete;
+  ScopedMinimumRelease &operator=(const ScopedMinimumRelease &) = delete;
+  static vmsdk::ValkeyVersion Minimum() { return minimum_; }
+
+ private:
+  vmsdk::ValkeyVersion saved_;
+  static thread_local vmsdk::ValkeyVersion minimum_;
+};
 
 /// Convenience overload — the constexpr ValkeyVersion ctor lets the compiler
 /// fold the comparand at every call site.

@@ -122,6 +122,14 @@ This section describes areas where Valkey Search intentionally diverges from Red
 
 **Migration impact.** Until then, remove quotes and `INORDER` / `SLOP` from queries against `NOOFFSETS` indexes, or create the index with offsets.
 
+### `VECTOR_RANGE` result cap
+
+**What differs.** For a query containing `VECTOR_RANGE`, each shard keeps at most `search.max-nonvector-search-results-fetched` (default 100000) matching keys and drops the rest without an error. The reply's total counts only the kept keys, and which keys are kept is unspecified. Redisearch has no such limit: its total counts every match it finds, and its `search-max-search-results` setting only rejects a larger `LIMIT`.
+
+**Why.** The setting bounds the number of keys a query holds on each shard before their contents are fetched, which bounds the memory the query uses.
+
+**Migration impact.** A range query that matches more keys on one shard than the setting allows returns an arbitrary subset of them. Raise `search.max-nonvector-search-results-fetched`, narrow the radius, or add filters so that each shard matches fewer keys. See [Vector Range Match](docs/topics/search-query.md#vector-range-match).
+
 ## Extensions
 
 Valkey Search may extend functionality beyond what Redisearch provides. These extensions take two forms.

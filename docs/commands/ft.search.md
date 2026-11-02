@@ -46,8 +46,8 @@ FT.SEARCH <index> <query>
 Response
 
 The shape and contents of the response depend on the options specified in the command.
-In all cases, the response is an array whose first element is the number of keys matched by the completed search work. For a best-effort partial response, such as `SOMESHARDS` when a shard times out or cancellation interrupts local query execution, this count can be lower than the number that would match a completed query.
-For a query containing `VECTOR_RANGE`, each shard silently retains at most `search.max-nonvector-search-results-fetched` matches. The count includes only those retained matches; in a cluster it is the sum of the retained shard counts. `SORTBY`, `LIMIT`, pagination, and `WITHCURSOR` operate on the retained set and cannot recover matches discarded by this cap. See [Vector Range Match](../topics/search-query.md#vector-range-match).
+In all cases, the response is an array with the first element being a count of the number of keys which match the query.
+For a query without KNN, including one containing `VECTOR_RANGE`, each shard silently retains at most `search.max-nonvector-search-results-fetched` matches. The count includes only those retained matches; in a cluster it is the sum of the retained shard counts. `SORTBY`, `LIMIT`, pagination, and `WITHCURSOR` operate on the retained set and cannot recover matches discarded by this cap. See [Vector Range Match](../topics/search-query.md#vector-range-match).
 The value of this count is unaffected by the presence of the `LIMIT` clause.
 
 The `LIMIT` clause trims the list of matched keys to generate a list of returned keys. The remainder of the response array is for the returned keys.

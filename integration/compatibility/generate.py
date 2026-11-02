@@ -985,35 +985,26 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         # Loading the same field twice is de-duplicated, not an error.
         self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 3 @__key @n2 @n2")
 
-        # KNOWN DIFFERENCES. Redisearch lets the first claim of an output name
-        # win and silently drops any later claim. valkey-search instead rejects
-        # a LOAD clause that names the same output twice when an `AS` rename is
-        # involved (see COMPATIBILITY.md, "stricter input validation"), so these
-        # commands error and are excluded from the result comparison.
+        # Both engines keep the first claim of an output name.
         #
         # A rename onto the name of a field loaded earlier in the same clause.
         self.check(dialect,
             f"ft.aggregate {key_type}_idx1 * load 5 @__key @n2 @n1 as n2",
-            excluded=True,
         )
         # ... and the same collision in the opposite order.
         self.check(dialect,
             f"ft.aggregate {key_type}_idx1 * load 5 @__key @n1 as n2 @n2",
-            excluded=True,
         )
         # A rename onto the key field when the key is also loaded.
         self.check(dialect,
             f"ft.aggregate {key_type}_idx1 * load 4 @__key @n1 as __key",
-            excluded=True,
         )
         # Two AS clauses targeting the same alias.
         self.check(dialect,
             f"ft.aggregate {key_type}_idx1 * load 7 @__key @n1 as x @n2 as x",
-            excluded=True,
         )
         self.check(dialect,
             f"ft.aggregate {key_type}_idx1 * load 7 @__key @n1 as x @n2 as x apply 1+@x as y",
-            excluded=True,
         )
 
     def test_aggregate_load_rename_json_path(self, key_type, dialect, vector_data_type):
@@ -1128,15 +1119,28 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
             self.check(dialect, f"ft.aggregate {idx} * load 1 @__key load * "
                        "load 3 @t1 as e2 load 3 @t2 as e2")
 
+    def test_aggregate_load_source_is_a_stored_field(self, key_type, dialect, vector_data_type):
+        # A LOAD source reads the stored field, even when an earlier entry
+        # already emits that name.
+        self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
+        idx = f"{key_type}_idx1"
+        for loads in [
+            "load 3 @t1 as e2 load 3 @e2 as y",
+            "load 6 @t1 as e2 @e2 as y",
+        ]:
+            self.check(dialect, f"ft.aggregate {idx} * load 1 @__key {loads}")
+
     def test_aggregate_load_as_and_knn_score(self, key_type, dialect, vector_data_type):
         # Redisearch keeps a vector query's score under its own name: a rename
-        # onto that name is dropped, and a rename of the score is ignored.
+        # onto that name is dropped, and a rename of the score loads the stored
+        # field of that name.
         self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
         idx = f"{key_type}_idx1"
         for loads in [
             "load 4 @__key @n1 as d",
             "load 4 @__key @d as x",
             "load 5 @__key @n2 @n1 as d",
+            "load 6 @__key @d as t2 @t2",
         ]:
             self.checkvec(dialect, f"ft.aggregate {idx} * {loads} sortby 2 @__key asc",
                           knn=4, score_as="AS d")

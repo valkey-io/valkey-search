@@ -118,8 +118,17 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
   }
   std::vector<LoadField> loads_to_process;
   for (const auto &load : params.loads_) {
-    if (!(load.after_groupby && params.embedded_in_hybrid_) &&
-        !load.yields_to_score && !load.duplicate) {
+    // FT.HYBRID ignores a late LOAD, but a GROUPBY on the key still needs it.
+    if (load.after_groupby && params.embedded_in_hybrid_) {
+      params.load_key |= load.identifier == "__key";
+      continue;
+    }
+    // 1.2.1 accepted these; CheckLoadAfterGroupby decides. Dropped here so a
+    // stage's own field is still loaded below.
+    if (load.after_groupby && params.loadall_) {
+      continue;
+    }
+    if (!load.yields_to_score && !load.duplicate) {
       loads_to_process.push_back(load);
     }
   }
@@ -192,7 +201,8 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
       }
       continue;
     }
-    if (identifier == vmsdk::ToStringView(params.score_as.get())) {
+    if (identifier == vmsdk::ToStringView(params.score_as.get()) &&
+        !load.reads_stored) {
       if (renamed) {
         apply_rename(params.record_indexes_by_alias_.at(identifier));
       }
@@ -206,10 +216,6 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
       if (renamed) {
         apply_rename(params.record_indexes_by_alias_.at(identifier));
       }
-      continue;
-    }
-    // 1.2.1 accepted these; CheckLoadAfterGroupby decides.
-    if (params.loadall_ && load.after_groupby) {
       continue;
     }
     content = true;

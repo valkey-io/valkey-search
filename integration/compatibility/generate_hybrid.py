@@ -724,6 +724,13 @@ class TestHybridCompatibility(BaseCompatibilityTest):
         ]:
             self.hybrid(key_type, "@title:alpha", load=load, fused_score_as=None)
 
+    # A late LOAD naming the GROUPBY key keeps the key.
+    def test_late_load_of_the_groupby_key(self, key_type):
+        super().setup_data("hybrid text extra", key_type)
+        self.hybrid(key_type, "@title:alpha", load=NO_LOAD, fused_score_as=None,
+                    tail=["GROUPBY", "1", "@__key", "REDUCE", "COUNT", "0", "AS", "cnt",
+                          "LOAD", "1", "@__key", "SORTBY", "2", "@__key", "ASC"])
+
     # -----------------------------------------------------------------
     # Defaults. These are the cases the sweeps above deliberately pin, so
     # that a disagreement about a default shows up here and only here.

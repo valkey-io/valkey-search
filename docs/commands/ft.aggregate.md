@@ -42,7 +42,7 @@ FT.AGGREGATE <index-name> <query>
 
   `LOAD *` may be combined with named `LOAD` clauses. They apply in command order: every stored field is loaded under its own name (on a JSON index, `LOAD *` loads the whole document as one `$` field), a renamed field adds a column, and a later clause replaces an earlier one with the same output name; a name claimed by named entries in two different clauses shows the stored field. A `LOAD` after `GROUPBY` is rejected, since each record is then a group rather than a key.
 
-  In a vector query the score keeps its name, as in Redisearch: `LOAD 3 @price AS dist`, where `dist` names the KNN score, is ignored, and so is a rename of the score itself (`LOAD 3 @dist AS d`).
+  In a vector query the score keeps its name, as in Redisearch: `LOAD 3 @price AS dist`, where `dist` names the KNN score, is ignored. A rename of the score itself (`LOAD 3 @dist AS d`) leaves the score under `dist` and loads the stored field `dist`, if the key has one, as `d`.
 
   `AS <alias>` renames the loaded field: it is emitted under `<alias>` in the result and is referenced as `@<alias>` by later stages. Without an `AS` clause the field is emitted under the name given in the `LOAD` clause. An alias may reuse the name of a declared attribute, in which case it hides that attribute for the remainder of the pipeline. When two entries produce the same output name, within one `LOAD` clause or across clauses, the first one is kept and the rest are ignored, as in Redisearch.
 

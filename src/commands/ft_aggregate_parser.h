@@ -73,6 +73,9 @@ struct LoadField {
   bool duplicate{false};
   // Claimed again by a later clause; under `LOAD *` the stored field then wins.
   bool claimed_again{false};
+  // Reads the stored field even though its name is the score's or another
+  // entry's output.
+  bool reads_stored{false};
 };
 
 struct IndexInterface {
@@ -204,6 +207,13 @@ struct AggregateParameters : public expr::Expression::CompileContext,
         record_info_by_index_[itr->second].output_name_ == output_name) {
       return itr->second;
     }
+    return AddRecordColumn(identifier, alias, output_name, data_type);
+  }
+
+  // Like AddRecordAttribute, but never reuses a column.
+  size_t AddRecordColumn(absl::string_view identifier, absl::string_view alias,
+                         absl::string_view output_name,
+                         indexes::IndexerType data_type) {
     size_t new_index = record_info_by_index_.size();
     // The attribute name keeps resolving to the first column that carried it;
     // the output name always resolves to the column that emits it.

@@ -10,6 +10,8 @@
 #include <vector>
 
 #include "absl/status/status.h"
+#include "absl/strings/ascii.h"
+#include "absl/strings/str_cat.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "src/commands/filter_parser.h"
@@ -199,6 +201,16 @@ TEST_F(TagIndexTest, ModifyRecordCaseOnlyChangeRetainsMembershipReverse) {
   auto entries_fetcher = index->Search(predicate, false);
   EXPECT_EQ(entries_fetcher->Size(), 1);
   EXPECT_THAT(Fetch(*entries_fetcher), testing::UnorderedElementsAre("key1"));
+}
+
+TEST_F(TagIndexTest, ModifyRecordCaseOnlyChangeRetainsMembershipLongTag) {
+  const std::string a(100, 'a'), b(100, 'b'), c(100, 'c');
+  const std::string lower = absl::StrCat(a, ",", b, ",", c);
+  EXPECT_TRUE(index->AddRecord("key1", absl::AsciiStrToUpper(lower)).value());
+  EXPECT_TRUE(index->ModifyRecord("key1", lower).value());
+  EXPECT_EQ(index->GetTagValueDocCount(a), 1u);
+  EXPECT_EQ(index->GetTagValueDocCount(b), 1u);
+  EXPECT_EQ(index->GetTagValueDocCount(c), 1u);
 }
 
 TEST_F(TagIndexTest, ModifyRecordCaseOnlyChangeMovesKeyWhenCaseSensitive) {

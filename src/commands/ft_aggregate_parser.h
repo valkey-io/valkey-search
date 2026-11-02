@@ -86,7 +86,6 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   void ReplyRecords(ValkeyModuleCtx* ctx, RecordSet& records, size_t count);
   bool loadall_{false};
   bool loadall_after_groupby_{false};
-  bool embedded_in_hybrid_{false};
   // The 1.3.0 rule for named loads under `LOAD *`.
   bool loadall_named_loads_{false};
   // A record column the pipeline needs but the reply must not carry.

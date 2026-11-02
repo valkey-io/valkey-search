@@ -81,8 +81,7 @@ absl::Status CheckAmbiguousName(const AggregateParameters &parameters,
     }
     // `__key` and the score name would each mean two columns: the loaded
     // key or score, and the field renamed onto its name.
-    const bool score_emitted =
-        parameters.IsVectorQuery() || parameters.embedded_in_hybrid_;
+    const bool score_emitted = parameters.IsVectorQuery() || parameters.hybrid_;
     const bool reserved =
         alias == "__key" ||
         (score_emitted &&
@@ -144,7 +143,7 @@ absl::Status CheckAmbiguousName(const AggregateParameters &parameters,
   // A distance the query emits: the KNN alias or a VECTOR_RANGE distance.
   // FT.HYBRID's fused score keeps its own documented rules.
   absl::string_view knn_name;
-  if (parameters.IsVectorQuery() && !parameters.embedded_in_hybrid_) {
+  if (parameters.IsVectorQuery() && !parameters.hybrid_) {
     knn_name = vmsdk::ToStringView(parameters.score_as.get());
   }
   for (absl::string_view name : {written, alias}) {
@@ -261,7 +260,7 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
                 parameters.MakeReference(identifier, true).status());
           }
           // FT.HYBRID ignores a late LOAD, its rename included.
-          if (renamed && !(after_groupby && parameters.embedded_in_hybrid_)) {
+          if (renamed && !(after_groupby && parameters.hybrid_)) {
             // LOAD precedes APPLY/SORTBY/FILTER in the command, so register
             // the rename now to make `@alias` resolvable in those later
             // stages. Entries that can't be resolved against the index here

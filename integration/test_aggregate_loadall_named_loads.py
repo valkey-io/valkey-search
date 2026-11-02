@@ -93,7 +93,7 @@ class TestAggregateLoadallNamedLoads(ValkeySearchTestCaseDebugMode):
         assert pages > 1
         assert client.info("SEARCH").get(COUNTER, 0) - before == 1
 
-    def test_hybrid_follows_the_same_rule(self):
+    def test_hybrid_always_follows_the_1_3_0_rule(self):
         client = self._client("1.3.0")
         client.execute_command(
             "FT.CREATE", "h", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA",
@@ -124,4 +124,5 @@ class TestAggregateLoadallNamedLoads(ValkeySearchTestCaseDebugMode):
         loads = ["LOAD", "*", "LOAD", "3", "@extra", "AS", "x"]
         assert hybrid("1.3.0", *loads) == [
             {**stored(i), "x": f"e{i}".encode()} for i in range(2)]
-        assert hybrid("1.0.0", *loads) == [stored(i) for i in range(2)]
+        # FT.HYBRID is new in 1.3.0 and always emulates at least 1.3.0.
+        assert hybrid("1.0.0", *loads) == hybrid("1.3.0", *loads)

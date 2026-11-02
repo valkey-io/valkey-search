@@ -806,7 +806,6 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
   //    embedded AggregateParameters in env.agg.
   if (env.agg == nullptr) {
     env.agg = std::make_unique<aggregate::AggregateParameters>(env.db_num);
-    env.agg->embedded_in_hybrid_ = true;
     env.agg->hybrid_ = true;
     env.agg->index_schema = env.index_schema;
     env.agg->index_schema_name = env.index_schema_name;

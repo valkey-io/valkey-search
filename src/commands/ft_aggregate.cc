@@ -48,7 +48,7 @@ namespace {
 // RediSearch rejects a LOAD after GROUPBY in FT.AGGREGATE but ignores it in
 // FT.HYBRID.
 absl::Status CheckLoadAfterGroupby(const AggregateParameters &params) {
-  if (params.embedded_in_hybrid_) {
+  if (params.hybrid_) {
     return absl::OkStatus();
   }
   const bool late_load =
@@ -124,7 +124,7 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
   std::vector<LoadField> loads_to_process;
   for (const auto &load : params.loads_) {
     // FT.HYBRID ignores a late LOAD, but a GROUPBY on the key still needs it.
-    if (load.after_groupby && params.embedded_in_hybrid_) {
+    if (load.after_groupby && params.hybrid_) {
       params.load_key |= load.identifier == "__key";
       continue;
     }

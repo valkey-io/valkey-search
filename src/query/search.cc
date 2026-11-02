@@ -118,6 +118,43 @@ DEV_INTEGER_COUNTER(query_stats, query_text_proximity_count);
 DEV_INTEGER_COUNTER(query_stats, query_numeric_count);
 DEV_INTEGER_COUNTER(query_stats, query_tag_count);
 DEV_INTEGER_COUNTER(query_stats, nonvector_results_fetched_limited_count);
+// Queries containing VECTOR_RANGE that a shard truncated at
+// search.max-nonvector-search-results-fetched, counted once per query when an
+// additional match proved the truncation.
+static vmsdk::info_field::Integer vector_range_results_fetched_limited_count(
+    "query", "vector_range_results_fetched_limited_count",
+    vmsdk::info_field::IntegerBuilder().App());
+// HNSW VECTOR_RANGE searches answered by an exact scan, one counter per reason.
+DEV_INTEGER_COUNTER(query_stats, vector_range_exact_fallback_cap_zero_count);
+DEV_INTEGER_COUNTER(query_stats,
+                    vector_range_exact_fallback_cosine_full_radius_count);
+DEV_INTEGER_COUNTER(query_stats,
+                    vector_range_exact_fallback_non_finite_distance_count);
+DEV_INTEGER_COUNTER(query_stats,
+                    vector_range_exact_fallback_shell_filled_count);
+
+static vmsdk::info_field::Integer *VectorRangeFallbackCounter(
+    indexes::RangeFallback fallback) {
+  switch (fallback) {
+    case indexes::RangeFallback::kNone:
+      return nullptr;
+    case indexes::RangeFallback::kCapZero:
+      return &vector_range_exact_fallback_cap_zero_count;
+    case indexes::RangeFallback::kCosineFullRadius:
+      return &vector_range_exact_fallback_cosine_full_radius_count;
+    case indexes::RangeFallback::kNonFiniteDistance:
+      return &vector_range_exact_fallback_non_finite_distance_count;
+    case indexes::RangeFallback::kShellFilled:
+      return &vector_range_exact_fallback_shell_filled_count;
+  }
+  return nullptr;
+}
+
+static void RecordVectorRangeFallback(indexes::RangeFallback fallback) {
+  if (auto *counter = VectorRangeFallbackCounter(fallback)) {
+    counter->Increment();
+  }
+}
 
 class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
  public:
@@ -522,6 +559,7 @@ size_t EvaluateFilterAsPrimary(
           auto range_result = vector_index->SearchRange(
               vr_pred->GetQueryVector(), range, parameters.cancellation_token);
           if (range_result.ok()) {
+            RecordVectorRangeFallback(range_result->fallback);
             if (truncated != nullptr) {
               *truncated = range_result->truncated;
             }
@@ -852,8 +890,9 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
             auto range_result,
             vector_index->SearchRange(vr_pred->GetQueryVector(), range,
                                       parameters.cancellation_token));
+        RecordVectorRangeFallback(range_result.fallback);
         if (range_result.truncated) {
-          RecordNonVectorResultsFetchedLimited();
+          vector_range_results_fetched_limited_count.Increment();
         }
         // Key order keeps SORTBY ties and FT.AGGREGATE working sets
         // deterministic regardless of scan order.
@@ -1012,7 +1051,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
   }
 
   if (child_truncated || final_truncated) {
-    RecordNonVectorResultsFetchedLimited();
+    vector_range_results_fetched_limited_count.Increment();
   }
 
   // Key order keeps SORTBY ties and FT.AGGREGATE working sets deterministic
@@ -1570,12 +1609,17 @@ bool ShouldReturnNoResults(const SearchParameters &parameters) {
          parameters.limit.number == 0;
 }
 
-void RecordNonVectorResultsFetchedLimited() {
-  nonvector_results_fetched_limited_count.Increment();
-}
-
 int64_t GetNonVectorResultsFetchedLimitedCount() {
   return nonvector_results_fetched_limited_count.Get();
+}
+
+int64_t GetVectorRangeResultsFetchedLimitedCount() {
+  return vector_range_results_fetched_limited_count.Get();
+}
+
+int64_t GetVectorRangeFallbackCount(indexes::RangeFallback fallback) {
+  const auto *counter = VectorRangeFallbackCounter(fallback);
+  return counter == nullptr ? 0 : counter->Get();
 }
 
 SearchResult::SearchResult()

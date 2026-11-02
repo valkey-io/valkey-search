@@ -444,7 +444,6 @@ class TestVectorRange(ValkeySearchTestCaseBase):
     def test_flat_range_hard_cap_and_counter(self):
         """FLAT distinguishes exactly N matches from an N+1 witness."""
         client = self.server.get_new_client()
-        client.config_set("search.info-developer-visible", "yes")
         client.config_set("search.max-nonvector-search-results-fetched", "3")
         self._create_flat_index(client, dim=2)
         vectors = {
@@ -457,17 +456,17 @@ class TestVectorRange(ValkeySearchTestCaseBase):
             client, vectors={key: vectors[key] for key in list(vectors)[:3]})
         IndexingTestHelper.wait_for_indexing_complete_on_node(client, "idx")
 
-        counter = "search_nonvector_results_fetched_limited_count"
+        counter = "search_vector_range_results_fetched_limited_count"
         query = "@vec:[VECTOR_RANGE 100 $blob]=>{$yield_distance_as: dist}"
         args = (
             "PARAMS", "2", "blob", float_to_bytes([0.0, 0.0]),
             "RETURN", "1", "dist", "LIMIT", "0", "10",
         )
-        before = client.info("search").get(counter, 0)
+        before = client.info("search")[counter]
         exact = self._search(client, "idx", query, *args)
         assert exact[0] == 3
         assert len(parse_result_with_fields(exact)) == 3
-        assert client.info("search").get(counter, 0) == before
+        assert client.info("search")[counter] == before
 
         self._load_vector_data(client, vectors={"doc:3": vectors["doc:3"]})
         IndexingTestHelper.wait_for_indexing_complete_on_node(client, "idx")
@@ -478,17 +477,16 @@ class TestVectorRange(ValkeySearchTestCaseBase):
         for key, fields in retained.items():
             assert float(fields["dist"]) == pytest.approx(
                 l2_distance([0.0, 0.0], vectors[key]))
-        after_truncated = client.info("search").get(counter, 0)
+        after_truncated = client.info("search")[counter]
         assert after_truncated == before + 1
 
         client.config_set("search.max-nonvector-search-results-fetched", "0")
         assert self._search(client, "idx", query, *args) == [0]
-        assert client.info("search").get(counter, 0) == after_truncated + 1
+        assert client.info("search")[counter] == after_truncated + 1
 
     def test_hnsw_range_hard_cap_walk_and_exact_fallback(self):
         """The HNSW walk and its COSINE radius-2 exact fallback cap at N."""
         client = self.server.get_new_client()
-        client.config_set("search.info-developer-visible", "yes")
         client.config_set("search.max-nonvector-search-results-fetched", "5")
         self._create_hnsw_index(
             client, index_name="walk", prefix="walk:", dim=2)
@@ -502,8 +500,8 @@ class TestVectorRange(ValkeySearchTestCaseBase):
                 f"exact:{i}", mapping={"vec": float_to_bytes([1.0, 0.0])})
         wait_indexed([client], ("walk", "exact"))
 
-        counter = "search_nonvector_results_fetched_limited_count"
-        before = client.info("search").get(counter, 0)
+        counter = "search_vector_range_results_fetched_limited_count"
+        before = client.info("search")[counter]
         for index, radius, query in (
                 ("walk", 0, [0.0, 0.0]),
                 ("exact", 2, [1.0, 0.0])):
@@ -514,14 +512,13 @@ class TestVectorRange(ValkeySearchTestCaseBase):
             )
             assert result[0] == 5
             assert len(result) == 6
-            after = client.info("search").get(counter, 0)
+            after = client.info("search")[counter]
             assert after == before + 1
             before = after
 
     def test_hnsw_pagination_matches_flat_at_cap(self):
         """When the true count is at most N, HNSW pages match exact FLAT."""
         client = self.server.get_new_client()
-        client.config_set("search.info-developer-visible", "yes")
         client.config_set("search.max-nonvector-search-results-fetched", "4")
         flat_index, hnsw_index = create_range_indexes(
             client, "L2", prefix="page:", dim=2)
@@ -536,8 +533,8 @@ class TestVectorRange(ValkeySearchTestCaseBase):
         write_vectors(client, range(len(vectors)), vectors, prefix="page:")
         wait_indexed([client], (flat_index, hnsw_index))
 
-        counter = "search_nonvector_results_fetched_limited_count"
-        before = client.info("search").get(counter, 0)
+        counter = "search_vector_range_results_fetched_limited_count"
+        before = client.info("search")[counter]
         query = "@v:[VECTOR_RANGE 10 $blob]=>{$yield_distance_as: dist}"
 
         def page(index, offset, count):
@@ -554,7 +551,7 @@ class TestVectorRange(ValkeySearchTestCaseBase):
             flat = page(flat_index, offset, count)
             hnsw = page(hnsw_index, offset, count)
             assert flat == hnsw == [4, *expected_keys]
-        assert client.info("search").get(counter, 0) == before
+        assert client.info("search")[counter] == before
 
     @pytest.mark.parametrize("metric", ["L2", "IP", "COSINE"])
     def test_hnsw_range_matches_flat_at_scale(self, metric):
@@ -777,7 +774,6 @@ class TestVectorRange(ValkeySearchTestCaseBase):
     def test_vector_range_or_hard_cap_has_unspecified_survivors(self):
         """OR retains N unspecified survivors and records one truncation."""
         client = self.server.get_new_client()
-        client.config_set("search.info-developer-visible", "yes")
         client.config_set("search.max-nonvector-search-results-fetched", "3")
         self._create_flat_index(client, extra_fields=["category", "TAG"])
         vectors = {f"doc:v{i}": [i * 0.1, 0.0, 0.0] for i in range(6)}
@@ -787,12 +783,12 @@ class TestVectorRange(ValkeySearchTestCaseBase):
         IndexingTestHelper.wait_for_indexing_complete_on_node(client, "idx")
 
         expected_union = {*vectors, "doc:special"}
-        counter = "search_nonvector_results_fetched_limited_count"
+        counter = "search_vector_range_results_fetched_limited_count"
         params = ("PARAMS", "2", "blob", float_to_bytes(QUERY_VEC))
         for query in (
                 "@vec:[VECTOR_RANGE 1 $blob] | @category:{special}",
                 "@category:{special} | @vec:[VECTOR_RANGE 1 $blob]"):
-            before = client.info("search").get(counter, 0)
+            before = client.info("search")[counter]
             result = self._search(
                 client, "idx", query, *params,
                 "NOCONTENT", "LIMIT", "0", "100",
@@ -802,7 +798,7 @@ class TestVectorRange(ValkeySearchTestCaseBase):
             assert survivors <= expected_union
             # The VECTOR_RANGE child and the final OR union both have more
             # matches than the cap, but one query increments the counter once.
-            assert client.info("search").get(counter, 0) == before + 1
+            assert client.info("search")[counter] == before + 1
 
 
     # =================================================================
@@ -2119,23 +2115,22 @@ class TestVectorRange(ValkeySearchTestCaseBase):
     def test_aggregate_hard_cap_reducer_and_cursor(self):
         """Reducers and cursors consume only the N retained range matches."""
         client = self.server.get_new_client()
-        client.config_set("search.info-developer-visible", "yes")
         client.config_set("search.max-nonvector-search-results-fetched", "3")
         self._create_flat_index(client)
         vectors = {f"doc:{i}": [float(i), 0.0, 0.0] for i in range(5)}
         self._load_vector_data(client, vectors=vectors)
         IndexingTestHelper.wait_for_indexing_complete_on_node(client, "idx")
 
-        counter = "search_nonvector_results_fetched_limited_count"
+        counter = "search_vector_range_results_fetched_limited_count"
         query = "@vec:[VECTOR_RANGE 100 $blob]"
         params = ("PARAMS", "2", "blob", float_to_bytes(QUERY_VEC))
-        before = client.info("search").get(counter, 0)
+        before = client.info("search")[counter]
         reduced = self._aggregate(
             client, "idx", query, *params,
             "GROUPBY", "0", "REDUCE", "COUNT", "0", "AS", "count",
         )
         assert reduced == [1, [b"count", b"3"]]
-        after_reducer = client.info("search").get(counter, 0)
+        after_reducer = client.info("search")[counter]
         assert after_reducer == before + 1
 
         batch, cursor = self._aggregate(
@@ -2154,7 +2149,7 @@ class TestVectorRange(ValkeySearchTestCaseBase):
         rows.extend(batch[1:])
         assert len(rows) == 3
         assert {row[1].decode() for row in rows} <= vectors.keys()
-        assert client.info("search").get(counter, 0) == after_reducer + 1
+        assert client.info("search")[counter] == after_reducer + 1
 
     # =================================================================
     # KNN pre-filter containing a VECTOR_RANGE predicate (rejected)
@@ -2274,14 +2269,13 @@ class TestVectorRangeCluster(ValkeySearchClusterTestCase):
 
         shard_keys = [add(shard, range(2)) for shard in range(len(primaries))]
         wait_indexed(primaries, (flat_index,))
-        counter = "search_nonvector_results_fetched_limited_count"
+        counter = "search_vector_range_results_fetched_limited_count"
         for primary in primaries:
-            primary.config_set("search.info-developer-visible", "yes")
             primary.config_set(
                 "search.max-nonvector-search-results-fetched", str(cap))
 
         def counts():
-            return [primary.info("search").get(counter, 0)
+            return [primary.info("search")[counter]
                     for primary in primaries]
 
         before = counts()

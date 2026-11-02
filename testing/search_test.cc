@@ -1745,7 +1745,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   }
 
   const int64_t counter_before =
-      query::GetNonVectorResultsFetchedLimitedCount();
+      query::GetVectorRangeResultsFetchedLimitedCount();
   query::QueryContext query_ctx(*schema,
                                 indexes::scoring::GetScorer(params.scorer));
   auto result = query::SearchVectorRangeQuery(params, query_ctx);
@@ -1756,7 +1756,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
     EXPECT_TRUE(neighbor.has_vr_distance);
   }
   EXPECT_THAT(keys, ::testing::ElementsAre("v3", "v4"));
-  EXPECT_EQ(query::GetNonVectorResultsFetchedLimitedCount(), counter_before);
+  EXPECT_EQ(query::GetVectorRangeResultsFetchedLimitedCount(), counter_before);
 }
 
 TEST_F(ValkeySearchTest, CompoundVectorRangeOrHonorsHardCap)
@@ -1849,7 +1849,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   };
 
   const int64_t counter_before =
-      query::GetNonVectorResultsFetchedLimitedCount();
+      query::GetVectorRangeResultsFetchedLimitedCount();
   const auto vector_first =
       search("@vector:[VECTOR_RANGE 1 $q] | @tag:{special}", cancel::Token{});
   ASSERT_EQ(vector_first.size(), 3u);
@@ -1857,7 +1857,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
               ::testing::UnorderedElementsAre(::testing::Pair("v0", true),
                                               ::testing::Pair("v1", true),
                                               ::testing::Pair("v2", true)));
-  EXPECT_EQ(query::GetNonVectorResultsFetchedLimitedCount(),
+  EXPECT_EQ(query::GetVectorRangeResultsFetchedLimitedCount(),
             counter_before + 1);
 
   const auto tag_first =
@@ -1867,13 +1867,13 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
               ::testing::UnorderedElementsAre(
                   ::testing::Pair("a-special", false),
                   ::testing::Pair("v0", true), ::testing::Pair("v1", true)));
-  EXPECT_EQ(query::GetNonVectorResultsFetchedLimitedCount(),
+  EXPECT_EQ(query::GetVectorRangeResultsFetchedLimitedCount(),
             counter_before + 2);
 
   // Under the cap, the late fetcher contributes a-special, and only it.
   VMSDK_EXPECT_OK(fetch_cap.SetValue(10));
   const int64_t counter_before_duplicate_only =
-      query::GetNonVectorResultsFetchedLimitedCount();
+      query::GetVectorRangeResultsFetchedLimitedCount();
   constexpr absl::string_view kThreeFetchers =
       "@vector:[VECTOR_RANGE 1 $q] | @tag:{duplicates} | @late_tag:{special}";
   auto never =
@@ -1901,7 +1901,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
       EXPECT_LT(partial.size(), complete.size());
     }
   }
-  EXPECT_EQ(query::GetNonVectorResultsFetchedLimitedCount(),
+  EXPECT_EQ(query::GetVectorRangeResultsFetchedLimitedCount(),
             counter_before_duplicate_only);
 }
 
@@ -1997,23 +1997,277 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
           "@vector:[VECTOR_RANGE 1 $q] | @tag:{none}",
           "@vector:[VECTOR_RANGE 1 $q] @tag:{a}"}) {
       SCOPED_TRACE(filter);
-      int64_t counter = query::GetNonVectorResultsFetchedLimitedCount();
+      int64_t counter = query::GetVectorRangeResultsFetchedLimitedCount();
       for (const char *key : {"v0", "v4"}) {
         EXPECT_THAT(search(filter, {key}), ::testing::ElementsAre(key));
-        EXPECT_EQ(query::GetNonVectorResultsFetchedLimitedCount(), counter)
+        EXPECT_EQ(query::GetVectorRangeResultsFetchedLimitedCount(), counter)
             << "a query with one in-range key in INKEYS is not truncated";
       }
       EXPECT_THAT(search(filter, {"far"}), ::testing::IsEmpty());
       EXPECT_THAT(search(filter, {"v2", "v3", "v4"}),
                   ::testing::ElementsAre("v2", "v3", "v4"));
-      EXPECT_EQ(query::GetNonVectorResultsFetchedLimitedCount(), counter);
+      EXPECT_EQ(query::GetVectorRangeResultsFetchedLimitedCount(), counter);
       EXPECT_THAT(search(filter, {"v0", "v1", "v3", "v4"}),
                   ::testing::AllOf(::testing::SizeIs(kCap),
                                    ::testing::Each(::testing::AnyOf(
                                        "v0", "v1", "v3", "v4"))));
-      EXPECT_EQ(query::GetNonVectorResultsFetchedLimitedCount(), counter + 1);
+      EXPECT_EQ(query::GetVectorRangeResultsFetchedLimitedCount(), counter + 1);
     }
   }
+}
+
+// A schema with vector field kVectorAttributeAlias, holding `vectors` as keys
+// v0, v1, ..., and tag field "tag", where every key is tagged "keep". Each call
+// creates a schema of its own name.
+std::shared_ptr<MockIndexSchema> MakeVectorRangeSchema(
+    bool hnsw, data_model::DistanceMetric metric,
+    const std::vector<std::vector<float>> &vectors) {
+  static int schemas = 0;
+  auto schema =
+      CreateIndexSchema(absl::StrCat("vector_range_schema_", ++schemas))
+          .value();
+  EXPECT_CALL(*schema, GetIdentifier(::testing::_))
+      .Times(::testing::AnyNumber());
+  const int capacity = static_cast<int>(vectors.size()) + 1;
+  std::shared_ptr<indexes::VectorBase> vector_index;
+  if (hnsw) {
+    vector_index =
+        indexes::VectorHNSW<float>::Create(
+            CreateHNSWVectorIndexProto(kVectorDimensions, metric, capacity,
+                                       /*m=*/16, 200, /*ef_runtime=*/10),
+            kVectorAttributeAlias, data_model::ATTRIBUTE_DATA_TYPE_HASH, 0)
+            .value();
+  } else {
+    vector_index =
+        indexes::VectorFlat<float>::Create(
+            CreateFlatVectorIndexProto(kVectorDimensions, metric, capacity,
+                                       /*block_size=*/10),
+            kVectorAttributeAlias, data_model::ATTRIBUTE_DATA_TYPE_HASH, 0)
+            .value();
+  }
+  VMSDK_EXPECT_OK(schema->AddIndex(kVectorAttributeAlias, kVectorAttributeAlias,
+                                   vector_index));
+  auto tag_index = std::make_shared<indexes::Tag>(
+      CreateTagIndexProto(/*separator=*/",", /*case_sensitive=*/false));
+  VMSDK_EXPECT_OK(schema->AddIndex("tag", "tag", tag_index));
+  for (size_t i = 0; i < vectors.size(); ++i) {
+    auto key = StringInternStore::Intern(absl::StrCat("v", i));
+    schema->SetIndexMutationSequenceNumber(key, 0);
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(*vector_index, key,
+                                                   VectorToStr(vectors[i])));
+    VMSDK_EXPECT_OK(tag_index->AddRecord(
+        key, AttributeData(vmsdk::MakeUniqueValkeyString("keep"))));
+  }
+  return schema;
+}
+
+// Runs `filter`, whose one VECTOR_RANGE searches at `query`, and returns the
+// number of keys returned.
+size_t CountVectorRangeMatches(const std::shared_ptr<MockIndexSchema> &schema,
+                               absl::string_view filter,
+                               const std::vector<float> &query,
+                               cancel::Token token = cancel::Token{}) {
+  UnitTestSearchParameters params;
+  if (token != nullptr) {
+    params.cancellation_token = std::move(token);
+  }
+  params.index_schema = schema;
+  params.dialect = kDialect;
+  TextParsingOptions parsing_options{};
+  params.filter_parse_results =
+      std::move(FilterParser(*schema, filter, parsing_options).Parse().value());
+  params.has_vector_range = true;
+  query::Predicate *vr = params.filter_parse_results.root_predicate.get();
+  if (vr->GetType() != query::PredicateType::kVectorRange) {
+    for (const auto &child :
+         static_cast<query::ComposedPredicate *>(vr)->GetChildren()) {
+      if (child->GetType() == query::PredicateType::kVectorRange) {
+        vr = child.get();
+      }
+    }
+  }
+  static_cast<query::VectorRangePredicate *>(vr)->SetQueryVector(
+      std::string(VectorToStr(query)));
+  query::QueryContext query_ctx(*schema,
+                                indexes::scoring::GetScorer(params.scorer));
+  auto result = query::SearchVectorRangeQuery(params, query_ctx);
+  EXPECT_TRUE(result.ok()) << result.status();
+  return result.ok() ? result->size() : 0;
+}
+
+// `inside` keys at squared L2 distance 0.01 * (i + 1)^2 from the origin, all
+// within radius 1, followed by `far` keys at squared distance 100 or more.
+std::vector<std::vector<float>> VectorsNearOrigin(int inside, int far) {
+  std::vector<std::vector<float>> vectors;
+  for (int i = 0; i < inside + far; ++i) {
+    std::vector<float> v(kVectorDimensions, 0.0f);
+    v[0] = i < inside ? 0.1f * (i + 1) : 10.0f + i;
+    vectors.push_back(std::move(v));
+  }
+  return vectors;
+}
+
+// The App truncation counter moves once for a VECTOR_RANGE query that the
+// shard truncated, and not for one whose matches exactly fill the cap, on
+// every path: FLAT, the HNSW walk and its exact scans, and the compound drain.
+// The developer non-vector counter does not move for any of them.
+TEST_F(ValkeySearchTest, VectorRangeTruncationCounterCountsTruncatedQueries)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  constexpr int kCap = 3;
+  auto &fetch_cap = options::GetMaxNonVectorSearchResultsFetched();
+  const auto saved_cap = fetch_cap.GetValue();
+  absl::Cleanup restore = [&] {
+    VMSDK_EXPECT_OK(fetch_cap.SetValue(saved_cap));
+  };
+  VMSDK_EXPECT_OK(fetch_cap.SetValue(kCap));
+  const std::vector<float> origin(kVectorDimensions, 0.0f);
+  std::vector<float> unit(kVectorDimensions, 0.0f);
+  unit[0] = 1.0f;
+  struct Case {
+    const char *name;
+    bool hnsw;
+    data_model::DistanceMetric metric;
+    const char *filter;
+  };
+  const Case kCases[] = {
+      {"flat", false, data_model::DISTANCE_METRIC_L2,
+       "@vector:[VECTOR_RANGE 1 $q]"},
+      {"hnsw walk", true, data_model::DISTANCE_METRIC_L2,
+       "@vector:[VECTOR_RANGE 1 $q]"},
+      {"hnsw cosine scan", true, data_model::DISTANCE_METRIC_COSINE,
+       "@vector:[VECTOR_RANGE 2 $q]"},
+      {"compound and", false, data_model::DISTANCE_METRIC_L2,
+       "@vector:[VECTOR_RANGE 1 $q] @tag:{keep}"},
+      {"compound or", true, data_model::DISTANCE_METRIC_L2,
+       "@vector:[VECTOR_RANGE 1 $q] | @tag:{none}"},
+  };
+  for (const Case &c : kCases) {
+    const bool cosine = c.metric == data_model::DISTANCE_METRIC_COSINE;
+    for (int inside : {kCap, kCap + 1}) {
+      SCOPED_TRACE(absl::StrCat(c.name, ", ", inside, " matches"));
+      // Every COSINE key is within radius 2, so that index has no far keys.
+      auto schema = MakeVectorRangeSchema(
+          c.hnsw, c.metric, VectorsNearOrigin(inside, cosine ? 0 : 20));
+      const int64_t app_before =
+          query::GetVectorRangeResultsFetchedLimitedCount();
+      const int64_t dev_before =
+          query::GetNonVectorResultsFetchedLimitedCount();
+      EXPECT_EQ(
+          CountVectorRangeMatches(schema, c.filter, cosine ? unit : origin),
+          static_cast<size_t>(kCap));
+      EXPECT_EQ(query::GetVectorRangeResultsFetchedLimitedCount(),
+                app_before + (inside > kCap ? 1 : 0));
+      EXPECT_EQ(query::GetNonVectorResultsFetchedLimitedCount(), dev_before);
+    }
+  }
+}
+
+// Each HNSW exact-scan reason moves its own developer counter and no other.
+TEST_F(ValkeySearchTest, VectorRangeExactFallbackCountersCountTheirReason)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  constexpr int kCap = 3;
+  auto &fetch_cap = options::GetMaxNonVectorSearchResultsFetched();
+  const auto saved_cap = fetch_cap.GetValue();
+  absl::Cleanup restore = [&] {
+    VMSDK_EXPECT_OK(fetch_cap.SetValue(saved_cap));
+  };
+  using indexes::RangeFallback;
+  constexpr RangeFallback kReasons[] = {
+      RangeFallback::kCapZero, RangeFallback::kCosineFullRadius,
+      RangeFallback::kNonFiniteDistance, RangeFallback::kShellFilled};
+  std::vector<float> origin(kVectorDimensions, 0.0f);
+  std::vector<float> unit(kVectorDimensions, 0.0f);
+  unit[0] = 1.0f;
+  // An infinite IP query is at NaN from every key with a zero first component.
+  std::vector<float> infinite(kVectorDimensions, 0.0f);
+  infinite[0] = indexes::scoring::PositiveInf();
+  std::vector<std::vector<float>> off_axis = VectorsNearOrigin(5, 0);
+  for (auto &v : off_axis) {
+    std::swap(v[0], v[1]);
+  }
+  struct Case {
+    RangeFallback expected;
+    int cap;
+    data_model::DistanceMetric metric;
+    std::vector<std::vector<float>> vectors;
+    const char *filter;
+    const std::vector<float> &query;
+  };
+  const Case kCases[] = {
+      {RangeFallback::kNone, kCap, data_model::DISTANCE_METRIC_L2,
+       VectorsNearOrigin(kCap + 1, 20), "@vector:[VECTOR_RANGE 1 $q]", origin},
+      {RangeFallback::kCapZero, 0, data_model::DISTANCE_METRIC_L2,
+       VectorsNearOrigin(2, 20), "@vector:[VECTOR_RANGE 1 $q]", origin},
+      {RangeFallback::kCosineFullRadius, kCap,
+       data_model::DISTANCE_METRIC_COSINE, VectorsNearOrigin(2, 0),
+       "@vector:[VECTOR_RANGE 2 $q]", unit},
+      {RangeFallback::kNonFiniteDistance, kCap, data_model::DISTANCE_METRIC_IP,
+       off_axis, "@vector:[VECTOR_RANGE 0 $q]", infinite},
+      {RangeFallback::kShellFilled, kCap, data_model::DISTANCE_METRIC_L2,
+       VectorsNearOrigin(kCap, 20), "@vector:[VECTOR_RANGE 1 $q]", origin},
+  };
+  for (const Case &c : kCases) {
+    SCOPED_TRACE(
+        absl::StrCat("expected reason ", static_cast<int>(c.expected)));
+    VMSDK_EXPECT_OK(fetch_cap.SetValue(c.cap));
+    auto schema = MakeVectorRangeSchema(/*hnsw=*/true, c.metric, c.vectors);
+    std::vector<int64_t> before;
+    for (RangeFallback reason : kReasons) {
+      before.push_back(query::GetVectorRangeFallbackCount(reason));
+    }
+    CountVectorRangeMatches(schema, c.filter, c.query);
+    for (size_t i = 0; i < std::size(kReasons); ++i) {
+      EXPECT_EQ(query::GetVectorRangeFallbackCount(kReasons[i]) - before[i],
+                kReasons[i] == c.expected ? 1 : 0)
+          << "reason " << static_cast<int>(kReasons[i]);
+    }
+  }
+}
+
+// Once an additional unique match proves a compound VECTOR_RANGE query
+// truncated, the drain stops: it polls the token once per fetched key, so it
+// polls about the cap's worth of keys, not every key the OR branch matches.
+TEST_F(ValkeySearchTest, CompoundVectorRangeDrainStopsAtTheWitness)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  constexpr int kCap = 3;
+  constexpr int kTagged = 100;
+  auto &fetch_cap = options::GetMaxNonVectorSearchResultsFetched();
+  const auto saved_cap = fetch_cap.GetValue();
+  absl::Cleanup restore = [&] {
+    VMSDK_EXPECT_OK(fetch_cap.SetValue(saved_cap));
+  };
+  VMSDK_EXPECT_OK(fetch_cap.SetValue(kCap));
+  // Two vector keys, both outside the radius; every key matches the tag.
+  auto schema = MakeVectorRangeSchema(
+      /*hnsw=*/false, data_model::DISTANCE_METRIC_L2, VectorsNearOrigin(0, 2));
+  auto tag_index =
+      std::dynamic_pointer_cast<indexes::Tag>(schema->GetIndex("tag").value());
+  ASSERT_NE(tag_index, nullptr);
+  for (int i = 0; i < kTagged; ++i) {
+    auto key = StringInternStore::Intern(absl::StrCat("t", i));
+    schema->SetIndexMutationSequenceNumber(key, 0);
+    VMSDK_EXPECT_OK(tag_index->AddRecord(
+        key, AttributeData(vmsdk::MakeUniqueValkeyString("keep"))));
+  }
+  class CountingToken : public cancel::Base {
+   public:
+    bool IsCancelled() override {
+      ++polls;
+      return false;
+    }
+    void Cancel() override {}
+    int polls{0};
+  };
+  auto counting = std::make_shared<CountingToken>();
+  const int64_t before = query::GetVectorRangeResultsFetchedLimitedCount();
+  EXPECT_EQ(CountVectorRangeMatches(
+                schema, "@vector:[VECTOR_RANGE 1 $q] | @tag:{keep}",
+                std::vector<float>(kVectorDimensions, 0.0f), counting),
+            static_cast<size_t>(kCap));
+  EXPECT_EQ(query::GetVectorRangeResultsFetchedLimitedCount(), before + 1);
+  // The FLAT scan polls once per stored vector, the drain once per key it
+  // advances past.
+  EXPECT_LE(counting->polls, 2 + kCap + 1);
 }
 
 class ScoreTextQueryTestBase : public ValkeySearchTest {

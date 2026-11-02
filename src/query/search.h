@@ -464,12 +464,12 @@ size_t CountVectorRangePredicates(const Predicate *predicate);
 // Check if no results should be returned based on limit parameters
 bool ShouldReturnNoResults(const SearchParameters &parameters);
 
-// Increments the developer-visible "nonvector_results_fetched_limited_count"
-// INFO counter when a query confirms that its final result is truncated.
-void RecordNonVectorResultsFetchedLimited();
-
-// Returns the shared fetch-cap counter for behavioral tests and diagnostics.
+// INFO counters, for behavioral tests: the non-vector fetch-cap counter, the
+// VECTOR_RANGE truncation counter, and the HNSW range exact-scan counter for
+// `fallback` (0 for kNone).
 int64_t GetNonVectorResultsFetchedLimitedCount();
+int64_t GetVectorRangeResultsFetchedLimitedCount();
+int64_t GetVectorRangeFallbackCount(indexes::RangeFallback fallback);
 
 // Scans for the vector filter delimiter `=>` that is followed by `[` (after
 // optional whitespace). Returns the position of `=>` or npos if not found.

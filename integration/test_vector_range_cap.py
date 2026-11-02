@@ -21,7 +21,8 @@ from valkey_search_test_case import (
 from valkeytestframework.conftest import resource_port_tracker
 from utils import IndexingTestHelper, find_local_key
 
-COUNTER = "search_nonvector_results_fetched_limited_count"
+COUNTER = "search_vector_range_results_fetched_limited_count"
+DEV_COUNTER = "search_nonvector_results_fetched_limited_count"
 CAP_CONFIG = "search.max-nonvector-search-results-fetched"
 
 
@@ -109,17 +110,41 @@ def assert_flat_distances(found, flat):
 
 
 def counter(client):
-    return client.info("search").get(COUNTER, 0)
+    return client.info("search")[COUNTER]
 
 
 def set_cap(clients, cap):
     for client in clients:
-        client.config_set("search.info-developer-visible", "yes")
         client.config_set(CAP_CONFIG, str(cap))
 
 
 class TestVectorRangeCap(ValkeySearchTestCaseBase):
     """The cap on one standalone node."""
+
+    def test_truncation_counter_is_an_app_metric(self):
+        """
+        The VECTOR_RANGE truncation counter is reported without
+        search.info-developer-visible and moves once for a truncated query;
+        the developer non-vector counter does not move for it.
+        """
+        client = self.server.get_new_client()
+        visible = "search.info-developer-visible"
+        assert client.config_get(visible)[visible] == "no"
+        info = client.info("search")
+        assert COUNTER in info and DEV_COUNTER not in info
+        create_index(client, "flat", "a:", "FLAT")
+        for i in range(3):
+            client.hset(f"a:{i}", mapping={"v": float_to_bytes([i, 0.0])})
+        wait_indexed([client], ("flat",))
+        set_cap([client], 2)
+        client.config_set(visible, "yes")
+        dev_before = client.info("search")[DEV_COUNTER]
+        client.config_set(visible, "no")
+        before = counter(client)
+        assert range_search(client, "flat", [0.0, 0.0], 100.0)[0] == 2
+        assert counter(client) == before + 1
+        client.config_set(visible, "yes")
+        assert client.info("search")[DEV_COUNTER] == dev_before
 
     def test_hnsw_walk_ball_of_n_in_fuller_shell_is_exact(self):
         """

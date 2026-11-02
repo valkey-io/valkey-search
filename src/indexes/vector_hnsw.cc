@@ -492,18 +492,22 @@ absl::StatusOr<RangeResult> VectorHNSW<T>::SearchRange(
                          this->ValidateRangeSearchInputs(query, range));
   const size_t max_candidates = static_cast<size_t>(
       options::GetMaxNonVectorSearchResultsFetched().GetValue());
+  auto exact_scan = [&](RangeFallback fallback) {
+    RangeResult result = this->SearchRangeExhaustive(
+        query, radius, cancellation_token, max_candidates, range.filter);
+    result.fallback = fallback;
+    return result;
+  };
 
   // A cap of 0 uses the bounded exact scan to look for one witness.
   if (max_candidates == 0) {
-    return this->SearchRangeExhaustive(query, radius, cancellation_token,
-                                       max_candidates, range.filter);
+    return exact_scan(RangeFallback::kCapZero);
   }
   // COSINE distances clamp into [0, 2], so radius 2 holds every key: scan,
   // rather than walk the whole graph and depend on the shell reaching
   // unclamped distances just above 2.
   if (this->normalize_ && radius >= 2.0f) {
-    return this->SearchRangeExhaustive(query, radius, cancellation_token,
-                                       max_candidates, range.filter);
+    return exact_scan(RangeFallback::kCosineFullRadius);
   }
 
   auto nq = this->NormalizeQueryIfNeeded(query);
@@ -538,10 +542,9 @@ absl::StatusOr<RangeResult> VectorHNSW<T>::SearchRange(
 
   // A rejected NaN, or a non-finite COSINE traversal distance, can hide keys
   // reachable only through that graph node. Scan exactly unless cancellation
-  // requests a partial result, but do not count this as a fetch-cap fallback.
+  // requests a partial result.
   if (!cancelled && stop_condition.RequiresExactFallback()) {
-    return this->SearchRangeExhaustive(query, radius, cancellation_token,
-                                       max_candidates, range.filter);
+    return exact_scan(RangeFallback::kNonFiniteDistance);
   }
   RangeResult result;
   std::vector<Neighbor> &neighbors = result.neighbors;
@@ -571,8 +574,7 @@ absl::StatusOr<RangeResult> VectorHNSW<T>::SearchRange(
   // did not change the walk, but the scan is kept because it makes such a ball
   // exact; it costs the walk plus one distance per tracked key.
   if (!cancelled && stop_condition.ShellFilled()) {
-    return this->SearchRangeExhaustive(query, radius, cancellation_token,
-                                       max_candidates, range.filter);
+    return exact_scan(RangeFallback::kShellFilled);
   }
   return result;
 }

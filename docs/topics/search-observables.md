@@ -6,7 +6,7 @@ description: Valkey Search Module INFO SEARCH Metrics
 # INFO SEARCH metrics
 
 Only Application metrics are listed here. These are kept compatible across releases. Developer metrics are hidden unless
-`search.info-developer-visible` is set to `yes`, and may change or be removed in any release without notice. For a query containing `VECTOR_RANGE`, the developer metric `search_nonvector_results_fetched_limited_count` increments once on a shard when the query is actually truncated by `search.max-nonvector-search-results-fetched`; merely returning exactly the configured maximum does not increment it. Other non-vector paths can stop at the maximum before inspecting an additional match, so this metric is not a complete record of truncation on those paths.
+`search.info-developer-visible` is set to `yes`, and may change or be removed in any release without notice.
 
 Some metrics are reported only when they apply. The `coordinator_*` metrics appear only when the module is loaded with
 `--use-coordinator`. Metrics ending in `_latency_usec` additionally appear only after at least one sample has been recorded.
@@ -58,6 +58,7 @@ Some metrics are reported only when they apply. The `coordinator_*` metrics appe
 | `inline_filtering_requests_count`                                |      `query`       |    Count     | Count of queries using inline filtering                                                                                                                             |
 | `prefiltering_requests_count`                                    |      `query`       |    Count     | Count of queries using pre-filtering                                                                                                                                |
 | `result_record_dropped_count`                                    |      `query`       |    Count     | Tracks records dropped when FT.SEARCH results exceed configured limits                                                                                              |
+| `vector_range_results_fetched_limited_count`                     |      `query`       |    Count     | Count of queries containing `VECTOR_RANGE` that this shard truncated at `search.max-nonvector-search-results-fetched`                                               |
 | `rdb_load_failure_cnt`                                           |       `rdb`        |    Count     | Number of failed RDB load operations                                                                                                                                |
 | `rdb_load_success_cnt`                                           |       `rdb`        |    Count     | Number of successful RDB load operations                                                                                                                            |
 | `rdb_save_failure_cnt`                                           |       `rdb`        |    Count     | Number of failed RDB save operations                                                                                                                                |

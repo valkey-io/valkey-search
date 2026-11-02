@@ -1073,6 +1073,12 @@ class SearchRangeTest : public VectorIndexTest {
       EXPECT_LE(searched->neighbors.size(), static_cast<size_t>(cap));
       EXPECT_EQ(searched->truncated, expected_truncated);
       EXPECT_EQ(counting->polls, expected_polls);
+      // FLAT always scans. HNSW scans for a COSINE radius of 2, and for a cap
+      // of 0 before that.
+      EXPECT_EQ(searched->fallback, !hnsw ? RangeFallback::kNone
+                                    : cap == 0
+                                        ? RangeFallback::kCapZero
+                                        : RangeFallback::kCosineFullRadius);
     };
 
     run(/*count=*/kCap, /*cap=*/kCap, /*expected_truncated=*/false,
@@ -1335,6 +1341,10 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
       EXPECT_LT(counting->polls, kCap + 1)
           << "the normal walk entered the bounded exact fallback";
     }
+    // The witness ends the walk; without one, a shell holding N or more keys
+    // sends the search to the exact scan.
+    EXPECT_EQ(searched->fallback,
+              ball > kCap ? RangeFallback::kNone : RangeFallback::kShellFilled);
   }
 }
 
@@ -1349,7 +1359,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
 // Squared distances from the query: start 1.44, in the shell of radius 1.43 and
 // the default epsilon; bridge 1.53, beyond it; target 0.36, in the ball. A cap
 // of 1 fills with start, so the fallback returns the one exact match without
-// reporting truncation or incrementing the final-query counter.
+// reporting truncation.
 TEST_F(SearchRangeFp32, HnswExactFallbackAtCapIsNotTruncated)
 ABSL_NO_THREAD_SAFETY_ANALYSIS {
   auto created = VectorHNSW<float>::Create(
@@ -1384,8 +1394,6 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
     VMSDK_EXPECT_OK(fetch_cap.SetValue(saved_cap));
   };
   VMSDK_EXPECT_OK(fetch_cap.SetValue(1));
-  const int64_t counter_before =
-      query::GetNonVectorResultsFetchedLimitedCount();
   auto counting = std::make_shared<CountingToken>();
   cancel::Token token = counting;
   auto searched = index.SearchRange(
@@ -1395,7 +1403,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   EXPECT_FALSE(searched->truncated);
   EXPECT_GT(counting->polls, std::size(kKeys))
       << "the full HNSW fetch did not run its bounded exact fallback";
-  EXPECT_EQ(query::GetNonVectorResultsFetchedLimitedCount(), counter_before);
+  EXPECT_EQ(searched->fallback, indexes::RangeFallback::kShellFilled);
 }
 
 TEST_F(SearchRangeFp32, RejectsMalformedRangeInputs) {
@@ -1636,13 +1644,12 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   ASSERT_EQ(expected.size(), 1u);
   ASSERT_TRUE(expected.contains("target"));
 
-  const int64_t counter_before =
-      query::GetNonVectorResultsFetchedLimitedCount();
   auto searched = index.SearchRange(
       query, {.radius = kRadius, .epsilon = 0.01f}, CancelNever());
   ASSERT_TRUE(searched.ok()) << searched.status();
   EXPECT_EQ(ToMap(searched->neighbors), expected);
-  EXPECT_EQ(query::GetNonVectorResultsFetchedLimitedCount(), counter_before);
+  EXPECT_FALSE(searched->truncated);
+  EXPECT_EQ(searched->fallback, indexes::RangeFallback::kNonFiniteDistance);
 }
 
 // With allow-replace-deleted a new key takes a deleted key's hnswlib slot under

@@ -398,10 +398,25 @@ struct RangeQuery {
   std::optional<size_t> ef_runtime;
 };
 
+// Why an HNSW range search scanned every tracked key instead of, or after,
+// walking the graph.
+enum class RangeFallback {
+  kNone,
+  // search.max-nonvector-search-results-fetched is 0.
+  kCapZero,
+  // A COSINE radius of 2 or more holds every key.
+  kCosineFullRadius,
+  // The walk met a NaN distance, or an infinite COSINE one.
+  kNonFiniteDistance,
+  // The walk saw the cap's worth of results within the shell and no witness.
+  kShellFilled,
+};
+
 struct RangeResult {
   std::vector<Neighbor> neighbors;
   // Set when a match beyond the retained neighbors was observed.
   bool truncated = false;
+  RangeFallback fallback = RangeFallback::kNone;
 };
 
 struct TrackedKeyMetadata {

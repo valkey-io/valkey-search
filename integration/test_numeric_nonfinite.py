@@ -1,16 +1,5 @@
-"""NUMERIC fields holding NaN, and FT.AGGREGATE SORTBY over NaN values.
-
-Every spelling that parses to NaN ("-nan", "+nan", "nan(1)", " nan", ...) is
-invalid NUMERIC data, as "nan" is. A NaN in the numeric B-tree is never
-ordered against other values, so it could never be erased: after the key is
-deleted its entry would stay behind, range counts would include it, and a
-query returning it would hit a missing-key CHECK.
-
-Infinities are ordered and stay valid.
-
-In FT.AGGREGATE, an APPLY that yields NaN (sqrt of a negative) sorts after
-every number in both directions, as a missing value does.
-"""
+"""Every NaN spelling is invalid NUMERIC data; infinities stay valid. SORTBY
+puts NaN last in FT.SEARCH and FT.AGGREGATE."""
 
 import json
 import math
@@ -69,8 +58,6 @@ class TestNumericNonFinite(ValkeySearchTestCaseBase):
                 valid.add(f"{index}:{v}")
             _set_value(client, f"{index}:bad", spelling, key_type)
             client.delete(f"{index}:bad")
-            # Fetching keys, not just counting them, is what would reach a
-            # stale entry.
             assert _keys(client, index, "@n:[100 119]") == {
                 f"{index}:{v}" for v in range(100, 120)}, spelling
             assert _keys(client, index, "@n:[-inf +inf]") == valid, spelling
@@ -79,7 +66,6 @@ class TestNumericNonFinite(ValkeySearchTestCaseBase):
             assert client.ping()
 
     def test_nan_overwrite_drops_the_field(self):
-        """The modify path: a valid value overwritten with NaN."""
         client = self.server.get_new_client()
         _create_numeric_index(client, "ow")
         valid = set()
@@ -110,12 +96,7 @@ class TestNumericNonFinite(ValkeySearchTestCaseBase):
 class TestSearchSortByNaN(ValkeySearchTestCaseBase):
 
     def test_sortby_numeric_puts_nan_last(self):
-        """FT.SEARCH SORTBY on a NUMERIC field whose stored value is a NaN.
-
-        Before 1.3.0 an invalid field is treated as missing and the key stays
-        in its other indexes, so the tag query still returns it. Its NaN sorts
-        last in both directions, as in FT.AGGREGATE.
-        """
+        # Under 1.2.0 emulation the NaN key stays in the TAG index.
         client = self.server.get_new_client()
         client.execute_command(
             "CONFIG", "SET", "search.emulate-release", "1.2.0")
@@ -156,15 +137,13 @@ class TestAggregateSortNaN(ValkeySearchTestCaseBase):
             client.hset(f"agg:{v}", "n", v)
         roots = sorted(math.sqrt(v) for v in values if v >= 0)
         nan_count = sum(1 for v in values if v < 0)
-        # (MAX, rows returned): MAX equal to the row count is the full sort,
-        # and MAX 30 the top-30 heap path. Without MAX, SORTBY keeps 10 rows.
+        # MAX = row count takes the full sort; MAX 30 the heap path.
         for max_arg, rows in ((str(len(values)), len(values)), ("30", 30)):
             for direction in ("ASC", "DESC"):
-                extra = ["MAX", max_arg]
                 result = client.execute_command(
                     "FT.AGGREGATE", "agg", "*", "LOAD", "1", "@n",
                     "APPLY", "sqrt(@n)", "AS", "x",
-                    "SORTBY", "2", "@x", direction, *extra,
+                    "SORTBY", "2", "@x", direction, "MAX", max_arg,
                     "LIMIT", "0", str(rows))
                 xs = [dict(zip(row[::2], row[1::2]))[b"x"].decode()
                       for row in result[1:]]

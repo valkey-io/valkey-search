@@ -362,8 +362,7 @@ INSTANTIATE_TEST_SUITE_P(
       return info.param.test_name;
     });
 
-// Every spelling that parses to NaN is not a valid double or float, not just
-// "nan". Infinities stay valid.
+// Every NaN spelling is rejected; infinities are accepted.
 TEST(ToDoubleTest, RejectsEveryNaNSpelling) {
   for (absl::string_view s :
        {"nan", "NaN", "-nan", "+nan", "-NaN", "nan(1)", " nan", "nan "}) {

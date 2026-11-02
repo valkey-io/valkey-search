@@ -15,7 +15,6 @@
 
 #include "src/utils/scanner.h"
 #include "src/valkey_search_options.h"  // VALKEY_SEARCH_COMPATIBILITY_FIX
-#include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 // #define DBG std::cerr
@@ -24,10 +23,6 @@ namespace valkey_search {
 namespace expr {
 
 static const uint64_t kSignBitMask = 0x8000000000000000ull;
-
-// -ffast-math folds std::isnan and std::isinf to false.
-using vmsdk::IsInfBits;
-using vmsdk::IsNaNBits;
 
 // Redisearch has no string form for an array and compares it as the empty
 // string -- `@array == ""` is true there, for an empty and a populated array
@@ -90,7 +85,7 @@ std::optional<Value::Nil> Value::AsNil() const {
 }
 
 std::string FormatDouble(double d) {
-  if (IsNaNBits(d)) {
+  if (std::isnan(d)) {
     if (std::signbit(d)) {
       return "-nan";
     } else {
@@ -105,7 +100,7 @@ std::string FormatDouble(double d) {
   // integrality is an artifact of the binary representation, and the fixed
   // expansion of a value like 1e300 would not fit storage, so the fixed path
   // stops at 1e17 -- still well past epoch microseconds.
-  if (!IsInfBits(d) && d == std::floor(d) && std::fabs(d) < 1e17) {
+  if (!std::isinf(d) && d == std::floor(d) && std::fabs(d) < 1e17) {
     auto [ptr, ec] = std::to_chars(storage, storage + sizeof(storage), d,
                                    std::chars_format::fixed, 0);
     CHECK(ec == std::errc()) << "to_chars failed formatting integral double "
@@ -126,7 +121,7 @@ std::optional<bool> Value::AsBool() const {
     return *result;
   }
   if (auto result = std::get_if<double>(&value_)) {
-    if (IsNaNBits(*result)) {
+    if (std::isnan(*result)) {
       return true;
     }
     return !(*result == 0.0);
@@ -178,7 +173,7 @@ std::optional<double> Value::AsDouble() const {
   }
   char* end{nullptr};
   double val = std::strtod(sv.begin(), &end);
-  if (end != sv.end() || IsNaNBits(val)) {
+  if (end != sv.end() || std::isnan(val)) {
     return std::nullopt;
   } else {
     return val;
@@ -278,7 +273,7 @@ std::ostream& operator<<(std::ostream& os, const Value& v) {
 static Ordering CompareDoubles(double l, double r) {
   // -ffast-math doesn't handle compares correctly with infinities or nans, we
   // do it integer.
-  if (IsNaNBits(l) || IsNaNBits(r)) {
+  if (std::isnan(l) || std::isnan(r)) {
     return Ordering::kUNORDERED;
   }
   union {
@@ -1029,7 +1024,7 @@ Value FuncConcat(const absl::InlinedVector<Value, 4>& values) {
     if (!ts) {                                                   \
       return Value(Value::Nil("timestamp not a number"));        \
     }                                                            \
-    if (IsNaNBits(*ts) || IsInfBits(*ts)) {                      \
+    if (std::isnan(*ts) || std::isinf(*ts)) {                    \
       return Value(Value::Nil("timestamp is not finite"));       \
     }                                                            \
     if (*ts < 0 && DateNegativeTsReturnsNil()) {                 \
@@ -1055,7 +1050,7 @@ Value FuncDayofweek(const Value& o) {
   }
   // Always-on UB hardening: pure-arithmetic implementation propagates
   // NaN/inf into UB at the int64 cast below, so refuse them here.
-  if (IsNaNBits(*tsd) || IsInfBits(*tsd)) {
+  if (std::isnan(*tsd) || std::isinf(*tsd)) {
     return Value(Value::Nil("dayofweek: timestamp is not finite"));
   }
   // 1.2.1 fix: pre-epoch → Nil.
@@ -1073,7 +1068,7 @@ Value FuncTimefmt(const Value& ts, const Value& fmt) {
   if (!timestampd) {
     return Value(Value::Nil("timefmt: timestamp was not a number"));
   }
-  if (IsInfBits(*timestampd)) {
+  if (std::isinf(*timestampd)) {
     return Value(Value::Nil("timefmt: timestamp is not finite"));
   }
   // Note: unlike the component extractors (month/day/hour/…), timefmt
@@ -1157,7 +1152,7 @@ Value FuncMonth(const Value& o) {
   if (!tsd) {
     return Value(Value::Nil("month: timestamp not a number"));
   }
-  if (IsNaNBits(*tsd) || IsInfBits(*tsd)) {
+  if (std::isnan(*tsd) || std::isinf(*tsd)) {
     return Value(Value::Nil("month: timestamp is not finite"));
   }
   if (*tsd < 0 && DateNegativeTsReturnsNil()) {
@@ -1191,7 +1186,7 @@ static Value RoundToPeriod(const Value& o, double period, const char* notnum,
   if (!tsd) {
     return Value(Value::Nil(notnum));
   }
-  if (IsNaNBits(*tsd) || IsInfBits(*tsd)) {
+  if (std::isnan(*tsd) || std::isinf(*tsd)) {
     return Value(Value::Nil(notfinite));
   }
   // 1.2.1 fix: pre-epoch → Nil.

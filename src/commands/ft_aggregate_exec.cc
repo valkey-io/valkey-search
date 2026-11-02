@@ -216,7 +216,7 @@ absl::Status Filter::Execute(RecordSet &records) const {
 }
 
 static bool IsNaNValue(const expr::Value &v) {
-  return v.IsDouble() && vmsdk::IsNaNBits(v.GetDouble());
+  return v.IsDouble() && std::isnan(v.GetDouble());
 }
 
 template <typename T>
@@ -244,10 +244,8 @@ struct SortFunctor {
         // Both missing: undecided on this key, try the next one.
         continue;
       }
-      // A NaN (sqrt(-1), log(-1), 0/0) sorts after every number, in both
-      // directions, for the same reason. Compare() reports it as kUNORDERED,
-      // and treating that as a tie with every value is not a strict weak
-      // ordering, which std::stable_sort requires.
+      // NaN sorts last in both directions. A tie with every value would not
+      // be a strict weak ordering.
       const bool l_nan = IsNaNValue(lvalue);
       const bool r_nan = IsNaNValue(rvalue);
       if (l_nan != r_nan) {

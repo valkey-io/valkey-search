@@ -7,8 +7,7 @@
 #include "src/commands/ft_aggregate_exec.h"
 
 #include <algorithm>
-#include <bit>
-#include <cstdint>
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
@@ -293,13 +292,10 @@ TEST_F(AggregateExecTest, SortTest) {
   }
 }
 
-// Built from bits: -ffast-math does not guarantee quiet_NaN().
-static double NaNValue() {
-  return std::bit_cast<double>(uint64_t{0x7FF8000000000000ull});
-}
+static double NaNValue() { return std::numeric_limits<double>::quiet_NaN(); }
 
 static bool IsNaNValue(const expr::Value &v) {
-  return v.IsDouble() && vmsdk::IsNaNBits(v.GetDouble());
+  return v.IsDouble() && std::isnan(v.GetDouble());
 }
 
 // Record i holds NaN when i % 3 == 1, else the number (i * 37) % 101.

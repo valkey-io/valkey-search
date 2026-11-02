@@ -68,8 +68,7 @@ absl::Status CheckLoadAfterGroupby(const AggregateParameters &params) {
 absl::Status ResolveLoadsUnderLoadAll(AggregateParameters &params) {
   const bool reply_differs = std::any_of(
       params.loads_.begin(), params.loads_.end(), [](const LoadField &f) {
-        return !f.after_groupby && !f.yields_to_score && !f.duplicate &&
-               (f.renamed || f.identifier == "__key");
+        return !f.after_groupby && (f.renamed || f.identifier == "__key");
       });
   if (!reply_differs) {
     return absl::OkStatus();
@@ -81,19 +80,8 @@ absl::Status ResolveLoadsUnderLoadAll(AggregateParameters &params) {
     return absl::OkStatus();
   }
   for (const auto &load : params.loads_) {
-    if (load.after_groupby || load.yields_to_score || load.duplicate) {
-      continue;
-    }
-    if (load.identifier == "__key") {
+    if (!load.after_groupby && load.identifier == "__key") {
       params.load_key = true;
-    }
-    if (!load.renamed || !(load.before_loadall || load.claimed_again)) {
-      continue;
-    }
-    auto it = params.record_indexes_by_alias_.find(load.alias);
-    if (it != params.record_indexes_by_alias_.end() &&
-        params.record_info_by_index_[it->second].output_name_ == load.alias) {
-      params.record_info_by_index_[it->second].yields_to_loadall_ = true;
     }
   }
   return absl::OkStatus();
@@ -116,6 +104,20 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
     CHECK(params.return_attributes.empty());
     params.all_content = true;
   }
+  // ADDSCORES may follow LOAD, so the parser cannot see that `__score` is
+  // emitted; reject a rename onto or of it here.
+  const auto score_sv = vmsdk::ToStringView(params.score_as.get());
+  if (params.addscores_ && !params.IsVectorQuery()) {
+    for (const auto &load : params.loads_) {
+      const bool touches_score =
+          load.alias == score_sv || load.identifier == score_sv;
+      if (load.renamed && !load.after_groupby &&
+          load.alias != load.identifier && touches_score) {
+        return absl::InvalidArgumentError(absl::StrCat(
+            "LOAD cannot rename to or from the score name `", score_sv, "`"));
+      }
+    }
+  }
   std::vector<LoadField> loads_to_process;
   for (const auto &load : params.loads_) {
     // FT.HYBRID ignores a late LOAD, but a GROUPBY on the key still needs it.
@@ -128,9 +130,7 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
     if (load.after_groupby && params.loadall_) {
       continue;
     }
-    if (!load.yields_to_score && !load.duplicate) {
-      loads_to_process.push_back(load);
-    }
+    loads_to_process.push_back(load);
   }
 
   // A field named by a pipeline stage but absent from the LOAD clause still
@@ -201,8 +201,7 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
       }
       continue;
     }
-    if (identifier == vmsdk::ToStringView(params.score_as.get()) &&
-        !load.reads_stored) {
+    if (identifier == vmsdk::ToStringView(params.score_as.get())) {
       if (renamed) {
         apply_rename(params.record_indexes_by_alias_.at(identifier));
       }

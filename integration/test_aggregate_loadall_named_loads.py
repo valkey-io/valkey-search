@@ -1,6 +1,5 @@
-"""`LOAD *` together with a renamed field or `@__key`. From 1.3.0 the reply
-matches RediSearch: every stored field appears under its own name, a rename
-adds a column, and a later clause overwrites an earlier one of the same name.
+"""`LOAD *` together with a renamed field or `@__key`. From 1.3.0 every stored
+field appears under its own name and a rename to a new name adds a column.
 Below 1.3.0 the legacy reply is kept. There `AS` is read as a field name, so
 only `@__key` reaches this counter; a rename is counted by the LOAD AS one
 (see COMPATIBILITY.md)."""
@@ -27,10 +26,6 @@ CASES = [
      [{"n": "1", "g": "a", "extra": "e1"}, {"n": "2", "g": "b", "extra": "e2"}],
      [{"n": "1", "g": "a", "extra": "e1", "x": "e1"},
       {"n": "2", "g": "b", "extra": "e2", "x": "e2"}]),
-    # The rename comes first, so `LOAD *` overwrites it with the stored n.
-    (["LOAD", "3", "@extra", "AS", "n", "LOAD", "*"],
-     [{"n": "1", "g": "a", "extra": "e1"}, {"n": "2", "g": "b", "extra": "e2"}],
-     [{"n": "1", "g": "a", "extra": "e1"}, {"n": "2", "g": "b", "extra": "e2"}]),
     (["LOAD", "*", "LOAD", "3", "@n", "AS", "m"],
      [{"n": "1", "g": "a", "extra": "e1"}, {"n": "2", "g": "b", "extra": "e2"}],
      [{"n": "1", "m": "1", "g": "a", "extra": "e1"},
@@ -130,5 +125,3 @@ class TestAggregateLoadallNamedLoads(ValkeySearchTestCaseDebugMode):
         assert hybrid("1.3.0", *loads) == [
             {**stored(i), "x": f"e{i}".encode()} for i in range(2)]
         assert hybrid("1.0.0", *loads) == [stored(i) for i in range(2)]
-        loads = ["LOAD", "3", "@extra", "AS", "price", "LOAD", "*"]
-        assert hybrid("1.3.0", *loads) == [stored(i) for i in range(2)]

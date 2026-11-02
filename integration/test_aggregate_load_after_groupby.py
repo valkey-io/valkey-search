@@ -137,24 +137,30 @@ class TestAggregateLoadAfterGroupby(ValkeySearchTestCaseDebugMode):
                 assert hybrid(*late) == expected, (release, late)
                 assert client.info("SEARCH").get(COUNTER, 0) == before
 
-    def test_rename_onto_the_knn_score_still_counts_as_a_late_load(self):
-        # The entry is dropped so the score keeps its name; it must not also
-        # drop the after-GROUPBY error.
+    def test_late_rename_gets_the_late_load_error_not_a_name_error(self):
+        client = self._client("1.3.0")
+        assert self._ticks(client, "LOAD", "3", "@n", "AS", "x", *GROUPBY,
+                           "LOAD", "3", "@g", "AS", "x") == (
+            "LOAD cannot be applied after GROUPBY", 0)
+
+    def test_hybrid_ignores_a_late_rename_onto_an_earlier_name(self):
         client = self._client("1.3.0")
         client.execute_command(
-            "FT.CREATE", "v", "ON", "HASH", "PREFIX", "1", "vd:", "SCHEMA",
-            "g", "TAG", "n", "NUMERIC",
+            "FT.CREATE", "hl", "ON", "HASH", "PREFIX", "1", "hl:", "SCHEMA",
+            "title", "TEXT", "g", "TAG", "n", "NUMERIC",
             "vec", "VECTOR", "FLAT", "6", "TYPE", "FLOAT32", "DIM", "2",
             "DISTANCE_METRIC", "L2")
         client.execute_command(
-            "HSET", "vd:1", "g", "a", "n", "1", "vec", struct.pack("<2f", 1.0, 0.0))
-        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "v")
-        with pytest.raises(valkey.exceptions.ResponseError,
-                           match="LOAD cannot be applied after GROUPBY"):
-            client.execute_command(
-                "FT.AGGREGATE", "v", "*=>[KNN 2 @vec $q AS dist]", *GROUPBY,
-                "LOAD", "3", "@n", "AS", "dist",
-                "PARAMS", "2", "q", struct.pack("<2f", 0.0, 0.0), "DIALECT", "2")
+            "HSET", "hl:1", "title", "alpha", "g", "a", "n", "1",
+            "vec", struct.pack("<2f", 1.0, 0.0))
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "hl")
+        reply = client.execute_command(
+            "FT.HYBRID", "hl", "SEARCH", "@title:alpha",
+            "VSIM", "@vec", "$q", "KNN", "2", "K", "10",
+            "LOAD", "3", "@n", "AS", "x", *GROUPBY, "LOAD", "3", "@g", "AS", "x",
+            "PARAMS", "2", "q", struct.pack("<2f", 0.0, 0.0))
+        assert reply[0] == 1 and dict(zip(reply[1][::2], reply[1][1::2]))[b"g"] == b"a"
+        assert b"x" not in reply[1][::2]
 
     def test_load_after_other_stages_still_loads(self):
         client = self._client("1.3.0")

@@ -700,31 +700,18 @@ class TestHybridCompatibility(BaseCompatibilityTest):
             self.hybrid(key_type, "@title:alpha", load=load,
                         tail=[*groupby, *late, *sortby])
 
-    # Under `LOAD *` a rename adds a column next to the field it reads, and a
-    # later clause overwrites an earlier one of the same output name.
+    # Under `LOAD *` a rename to a new name adds a column next to the field it
+    # reads.
     def test_loadall_with_named_loads(self, key_type):
         super().setup_data("hybrid text extra", key_type)
         for load in [
             ["LOAD", "*", "LOAD", "3", "@extra", "AS", "x"],
             ["LOAD", "3", "@extra", "AS", "x", "LOAD", "*"],
-            ["LOAD", "3", "@extra", "AS", "price", "LOAD", "*"],
-            ["LOAD", "*", "LOAD", "3", "@extra", "AS", "price"],
             ["LOAD", "*", "LOAD", "3", "@price", "AS", "p"],
             ["LOAD", "*", "LOAD", "1", "@__key"],
         ]:
             self.hybrid(key_type, "@title:alpha", load=load)
 
-    # A rename onto the fused score's name is dropped and the fused score
-    # shows, as in Redisearch.
-    def test_load_as_fused_score(self, key_type):
-        super().setup_data("hybrid text extra", key_type)
-        for load in [
-            ["LOAD", "4", "@__key", "@price", "AS", "__score"],
-            ["LOAD", "4", "@__key", "@extra", "AS", "__score"],
-        ]:
-            self.hybrid(key_type, "@title:alpha", load=load, fused_score_as=None)
-
-    # A late LOAD naming the GROUPBY key keeps the key.
     def test_late_load_of_the_groupby_key(self, key_type):
         super().setup_data("hybrid text extra", key_type)
         self.hybrid(key_type, "@title:alpha", load=NO_LOAD, fused_score_as=None,

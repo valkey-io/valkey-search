@@ -65,17 +65,6 @@ struct LoadField {
   // resolved JSON path leaves the two legitimately different.
   bool renamed{false};
   bool after_groupby{false};
-  // A later `LOAD *` overwrites this entry's column.
-  bool before_loadall{false};
-  // A rename onto the score's name; dropped, kept for the after-GROUPBY check.
-  bool yields_to_score{false};
-  // A repeated output name; dropped, kept for the after-GROUPBY check.
-  bool duplicate{false};
-  // Claimed again by a later clause; under `LOAD *` the stored field then wins.
-  bool claimed_again{false};
-  // Reads the stored field even though its name is the score's or another
-  // entry's output.
-  bool reads_stored{false};
 };
 
 struct IndexInterface {
@@ -159,8 +148,6 @@ struct AggregateParameters : public expr::Expression::CompileContext,
     // rename overrides it with the requested alias.
     std::string output_name_;
     indexes::IndexerType data_type_;
-    // Loaded before `LOAD *`, so the stored field of the same name wins.
-    bool yields_to_loadall_{false};
   };
 
   friend std::ostream& operator<<(std::ostream& os,
@@ -207,13 +194,6 @@ struct AggregateParameters : public expr::Expression::CompileContext,
         record_info_by_index_[itr->second].output_name_ == output_name) {
       return itr->second;
     }
-    return AddRecordColumn(identifier, alias, output_name, data_type);
-  }
-
-  // Like AddRecordAttribute, but never reuses a column.
-  size_t AddRecordColumn(absl::string_view identifier, absl::string_view alias,
-                         absl::string_view output_name,
-                         indexes::IndexerType data_type) {
     size_t new_index = record_info_by_index_.size();
     // The attribute name keeps resolving to the first column that carried it;
     // the output name always resolves to the column that emits it.

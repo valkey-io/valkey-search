@@ -13,7 +13,6 @@
 #include <random>
 
 #include "absl/container/flat_hash_map.h"
-#include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -1170,12 +1169,11 @@ absl::Status CreateRecordsFromNeighbors(
   // On JSON, `LOAD *` is the `$` root; named paths only feed columns.
   const bool is_json =
       data_type == data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON;
-  absl::flat_hash_set<std::string_view> output_names;
-  if (parameters.loadall_named_loads_) {
-    for (const auto &info : parameters.record_info_by_index_) {
-      output_names.insert(info.output_name_);
-    }
-  }
+  const bool root_is_a_column =
+      std::any_of(parameters.record_info_by_index_.begin(),
+                  parameters.record_info_by_index_.end(), [](const auto &info) {
+                    return info.output_name_ == kJsonRootElementQuery;
+                  });
 
   for (auto &n : neighbors) {
     // One slot per record column. Not record_indexes_by_alias_.size(): that
@@ -1232,7 +1230,8 @@ absl::Status CreateRecordsFromNeighbors(
         // YIELD_SCORE_AS named the column) must not overwrite the score with
         // it. Step 2 below drops the losing value rather than emitting it as
         // a second column, because `record_identifiers_` holds the score's
-        // name. A vector query always has a score column at `scores_index`,
+        // name (under the 1.3.0 `LOAD *` rule, ReplyRecords drops it). A
+        // vector query always has a score column at `scores_index`,
         // and ADDSCORES adds one for non-vector queries as well.
         if ((parameters.IsVectorQuery() || parameters.addscores_) &&
             i == scores_index) {
@@ -1240,27 +1239,15 @@ absl::Status CreateRecordsFromNeighbors(
         }
         const auto &info = parameters.record_info_by_index_[i];
         auto itr = n.attribute_contents->find(info.identifier_);
-        auto field_type = info.data_type_;
-        // RediSearch applies LOAD clauses in command order; a missing value
-        // keeps the earlier one.
-        if (parameters.loadall_named_loads_ && i != key_index &&
-            info.output_name_ != info.identifier_) {
-          auto stored = n.attribute_contents->find(info.output_name_);
-          if (stored != n.attribute_contents->end() &&
-              (info.yields_to_loadall_ || itr == n.attribute_contents->end())) {
-            itr = stored;
-            field_type = indexes::IndexerType::kNone;
-          }
-        }
         if (itr == n.attribute_contents->end()) {
           continue;
         }
         auto processed_value =
             ProcessFieldValue(vmsdk::ToStringView(itr->second.value.get()),
-                              field_type, data_type);
+                              info.data_type_, data_type);
         if (processed_value.ok()) {
           rec->fields_[i] = std::move(*processed_value);
-        } else if (field_type != indexes::IndexerType::kNumeric) {
+        } else if (info.data_type_ != indexes::IndexerType::kNumeric) {
           // For JSON unquote failures, drop the entire record
           should_drop_record = true;
           break;
@@ -1274,17 +1261,16 @@ absl::Status CreateRecordsFromNeighbors(
 
       // 2/ Anything fetched that no column sources is passed through as an
       //    extra field. This is how LOAD * surfaces the contents of a key,
-      //    since it builds no columns of its own. Under the 1.3.0 rule a field
-      //    is held back only when a column emits its name, so a renamed field
-      //    still appears under its own.
+      //    since it builds no columns of its own. Under the 1.3.0 rule a
+      //    renamed field still appears under its own name; ReplyRecords
+      //    hides it if a column of that name is emitted.
       for (auto &[name, records_map_value] : *n.attribute_contents) {
-        bool sourced;
-        if (parameters.loadall_named_loads_ && !is_json) {
-          sourced = output_names.contains(name);
-        } else {
-          sourced = parameters.record_identifiers_.contains(name);
-        }
-        if (sourced) {
+        // `LOAD *` on JSON is the `$` root, even when a named entry reads it.
+        const bool root_kept = is_json && parameters.loadall_ &&
+                               name == kJsonRootElementQuery &&
+                               !root_is_a_column;
+        if (!(parameters.loadall_named_loads_ && !is_json) && !root_kept &&
+            parameters.record_identifiers_.contains(name)) {
           continue;
         }
         rec->extra_fields_.push_back(std::make_pair(
@@ -1358,6 +1344,17 @@ void AggregateParameters::ReplyRecords(ValkeyModuleCtx *ctx, RecordSet &records,
   auto &parameters = *this;
   ValkeyModule_ReplyWithArray(ctx, 1 + count);
   ValkeyModule_ReplyWithLongLong(ctx, static_cast<long long>(count));
+  // Under the 1.3.0 `LOAD *` rule a stored field is hidden by a column of its
+  // name that holds a value; known only after the pipeline ran.
+  absl::flat_hash_map<std::string_view, std::vector<size_t>> columns_by_name;
+  if (parameters.loadall_named_loads_ &&
+      parameters.index_schema->GetAttributeDataType().ToProto() !=
+          data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON) {
+    for (size_t i = 0; i < parameters.record_info_by_index_.size(); ++i) {
+      columns_by_name[parameters.record_info_by_index_[i].output_name_]
+          .push_back(i);
+    }
+  }
 
   for (size_t n = 0; n < count; ++n) {
     auto rec = records.pop_front();
@@ -1380,6 +1377,13 @@ void AggregateParameters::ReplyRecords(ValkeyModuleCtx *ctx, RecordSet &records,
     }
 
     for (const auto &[name, value] : rec->extra_fields_) {
+      if (auto it = columns_by_name.find(name);
+          it != columns_by_name.end() &&
+          std::any_of(it->second.begin(), it->second.end(), [&](size_t i) {
+            return i < rec->fields_.size() && !rec->fields_[i].IsMissing();
+          })) {
+        continue;
+      }
       if (ReplyWithValue(
               ctx, parameters.index_schema->GetAttributeDataType().ToProto(),
               name, indexes::IndexerType::kNone, value, parameters.dialect)) {

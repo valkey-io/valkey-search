@@ -316,17 +316,6 @@ absl::Status VectorHNSW<T>::RemoveRecordImpl(uint64_t internal_id) {
 
 namespace {
 
-// Paper over the impedance mismatch between the
-// cancel::Token and hnswlib::BaseCancellationFunctor.
-class CancelCondition : public hnswlib::BaseCancellationFunctor {
- public:
-  explicit CancelCondition(cancel::Token &token) : token_(token) {}
-  bool isCancelled() override { return token_->IsCancelled(); }
-
- private:
-  cancel::Token &token_;
-};
-
 // Compute the range traversal shell outside float arithmetic: FLT_MAX with
 // even the default epsilon overflows in float. GetSearchEpsilon() keeps epsilon
 // finite, and the double product of two finite floats cannot overflow double.
@@ -374,7 +363,7 @@ class RangeStopCondition : public hnswlib::BaseSearchStopCondition<float> {
     return true;
   }
 
-  bool observe_result(hnswlib::labeltype, const void *, float dist) override {
+  bool observe_result(float dist) override {
     if (dist <= shell_) {
       ++shell_results_seen_;
     }
@@ -388,10 +377,6 @@ class RangeStopCondition : public hnswlib::BaseSearchStopCondition<float> {
   void add_point_to_result(hnswlib::labeltype, const void *,
                            float dist) override {
     ++num_results_;
-    if (scoring::IsNaN(dist)) {
-      requires_exact_fallback_ = true;
-      return;
-    }
     if (dist <= shell_) {
       return;
     }
@@ -420,13 +405,6 @@ class RangeStopCondition : public hnswlib::BaseSearchStopCondition<float> {
            candidate_dist > nearest_.top();
   }
   bool should_consider_candidate(float dist, float lower_bound) override {
-    // A non-finite value cannot safely participate in COSINE result ordering,
-    // and a NaN cannot enter any distance-ordered candidate queue. Record it
-    // so SearchRange can use the bounded exact scan instead.
-    if (scoring::IsNaN(dist) || (normalize_ && scoring::IsInf(dist))) {
-      requires_exact_fallback_ = true;
-      return false;
-    }
     if (dist <= radius_) {
       return true;
     }
@@ -546,10 +524,9 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
                                                 GetVectorAllocator()),
                         nq.view.size(), normalize_, GetVectorDataType());
   std::vector<std::pair<float, hnswlib::labeltype>> raw_results;
-  const size_t effective_ef =
-      std::min(ef_runtime.value_or(GetEfRuntime()), max_candidates);
-  RangeStopCondition stop_condition(ComputeRangeShell(radius, epsilon), radius,
-                                    normalize_, effective_ef, max_candidates);
+  RangeStopCondition stop_condition(
+      ComputeRangeShell(radius, epsilon), radius, normalize_,
+      ef_runtime.value_or(GetEfRuntime()), max_candidates);
   try {
     CancelCondition cancel_condition(cancellation_token);
     raw_results = algo_->searchStopConditionClosest(
@@ -572,20 +549,11 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
   }
   std::vector<Neighbor> neighbors;
   neighbors.reserve(std::min(raw_results.size(), max_candidates));
+  // observe_distance keeps NaN out of the fetch, and observe_result keeps it
+  // to at most N results within the radius. A +inf distance is within no
+  // radius and ranks last, so filter_results has already trimmed it; an IP
+  // -inf is an ordinary distance, within every radius.
   for (const auto &[dist, label] : raw_results) {
-    // NaN breaks the traversal's ordering, so the walk cannot be trusted to
-    // have reached every key in range. A +inf distance is within no radius
-    // and, without a NaN, ranks last, so filter_results has already trimmed
-    // it; an IP -inf is an ordinary distance, within every radius. IsNaN reads
-    // the bits, unaffected by -ffast-math.
-    if (scoring::IsNaN(dist)) {
-      if (cancelled) {
-        continue;
-      }
-      return this->SearchRangeExhaustive(query, radius, cancellation_token,
-                                         max_candidates, truncated,
-                                         filter.get());
-    }
     const float clamped_dist = this->ClampCosineDistance(dist);
     if (clamped_dist > radius) {
       continue;
@@ -594,16 +562,9 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
     if (!key.ok()) {
       continue;
     }
-    if (neighbors.size() >= max_candidates) {
-      if (truncated != nullptr) {
-        *truncated = true;
-      }
-      return neighbors;
-    }
     neighbors.emplace_back(*key, clamped_dist);
   }
   if (stop_condition.Truncated()) {
-    DCHECK_EQ(neighbors.size(), max_candidates);
     if (truncated != nullptr) {
       *truncated = true;
     }

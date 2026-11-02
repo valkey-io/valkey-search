@@ -62,6 +62,16 @@ constexpr float kDefaultMagnitude = 1.0f;
 // Initial capacity of a range search's result vector.
 constexpr size_t kRangeReserve = 128;
 
+// Lets an hnswlib traversal poll a cancel::Token.
+class CancelCondition : public hnswlib::BaseCancellationFunctor {
+ public:
+  explicit CancelCondition(cancel::Token &token) : token_(token) {}
+  bool isCancelled() override { return token_->IsCancelled(); }
+
+ private:
+  cancel::Token &token_;
+};
+
 inline constexpr size_t UpperBoundToMultipleOf64(size_t num) {
   return (num + 63) & ~size_t(63);
 }
@@ -604,8 +614,9 @@ class VectorBase : public IndexBase {
     return ClampCosineDistance(ComputeDistance(query, record, query_magnitude));
   }
 
-  // Every tracked key within `radius` of `query`, unordered, for FLAT/HNSW
-  // alike. Lock-free: phase-based locking keeps queries and mutations
+  // Tracked keys within `radius` of `query`, unordered, for FLAT/HNSW alike:
+  // at most `max_results`, and the scan stops at one more match, setting
+  // `*truncated`. Lock-free: phase-based locking keeps queries and mutations
   // mutually exclusive, so key_to_metadata_mutex_ is not needed here.
   std::vector<Neighbor> SearchRangeExhaustive(
       absl::string_view query, float radius, cancel::Token &cancellation_token,

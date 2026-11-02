@@ -192,7 +192,7 @@ TEST_F(VectorIndexTest, HnswStopConditionObservesEntryAndUpperLayerDistances) {
       }
       return stop_on_observation_;
     }
-    bool observe_result(hnswlib::labeltype, const void *, float) override {
+    bool observe_result(float) override {
       if (++eligible_results_ == stop_before_result_) {
         observations_at_result_stop_ = observations_;
         return true;

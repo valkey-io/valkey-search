@@ -559,8 +559,7 @@ class HierarchicalNSW
         return top_candidates;
       }
       if (!bare_bone_search && stop_condition &&
-          stop_condition->observe_result(GetExternalLabel(ep_id),
-                                         ep_data.GetRawVector(), dist)) {
+          stop_condition->observe_result(dist)) {
         visited_list_pool_->releaseVisitedList(vl);
         return top_candidates;
       }
@@ -715,8 +714,7 @@ class HierarchicalNSW
                ((!isIdAllowed) ||
                 (*isIdAllowed)(GetExternalLabel(candidate_id))));
           if (!bare_bone_search && stop_condition && is_result &&
-              stop_condition->observe_result(GetExternalLabel(candidate_id),
-                                             vec, dist)) {
+              stop_condition->observe_result(dist)) {
             stop_search = true;
             break;
           }

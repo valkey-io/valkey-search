@@ -58,6 +58,17 @@ If `WITHCURSOR` is specified the output is a two element array, as for `FT.AGGRE
 
 Unlike `FT.AGGREGATE`, which returns every record, `FT.HYBRID` returns at most 10 records when the command writes no `LIMIT` clause. An explicit `LIMIT` stays where it is written in the pipeline; only the default is appended, so it runs after every other stage.
 
+## Reply
+
+Array: the first element is an integer, the number of records returned (not the total number of matches), followed by one array per record.
+Each record's array contains its field/value pairs.
+Without a `LOAD` clause each record carries `__key` and the fused score.
+
+If `WITHCURSOR` is specified, an array of two elements, as for [`FT.AGGREGATE`](ft.aggregate.md):
+
+1. Array: an integer, the number of records returned, followed by one array per record.
+2. Integer: the cursor id to pass to [`FT.CURSOR READ`](ft.cursor.md), or 0 if all records were returned.
+
 # Fusion methods
 
 Fusion sees each arm's results ranked best-first, and every arm's score in the same direction: higher is better. The `VSIM` arm's distance is converted to a similarity before fusion, so a nearer document scores higher.

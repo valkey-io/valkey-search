@@ -31,6 +31,13 @@ Errors:
 - `The user does not have permission to access the key prefix...` (`READ` and `DEL`): the user may not read the cursor's index.
 - `The index was dropped while the cursor was idle` (`READ` only): the cursor's index was replaced between the cursor's creation and this read.
 
+## Reply
+
+* `FT.CURSOR READ`: an array of two elements.
+  The first is an array whose first element is an integer, the number of rows returned, followed by one array per row.
+  The second is an integer, the cursor id for the next read, or 0 if all rows have been returned.
+* `FT.CURSOR DEL`: `OK`.
+
 # Example
 
 ```

@@ -79,6 +79,25 @@ The response is a three element array:
 2. An array with one element per returned key. Each element is an array holding the entries for that key described above, e.g. the key name and its array of name/value pairs.
 3. The cursor id to pass to [`FT.CURSOR READ`](ft.cursor.md), or 0 if all keys were returned, in which case no cursor is created.
 
+## Reply
+
+Array: the first element is an integer, the number of keys that match the query, which isn't affected by `LIMIT`.
+For a KNN vector query the count is at most K.
+It's followed by these elements for each returned key, one after another:
+
+* String: the key name.
+* String: the key's relevance score, if `WITHSCORES` is specified.
+* String: the value of the `SORTBY` field, prefixed with `#` for a numeric field or `$` for a string field, if `WITHSORTKEYS` is specified and `NOCONTENT` isn't.
+  Null if the key doesn't have that field.
+  Below `search.emulate-release` 1.3.0, the prefix is always `#` and a missing value is replied as `#`.
+* Array: the key's field/value pairs, unless `NOCONTENT` or `RETURN 0` is specified.
+
+If `WITHCURSOR` is specified, an array of three elements:
+
+1. Integer: the number of keys that match the query, as above.
+2. Array: one array per returned key, containing that key's elements listed above.
+3. Integer: the cursor id to pass to [`FT.CURSOR READ`](ft.cursor.md), or 0 if all keys were returned.
+
 # Examples
 
 ## Non-vector Queries On Hash Index

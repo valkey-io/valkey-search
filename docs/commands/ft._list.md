@@ -17,3 +17,7 @@ ft._list
 3) users
 4) transactions
 ```
+
+## Reply
+
+Array of strings which are the currently defined index names

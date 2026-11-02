@@ -119,6 +119,12 @@ This table shows the actual computation that Search uses when computing the dist
 
 - `UNF` (optional): Only valid immediately after `SORTABLE`. In RediSearch this keeps the sort value of a `SORTABLE` field in its original form instead of converting it to lowercase. `SORTBY` already compares the stored field value directly, so this has no effect beyond being reported by [`FT.INFO`](ft.info.md).
 
+## Reply
+
+`OK`.
+
+If an error occurs during the index creation, an error is returned.
+
 ## Examples
 
 ### HNSW example:

@@ -1278,35 +1278,65 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   EnforcesHardCapAndStopsAfterWitness(/*hnsw=*/false);
 }
 
+// Keys at distinct distances: `ball` inside the radius, more between the
+// radius and the epsilon shell, and the rest beyond the shell. A ball of N
+// with a fuller shell is complete, not truncated: only in-radius keys are
+// truncation witnesses. A ball of N + 1 keeps N keys at their exact distances.
 TEST_F(SearchRangeFp32, HnswWalkEnforcesHardCap)
 ABSL_NO_THREAD_SAFETY_ANALYSIS {
   constexpr int kCap = 5;
+  constexpr int kShell = 40;
+  constexpr float kRadius = 1.0f;
+  constexpr float kEpsilon = 1.0f;  // Shell at squared distance 2.
   auto &fetch_cap = options::GetMaxNonVectorSearchResultsFetched();
   const auto saved_cap = fetch_cap.GetValue();
   absl::Cleanup restore = [&] {
     VMSDK_EXPECT_OK(fetch_cap.SetValue(saved_cap));
   };
   VMSDK_EXPECT_OK(fetch_cap.SetValue(kCap));
-
-  auto index = MakeIndex(/*hnsw=*/true, data_model::DISTANCE_METRIC_L2,
-                         /*ef_runtime=*/10);
-  ASSERT_NE(index, nullptr);
   const std::string query = Bytes(std::vector<float>(kDims, 0.0f));
-  for (int i = 0; i < kVectors; ++i) {
-    VMSDK_EXPECT_OK(
-        testing_infra::AddVectorRecord(*index, IndexToKey(i), query));
+
+  for (int ball : {kCap, kCap + 1}) {
+    SCOPED_TRACE(absl::StrCat("ball ", ball));
+    auto index = MakeIndex(/*hnsw=*/true, data_model::DISTANCE_METRIC_L2,
+                           /*ef_runtime=*/10);
+    ASSERT_NE(index, nullptr);
+    for (int i = 0; i < kVectors; ++i) {
+      // Squared distances: ball 0.1 to 0.85, shell 1.02 to 1.8, beyond 2.5,
+      // none near the radius or the shell boundary.
+      const float squared = i < ball ? 0.1f + 0.15f * i
+                            : i < ball + kShell
+                                ? 1.02f + 0.02f * (i - ball)
+                                : 2.5f + 0.1f * (i - ball - kShell);
+      const float angle = 2.39996f * i;
+      std::vector<float> v(kDims, 0.0f);
+      v[0] = std::sqrt(squared) * std::cos(angle);
+      v[1] = std::sqrt(squared) * std::sin(angle);
+      VMSDK_EXPECT_OK(
+          testing_infra::AddVectorRecord(*index, IndexToKey(i), Bytes(v)));
+    }
+    const auto reference = PerKeyReference(*index, query, kRadius);
+    ASSERT_EQ(reference.size(), static_cast<size_t>(ball));
+
+    auto counting = std::make_shared<CountingToken>();
+    cancel::Token token = counting;
+    bool truncated = ball <= kCap;
+    auto searched =
+        index->SearchRange(query, kRadius, token, kEpsilon,
+                           /*filter=*/nullptr, /*ef_runtime=*/10, &truncated);
+    ASSERT_TRUE(searched.ok()) << searched.status();
+    EXPECT_EQ(searched->size(), static_cast<size_t>(std::min(ball, kCap)));
+    EXPECT_EQ(truncated, ball > kCap);
+    for (const auto &[key, distance] : ToMap(*searched)) {
+      auto it = reference.find(key);
+      ASSERT_NE(it, reference.end()) << key << " is outside the radius";
+      EXPECT_EQ(distance, it->second) << key;
+    }
+    if (ball > kCap) {
+      EXPECT_LT(counting->polls, kCap + 1)
+          << "the normal walk entered the bounded exact fallback";
+    }
   }
-  auto counting = std::make_shared<CountingToken>();
-  cancel::Token token = counting;
-  bool truncated = false;
-  auto searched =
-      index->SearchRange(query, /*radius=*/0.0f, token, /*epsilon=*/0.01f,
-                         /*filter=*/nullptr, /*ef_runtime=*/10, &truncated);
-  ASSERT_TRUE(searched.ok()) << searched.status();
-  EXPECT_EQ(searched->size(), static_cast<size_t>(kCap));
-  EXPECT_TRUE(truncated);
-  EXPECT_LT(counting->polls, kCap + 1)
-      << "the normal walk entered the bounded exact fallback";
 }
 
 TEST_F(SearchRangeFp32, HnswExactFallbackEnforcesHardCapAndStopsAfterWitness)

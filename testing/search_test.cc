@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -1872,17 +1873,37 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   EXPECT_EQ(query::GetNonVectorResultsFetchedLimitedCount(),
             counter_before + 2);
 
+  // Under the cap, the late fetcher contributes a-special, and only it.
   VMSDK_EXPECT_OK(fetch_cap.SetValue(10));
   const int64_t counter_before_duplicate_only =
       query::GetNonVectorResultsFetchedLimitedCount();
-  auto token = std::make_shared<CancelAfterPolls>(12);
-  const auto partial = search(
-      "@vector:[VECTOR_RANGE 1 $q] | @tag:{duplicates} | "
-      "@late_tag:{special}",
-      token);
-  EXPECT_EQ(partial.size(), 6u);
-  EXPECT_FALSE(partial.contains("a-special"));
-  EXPECT_EQ(token->polls(), 13);
+  constexpr absl::string_view kThreeFetchers =
+      "@vector:[VECTOR_RANGE 1 $q] | @tag:{duplicates} | @late_tag:{special}";
+  auto never =
+      std::make_shared<CancelAfterPolls>(std::numeric_limits<int>::max());
+  const auto complete = search(kThreeFetchers, never);
+  ASSERT_EQ(complete.size(), 7u);
+  ASSERT_TRUE(complete.contains("a-special"));
+  const int all_polls = never->polls();
+
+  // A cancelled query keeps what it collected before the poll that reported
+  // cancellation and polls no further: cancelled at the last poll it has
+  // already collected a-special; cancelled in the duplicates fetcher it never
+  // reaches the late fetcher.
+  for (const int grace : {all_polls - 1, 12}) {
+    SCOPED_TRACE(absl::StrCat("grace ", grace, " of ", all_polls, " polls"));
+    ASSERT_LT(grace, all_polls);
+    auto token = std::make_shared<CancelAfterPolls>(grace);
+    const auto partial = search(kThreeFetchers, token);
+    EXPECT_EQ(token->polls(), grace + 1);
+    for (const auto &[key, has_vr_distance] : partial) {
+      EXPECT_TRUE(complete.contains(key)) << key;
+    }
+    EXPECT_EQ(partial.contains("a-special"), grace == all_polls - 1);
+    if (grace < all_polls - 1) {
+      EXPECT_LT(partial.size(), complete.size());
+    }
+  }
   EXPECT_EQ(query::GetNonVectorResultsFetchedLimitedCount(),
             counter_before_duplicate_only);
 }

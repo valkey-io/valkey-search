@@ -2442,19 +2442,19 @@ class TestVectorRangeBenchmark(ValkeySearchTestCaseBase):
 
 
 class TestVectorRangeEfRuntimeSweep(ValkeySearchTestCaseBase):
-    """Per-query EF_RUNTIME sets the HNSW range walk's initial beam. When a
-    ball holds about EF_RUNTIME keys, the walk can stop as a KNN@ef search
-    would, so a wider per-query beam must recover the recall."""
+    """Per-query EF_RUNTIME sets the width of the beam the HNSW range walk
+    keeps outside the ball. The walk homes in as a KNN@ef search does and then
+    floods the ball, so its recall is never below KNN recall at the same ef,
+    and a wider per-query beam raises it."""
 
     KEYS = 50000
     DIM = 32
     QUERIES = 30
     FIELD_EF = 10
-    QUERY_EFS = (5, 10, 50)
-    # ef/2, ef, 2ef and 10ef for each of QUERY_EFS.
+    # None sends no EF_RUNTIME, so the walk uses FIELD_EF.
+    QUERY_EFS = (None, 5, 10, 50)
+    # ef/2, ef, 2ef and 10ef for each of QUERY_EFS, and 2.5x FIELD_EF.
     BALL_SIZES = (2, 5, 10, 20, 25, 50, 100, 500)
-    # Range recall may trail KNN recall at the same ef by at most this much.
-    KNN_SLACK = 0.05
     # Floor for every cell at the widest per-query EF_RUNTIME (measured
     # minimum 0.967).
     WIDE_EF_MIN_RECALL = 0.93
@@ -2463,7 +2463,8 @@ class TestVectorRangeEfRuntimeSweep(ValkeySearchTestCaseBase):
         """Keys of an HNSW KNN query for n neighbors at EF_RUNTIME ef."""
         result = client.execute_command(
             "FT.SEARCH", index,
-            f"*=>[KNN {n} @{field} $BLOB EF_RUNTIME {ef} AS d]",
+            f"*=>[KNN {n} @{field} $BLOB"
+            f"{'' if ef is None else f' EF_RUNTIME {ef}'} AS d]",
             "PARAMS", "2", "BLOB", query.astype("<f4").tobytes(),
             "NOCONTENT", "LIMIT", "0", str(n), "DIALECT", "2",
         )
@@ -2473,10 +2474,11 @@ class TestVectorRangeEfRuntimeSweep(ValkeySearchTestCaseBase):
     def test_hnsw_range_recall_follows_query_ef_runtime(self, metric):
         """
         On 50k clustered 32-d vectors with field EF_RUNTIME 10, sweep the
-        per-query EF_RUNTIME over 5, 10 and 50 and the ball over 2..500 keys.
-        Every HNSW key is a FLAT key at the same distance; each cell's range
-        recall is within KNN_SLACK of HNSW KNN recall at the same ef; and
-        raising the per-query EF_RUNTIME from 5 to 50 raises mean recall.
+        per-query EF_RUNTIME over none (the field's 10), 5, 10 and 50 and the
+        ball over 2..500 keys. Every HNSW key is a FLAT key at the same
+        distance; each cell's range recall is at least HNSW KNN recall at the
+        same ef; and raising the per-query EF_RUNTIME from 5 to 50 raises mean
+        recall.
         """
         client = self.server.get_new_client()
         rng = np.random.default_rng(53)
@@ -2522,7 +2524,7 @@ class TestVectorRangeEfRuntimeSweep(ValkeySearchTestCaseBase):
                 for ef in self.QUERY_EFS))
 
         for cell in cells:
-            assert range_means[cell] >= knn_means[cell] - self.KNN_SLACK, (
+            assert range_means[cell] >= knn_means[cell], (
                 metric, cell, range_means[cell], knn_means[cell])
         by_ef = {ef: mean([range_means[(n, ef)] for n in self.BALL_SIZES])
                  for ef in self.QUERY_EFS}

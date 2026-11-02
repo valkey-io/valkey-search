@@ -2315,9 +2315,11 @@ class TestVectorRangeCluster(ValkeySearchClusterTestCase):
         """A per-query EF_RUNTIME reaches remote shards and raises recall.
 
         The coordinator owns no documents. Each other primary owns 10k vectors,
-        and the two clouds are far apart so each query's 10-key ball is served
-        by one remote shard. If the optional predicate field is lost in fanout,
-        EF_RUNTIME 50 behaves like the field default of 1 and this test fails.
+        and the two clouds are far apart so each query's ball is served by one
+        remote shard. The balls hold 1x and 2x the field EF_RUNTIME of 1, where
+        the beam width decides recall. If the optional predicate field is lost
+        in fanout, EF_RUNTIME 50 behaves like the field default and this test
+        fails.
         """
         cluster_client = self.new_cluster_client()
         keys_per_shard = 10000
@@ -2343,37 +2345,40 @@ class TestVectorRangeCluster(ValkeySearchClusterTestCase):
         assert [p.dbsize() for p in primaries] == [0, keys_per_shard,
                                                    keys_per_shard]
 
-        default_recalls = []
-        override_recalls = []
-        queries = scale_queries(rng, first, "L2", count=20)
+        # On this data a field EF_RUNTIME of 5 or 10 already finds 98-100% of
+        # balls of 1-25 keys, which leaves EF_RUNTIME 50 nothing to raise.
+        ball_sizes = (field_ef, 2 * field_ef)
+        efs = ((field_ef, None), (50, 50))
+        recalls = {(n, ef): [] for n in ball_sizes for ef, _ in efs}
+        queries = scale_queries(rng, first, "L2", count=40)
         for query in queries:
-            _, radius = knn_radii(
-                primaries[0], flat_index, "v", query, sizes=(10,))[0]
-            flat = range_distances(
-                primaries[0], flat_index, "v", query, radius)
-            default = range_distances(
-                primaries[0], hnsw_index, "v", query, radius)
-            override = range_distances(
-                primaries[0], hnsw_index, "v", query, radius,
-                ef_runtime=50)
-            assert len(flat) == 10
-            for ef, result in ((field_ef, default), (50, override)):
-                extra = result.keys() - flat.keys()
-                assert not extra, (ef, extra)
-                for key, distance in result.items():
-                    assert math.isclose(
-                        distance, flat[key], rel_tol=1e-5, abs_tol=1e-5), (
-                            ef, key, distance, flat[key])
-            default_recalls.append(len(default) / len(flat))
-            override_recalls.append(len(override) / len(flat))
+            for n, radius in knn_radii(primaries[0], flat_index, "v", query,
+                                       sizes=ball_sizes):
+                flat = range_distances(
+                    primaries[0], flat_index, "v", query, radius)
+                assert len(flat) == n
+                for ef, query_ef in efs:
+                    result = range_distances(
+                        primaries[0], hnsw_index, "v", query, radius,
+                        ef_runtime=query_ef)
+                    extra = result.keys() - flat.keys()
+                    assert not extra, (ef, extra)
+                    for key, distance in result.items():
+                        assert math.isclose(
+                            distance, flat[key], rel_tol=1e-5,
+                            abs_tol=1e-5), (ef, key, distance, flat[key])
+                    recalls[(n, ef)].append(len(result) / n)
 
-        default_mean = sum(default_recalls) / len(default_recalls)
-        override_mean = sum(override_recalls) / len(override_recalls)
-        print("\nRemote-shard VECTOR_RANGE recall: "
-              f"field EF_RUNTIME {field_ef}={default_mean:.3f}, "
-              f"query EF_RUNTIME 50={override_mean:.3f}")
-        assert override_mean > default_mean, (default_mean, override_mean)
-        assert override_mean >= 0.95, override_mean
+        means = {cell: sum(r) / len(r) for cell, r in recalls.items()}
+        print("\nRemote-shard VECTOR_RANGE recall by ball size: " + ", ".join(
+            f"{n}: field EF_RUNTIME {field_ef}={means[(n, field_ef)]:.3f} "
+            f"query EF_RUNTIME 50={means[(n, 50)]:.3f}" for n in ball_sizes))
+        # Over 10 graph builds on this data, the field EF_RUNTIME found
+        # 0.79-0.93 of each ball and EF_RUNTIME 50 found all of it, so the
+        # smallest gain was 0.075.
+        for n in ball_sizes:
+            assert means[(n, 50)] >= 0.95, (n, means)
+            assert means[(n, 50)] >= means[(n, field_ef)] + 0.05, (n, means)
 
     def test_query_attr_epsilon_saturated_cluster(self):
         """

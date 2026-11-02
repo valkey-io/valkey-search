@@ -181,12 +181,11 @@ FilterVerification VerifyFilter(const query::SearchParameters &parameters,
                                 const RecordsMap &records,
                                 const indexes::Neighbor &n,
                                 std::unique_ptr<QueryContext> &query_ctx,
-                                std::optional<bool> recompute_score_override,
-                                bool rescore_unchanged) {
+                                std::optional<bool> recompute_score_override) {
   auto predicate = parameters.filter_parse_results.root_predicate.get();
-  // Match-all has nothing to re-evaluate, but its score still follows the
-  // corpus, so it is rescored when the caller asks.
-  if (predicate == nullptr && !rescore_unchanged) {
+  // Match-all has no filter to recheck, but its score can still change.
+  if (predicate == nullptr &&
+      !recompute_score_override.value_or(parameters.ScoreIsRelevance())) {
     return {true, std::nullopt};
   }
   auto db_seq =
@@ -200,13 +199,10 @@ FilterVerification VerifyFilter(const query::SearchParameters &parameters,
     // so it does not match and the caller drops it.
     return {false, std::nullopt};
   }
-  const bool mutated = *db_seq != n.sequence_number;
-  if (!mutated && !rescore_unchanged) {
+  if (*db_seq == n.sequence_number) {
     return {true, std::nullopt};
   }
-  if (mutated) {
-    predicate_revalidation.Increment();
-  }
+  predicate_revalidation.Increment();
 
   const IndexSchema &index_schema = *parameters.index_schema;
   // One context per reply: leaves resolve on the first mutated document and are

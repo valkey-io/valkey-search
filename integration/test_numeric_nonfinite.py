@@ -15,6 +15,7 @@ every number in both directions, as a missing value does.
 import json
 import math
 
+import pytest
 from valkey_search_test_case import ValkeySearchTestCaseBase
 from valkeytestframework.conftest import resource_port_tracker
 
@@ -38,43 +39,38 @@ def _create_numeric_index(client, index):
         "SCHEMA", "n", "NUMERIC")
 
 
+def _create_index(client, index, key_type):
+    if key_type == "JSON":
+        client.execute_command(
+            "FT.CREATE", index, "ON", "JSON", "PREFIX", "1", index + ":",
+            "SCHEMA", "$.n", "AS", "n", "NUMERIC")
+    else:
+        _create_numeric_index(client, index)
+
+
+def _set_value(client, key, value, key_type):
+    if key_type == "JSON":
+        client.execute_command("JSON.SET", key, "$", json.dumps({"n": value}))
+    else:
+        client.hset(key, "n", value)
+
+
 class TestNumericNonFinite(ValkeySearchTestCaseBase):
 
-    def test_nan_is_invalid_and_leaves_nothing_behind(self):
+    @pytest.mark.parametrize("key_type", ["HASH", "JSON"])
+    def test_nan_is_invalid_and_leaves_nothing_behind(self, key_type):
         client = self.server.get_new_client()
         for i, spelling in enumerate(NAN_SPELLINGS):
             index = f"idx{i}"
-            _create_numeric_index(client, index)
+            _create_index(client, index, key_type)
             valid = set()
             for v in list(range(20)) + list(range(100, 120)):
-                client.hset(f"{index}:{v}", "n", v)
+                _set_value(client, f"{index}:{v}", v, key_type)
                 valid.add(f"{index}:{v}")
-            client.hset(f"{index}:bad", "n", spelling)
+            _set_value(client, f"{index}:bad", spelling, key_type)
             client.delete(f"{index}:bad")
             # Fetching keys, not just counting them, is what would reach a
             # stale entry.
-            assert _keys(client, index, "@n:[100 119]") == {
-                f"{index}:{v}" for v in range(100, 120)}, spelling
-            assert _keys(client, index, "@n:[-inf +inf]") == valid, spelling
-            assert _count(client, index, "@n:[-inf +inf]") == 40, spelling
-            assert _count(client, index, "@n:[0 19]") == 20, spelling
-            assert client.ping()
-
-    def test_nan_is_invalid_and_leaves_nothing_behind_json(self):
-        client = self.server.get_new_client()
-        for i, spelling in enumerate(NAN_SPELLINGS):
-            index = f"jidx{i}"
-            client.execute_command(
-                "FT.CREATE", index, "ON", "JSON", "PREFIX", "1", index + ":",
-                "SCHEMA", "$.n", "AS", "n", "NUMERIC")
-            valid = set()
-            for v in list(range(20)) + list(range(100, 120)):
-                client.execute_command(
-                    "JSON.SET", f"{index}:{v}", "$", json.dumps({"n": v}))
-                valid.add(f"{index}:{v}")
-            client.execute_command(
-                "JSON.SET", f"{index}:bad", "$", json.dumps({"n": spelling}))
-            client.delete(f"{index}:bad")
             assert _keys(client, index, "@n:[100 119]") == {
                 f"{index}:{v}" for v in range(100, 120)}, spelling
             assert _keys(client, index, "@n:[-inf +inf]") == valid, spelling

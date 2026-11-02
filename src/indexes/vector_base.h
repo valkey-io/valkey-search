@@ -386,6 +386,24 @@ absl::string_view LookupKeyByValue(
   }
 }
 
+// A range search for the keys within `radius` of the query vector.
+struct RangeQuery {
+  float radius = 0.0f;
+  // HNSW also walks through nodes within radius * (1 + epsilon) without
+  // emitting them; FLAT ignores it. Must be finite and non-negative.
+  float epsilon = 0.0f;
+  // Restricts the keys searched; not owned.
+  hnswlib::BaseFilterFunctor *filter = nullptr;
+  // HNSW beam width; nullopt uses the field's EF_RUNTIME. FLAT ignores it.
+  std::optional<size_t> ef_runtime;
+};
+
+struct RangeResult {
+  std::vector<Neighbor> neighbors;
+  // Set when a match beyond the retained neighbors was observed.
+  bool truncated = false;
+};
+
 struct TrackedKeyMetadata {
   uint64_t internal_id;
   // If normalize_ is false, this will be 1.0f. Otherwise, it will be the
@@ -464,17 +482,15 @@ class VectorBase : public IndexBase {
   size_t GetVectorDataSize() const { return GetDataTypeSize() * dimensions_; }
 
   // Returns up to search.max-nonvector-search-results-fetched neighbors within
-  // `radius`, unordered, and sets `truncated` after observing an additional
-  // matching neighbor. FLAT scans exhaustively until that witness. HNSW homes
-  // in on the query with an `ef_runtime`-wide beam, defaulting to the field's
-  // EF_RUNTIME, and also walks through nodes within radius * (1 + epsilon)
-  // without emitting them. HNSW exact fallbacks obey the same result cap.
-  virtual absl::StatusOr<std::vector<Neighbor>> SearchRange(
-      absl::string_view query, float radius, cancel::Token &cancellation_token,
-      float epsilon,
-      std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr,
-      std::optional<size_t> ef_runtime = std::nullopt,
-      bool *truncated = nullptr) = 0;
+  // `range.radius`, unordered, and sets `truncated` after observing an
+  // additional matching neighbor. FLAT scans exhaustively until that witness.
+  // HNSW homes in on the query with an `ef_runtime`-wide beam, defaulting to
+  // the field's EF_RUNTIME, and also walks through nodes within
+  // radius * (1 + epsilon) without emitting them. HNSW exact fallbacks obey
+  // the same result cap.
+  virtual absl::StatusOr<RangeResult> SearchRange(
+      absl::string_view query, const RangeQuery &range,
+      cancel::Token &cancellation_token) = 0;
 
   // Distance and internal label for `key`, or an error if untracked. Backs
   // IsWithinVectorRange. Search-phase only: lock-free, like
@@ -544,12 +560,12 @@ class VectorBase : public IndexBase {
   bool IsValidSizeVector(absl::string_view record) const {
     return IsValidSizeVector(record.size());
   }
-  // Validates the query blob and radius at a SearchRange boundary. Returns a
-  // finite, non-negative radius: positive infinity is normalized to FLT_MAX,
-  // matching command parsing. Malformed input returns a status rather than
-  // reaching a distance kernel or a fatal internal invariant.
-  absl::StatusOr<float> ValidateRangeSearchInputs(absl::string_view query,
-                                                  float radius) const;
+  // Validates the query blob, radius and epsilon at a SearchRange boundary.
+  // Returns a finite, non-negative radius: positive infinity is normalized to
+  // FLT_MAX, matching command parsing. Malformed input returns a status rather
+  // than reaching a distance kernel or a fatal internal invariant.
+  absl::StatusOr<float> ValidateRangeSearchInputs(
+      absl::string_view query, const RangeQuery &range) const;
   // Distance between `query` and the vector in `record`, where `record` is the
   // raw bytes just read back from the database rather than anything the index
   // holds.
@@ -616,13 +632,12 @@ class VectorBase : public IndexBase {
 
   // Tracked keys within `radius` of `query`, unordered, for FLAT/HNSW alike:
   // at most `max_results`, and the scan stops at one more match, setting
-  // `*truncated`. Lock-free: phase-based locking keeps queries and mutations
+  // `truncated`. Lock-free: phase-based locking keeps queries and mutations
   // mutually exclusive, so key_to_metadata_mutex_ is not needed here.
-  std::vector<Neighbor> SearchRangeExhaustive(
+  RangeResult SearchRangeExhaustive(
       absl::string_view query, float radius, cancel::Token &cancellation_token,
-      size_t max_results, bool *truncated,
-      hnswlib::BaseFilterFunctor *filter = nullptr) const
-      ABSL_NO_THREAD_SAFETY_ANALYSIS;
+      size_t max_results,
+      hnswlib::BaseFilterFunctor *filter) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
   // Holds an optionally-normalized query vector. `view` is always valid and
   // points either into `storage` (if normalization was applied) or into the

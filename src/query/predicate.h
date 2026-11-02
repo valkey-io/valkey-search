@@ -19,6 +19,7 @@
 
 #include "absl/functional/function_ref.h"
 #include "absl/strings/string_view.h"
+#include "src/indexes/scoring/scorer.h"
 #include "src/indexes/text/language.h"
 #include "src/indexes/text/text_iterator.h"
 #include "src/query/resolved_leaf.h"
@@ -255,13 +256,12 @@ class VectorRangePredicate : public Predicate {
   // cast in range.
   float GetSearchEpsilon() const {
     constexpr double kMaxEpsilon = std::numeric_limits<float>::max();
-    constexpr uint64_t kSignMask = uint64_t{1} << 63;
     const double epsilon = epsilon_.value_or(0.01);
-    const uint64_t epsilon_bits = std::bit_cast<uint64_t>(epsilon);
-    if ((epsilon_bits & ~kSignMask) == 0) {
+    if (indexes::scoring::IsZero(epsilon)) {
       return 0.0f;
     }
-    return epsilon_bits > std::bit_cast<uint64_t>(kMaxEpsilon)
+    return std::bit_cast<uint64_t>(epsilon) >
+                   std::bit_cast<uint64_t>(kMaxEpsilon)
                ? std::numeric_limits<float>::max()
                : static_cast<float>(epsilon);
   }

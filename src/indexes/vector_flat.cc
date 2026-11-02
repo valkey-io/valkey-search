@@ -265,15 +265,11 @@ float VectorFlat<T>::ComputeDistance(absl::string_view query,
 // Linear scan of the contiguous FLAT store: the loop and distance kernel of
 // FLAT KNN (BruteforceSearch::searchKnn), resolving a key only for a match.
 template <typename T>
-absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::SearchRange(
-    absl::string_view query, float radius, cancel::Token &cancellation_token,
-    float /*epsilon*/, std::unique_ptr<hnswlib::BaseFilterFunctor> filter,
-    std::optional<size_t> /*ef_runtime*/, bool *truncated) {
-  if (truncated != nullptr) {
-    *truncated = false;
-  }
-  VMSDK_ASSIGN_OR_RETURN(radius,
-                         this->ValidateRangeSearchInputs(query, radius));
+absl::StatusOr<RangeResult> VectorFlat<T>::SearchRange(
+    absl::string_view query, const RangeQuery &range,
+    cancel::Token &cancellation_token) {
+  VMSDK_ASSIGN_OR_RETURN(const float radius,
+                         this->ValidateRangeSearchInputs(query, range));
   const size_t max_results = static_cast<size_t>(
       options::GetMaxNonVectorSearchResultsFetched().GetValue());
   auto nq = this->NormalizeQueryIfNeeded(query);
@@ -281,7 +277,8 @@ absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::SearchRange(
       normalize_ ? CalcReciprocalMagnitude(nq.view, this->GetVectorDataType())
                  : kDefaultMagnitude;
 
-  std::vector<Neighbor> neighbors;
+  RangeResult result;
+  std::vector<Neighbor> &neighbors = result.neighbors;
   neighbors.reserve(std::min(kRangeReserve, max_results));
   for (size_t i = 0; i < algo_->cur_element_count_; ++i) {
     if (cancellation_token->IsCancelled()) {
@@ -289,7 +286,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::SearchRange(
     }
     const auto *stored_vector = algo_->GetDataPtrByInternalId(i);
     const hnswlib::labeltype label = algo_->GetLabel(stored_vector);
-    if (!*stored_vector || (filter && !(*filter)(label))) {
+    if (!*stored_vector || (range.filter && !(*range.filter)(label))) {
       continue;
     }
     float distance =
@@ -297,16 +294,14 @@ absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::SearchRange(
     if (distance <= radius) {
       if (const auto *key = this->FindKeyDuringSearch(label)) {
         if (neighbors.size() >= max_results) {
-          if (truncated != nullptr) {
-            *truncated = true;
-          }
+          result.truncated = true;
           break;
         }
         neighbors.emplace_back(*key, distance);
       }
     }
   }
-  return neighbors;
+  return result;
 }
 
 template <typename T>

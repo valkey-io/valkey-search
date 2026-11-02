@@ -485,29 +485,25 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
 }
 
 template <typename T>
-absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
-    absl::string_view query, float radius, cancel::Token &cancellation_token,
-    float epsilon, std::unique_ptr<hnswlib::BaseFilterFunctor> filter,
-    std::optional<size_t> ef_runtime, bool *truncated) {
-  if (truncated != nullptr) {
-    *truncated = false;
-  }
-  VMSDK_ASSIGN_OR_RETURN(radius,
-                         this->ValidateRangeSearchInputs(query, radius));
+absl::StatusOr<RangeResult> VectorHNSW<T>::SearchRange(
+    absl::string_view query, const RangeQuery &range,
+    cancel::Token &cancellation_token) {
+  VMSDK_ASSIGN_OR_RETURN(const float radius,
+                         this->ValidateRangeSearchInputs(query, range));
   const size_t max_candidates = static_cast<size_t>(
       options::GetMaxNonVectorSearchResultsFetched().GetValue());
 
   // A cap of 0 uses the bounded exact scan to look for one witness.
   if (max_candidates == 0) {
     return this->SearchRangeExhaustive(query, radius, cancellation_token,
-                                       max_candidates, truncated, filter.get());
+                                       max_candidates, range.filter);
   }
   // COSINE distances clamp into [0, 2], so radius 2 holds every key: scan,
   // rather than walk the whole graph and depend on the shell reaching
   // unclamped distances just above 2.
   if (this->normalize_ && radius >= 2.0f) {
     return this->SearchRangeExhaustive(query, radius, cancellation_token,
-                                       max_candidates, truncated, filter.get());
+                                       max_candidates, range.filter);
   }
 
   auto nq = this->NormalizeQueryIfNeeded(query);
@@ -525,12 +521,12 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
                         nq.view.size(), normalize_, GetVectorDataType());
   std::vector<std::pair<float, hnswlib::labeltype>> raw_results;
   RangeStopCondition stop_condition(
-      ComputeRangeShell(radius, epsilon), radius, normalize_,
-      ef_runtime.value_or(GetEfRuntime()), max_candidates);
+      ComputeRangeShell(radius, range.epsilon), radius, normalize_,
+      range.ef_runtime.value_or(GetEfRuntime()), max_candidates);
   try {
     CancelCondition cancel_condition(cancellation_token);
     raw_results = algo_->searchStopConditionClosest(
-        embedding, stop_condition, filter.get(), &cancel_condition);
+        embedding, stop_condition, range.filter, &cancel_condition);
   } catch (const std::exception &e) {
     Metrics::GetStats().hnsw_search_exceptions_cnt.fetch_add(
         1, std::memory_order_relaxed);
@@ -545,9 +541,10 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
   // requests a partial result, but do not count this as a fetch-cap fallback.
   if (!cancelled && stop_condition.RequiresExactFallback()) {
     return this->SearchRangeExhaustive(query, radius, cancellation_token,
-                                       max_candidates, truncated, filter.get());
+                                       max_candidates, range.filter);
   }
-  std::vector<Neighbor> neighbors;
+  RangeResult result;
+  std::vector<Neighbor> &neighbors = result.neighbors;
   neighbors.reserve(std::min(raw_results.size(), max_candidates));
   // observe_distance keeps NaN out of the fetch, and observe_result keeps it
   // to at most N results within the radius. A +inf distance is within no
@@ -565,10 +562,8 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
     neighbors.emplace_back(*key, clamped_dist);
   }
   if (stop_condition.Truncated()) {
-    if (truncated != nullptr) {
-      *truncated = true;
-    }
-    return neighbors;
+    result.truncated = true;
+    return result;
   }
   // Once max_candidates results within the shell were seen, the fetch bound
   // may have stopped the walk short of more matches. Scan exactly, collecting
@@ -577,9 +572,9 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
   // exact; it costs the walk plus one distance per tracked key.
   if (!cancelled && stop_condition.ShellFilled()) {
     return this->SearchRangeExhaustive(query, radius, cancellation_token,
-                                       max_candidates, truncated, filter.get());
+                                       max_candidates, range.filter);
   }
-  return neighbors;
+  return result;
 }
 
 template <typename T>

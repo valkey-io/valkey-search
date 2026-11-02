@@ -1719,14 +1719,11 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   }
 
   cancel::Token direct_token = cancel::Make(1000000, nullptr);
-  bool vector_truncated = false;
   auto vector_candidates = vector_index->SearchRange(
-      VectorToStr(zero), /*radius=*/1.0f, direct_token,
-      /*epsilon=*/0.01f, /*filter=*/nullptr, /*ef_runtime=*/std::nullopt,
-      &vector_truncated);
+      VectorToStr(zero), {.radius = 1.0f, .epsilon = 0.01f}, direct_token);
   ASSERT_TRUE(vector_candidates.ok()) << vector_candidates.status();
-  EXPECT_EQ(vector_candidates->size(), static_cast<size_t>(kCap));
-  EXPECT_TRUE(vector_truncated);
+  EXPECT_EQ(vector_candidates->neighbors.size(), static_cast<size_t>(kCap));
+  EXPECT_TRUE(vector_candidates->truncated);
 
   UnitTestSearchParameters params;
   params.index_schema = schema;

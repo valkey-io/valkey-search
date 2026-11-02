@@ -640,41 +640,44 @@ absl::Status VectorBase::ForEachUnTrackedKey(
 }
 
 absl::StatusOr<float> VectorBase::ValidateRangeSearchInputs(
-    absl::string_view query, float radius) const {
+    absl::string_view query, const RangeQuery &range) const {
   if (!IsValidSizeVector(query)) {
     return absl::InvalidArgumentError(absl::StrCat(
-        "Error parsing vector similarity query: query vector blob size (",
-        query.size(), ") does not match index's expected size (",
-        GetVectorDataSize(), ")."));
+        "Vector blob size (", query.size(),
+        ") does not match index dimensions (", GetVectorDataSize(), ")"));
   }
-
+  const float radius = range.radius;
   if (scoring::IsNaN(radius)) {
     return absl::InvalidArgumentError(
         "VECTOR_RANGE radius is not a valid number");
   }
-  constexpr uint32_t kSignMask = uint32_t{1} << 31;
-  const uint32_t radius_bits = std::bit_cast<uint32_t>(radius);
-  const uint32_t magnitude = radius_bits & ~kSignMask;
-  if ((radius_bits & kSignMask) != 0 && magnitude != 0) {
+  if (scoring::IsNegativeNonZero(radius)) {
     return absl::InvalidArgumentError(
         "VECTOR_RANGE radius must be non-negative");
+  }
+  // The HNSW shell arithmetic requires a finite, non-negative epsilon; the
+  // query path passes VectorRangePredicate::GetSearchEpsilon(), which is.
+  if (scoring::IsNaN(range.epsilon) || scoring::IsInf(range.epsilon) ||
+      scoring::IsNegativeNonZero(range.epsilon)) {
+    return absl::InvalidArgumentError(
+        "VECTOR_RANGE epsilon must be a finite non-negative number");
   }
   if (scoring::IsInf(radius)) {
     return std::numeric_limits<float>::max();
   }
   // Normalize -0 to +0 so shell arithmetic and diagnostics have one zero.
-  return magnitude == 0 ? 0.0f : radius;
+  return scoring::IsZero(radius) ? 0.0f : radius;
 }
 
-std::vector<Neighbor> VectorBase::SearchRangeExhaustive(
+RangeResult VectorBase::SearchRangeExhaustive(
     absl::string_view query, float radius, cancel::Token &cancellation_token,
-    size_t max_results, bool *truncated,
-    hnswlib::BaseFilterFunctor *filter) const {
+    size_t max_results, hnswlib::BaseFilterFunctor *filter) const {
   auto nq = NormalizeQueryIfNeeded(query);
   const float query_magnitude =
       normalize_ ? CalcReciprocalMagnitude(nq.view, GetVectorDataType())
                  : kDefaultMagnitude;
-  std::vector<Neighbor> neighbors;
+  RangeResult result;
+  std::vector<Neighbor> &neighbors = result.neighbors;
   neighbors.reserve(std::min(kRangeReserve, max_results));
   for (const auto &[key, metadata] : tracked_metadata_by_key_) {
     if (cancellation_token->IsCancelled()) {
@@ -690,15 +693,13 @@ std::vector<Neighbor> VectorBase::SearchRangeExhaustive(
     float distance = RangeDistance(nq.view, query_magnitude, vector_record);
     if (distance <= radius) {
       if (neighbors.size() >= max_results) {
-        if (truncated != nullptr) {
-          *truncated = true;
-        }
+        result.truncated = true;
         break;
       }
       neighbors.emplace_back(key, distance);
     }
   }
-  return neighbors;
+  return result;
 }
 
 template absl::StatusOr<std::vector<Neighbor>> VectorBase::CreateReply<float>(

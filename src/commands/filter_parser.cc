@@ -7,7 +7,6 @@
 
 #include "src/commands/filter_parser.h"
 
-#include <bit>
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
@@ -28,6 +27,7 @@
 #include "src/index_schema.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
+#include "src/indexes/scoring/scorer.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
 #include "src/indexes/text/language.h"
@@ -36,6 +36,7 @@
 #include "src/utils/scanner.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/status/status_macros.h"
+#include "vmsdk/src/utils.h"
 
 namespace valkey_search {
 
@@ -390,11 +391,8 @@ FilterParser::ParseVectorRangeQueryAttributes() {
         return absl::InvalidArgumentError(
             "$epsilon must be a valid non-negative number");
       }
-      // Sign and zero are tested by bit: under -ffast-math NaN comparisons are
-      // unreliable and std::signbit can miss the sign of -nan and -0. Zeros are
-      // rejected by the HNSW check below.
-      const uint64_t epsilon_bits = std::bit_cast<uint64_t>(epsilon_val);
-      if ((epsilon_bits >> 63) != 0 && (epsilon_bits << 1) != 0) {
+      // Zeros are rejected by the HNSW check below.
+      if (indexes::scoring::IsNegativeNonZero(epsilon_val)) {
         return absl::InvalidArgumentError(
             "$epsilon must be a valid non-negative number");
       }
@@ -481,16 +479,19 @@ FilterParser::ParseVectorRangePredicate(const std::string& attribute_alias) {
       // results retained by either algorithm.
       VMSDK_ASSIGN_OR_RETURN(auto ef_value,
                              ParseToken("]", "EF_RUNTIME argument is missing"));
-      const auto max_ef_runtime = options::GetMaxEfRuntime().GetValue();
-      uint64_t ef = 0;
-      if (!absl::SimpleAtoi(ef_value, &ef) || ef < 1 ||
-          ef > static_cast<uint64_t>(max_ef_runtime)) {
-        return absl::InvalidArgumentError(absl::StrCat(
-            "`EF_RUNTIME` must be a positive integer greater than 0 and "
-            "cannot exceed ",
-            max_ef_runtime, "."));
+      // Bounded with KNN's EF_RUNTIME check and error text. SimpleAtoi, unlike
+      // vmsdk::To, rejects trailing characters.
+      int64_t ef = 0;
+      if (!absl::SimpleAtoi(ef_value, &ef)) {
+        return absl::InvalidArgumentError(
+            absl::StrCat("`", ef_value, "` is not a valid numeric value"));
       }
-      ef_runtime = ef;
+      const auto max_ef_runtime = options::GetMaxEfRuntime().GetValue();
+      VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(ef, 1, max_ef_runtime))
+          << "`EF_RUNTIME` must be a positive integer greater than 0 and "
+             "cannot exceed "
+          << max_ef_runtime << ".";
+      ef_runtime = static_cast<size_t>(ef);
     } else if (MatchInsensitive("AS")) {
       VMSDK_ASSIGN_OR_RETURN(auto as_name,
                              ParseToken("]", "AS argument is missing"));
@@ -530,7 +531,7 @@ FilterParser::ParseVectorRangePredicate(const std::string& attribute_alias) {
           return absl::InvalidArgumentError(
               "Invalid option (Error parsing vector similarity parameters)");
         }
-        if ((std::bit_cast<uint64_t>(attrs.epsilon.value()) << 1) == 0) {
+        if (indexes::scoring::IsZero(attrs.epsilon.value())) {
           return absl::InvalidArgumentError(
               "Invalid option (Error parsing vector similarity parameters)");
         }

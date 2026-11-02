@@ -353,11 +353,64 @@ TEST_F(SearchConverterTest, VectorRangeEfRuntimeRoundTrips) {
                                           std::nullopt, std::nullopt);
     predicate.SetQueryVector(std::string(VectorToStr(query)));
     predicate.SetEfRuntime(ef);
+    auto proto = PredicateToGRPCPredicate(predicate);
+    ASSERT_NE(proto, nullptr);
+    ASSERT_EQ(proto->vector_range().has_ef_runtime(), ef.has_value());
+    if (ef.has_value()) {
+      EXPECT_EQ(proto->vector_range().ef_runtime(), *ef);
+    }
     std::unique_ptr<query::Predicate> decoded;
     RoundTripIdentifiers(predicate, &decoded);
     auto* vr = dynamic_cast<query::VectorRangePredicate*>(decoded.get());
     ASSERT_NE(vr, nullptr);
     EXPECT_EQ(vr->GetEfRuntime(), ef);
+  }
+}
+
+// The shard does not range-check a wire EF_RUNTIME, as for KNN: 0 and the
+// largest uint32 decode as given and the range search clamps them.
+TEST_F(SearchConverterTest, VectorRangeWireEfRuntimeIsClampedNotRejected) {
+  auto index = indexes::VectorHNSW<float>::Create(
+                   CreateHNSWVectorIndexProto(2, data_model::DISTANCE_METRIC_L2,
+                                              10, 16, 200, 10),
+                   "vec", data_model::ATTRIBUTE_DATA_TYPE_HASH, 0)
+                   .value();
+  VMSDK_EXPECT_OK(index_schema_->AddIndex("vec", "vec", index));
+  for (int i = 0; i < 3; ++i) {
+    const std::vector<float> vector = {0.1f * i, 0.0f};
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(
+        *index, StringInternStore::Intern(absl::StrCat("k", i)),
+        VectorToStr(vector)));
+  }
+  const std::vector<float> query = {0.0f, 0.0f};
+  for (const uint32_t ef :
+       {uint32_t{0}, std::numeric_limits<uint32_t>::max()}) {
+    SCOPED_TRACE(absl::StrCat("ef_runtime ", ef));
+    Predicate proto;
+    auto* vr = proto.mutable_vector_range();
+    vr->set_attribute_alias("vec");
+    vr->set_radius(1.0);
+    vr->set_vector_param_name("blob");
+    vr->set_query_vector(std::string(VectorToStr(query)));
+    vr->set_ef_runtime(ef);
+    absl::flat_hash_set<std::string> identifiers;
+    auto predicate =
+        GRPCPredicateToPredicate(proto, index_schema_, identifiers);
+    ASSERT_TRUE(predicate.ok()) << predicate.status();
+    auto* decoded =
+        dynamic_cast<query::VectorRangePredicate*>(predicate->get());
+    ASSERT_NE(decoded, nullptr);
+    EXPECT_EQ(decoded->GetEfRuntime(), std::optional<size_t>(ef));
+
+    UnitTestSearchParameters params;
+    params.index_schema = index_schema_;
+    params.filter_parse_results.root_predicate = std::move(predicate).value();
+    params.has_vector_range = true;
+    query::QueryContext query_ctx(*index_schema_,
+                                  indexes::scoring::GetScorer(params.scorer));
+    auto neighbors = query::SearchVectorRangeQuery(params, query_ctx);
+    ASSERT_TRUE(neighbors.ok()) << neighbors.status();
+    EXPECT_EQ(neighbors->size(), 3u);
   }
 }
 

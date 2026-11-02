@@ -1065,14 +1065,13 @@ class SearchRangeTest : public VectorIndexTest {
       }
       auto counting = std::make_shared<CountingToken>();
       cancel::Token token = counting;
-      bool truncated = !expected_truncated;
-      auto searched = index->SearchRange(
-          query, /*radius=*/2.0f, token, /*epsilon=*/0.01f,
-          /*filter=*/nullptr, /*ef_runtime=*/std::nullopt, &truncated);
+      auto searched =
+          index->SearchRange(query, {.radius = 2.0f, .epsilon = 0.01f}, token);
       ASSERT_TRUE(searched.ok()) << searched.status();
-      EXPECT_EQ(searched->size(), static_cast<size_t>(std::min(count, cap)));
-      EXPECT_LE(searched->size(), static_cast<size_t>(cap));
-      EXPECT_EQ(truncated, expected_truncated);
+      EXPECT_EQ(searched->neighbors.size(),
+                static_cast<size_t>(std::min(count, cap)));
+      EXPECT_LE(searched->neighbors.size(), static_cast<size_t>(cap));
+      EXPECT_EQ(searched->truncated, expected_truncated);
       EXPECT_EQ(counting->polls, expected_polls);
     };
 
@@ -1188,10 +1187,10 @@ class SearchRangeTest : public VectorIndexTest {
               static_cast<float>(sorted.back()) + 1.0f}) {
           SCOPED_TRACE(absl::StrCat("radius ", radius));
           auto expected = PerKeyReference(*index, query, radius);
-          auto searched = index->SearchRange(query, radius, CancelNever(),
-                                             /*epsilon=*/0.01f);
+          auto searched = index->SearchRange(
+              query, {.radius = radius, .epsilon = 0.01f}, CancelNever());
           ASSERT_TRUE(searched.ok()) << searched.status();
-          const auto found = ToMap(*searched);
+          const auto found = ToMap(searched->neighbors);
           EXPECT_EQ(found, expected);
           const double tol = Tolerance();
           for (const auto &[key, v] : live) {
@@ -1237,10 +1236,10 @@ class SearchRangeTest : public VectorIndexTest {
     const auto expected = PerKeyReference(index, query, kRadius);
     ASSERT_EQ(expected.size(), 2u);
 
-    auto searched =
-        index.SearchRange(query, kRadius, CancelNever(), /*epsilon=*/0.0f);
+    auto searched = index.SearchRange(
+        query, {.radius = kRadius, .epsilon = 0.0f}, CancelNever());
     ASSERT_TRUE(searched.ok()) << searched.status();
-    EXPECT_EQ(ToMap(*searched), expected);
+    EXPECT_EQ(ToMap(searched->neighbors), expected);
   }
 };
 
@@ -1320,14 +1319,14 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
 
     auto counting = std::make_shared<CountingToken>();
     cancel::Token token = counting;
-    bool truncated = ball <= kCap;
-    auto searched =
-        index->SearchRange(query, kRadius, token, kEpsilon,
-                           /*filter=*/nullptr, /*ef_runtime=*/10, &truncated);
+    auto searched = index->SearchRange(
+        query, {.radius = kRadius, .epsilon = kEpsilon, .ef_runtime = 10},
+        token);
     ASSERT_TRUE(searched.ok()) << searched.status();
-    EXPECT_EQ(searched->size(), static_cast<size_t>(std::min(ball, kCap)));
-    EXPECT_EQ(truncated, ball > kCap);
-    for (const auto &[key, distance] : ToMap(*searched)) {
+    EXPECT_EQ(searched->neighbors.size(),
+              static_cast<size_t>(std::min(ball, kCap)));
+    EXPECT_EQ(searched->truncated, ball > kCap);
+    for (const auto &[key, distance] : ToMap(searched->neighbors)) {
       auto it = reference.find(key);
       ASSERT_NE(it, reference.end()) << key << " is outside the radius";
       EXPECT_EQ(distance, it->second) << key;
@@ -1389,13 +1388,11 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
       query::GetNonVectorResultsFetchedLimitedCount();
   auto counting = std::make_shared<CountingToken>();
   cancel::Token token = counting;
-  bool truncated = true;
-  auto searched = index.SearchRange(query, kRadius, token, kEpsilon,
-                                    /*filter=*/nullptr,
-                                    /*ef_runtime=*/10, &truncated);
+  auto searched = index.SearchRange(
+      query, {.radius = kRadius, .epsilon = kEpsilon, .ef_runtime = 10}, token);
   ASSERT_TRUE(searched.ok()) << searched.status();
-  EXPECT_EQ(ToMap(*searched), expected);
-  EXPECT_FALSE(truncated);
+  EXPECT_EQ(ToMap(searched->neighbors), expected);
+  EXPECT_FALSE(searched->truncated);
   EXPECT_GT(counting->polls, std::size(kKeys))
       << "the full HNSW fetch did not run its bounded exact fallback";
   EXPECT_EQ(query::GetNonVectorResultsFetchedLimitedCount(), counter_before);
@@ -1416,25 +1413,44 @@ TEST_F(SearchRangeFp32, RejectsMalformedRangeInputs) {
         static_cast<indexes::VectorBase *>(flat.get())}) {
     for (const std::string &bad_query :
          {query.substr(1), query + std::string(1, '\0')}) {
-      auto result = index->SearchRange(bad_query, 1.0f, CancelNever(),
-                                       /*epsilon=*/0.01f);
+      auto result = index->SearchRange(
+          bad_query, {.radius = 1.0f, .epsilon = 0.01f}, CancelNever());
       EXPECT_EQ(result.status().code(), absl::StatusCode::kInvalidArgument)
           << "query size " << bad_query.size();
     }
     for (float radius : {kNaN, -1.0f, kNegativeInf}) {
-      auto result = index->SearchRange(query, radius, CancelNever(),
-                                       /*epsilon=*/0.01f);
+      auto result = index->SearchRange(
+          query, {.radius = radius, .epsilon = 0.01f}, CancelNever());
       EXPECT_EQ(result.status().code(), absl::StatusCode::kInvalidArgument)
           << "radius bits " << std::bit_cast<uint32_t>(radius);
     }
-    auto normalized_radius =
-        index->ValidateRangeSearchInputs(query, kPositiveInf);
+    // FLAT ignores epsilon, but both validate it: HNSW CHECKs it in the shell
+    // arithmetic, and a negative one would narrow the shell inside the ball.
+    constexpr float kNegativeNaN = std::bit_cast<float>(uint32_t{0xffc00000});
+    for (float epsilon :
+         {kNaN, kNegativeNaN, -1.0f, kNegativeInf, kPositiveInf}) {
+      auto result = index->SearchRange(
+          query, {.radius = 1.0f, .epsilon = epsilon}, CancelNever());
+      EXPECT_EQ(result.status().code(), absl::StatusCode::kInvalidArgument)
+          << "epsilon bits " << std::bit_cast<uint32_t>(epsilon);
+    }
+    constexpr float kNegativeZero = std::bit_cast<float>(uint32_t{0x80000000});
+    for (float epsilon :
+         {kNegativeZero, 0.0f, std::numeric_limits<float>::max()}) {
+      auto result = index->SearchRange(
+          query, {.radius = 1.0f, .epsilon = epsilon}, CancelNever());
+      EXPECT_TRUE(result.ok())
+          << "epsilon bits " << std::bit_cast<uint32_t>(epsilon) << ": "
+          << result.status();
+    }
+    auto normalized_radius = index->ValidateRangeSearchInputs(
+        query, {.radius = kPositiveInf, .epsilon = 0.01f});
     ASSERT_TRUE(normalized_radius.ok()) << normalized_radius.status();
     EXPECT_EQ(*normalized_radius, std::numeric_limits<float>::max());
-    auto result = index->SearchRange(query, kPositiveInf, CancelNever(),
-                                     /*epsilon=*/0.01f);
+    auto result = index->SearchRange(
+        query, {.radius = kPositiveInf, .epsilon = 0.01f}, CancelNever());
     ASSERT_TRUE(result.ok()) << result.status();
-    EXPECT_TRUE(result->empty());
+    EXPECT_TRUE(result->neighbors.empty());
   }
 }
 
@@ -1498,21 +1514,17 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
     EXPECT_LE(raw_finite->first, 1.5f);
   }
 
-  bool flat_truncated = true;
-  auto expected = flat->SearchRange(
-      query, /*radius=*/1.5f, CancelNever(), /*epsilon=*/0.01f,
-      /*filter=*/nullptr, /*ef_runtime=*/std::nullopt, &flat_truncated);
+  auto expected = flat->SearchRange(query, {.radius = 1.5f, .epsilon = 0.01f},
+                                    CancelNever());
   ASSERT_TRUE(expected.ok()) << expected.status();
-  ASSERT_EQ(expected->size(), 2u);
-  EXPECT_FALSE(flat_truncated);
+  ASSERT_EQ(expected->neighbors.size(), 2u);
+  EXPECT_FALSE(expected->truncated);
 
-  bool hnsw_truncated = true;
-  auto actual = hnsw->SearchRange(
-      query, /*radius=*/1.5f, CancelNever(), /*epsilon=*/0.01f,
-      /*filter=*/nullptr, /*ef_runtime=*/std::nullopt, &hnsw_truncated);
+  auto actual = hnsw->SearchRange(query, {.radius = 1.5f, .epsilon = 0.01f},
+                                  CancelNever());
   ASSERT_TRUE(actual.ok()) << actual.status();
-  EXPECT_EQ(ToMap(*actual), ToMap(*expected));
-  EXPECT_FALSE(hnsw_truncated);
+  EXPECT_EQ(ToMap(actual->neighbors), ToMap(expected->neighbors));
+  EXPECT_FALSE(actual->truncated);
 }
 
 // The shell calculation remains finite when either multiplication would
@@ -1532,10 +1544,10 @@ TEST_F(SearchRangeFp32, HnswRangeShellStaysFiniteAtFloatLimits) {
   ASSERT_EQ(expected.size(), static_cast<size_t>(kVectors));
   for (float epsilon : {0.01f, kMaxFloat}) {
     SCOPED_TRACE(absl::StrCat("epsilon ", epsilon));
-    auto searched =
-        index->SearchRange(query, kMaxFloat, CancelNever(), epsilon);
+    auto searched = index->SearchRange(
+        query, {.radius = kMaxFloat, .epsilon = epsilon}, CancelNever());
     ASSERT_TRUE(searched.ok()) << searched.status();
-    EXPECT_EQ(ToMap(*searched), expected);
+    EXPECT_EQ(ToMap(searched->neighbors), expected);
   }
 }
 
@@ -1576,11 +1588,12 @@ TEST_F(SearchRangeFp32, HnswRangeWalksPastInfiniteEntryPoint) {
       const auto expected = PerKeyReference(*index, query, kRadius);
       ASSERT_EQ(expected.size(), static_cast<size_t>(count - 1));
       hnswlib::labeltype start = kNone;
-      auto searched =
-          index->SearchRange(query, kRadius, CancelNever(), /*epsilon=*/0.01f,
-                             std::make_unique<FirstLabel>(start));
+      FirstLabel first_label(start);
+      auto searched = index->SearchRange(
+          query, {.radius = kRadius, .epsilon = 0.01f, .filter = &first_label},
+          CancelNever());
       ASSERT_TRUE(searched.ok()) << searched.status();
-      EXPECT_EQ(ToMap(*searched), expected);
+      EXPECT_EQ(ToMap(searched->neighbors), expected);
       // A fresh index labels keys in insertion order.
       if (start == static_cast<hnswlib::labeltype>(infinite_at)) {
         ++walks_from_infinite_key;
@@ -1625,10 +1638,10 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
 
   const int64_t counter_before =
       query::GetNonVectorResultsFetchedLimitedCount();
-  auto searched =
-      index.SearchRange(query, kRadius, CancelNever(), /*epsilon=*/0.01f);
+  auto searched = index.SearchRange(
+      query, {.radius = kRadius, .epsilon = 0.01f}, CancelNever());
   ASSERT_TRUE(searched.ok()) << searched.status();
-  EXPECT_EQ(ToMap(*searched), expected);
+  EXPECT_EQ(ToMap(searched->neighbors), expected);
   EXPECT_EQ(query::GetNonVectorResultsFetchedLimitedCount(), counter_before);
 }
 
@@ -1664,10 +1677,11 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
       const std::string vector = Bytes(RandomVector(seed));
       VMSDK_EXPECT_OK(
           testing_infra::AddVectorRecord(*index, IndexToKey(i), vector));
-      auto searched =
-          index->SearchRange(vector, 1e-3f, CancelNever(), /*epsilon=*/0.01f);
+      auto searched = index->SearchRange(
+          vector, {.radius = 1e-3f, .epsilon = 0.01f}, CancelNever());
       ASSERT_TRUE(searched.ok()) << searched.status();
-      EXPECT_EQ(ToMap(*searched), PerKeyReference(*index, vector, 1e-3f));
+      EXPECT_EQ(ToMap(searched->neighbors),
+                PerKeyReference(*index, vector, 1e-3f));
     }
   }
 }
@@ -1739,13 +1753,13 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
         const float radius =
             std::max(0.0f, (distances[k - 1] + distances[k]) / 2);
         SCOPED_TRACE(absl::StrCat("query ", q, " radius ", radius));
-        auto from_hnsw = hnsw->SearchRange(query, radius, CancelNever(),
-                                           /*epsilon=*/0.01f);
-        auto from_flat =
-            flat->SearchRange(query, radius, CancelNever(), /*epsilon=*/0.01f);
+        auto from_hnsw = hnsw->SearchRange(
+            query, {.radius = radius, .epsilon = 0.01f}, CancelNever());
+        auto from_flat = flat->SearchRange(
+            query, {.radius = radius, .epsilon = 0.01f}, CancelNever());
         ASSERT_TRUE(from_hnsw.ok()) << from_hnsw.status();
         ASSERT_TRUE(from_flat.ok()) << from_flat.status();
-        EXPECT_EQ(keys(*from_hnsw), keys(*from_flat));
+        EXPECT_EQ(keys(from_hnsw->neighbors), keys(from_flat->neighbors));
       }
     }
   }
@@ -1780,10 +1794,10 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
                   });
         const float radius = ((*knn)[k - 1].distance + (*knn)[k].distance) / 2;
         for (float epsilon : {0.0f, 0.01f}) {
-          auto searched =
-              index->SearchRange(query, radius, CancelNever(), epsilon);
+          auto searched = index->SearchRange(
+              query, {.radius = radius, .epsilon = epsilon}, CancelNever());
           ASSERT_TRUE(searched.ok()) << searched.status();
-          const auto found = ToMap(*searched);
+          const auto found = ToMap(searched->neighbors);
           for (int i = 0; i < k; ++i) {
             EXPECT_TRUE(
                 found.contains(std::string((*knn)[i].external_id->Str())))
@@ -1825,9 +1839,10 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   ASSERT_EQ(expected.size(), static_cast<size_t>(kVectors / 3));
   for (float epsilon : {0.0f, 0.01f}) {
     SCOPED_TRACE(absl::StrCat("epsilon ", epsilon));
-    auto searched = index->SearchRange(query, 0.5f, CancelNever(), epsilon);
+    auto searched = index->SearchRange(
+        query, {.radius = 0.5f, .epsilon = epsilon}, CancelNever());
     ASSERT_TRUE(searched.ok()) << searched.status();
-    EXPECT_EQ(ToMap(*searched), expected);
+    EXPECT_EQ(ToMap(searched->neighbors), expected);
   }
 }
 
@@ -1865,15 +1880,15 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   const auto expected = PerKeyReference(index, query, kRadius);
   ASSERT_EQ(expected.size(), 2u);
 
-  auto wide =
-      index.SearchRange(query, kRadius, CancelNever(), /*epsilon=*/0.6f);
+  auto wide = index.SearchRange(query, {.radius = kRadius, .epsilon = 0.6f},
+                                CancelNever());
   ASSERT_TRUE(wide.ok()) << wide.status();
-  EXPECT_EQ(ToMap(*wide), expected);
+  EXPECT_EQ(ToMap(wide->neighbors), expected);
   // Without the shell, the walk returns only the key it enters at.
-  auto narrow =
-      index.SearchRange(query, kRadius, CancelNever(), /*epsilon=*/0.0f);
+  auto narrow = index.SearchRange(query, {.radius = kRadius, .epsilon = 0.0f},
+                                  CancelNever());
   ASSERT_TRUE(narrow.ok()) << narrow.status();
-  EXPECT_EQ(narrow->size(), 1u)
+  EXPECT_EQ(narrow->neighbors.size(), 1u)
       << "with epsilon 0 the walk reached both keys: either the beam does not "
          "stop it, or its entry point is bridge rather than start (the level "
          "generator draws differently), which reaches both at any epsilon";
@@ -1956,13 +1971,14 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
         for (float radius : queries[i].second) {
           SCOPED_TRACE(
               absl::StrCat("cap ", cap, " query ", i, " radius ", radius));
-          auto from_hnsw = hnsw->SearchRange(query, radius, CancelNever(),
-                                             /*epsilon=*/0.01f);
-          auto from_flat = flat->SearchRange(query, radius, CancelNever(),
-                                             /*epsilon=*/0.01f);
+          auto from_hnsw = hnsw->SearchRange(
+              query, {.radius = radius, .epsilon = 0.01f}, CancelNever());
+          auto from_flat = flat->SearchRange(
+              query, {.radius = radius, .epsilon = 0.01f}, CancelNever());
           ASSERT_TRUE(from_hnsw.ok()) << from_hnsw.status();
           ASSERT_TRUE(from_flat.ok()) << from_flat.status();
-          EXPECT_EQ(compared_keys(*from_hnsw), compared_keys(*from_flat));
+          EXPECT_EQ(compared_keys(from_hnsw->neighbors),
+                    compared_keys(from_flat->neighbors));
         }
       }
     }
@@ -2096,13 +2112,11 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   for (int polls : {0, 1, 50, kCount}) {
     SCOPED_TRACE(absl::StrCat("polls ", polls));
     cancel::Token token = std::make_shared<CancelAfter>(polls);
-    bool truncated = true;
-    auto res = (*flat)->SearchRange(query, 1.0f, token, /*epsilon=*/0.01f,
-                                    /*filter=*/nullptr,
-                                    /*ef_runtime=*/std::nullopt, &truncated);
+    auto res =
+        (*flat)->SearchRange(query, {.radius = 1.0f, .epsilon = 0.01f}, token);
     ASSERT_TRUE(res.ok()) << res.status();
-    check(res->size(), polls);
-    EXPECT_FALSE(truncated);
+    check(res->neighbors.size(), polls);
+    EXPECT_FALSE(res->truncated);
   }
 
   auto &fetch_cap = options::GetMaxNonVectorSearchResultsFetched();
@@ -2115,13 +2129,11 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   for (int polls : {0, 1, 50, kCount}) {
     SCOPED_TRACE(absl::StrCat("scan polls ", polls));
     cancel::Token token = std::make_shared<CancelAfter>(polls);
-    bool truncated = true;
-    auto res = (*hnsw)->SearchRange(query, 2.0f, token, /*epsilon=*/0.01f,
-                                    /*filter=*/nullptr,
-                                    /*ef_runtime=*/std::nullopt, &truncated);
+    auto res =
+        (*hnsw)->SearchRange(query, {.radius = 2.0f, .epsilon = 0.01f}, token);
     ASSERT_TRUE(res.ok()) << res.status();
-    check(res->size(), polls);
-    EXPECT_FALSE(truncated);
+    check(res->neighbors.size(), polls);
+    EXPECT_FALSE(res->truncated);
   }
 }
 
@@ -2141,18 +2153,18 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   auto counting = std::make_shared<CountingToken>();
   cancel::Token token = counting;
   auto searched =
-      index->SearchRange(query, /*radius=*/1000.0f, token, /*epsilon=*/0.01f);
+      index->SearchRange(query, {.radius = 1000.0f, .epsilon = 0.01f}, token);
   ASSERT_TRUE(searched.ok()) << searched.status();
-  ASSERT_EQ(searched->size(), static_cast<size_t>(kVectors));
+  ASSERT_EQ(searched->neighbors.size(), static_cast<size_t>(kVectors));
   EXPECT_GE(counting->polls, kVectors);
 
   // Cancelled after two expansions, the walk returns the keys it has reached.
   cancel::Token early = std::make_shared<CancelAfter>(2);
   auto stopped =
-      index->SearchRange(query, /*radius=*/1000.0f, early, /*epsilon=*/0.01f);
+      index->SearchRange(query, {.radius = 1000.0f, .epsilon = 0.01f}, early);
   ASSERT_TRUE(stopped.ok()) << stopped.status();
-  EXPECT_GT(stopped->size(), 0u);
-  EXPECT_LT(stopped->size(), static_cast<size_t>(kVectors));
+  EXPECT_GT(stopped->neighbors.size(), 0u);
+  EXPECT_LT(stopped->neighbors.size(), static_cast<size_t>(kVectors));
 }
 
 // The range walk stops once neither the radius nor the ef_runtime beam admits
@@ -2183,10 +2195,10 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
     SCOPED_TRACE(absl::StrCat("query ", i));
     auto counting = std::make_shared<CountingToken>();
     cancel::Token token = counting;
-    auto searched = index->SearchRange(stored[i], /*radius=*/1e-3f, token,
-                                       /*epsilon=*/0.01f);
+    auto searched = index->SearchRange(
+        stored[i], {.radius = 1e-3f, .epsilon = 0.01f}, token);
     ASSERT_TRUE(searched.ok()) << searched.status();
-    EXPECT_EQ(searched->size(), 1u);
+    EXPECT_EQ(searched->neighbors.size(), 1u);
     EXPECT_LT(counting->polls, 4 * kEf);
   }
 }
@@ -2214,18 +2226,20 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   auto parking = std::make_shared<ParkingToken>();
   std::thread parked_scan([&]() {
     cancel::Token token = parking;
-    auto res = (*index)->SearchRange(query, 1.0f, token, /*epsilon=*/0.01f);
+    auto res =
+        (*index)->SearchRange(query, {.radius = 1.0f, .epsilon = 0.01f}, token);
     ASSERT_TRUE(res.ok()) << res.status();
-    EXPECT_EQ(res->size(), static_cast<size_t>(kCount));
+    EXPECT_EQ(res->neighbors.size(), static_cast<size_t>(kCount));
   });
   parking->parked.WaitForNotification();
 
   absl::Notification done;
   std::thread other_reader([&]() {
     cancel::Token token = std::make_shared<CancelAfter>(kCount + 1);
-    auto res = (*index)->SearchRange(query, 1.0f, token, /*epsilon=*/0.01f);
+    auto res =
+        (*index)->SearchRange(query, {.radius = 1.0f, .epsilon = 0.01f}, token);
     ASSERT_TRUE(res.ok()) << res.status();
-    EXPECT_EQ(res->size(), static_cast<size_t>(kCount));
+    EXPECT_EQ(res->neighbors.size(), static_cast<size_t>(kCount));
     EXPECT_TRUE((*index)->IsTracked(IndexToKey(0)));
     EXPECT_EQ((*index)->GetTrackedKeyCount(), static_cast<size_t>(kCount));
     done.Notify();
@@ -2720,10 +2734,11 @@ TEST_F(VectorIndexTest, SaveAndLoadFlatNewKeyGetsUnusedLabel) {
         auto knn = index->Search(query, 1, CancelNever());
         ASSERT_TRUE(knn.ok()) << knn.status();
         EXPECT_EQ(keys_of(*knn), self) << "KNN, vector " << i;
-        auto range = index->SearchRange(query, kSelfRadius, CancelNever(),
-                                        /*epsilon=*/0.01f);
+        auto range = index->SearchRange(
+            query, {.radius = kSelfRadius, .epsilon = 0.01f}, CancelNever());
         ASSERT_TRUE(range.ok()) << range.status();
-        EXPECT_EQ(keys_of(*range), self) << "SearchRange, vector " << i;
+        EXPECT_EQ(keys_of(range->neighbors), self)
+            << "SearchRange, vector " << i;
       }
     };
     VERIFY_ADD(index.get(), vectors, kLoaded, ExpectedResults::kSuccess);
@@ -3946,17 +3961,18 @@ TEST_F(VectorIndexTest, SearchRangeRadiusZeroCosineCompatibility) {
     absl::string_view query = VectorToStr(vectors[i]);
     for (VectorBase *index : {static_cast<VectorBase *>(hnsw_index->get()),
                               static_cast<VectorBase *>(flat_index->get())}) {
-      auto zero = index->SearchRange(query, /*radius=*/0.0f, CancelNever(),
-                                     /*epsilon=*/0.01f);
+      auto zero = index->SearchRange(query, {.radius = 0.0f, .epsilon = 0.01f},
+                                     CancelNever());
       ASSERT_TRUE(zero.ok()) << zero.status();
-      auto near = index->SearchRange(query, /*radius=*/1e-6f, CancelNever(),
-                                     /*epsilon=*/0.01f);
+      auto near = index->SearchRange(query, {.radius = 1e-6f, .epsilon = 0.01f},
+                                     CancelNever());
       ASSERT_TRUE(near.ok()) << near.status();
-      ASSERT_EQ(near->size(), 1u) << "missed the self-match of vector " << i;
-      EXPECT_EQ((*near)[0].external_id->Str(), IndexToKey(i)->Str());
-      const float self_distance = (*near)[0].distance;
+      ASSERT_EQ(near->neighbors.size(), 1u)
+          << "missed the self-match of vector " << i;
+      EXPECT_EQ(near->neighbors[0].external_id->Str(), IndexToKey(i)->Str());
+      const float self_distance = near->neighbors[0].distance;
       EXPECT_GE(self_distance, 0.0f);
-      EXPECT_EQ(zero->size(), self_distance == 0.0f ? 1u : 0u)
+      EXPECT_EQ(zero->neighbors.size(), self_distance == 0.0f ? 1u : 0u)
           << "vector " << i << " self distance " << self_distance;
     }
   }
@@ -4034,11 +4050,11 @@ TEST_F(VectorIndexTest, SearchRangeCosineNearDuplicatesHighDims) {
       VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(*index, IndexToKey(i),
                                                      VectorToStr(docs[i])));
     }
-    auto both = index->SearchRange(query, /*radius=*/0.01f, CancelNever(),
-                                   /*epsilon=*/0.01f);
+    auto both = index->SearchRange(query, {.radius = 0.01f, .epsilon = 0.01f},
+                                   CancelNever());
     ASSERT_TRUE(both.ok()) << both.status();
-    ASSERT_EQ(both->size(), 2u);
-    for (const auto &n : *both) {
+    ASSERT_EQ(both->neighbors.size(), 2u);
+    for (const auto &n : both->neighbors) {
       const int i = n.external_id->Str() == IndexToKey(0)->Str() ? 0 : 1;
       EXPECT_NEAR(n.distance, true_distance(i), 1e-5) << "key " << i;
     }
@@ -4049,11 +4065,11 @@ TEST_F(VectorIndexTest, SearchRangeCosineNearDuplicatesHighDims) {
       EXPECT_NEAR(**within, true_distance(i), 1e-5) << "key " << i;
     }
 
-    auto nearer = index->SearchRange(query, /*radius=*/5e-5f, CancelNever(),
-                                     /*epsilon=*/0.01f);
+    auto nearer = index->SearchRange(query, {.radius = 5e-5f, .epsilon = 0.01f},
+                                     CancelNever());
     ASSERT_TRUE(nearer.ok()) << nearer.status();
-    ASSERT_EQ(nearer->size(), 1u);
-    EXPECT_EQ((*nearer)[0].external_id->Str(), IndexToKey(0)->Str());
+    ASSERT_EQ(nearer->neighbors.size(), 1u);
+    EXPECT_EQ(nearer->neighbors[0].external_id->Str(), IndexToKey(0)->Str());
     for (int i = 0; i < 2; ++i) {
       auto within = index->IsWithinVectorRange(IndexToKey(i), query, 5e-5f);
       ASSERT_TRUE(within.ok()) << within.status();
@@ -4130,11 +4146,11 @@ TEST_F(VectorIndexTest, SearchRangeNonFiniteDistance) {
       for (const auto &c : cases) {
         absl::string_view query = VectorToStr(c.query);
         for (float radius : {0.5f, 2.0f, kMaxFloat}) {
-          auto result = index->SearchRange(query, radius, CancelNever(),
-                                           /*epsilon=*/0.01f);
+          auto result = index->SearchRange(
+              query, {.radius = radius, .epsilon = 0.01f}, CancelNever());
           ASSERT_TRUE(result.ok()) << result.status();
           absl::flat_hash_map<std::string, float> found;
-          for (const auto &n : *result) {
+          for (const auto &n : result->neighbors) {
             found[n.external_id->Str()] = n.distance;
           }
           for (int i = 0; i < static_cast<int>(docs.size()); ++i) {
@@ -4208,10 +4224,10 @@ TEST_F(VectorIndexTest, SearchRangeCosineRadiusTwoKeepsAntipodes) {
           antipode[j] = -scale * vectors[i][j];
         }
         absl::string_view query = VectorToStr(antipode);
-        auto result = index->SearchRange(query, /*radius=*/2.0f, CancelNever(),
-                                         /*epsilon=*/0.01f);
+        auto result = index->SearchRange(
+            query, {.radius = 2.0f, .epsilon = 0.01f}, CancelNever());
         ASSERT_TRUE(result.ok()) << result.status();
-        EXPECT_EQ(result->size(), static_cast<size_t>(kVecCount))
+        EXPECT_EQ(result->neighbors.size(), static_cast<size_t>(kVecCount))
             << "dim " << dim << " vector " << i;
         auto within = index->IsWithinVectorRange(IndexToKey(i), query, 2.0f);
         ASSERT_TRUE(within.ok()) << within.status();
@@ -4264,12 +4280,15 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   auto search = [&](size_t ef, bool &truncated, int &polls) {
     auto counting = std::make_shared<CountingToken>();
     cancel::Token token = counting;
-    auto searched =
-        index.SearchRange(query, kRadius, token, /*epsilon=*/0.01f,
-                          /*filter=*/nullptr, /*ef_runtime=*/ef, &truncated);
+    auto searched = index.SearchRange(
+        query, {.radius = kRadius, .epsilon = 0.01f, .ef_runtime = ef}, token);
     EXPECT_TRUE(searched.ok()) << searched.status();
     polls = counting->polls;
-    return searched.ok() ? ToMap(*searched) : std::map<std::string, float>{};
+    if (!searched.ok()) {
+      return std::map<std::string, float>{};
+    }
+    truncated = searched->truncated;
+    return ToMap(searched->neighbors);
   };
   bool truncated = true;
   int polls = 0;

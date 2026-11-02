@@ -7,7 +7,6 @@
 
 #include "src/coordinator/search_converter.h"
 
-#include <bit>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -38,16 +37,11 @@ namespace valkey_search::coordinator {
 namespace {
 
 absl::Status ValidateVectorRangeRadius(double radius) {
-  constexpr uint64_t kSignMask = uint64_t{1} << 63;
-  constexpr uint64_t kExponentMask = uint64_t{0x7ff} << 52;
-  constexpr uint64_t kMantissaMask = (uint64_t{1} << 52) - 1;
-  const uint64_t bits = std::bit_cast<uint64_t>(radius);
-  if ((bits & kExponentMask) == kExponentMask && (bits & kMantissaMask) != 0) {
+  if (indexes::scoring::IsNaN(radius)) {
     return absl::InvalidArgumentError(
         "VECTOR_RANGE radius is not a valid number");
   }
-  const uint64_t magnitude = bits & ~kSignMask;
-  if ((bits & kSignMask) != 0 && magnitude != 0) {
+  if (indexes::scoring::IsNegativeNonZero(radius)) {
     return absl::InvalidArgumentError(
         "VECTOR_RANGE radius must be non-negative");
   }
@@ -328,6 +322,9 @@ static absl::StatusOr<std::unique_ptr<query::Predicate>> BuildPredicateFromGRPC(
       if (!vr.radius_param_name().empty()) {
         vr_predicate->SetRadiusParamName(vr.radius_param_name());
       }
+      // Not range-checked, as KNN's ef is not: the shard clamps it to
+      // [1, search.max-nonvector-search-results-fetched], so a coordinator
+      // with a different search.max-vector-ef-runtime cannot fail the query.
       if (vr.has_ef_runtime()) {
         vr_predicate->SetEfRuntime(vr.ef_runtime());
       }

@@ -505,7 +505,6 @@ size_t EvaluateFilterAsPrimary(
         auto *vector_index =
             dynamic_cast<indexes::VectorBase *>(index_result.value().get());
         if (vector_index != nullptr && !vr_pred->GetQueryVector().empty()) {
-          bool range_truncated = false;
           // INKEYS is applied inside the scan so the cap counts only keys the
           // query can return. SearchVectorRangeQuery, the only caller that
           // reaches this branch, passes query_ctx.
@@ -515,18 +514,19 @@ size_t EvaluateFilterAsPrimary(
                 /*filter_predicate=*/nullptr, vector_index, *query_ctx,
                 query_operations, *index_schema, parameters.inkeys);
           }
+          const indexes::RangeQuery range{
+              .radius = static_cast<float>(vr_pred->GetRadius()),
+              .epsilon = vr_pred->GetSearchEpsilon(),
+              .filter = inkeys_filter.get(),
+              .ef_runtime = vr_pred->GetEfRuntime()};
           auto range_result = vector_index->SearchRange(
-              vr_pred->GetQueryVector(),
-              static_cast<float>(vr_pred->GetRadius()),
-              parameters.cancellation_token, vr_pred->GetSearchEpsilon(),
-              std::move(inkeys_filter), vr_pred->GetEfRuntime(),
-              &range_truncated);
+              vr_pred->GetQueryVector(), range, parameters.cancellation_token);
           if (range_result.ok()) {
             if (truncated != nullptr) {
-              *truncated = range_truncated;
+              *truncated = range_result->truncated;
             }
-            auto fetcher =
-                std::make_unique<VectorRangeFetcher>(std::move(*range_result));
+            auto fetcher = std::make_unique<VectorRangeFetcher>(
+                std::move(range_result->neighbors));
             size_t size = fetcher->Size();
             entries_fetchers.push(std::move(fetcher));
             return size;
@@ -833,7 +833,6 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
       auto *vector_index =
           dynamic_cast<indexes::VectorBase *>(index_result.value().get());
       if (vector_index != nullptr) {
-        bool truncated = false;
         // INKEYS is applied inside the scan so the cap counts only keys the
         // query can return; a later post-filter would drop in-set keys beyond
         // the first N.
@@ -844,23 +843,25 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
               parameters.filter_parse_results.query_operations,
               *parameters.index_schema, parameters.inkeys);
         }
+        const indexes::RangeQuery range{
+            .radius = static_cast<float>(vr_pred->GetRadius()),
+            .epsilon = vr_pred->GetSearchEpsilon(),
+            .filter = inkeys_filter.get(),
+            .ef_runtime = vr_pred->GetEfRuntime()};
         VMSDK_ASSIGN_OR_RETURN(
-            auto raw_neighbors,
-            vector_index->SearchRange(
-                vr_pred->GetQueryVector(),
-                static_cast<float>(vr_pred->GetRadius()),
-                parameters.cancellation_token, vr_pred->GetSearchEpsilon(),
-                std::move(inkeys_filter), vr_pred->GetEfRuntime(), &truncated));
-        if (truncated) {
+            auto range_result,
+            vector_index->SearchRange(vr_pred->GetQueryVector(), range,
+                                      parameters.cancellation_token));
+        if (range_result.truncated) {
           RecordNonVectorResultsFetchedLimited();
         }
         // Key order keeps SORTBY ties and FT.AGGREGATE working sets
         // deterministic regardless of scan order.
-        std::sort(raw_neighbors.begin(), raw_neighbors.end(),
+        std::sort(range_result.neighbors.begin(), range_result.neighbors.end(),
                   [](const indexes::Neighbor &a, const indexes::Neighbor &b) {
                     return a.external_id->Str() < b.external_id->Str();
                   });
-        return raw_neighbors;
+        return std::move(range_result.neighbors);
       }
     }
   }

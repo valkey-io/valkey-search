@@ -372,7 +372,8 @@ BuildTextIterator(const Predicate *predicate, bool negate,
 size_t EvaluateFilterAsPrimary(
     const SearchParameters &parameters, const Predicate *predicate,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
-    bool negate, float or_weight_multiplier, bool *truncated) {
+    bool negate, float or_weight_multiplier, bool *truncated,
+    QueryContext *query_ctx) {
   if (truncated != nullptr) {
     *truncated = false;
   }
@@ -416,7 +417,7 @@ size_t EvaluateFilterAsPrimary(
         bool child_truncated = false;
         size_t child_size = EvaluateFilterAsPrimary(
             parameters, child.get(), child_fetchers, negate,
-            or_weight_multiplier, &child_truncated);
+            or_weight_multiplier, &child_truncated, query_ctx);
         if (min_size == SIZE_MAX || (best_truncated && !child_truncated) ||
             (best_truncated == child_truncated && child_size < min_size)) {
           min_size = child_size;
@@ -440,9 +441,9 @@ size_t EvaluateFilterAsPrimary(
       for (const auto &child : composed_predicate->GetChildren()) {
         std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> child_fetchers;
         bool child_truncated = false;
-        size_t child_size =
-            EvaluateFilterAsPrimary(parameters, child.get(), child_fetchers,
-                                    negate, child_multiplier, &child_truncated);
+        size_t child_size = EvaluateFilterAsPrimary(
+            parameters, child.get(), child_fetchers, negate, child_multiplier,
+            &child_truncated, query_ctx);
         AppendQueue(entries_fetchers, child_fetchers);
         total_size += child_size;
         any_child_truncated |= child_truncated;
@@ -485,7 +486,7 @@ size_t EvaluateFilterAsPrimary(
     auto negate_predicate = dynamic_cast<const NegatePredicate *>(predicate);
     size_t result = EvaluateFilterAsPrimary(
         parameters, negate_predicate->GetPredicate(), entries_fetchers, !negate,
-        or_weight_multiplier, truncated);
+        or_weight_multiplier, truncated, query_ctx);
     return result;
   }
   if (predicate->GetType() == PredicateType::kVectorRange) {
@@ -505,11 +506,21 @@ size_t EvaluateFilterAsPrimary(
             dynamic_cast<indexes::VectorBase *>(index_result.value().get());
         if (vector_index != nullptr && !vr_pred->GetQueryVector().empty()) {
           bool range_truncated = false;
+          // INKEYS is applied inside the scan so the cap counts only keys the
+          // query can return. SearchVectorRangeQuery, the only caller that
+          // reaches this branch, passes query_ctx.
+          std::unique_ptr<InlineVectorFilter> inkeys_filter;
+          if (parameters.inkeys.has_value() && query_ctx != nullptr) {
+            inkeys_filter = std::make_unique<InlineVectorFilter>(
+                /*filter_predicate=*/nullptr, vector_index, *query_ctx,
+                query_operations, *index_schema, parameters.inkeys);
+          }
           auto range_result = vector_index->SearchRange(
               vr_pred->GetQueryVector(),
               static_cast<float>(vr_pred->GetRadius()),
               parameters.cancellation_token, vr_pred->GetSearchEpsilon(),
-              /*filter=*/nullptr, vr_pred->GetEfRuntime(), &range_truncated);
+              std::move(inkeys_filter), vr_pred->GetEfRuntime(),
+              &range_truncated);
           if (range_result.ok()) {
             if (truncated != nullptr) {
               *truncated = range_truncated;
@@ -823,13 +834,23 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
           dynamic_cast<indexes::VectorBase *>(index_result.value().get());
       if (vector_index != nullptr) {
         bool truncated = false;
+        // INKEYS is applied inside the scan so the cap counts only keys the
+        // query can return; a later post-filter would drop in-set keys beyond
+        // the first N.
+        std::unique_ptr<InlineVectorFilter> inkeys_filter;
+        if (parameters.inkeys.has_value()) {
+          inkeys_filter = std::make_unique<InlineVectorFilter>(
+              /*filter_predicate=*/nullptr, vector_index, query_ctx,
+              parameters.filter_parse_results.query_operations,
+              *parameters.index_schema, parameters.inkeys);
+        }
         VMSDK_ASSIGN_OR_RETURN(
             auto raw_neighbors,
             vector_index->SearchRange(
                 vr_pred->GetQueryVector(),
                 static_cast<float>(vr_pred->GetRadius()),
                 parameters.cancellation_token, vr_pred->GetSearchEpsilon(),
-                /*filter=*/nullptr, vr_pred->GetEfRuntime(), &truncated));
+                std::move(inkeys_filter), vr_pred->GetEfRuntime(), &truncated));
         if (truncated) {
           RecordNonVectorResultsFetchedLimited();
         }
@@ -859,7 +880,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
     qualified_entries = EvaluateFilterAsPrimary(
         parameters, parameters.filter_parse_results.root_predicate.get(),
         entries_fetchers, false, /*or_weight_multiplier=*/1.0f,
-        &child_truncated);
+        &child_truncated, &query_ctx);
   }
 
   const size_t max_results = static_cast<size_t>(
@@ -922,7 +943,11 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
     auto iterator = fetcher->Begin();
     while (!iterator->Done()) {
       const auto &key = **iterator;
-      if (needs_dedup && result_keys.contains(key->Str().data())) {
+      // Keys outside INKEYS are skipped before they can take a slot under the
+      // cap, as in EvaluatePrefilteredKeys.
+      if ((needs_dedup && result_keys.contains(key->Str().data())) ||
+          (parameters.inkeys.has_value() &&
+           !parameters.inkeys->contains(key->Str()))) {
         iterator->Next();
         if (parameters.cancellation_token->IsCancelled()) {
           cancelled = true;

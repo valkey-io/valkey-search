@@ -2525,3 +2525,85 @@ class TestVectorRangeEfRuntimeSweep(ValkeySearchTestCaseBase):
         for n in self.BALL_SIZES:
             assert range_means[(n, 50)] >= self.WIDE_EF_MIN_RECALL, (
                 metric, n, range_means[(n, 50)])
+
+
+# ---------------------------------------------------------------------------
+# INKEYS under the per-shard VECTOR_RANGE cap
+# ---------------------------------------------------------------------------
+# Five keys lie in the ball and the cap is 3. INKEYS restricts the query, so
+# it must be applied before the cap: each in-range key named alone in INKEYS is
+# returned, as KNN and non-vector queries do and as Redis does.
+INKEYS_CAP = 3
+INKEYS_BALL = 5
+INKEYS_SHAPES = (
+    "@{f}:[VECTOR_RANGE 1 $blob]",
+    "@{f}:[VECTOR_RANGE 1 $blob] | @t:{{none}}",
+    "@{f}:[VECTOR_RANGE 1 $blob] @t:{{a}}",
+)
+
+
+def inkeys_search(client, index, shape, field, keys):
+    """NOCONTENT VECTOR_RANGE query at the zero vector restricted to keys."""
+    result = client.execute_command(
+        "FT.SEARCH", index, shape.format(f=field),
+        "PARAMS", "2", "blob", float_to_bytes([0.0, 0.0]),
+        "INKEYS", str(len(keys)), *keys, "NOCONTENT", "DIALECT", "2",
+    )
+    assert result[0] == len(result) - 1
+    return parse_result_keys(result)
+
+
+class TestVectorRangeInkeysCap(ValkeySearchTestCaseBase):
+
+    @pytest.mark.parametrize("algo", ["FLAT", "HNSW"])
+    def test_inkeys_applies_before_range_cap(self, algo):
+        client = self.server.get_new_client()
+        assert client.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:",
+            "SCHEMA", "t", "TAG", "vec", "VECTOR", algo, "6",
+            "TYPE", "FLOAT32", "DIM", "2", "DISTANCE_METRIC", "L2",
+        ) == b"OK"
+        ball = [f"doc:{i}" for i in range(INKEYS_BALL)]
+        for i, key in enumerate(ball):
+            client.hset(key, mapping={
+                "t": "a", "vec": float_to_bytes([0.1 * (i + 1), 0.0])})
+        client.hset("doc:far", mapping={
+            "t": "a", "vec": float_to_bytes([10.0, 0.0])})
+        wait_indexed([client], ("idx",))
+        client.config_set("search.max-nonvector-search-results-fetched",
+                          str(INKEYS_CAP))
+
+        for shape in INKEYS_SHAPES:
+            assert len(inkeys_search(client, "idx", shape, "vec",
+                                     ball)) == INKEYS_CAP, shape
+            for key in ball:
+                assert inkeys_search(client, "idx", shape, "vec",
+                                     [key]) == {key}, (shape, key)
+            assert inkeys_search(client, "idx", shape, "vec",
+                                 ["doc:far"]) == set(), shape
+
+
+class TestVectorRangeInkeysCapCluster(ValkeySearchClusterTestCase):
+
+    def test_inkeys_applies_before_range_cap_on_remote_shard(self):
+        """All keys live on shard 1 and the query enters at shard 0."""
+        cluster_client = self.new_cluster_client()
+        indexes = create_range_indexes(cluster_client, "L2", dim=2)
+        primaries = [self.client_for_primary(i)
+                     for i in range(len(self.replication_groups))]
+        tag = find_local_key(primaries[1], "vr-inkeys-")
+        ball = [f"sc:{{{tag}}}:{i}" for i in range(INKEYS_BALL)]
+        for i, key in enumerate(ball):
+            primaries[1].hset(key, mapping={
+                "v": float_to_bytes([0.1 * (i + 1), 0.0])})
+        wait_indexed(primaries, indexes)
+        for primary in primaries:
+            primary.config_set(
+                "search.max-nonvector-search-results-fetched", str(INKEYS_CAP))
+
+        for index in indexes:
+            assert len(inkeys_search(primaries[0], index, INKEYS_SHAPES[0],
+                                     "v", ball)) == INKEYS_CAP, index
+            for key in ball:
+                assert inkeys_search(primaries[0], index, INKEYS_SHAPES[0],
+                                     "v", [key]) == {key}, (index, key)

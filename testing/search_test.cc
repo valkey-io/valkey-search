@@ -1887,6 +1887,117 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
             counter_before_duplicate_only);
 }
 
+// Five keys lie in the ball and the cap is 3. INKEYS must be applied before
+// the cap, as KNN and the non-vector drain do: a post-filter over the first
+// three in-range keys returns nothing for an in-set key beyond them. {v2, v3,
+// v4} is exactly the cap, which sends HNSW through its bounded exact scan.
+TEST_F(ValkeySearchTest, VectorRangeAppliesInkeysBeforeHardCap)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  constexpr int kCap = 3;
+  auto &fetch_cap = options::GetMaxNonVectorSearchResultsFetched();
+  const auto saved_cap = fetch_cap.GetValue();
+  absl::Cleanup restore = [&] {
+    VMSDK_EXPECT_OK(fetch_cap.SetValue(saved_cap));
+  };
+  VMSDK_EXPECT_OK(fetch_cap.SetValue(kCap));
+
+  for (bool hnsw : {false, true}) {
+    const std::string schema_name = hnsw ? "inkeys_hnsw" : "inkeys_flat";
+    SCOPED_TRACE(schema_name);
+    auto schema = CreateIndexSchema(schema_name).value();
+    EXPECT_CALL(*schema, GetIdentifier(::testing::_))
+        .Times(::testing::AnyNumber());
+    std::shared_ptr<indexes::VectorBase> vector_index;
+    if (hnsw) {
+      vector_index =
+          indexes::VectorHNSW<float>::Create(
+              CreateHNSWVectorIndexProto(kVectorDimensions,
+                                         data_model::DISTANCE_METRIC_L2, 10,
+                                         /*m=*/16, 200, /*ef_runtime=*/10),
+              kVectorAttributeAlias, data_model::ATTRIBUTE_DATA_TYPE_HASH, 0)
+              .value();
+    } else {
+      vector_index =
+          indexes::VectorFlat<float>::Create(
+              CreateFlatVectorIndexProto(kVectorDimensions,
+                                         data_model::DISTANCE_METRIC_L2,
+                                         /*initial_cap=*/10, /*block_size=*/10),
+              kVectorAttributeAlias, data_model::ATTRIBUTE_DATA_TYPE_HASH, 0)
+              .value();
+    }
+    VMSDK_EXPECT_OK(schema->AddIndex(kVectorAttributeAlias,
+                                     kVectorAttributeAlias, vector_index));
+    auto tag_index = std::make_shared<indexes::Tag>(
+        CreateTagIndexProto(/*separator=*/",", /*case_sensitive=*/false));
+    VMSDK_EXPECT_OK(schema->AddIndex("tag", "tag", tag_index));
+    // v0..v4 at squared distance 0.01..0.25 from the query, far at 100.
+    for (int i = 0; i <= 5; ++i) {
+      std::vector<float> v(kVectorDimensions, 0.0f);
+      v[0] = i < 5 ? 0.1f * (i + 1) : 10.0f;
+      auto key =
+          StringInternStore::Intern(i < 5 ? absl::StrCat("v", i) : "far");
+      schema->SetIndexMutationSequenceNumber(key, 0);
+      VMSDK_EXPECT_OK(
+          testing_infra::AddVectorRecord(*vector_index, key, VectorToStr(v)));
+      VMSDK_EXPECT_OK(tag_index->AddRecord(
+          key, AttributeData(vmsdk::MakeUniqueValkeyString("a"))));
+    }
+    const std::vector<float> zero(kVectorDimensions, 0.0f);
+
+    auto search = [&](absl::string_view filter,
+                      absl::flat_hash_set<std::string> inkeys) {
+      UnitTestSearchParameters params;
+      params.index_schema_name = schema_name;
+      params.index_schema = schema;
+      params.dialect = kDialect;
+      params.inkeys = std::move(inkeys);
+      TextParsingOptions parsing_options{};
+      params.filter_parse_results = std::move(
+          FilterParser(*schema, filter, parsing_options).Parse().value());
+      params.has_vector_range = true;
+      query::Predicate *vr = params.filter_parse_results.root_predicate.get();
+      if (vr->GetType() != query::PredicateType::kVectorRange) {
+        for (const auto &child :
+             static_cast<query::ComposedPredicate *>(vr)->GetChildren()) {
+          if (child->GetType() == query::PredicateType::kVectorRange) {
+            vr = child.get();
+          }
+        }
+      }
+      static_cast<query::VectorRangePredicate *>(vr)->SetQueryVector(
+          std::string(VectorToStr(zero)));
+      VMSDK_EXPECT_OK(Search(params, query::SearchMode::kLocal));
+      std::vector<std::string> keys;
+      for (const auto &neighbor : params.search_result.neighbors) {
+        keys.emplace_back(neighbor.external_id->Str());
+      }
+      return keys;
+    };
+
+    for (absl::string_view filter :
+         {"@vector:[VECTOR_RANGE 1 $q]",
+          "@vector:[VECTOR_RANGE 1 $q] | @tag:{none}",
+          "@vector:[VECTOR_RANGE 1 $q] @tag:{a}"}) {
+      SCOPED_TRACE(filter);
+      int64_t counter = query::GetNonVectorResultsFetchedLimitedCount();
+      for (const char *key : {"v0", "v4"}) {
+        EXPECT_THAT(search(filter, {key}), ::testing::ElementsAre(key));
+        EXPECT_EQ(query::GetNonVectorResultsFetchedLimitedCount(), counter)
+            << "a query with one in-range key in INKEYS is not truncated";
+      }
+      EXPECT_THAT(search(filter, {"far"}), ::testing::IsEmpty());
+      EXPECT_THAT(search(filter, {"v2", "v3", "v4"}),
+                  ::testing::ElementsAre("v2", "v3", "v4"));
+      EXPECT_EQ(query::GetNonVectorResultsFetchedLimitedCount(), counter);
+      EXPECT_THAT(search(filter, {"v0", "v1", "v3", "v4"}),
+                  ::testing::AllOf(::testing::SizeIs(kCap),
+                                   ::testing::Each(::testing::AnyOf(
+                                       "v0", "v1", "v3", "v4"))));
+      EXPECT_EQ(query::GetNonVectorResultsFetchedLimitedCount(), counter + 1);
+    }
+  }
+}
+
 class ScoreTextQueryTestBase : public ValkeySearchTest {
  protected:
   // Schema with a text field "text", a case-insensitive tag field "color", and

@@ -347,10 +347,11 @@ float ComputeRangeShell(float radius, float epsilon) {
 // beyond the shell. Results within the shell do not occupy the ef beam, so the
 // walk homes in on the query as an ef-bounded KNN search does, floods the ball,
 // and keeps an ef-wide beam around it to follow paths that leave the shell.
-// Results within the shell are kept, at most `max_results` of the nearest. An
-// eligible in-radius result beyond that limit is observed but not stored, and
-// immediately stops the current adjacency scan. A full fetch without that
-// witness still requests a bounded exact fallback from SearchRange.
+// At most `max_results` results within the radius are kept. An eligible
+// in-radius result beyond that limit is observed but not stored, and
+// immediately stops the current adjacency scan. Seeing `max_results` results
+// within the shell without that witness requests a bounded exact fallback from
+// SearchRange.
 class RangeStopCondition : public hnswlib::BaseSearchStopCondition<float> {
  public:
   RangeStopCondition(float shell, float radius, bool normalize, size_t ef,
@@ -359,7 +360,8 @@ class RangeStopCondition : public hnswlib::BaseSearchStopCondition<float> {
         radius_(radius),
         normalize_(normalize),
         ef_(std::clamp<size_t>(ef, 1, max_results)),
-        max_results_(max_results) {
+        max_results_(max_results),
+        max_fetched_(max_results + ef_) {
     CHECK(!scoring::IsNaN(shell_));
     CHECK(!scoring::IsInf(shell_));
   }
@@ -410,7 +412,7 @@ class RangeStopCondition : public hnswlib::BaseSearchStopCondition<float> {
     }
     // Once the fetch is full it stays so (later results only displace farther
     // ones), and SearchRange then resolves the N+1 witness or fallback.
-    if (num_results_ >= max_results_ &&
+    if (num_results_ >= max_fetched_ &&
         (candidate_dist > lower_bound || lower_bound <= shell_)) {
       return true;
     }
@@ -428,12 +430,12 @@ class RangeStopCondition : public hnswlib::BaseSearchStopCondition<float> {
     if (dist <= radius_) {
       return true;
     }
-    if (num_results_ >= max_results_ && dist >= lower_bound) {
+    if (num_results_ >= max_fetched_ && dist >= lower_bound) {
       return false;
     }
     return dist <= shell_ || !EfFull() || dist < nearest_.top();
   }
-  bool should_remove_extra() override { return num_results_ > max_results_; }
+  bool should_remove_extra() override { return num_results_ > max_fetched_; }
   void filter_results(
       std::vector<std::pair<float, hnswlib::labeltype>> &results) override {
     while (!results.empty() && results.back().first > shell_) {
@@ -455,6 +457,11 @@ class RangeStopCondition : public hnswlib::BaseSearchStopCondition<float> {
   const bool normalize_;
   const size_t ef_;
   const size_t max_results_;
+  // The fetch has room for ef results beyond the cap. While at most
+  // max_results_ of its results are within the shell, a full fetch holds at
+  // least ef outside it, so its farthest result is never nearer than the ef-th
+  // nearest outside the shell and the bound never narrows the beam.
+  const size_t max_fetched_;
   size_t num_results_{0};
   size_t shell_results_seen_{0};
   size_t matching_results_seen_{0};
@@ -602,9 +609,11 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
     }
     return neighbors;
   }
-  // A full shell fetch with at most N in-radius keys may have stopped before
-  // reaching more matches. Preserve the exact fallback, but bound its result
-  // collection to the same N+1 witness.
+  // Once max_candidates results within the shell were seen, the fetch bound
+  // may have stopped the walk short of more matches. Scan exactly, collecting
+  // at most N+1 matches. With exactly N results within the shell, the bound
+  // did not change the walk, but the scan is kept because it makes such a ball
+  // exact; it costs the walk plus one distance per tracked key.
   if (!cancelled && stop_condition.ShellFilled()) {
     return this->SearchRangeExhaustive(query, radius, cancellation_token,
                                        max_candidates, truncated, filter.get());

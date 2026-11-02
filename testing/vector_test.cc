@@ -4193,6 +4193,70 @@ TEST_F(VectorIndexTest, SearchRangeCosineRadiusTwoKeepsAntipodes) {
   }
 }
 
+// The results the range walk keeps within the shell do not take room from the
+// ef beam, even when they and the beam together exceed the result cap. With M
+// 2, the graph is the path start - b1 - b2 - b3 - target and start is the entry
+// point. Squared distances from the query: start and target 0.81, in the radius
+// 1; then b1 1.105, b2 1.21 and b3 1.4125, each farther than the one before, so
+// none improves the beam and only an ef of 3 admits all three. A cap of 3 holds
+// both keys in range, so the walk must reach target as under the default cap.
+TEST_F(SearchRangeFp32, HnswRangeBeamKeepsEfBesideShellResultsAtTheCap)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  auto created = VectorHNSW<float>::Create(
+      CreateHNSWVectorIndexProto(kDims, data_model::DISTANCE_METRIC_L2, 5,
+                                 /*m=*/2, 200, /*ef_runtime=*/1),
+      attribute_identifier, attribute_data_type, 0);
+  ASSERT_TRUE(created.ok()) << created.status();
+  auto &index = **created;
+  const std::pair<const char *, std::pair<float, float>> kKeys[] = {
+      {"start", {-0.9f, 0.0f}},
+      {"b1", {-0.45f, 0.95f}},
+      {"b2", {0.0f, 1.1f}},
+      {"b3", {0.45f, 1.1f}},
+      {"target", {0.9f, 0.0f}}};
+  for (const auto &[key, xy] : kKeys) {
+    std::vector<float> v(kDims, 0.0f);
+    v[0] = xy.first;
+    v[1] = xy.second;
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(
+        index, StringInternStore::Intern(key), Bytes(v)));
+  }
+  const std::string query = Bytes(std::vector<float>(kDims, 0.0f));
+  constexpr float kRadius = 1.0f;
+  const auto expected = PerKeyReference(index, query, kRadius);
+  ASSERT_EQ(expected.size(), 2u);
+
+  auto &fetch_cap = options::GetMaxNonVectorSearchResultsFetched();
+  const auto saved_cap = fetch_cap.GetValue();
+  absl::Cleanup restore = [&] {
+    VMSDK_EXPECT_OK(fetch_cap.SetValue(saved_cap));
+  };
+  auto search = [&](size_t ef, bool &truncated, int &polls) {
+    auto counting = std::make_shared<CountingToken>();
+    cancel::Token token = counting;
+    auto searched =
+        index.SearchRange(query, kRadius, token, /*epsilon=*/0.01f,
+                          /*filter=*/nullptr, /*ef_runtime=*/ef, &truncated);
+    EXPECT_TRUE(searched.ok()) << searched.status();
+    polls = counting->polls;
+    return searched.ok() ? ToMap(*searched) : std::map<std::string, float>{};
+  };
+  bool truncated = true;
+  int polls = 0;
+  EXPECT_EQ(search(/*ef=*/3, truncated, polls), expected);
+  EXPECT_EQ(search(/*ef=*/2, truncated, polls).size(), 1u)
+      << "an ef of 2 reached both keys: the walk does not start at start (the "
+         "level generator draws differently) or the beam does not stop it";
+
+  VMSDK_EXPECT_OK(fetch_cap.SetValue(3));
+  EXPECT_EQ(search(/*ef=*/3, truncated, polls), expected);
+  EXPECT_FALSE(truncated);
+  // One poll per expanded node and one after the walk; the exact scan would
+  // add one per key.
+  EXPECT_LE(polls, std::size(kKeys) + 1)
+      << "the walk entered the bounded exact fallback";
+}
+
 }  // namespace
 
 }  // namespace valkey_search::indexes

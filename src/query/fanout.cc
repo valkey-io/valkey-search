@@ -641,7 +641,11 @@ void PerformRemoteMultiSearchRequestAsync(
 // at the coordinator instead, by dropping the content after the arms report.
 void ApplyAggregateProjection(const aggregate::AggregateParameters &agg,
                               coordinator::SearchIndexPartitionRequest *req) {
-  if (agg.loadall_ || agg.return_attributes.empty()) {
+  // `LOAD *` asks for the whole record *and* whatever fields the pipeline
+  // stages named, so the flag travels on its own and the list below is sent
+  // alongside it rather than instead of it.
+  req->set_all_content(agg.all_content);
+  if (agg.return_attributes.empty()) {
     return;
   }
   req->clear_return_parameters();

@@ -262,10 +262,10 @@ void MarkContentResolved(std::vector<indexes::Neighbor> &neighbors) {
 }
 
 // Whether the resolved LOAD clause asks for any database field at all. `LOAD *`
-// asks for all of them and leaves the attribute list empty by convention, so it
-// is checked separately.
+// asks for the whole record through all_content, independently of the
+// attribute list, so it is checked separately.
 bool WantsNoDatabaseContent(const aggregate::AggregateParameters &agg) {
-  return !agg.loadall_ && agg.return_attributes.empty();
+  return !agg.all_content && agg.return_attributes.empty();
 }
 
 std::vector<query::ReturnAttribute> CopyReturnAttributes(
@@ -573,6 +573,7 @@ void FuseAndResolveLocal(std::unique_ptr<MultiSearchParameters> params) {
   if (params->agg != nullptr) {
     resolver->return_attributes =
         CopyReturnAttributes(params->agg->return_attributes);
+    resolver->all_content = params->agg->all_content;
     resolver->no_content = WantsNoDatabaseContent(*params->agg);
   }
   resolver->saved_aliases = SaveAndClearAliases(fused);

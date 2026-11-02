@@ -197,6 +197,10 @@ inline bool EnabledInVersion(int major, int minor, int patch) {
   return EnabledInVersion(vmsdk::ValkeyVersion(major, minor, patch));
 }
 
+// Set while code that already ran for this command runs again (a re-parse),
+// so its compatibility counters count the command once, not once per run.
+inline thread_local bool compat_counters_suppressed = false;
+
 }  // namespace options
 }  // namespace valkey_search
 
@@ -207,7 +211,8 @@ inline bool EnabledInVersion(int major, int minor, int patch) {
 //   * emulate-release >= major.minor.patch  -> run `fixed_fn()`
 //   * otherwise                             -> run `old_fn()` and bump the
 //                                              per-site INFO counter named
-//                                              `label`.
+//                                              `label`, unless
+//                                              compat_counters_suppressed.
 //
 // Both callables must be nullary and return the same type (void is allowed).
 // `label` must be a string literal; the INFO field is registered under the
@@ -233,6 +238,8 @@ inline bool EnabledInVersion(int major, int minor, int patch) {
     if (::valkey_search::options::EnabledInVersion(kVsCompatFixVersion)) {    \
       return (fixed_fn)();                                                    \
     }                                                                         \
-    kVsCompatFixCounter.Increment();                                          \
+    if (!::valkey_search::options::compat_counters_suppressed) {              \
+      kVsCompatFixCounter.Increment();                                        \
+    }                                                                         \
     return (old_fn)();                                                        \
   })()

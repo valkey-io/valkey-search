@@ -450,7 +450,7 @@ def start_valkey_cluster(
             )
             # Default only: callers such as the stability tests set their own
             # value, and it must not be overridden here.
-            cluster_args.setdefault("cluster-node-timeout", "10000")
+            cluster_args.setdefault("cluster-node-timeout", "15000")
             if os.path.exists(node_dir):
                 shutil.rmtree(node_dir, ignore_errors=True)
             os.makedirs(node_dir, exist_ok=True)

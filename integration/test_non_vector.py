@@ -1239,6 +1239,9 @@ class TestSortByAliasGate(ValkeySearchTestCaseDebugMode):
                 "search_compatibility-ft_search_sortby_alias", 0)
 
         knn = ["*=>[KNN 3 @v $q]", "PARAMS", "2", "q", vec]
+        # NOCONTENT fetches only the sort field (#1381), so even the legacy
+        # lookup reads the right value.
+        desc_ids = [3, b"sba:1", b"sba:3", b"sba:2"]
         for release, by_field_b, counted in (("1.2.1", True, 1),
                                              ("1.3.0", False, 0)):
             assert client.execute_command(
@@ -1247,12 +1250,10 @@ class TestSortByAliasGate(ValkeySearchTestCaseDebugMode):
                 with_c = [3, b"sba:3", b"#100", [b"c", b"100"],
                           b"sba:1", b"#500", [b"c", b"500"],
                           b"sba:2", b"#900", [b"c", b"900"]]
-                desc_ids = [3, b"sba:2", b"sba:1", b"sba:3"]
             else:
                 with_c = [3, b"sba:2", b"#5", [b"c", b"900"],
                           b"sba:3", b"#6", [b"c", b"100"],
                           b"sba:1", b"#7", [b"c", b"500"]]
-                desc_ids = [3, b"sba:1", b"sba:3", b"sba:2"]
             for query, expected in ((["@b:[0 10]"], with_c), (knn, with_c)):
                 before = legacy_uses()
                 result = client.execute_command(
@@ -1714,12 +1715,16 @@ class TestSortByAliasCluster(ValkeySearchClusterTestCaseDebugMode):
                                         ("DESC", expected_desc)):
                     base = ["FT.SEARCH", "sbc_idx", *query, "SORTBY", "b",
                             order]
+                    # NOCONTENT fetches only the sort field (#1381), so even
+                    # the legacy lookup reads the right value.
+                    corrected = by_a if order == "ASC" else list(reversed(by_a))
                     for shape in ([], ["NOCONTENT"], ["RETURN", "1", "c"]):
+                        want = corrected if shape == ["NOCONTENT"] else expected
                         before = legacy_uses()
                         result = coordinator.execute_command(
                             *base, *shape, "DIALECT", "2")
-                        assert ids(result) == expected, (release, query,
-                                                         order, shape, result)
+                        assert ids(result) == want, (release, query,
+                                                     order, shape, result)
                         assert (legacy_uses() > before) == counted, (
                             release, query, order, shape)
             result = coordinator.execute_command(

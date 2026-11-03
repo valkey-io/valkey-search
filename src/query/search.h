@@ -72,7 +72,8 @@ struct SortByKey {
 
   RecordsMap::const_iterator Find(const RecordsMap &contents) const {
     auto it = contents.find(identifier);
-    // Older cluster nodes may return JSON content under either name (#1597).
+    // A JSON whole-record fetch, and older cluster nodes (#1597), key it by
+    // alias.
     if (it == contents.end() && is_json) {
       it = contents.find(alias);
     }

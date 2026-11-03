@@ -323,11 +323,7 @@ absl::StatusOr<RecordsMap> GetContent(
       *out_recomputed_score = verification.recomputed_score;
     }
   }
-  // Every other fetch is projected below, filter or not. `content` cannot be
-  // handed back as it is: a JSON fetch keys it by views of the identifiers it
-  // was asked for, and `sortby_identifier` dies with this function. The
-  // projection also re-keys the sortby field under its alias, where sorting
-  // looks for it.
+  // Every other fetch is projected below, filter or not.
   if (fetch_whole_hash) {
     // The whole hash was fetched, and the whole hash is what was asked for.
     return content;
@@ -370,16 +366,29 @@ absl::StatusOr<RecordsMap> GetContent(
   if (parameters.sortby_parameter.has_value()) {
     auto itr = content.find(sortby_identifier);
     if (itr != content.end()) {
-      out_sortby_content.emplace(SortByContent{
-          .identifier = std::move(sortby_identifier),
-          .value = vmsdk::RetainUniqueValkeyString(itr->second.value.get())});
+      if (parameters.all_content) {
+        // A whole record is printed entry by entry, and RediSearch shows the
+        // sort field in it under its alias, so here the copy is returned
+        // content and counts toward the response limits.
+        return_content.emplace(
+            parameters.sortby_parameter->field,
+            RecordsMapValue(
+                vmsdk::MakeUniqueValkeyString(
+                    parameters.sortby_parameter->field),
+                vmsdk::RetainUniqueValkeyString(itr->second.value.get())));
+      } else {
+        out_sortby_content.emplace(SortByContent{
+            .identifier = std::move(sortby_identifier),
+            .value = vmsdk::RetainUniqueValkeyString(itr->second.value.get())});
+      }
     }
   }
 
   return return_content;
 }
 
-// A coordinator on an older release looks the sort value up by alias.
+// The legacy lookup, on this node below 1.3.0 or on an older coordinator,
+// reads the sort value by alias.
 void FileSortByContent(RecordsMap &content, SortByContent sortby_content,
                        absl::string_view alias) {
   auto owned_identifier =

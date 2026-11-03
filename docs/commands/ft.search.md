@@ -43,7 +43,7 @@ FT.SEARCH <index> <query>
 - `WITHSCORES` (Optional): Augments the output with the relevance score computed for each returned key.
 - `WITHSORTKEYS` (Optional): If `SORTBY` is specified then enabling this option augments the output with the value of the field used for sorting.
 
-Response
+## Reply
 
 The shape and contents of the response depend on the options specified in the command.
 In all cases, the response is an array with the first element being a count of the number of keys which match the query.
@@ -79,32 +79,9 @@ The response is a three element array:
 2. An array with one element per returned key. Each element is an array holding the entries for that key described above, e.g. the key name and its array of name/value pairs.
 3. The cursor id to pass to [`FT.CURSOR READ`](ft.cursor.md), or 0 if all keys were returned, in which case no cursor is created.
 
-## Reply
+## Examples
 
-Array. The first element, `[0]`, is an integer: the number of keys that match the query, which isn't affected by `LIMIT`. For a KNN vector query the count is at most K.
-
-It is followed, for each returned key in turn, by these elements:
-
-| Element  | Type           | Contents                                                                                                                                                                                                                                  |
-| :------- | :------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Key name | String         | Always present.                                                                                                                                                                                                                           |
-| Score    | String         | The key's relevance score. Present if `WITHSCORES` is specified.                                                                                                                                                                          |
-| Sort key | String or Null | The value of the `SORTBY` field, prefixed with `#` for a numeric field or `$` for a string field, or Null if the key doesn't have that field. Present if `WITHSORTKEYS` is specified and neither `NOCONTENT` nor `RETURN 0` is specified. |
-| Fields   | Array          | The key's field/value pairs. Present unless `NOCONTENT` or `RETURN 0` is specified.                                                                                                                                                       |
-
-Below `search.emulate-release` 1.3.0, the sort key prefix is always `#` and a missing sort key is replied as `#`.
-
-If `WITHCURSOR` is specified, an array of three elements:
-
-| Element | Type    | Contents                                                                                   |
-| :------ | :------ | :----------------------------------------------------------------------------------------- |
-| `[0]`   | Integer | The number of keys that match the query, as above.                                         |
-| `[1]`   | Array   | One array per returned key, holding that key's elements listed above.                      |
-| `[2]`   | Integer | The cursor id to pass to [`FT.CURSOR READ`](ft.cursor.md), or 0 if all keys were returned. |
-
-# Examples
-
-## Non-vector Queries On Hash Index
+### Non-vector Queries On Hash Index
 
 For these queries the following index and data definitions were used:
 
@@ -169,7 +146,7 @@ FT.SEARCH index @color:{bl*} RETURN 2 color city
    4) "Paris"
 ```
 
-## Non-vector Queries On JSON Index
+### Non-vector Queries On JSON Index
 
 Repeating the queries above, except the data is JSON
 
@@ -228,7 +205,7 @@ FT.SEARCH index @color:{bl*} RETURN 2 color city
    4) "London"
 ```
 
-## Pure vector search query
+### Pure vector search query
 
 For this example, assume we're building a property searching index where customers can search properties based on some features.
 Assume we have a list of properties with the following attributes:
@@ -290,14 +267,14 @@ Returned result:
     4) \x00\x00\x80?\x00\x00\x00\x00\x00\x00\x00\x00
 ```
 
-## Query On JSON Index without RETURN clause
+### Query On JSON Index without RETURN clause
 
 Simple query showing the JSON output
 
-## Simple Query with RETURN Clause
+### Simple Query with RETURN Clause
 
 Simple query showing selecting return of additional fields
 
-## Query showing NOCONTENT
+### Query showing NOCONTENT
 
-## Query showing SORTBY
+### Query showing SORTBY

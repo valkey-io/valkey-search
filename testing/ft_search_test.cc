@@ -197,6 +197,8 @@ void SendReplyTest::DoSendReplyTest(
     parameters->return_attributes.push_back(
         ToReturnAttribute(return_attribute));
   }
+  // Mirror ft_search_parser.cc: a bare FT.SEARCH asks for the whole record.
+  parameters->all_content = !no_content && input.return_attributes.empty();
   auto neighbor_count = neighbors.size();
   query::SearchResult wrapper(neighbor_count, std::move(neighbors),
                               *parameters);
@@ -608,6 +610,8 @@ void VectorRangeSendReplyTest::DoTest(
   if (input.sortby.has_value()) {
     parameters->sortby_parameter = input.sortby;
   }
+  // Mirror ft_search_parser.cc: a bare FT.SEARCH asks for the whole record.
+  parameters->all_content = !no_content && input.return_attributes.empty();
 
   auto neighbor_count = neighbors.size();
   query::SearchResult wrapper(neighbor_count, std::move(neighbors),

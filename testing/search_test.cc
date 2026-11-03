@@ -2157,10 +2157,13 @@ TEST_F(ScoreTextQueryTestBase, StemWeightScalesWholeExpansion) {
   auto schema = BuildTextTagSchema(
       {{"d1", "running", ""}, {"d2", "runs", ""}, {"d3", "run", ""}},
       /*no_stem=*/false);
-  auto plain = Score(*schema, "@text:running", "d1");
-  auto weighted = Score(*schema, "(@text:running) => { $weight: 2; }", "d1");
-  ASSERT_TRUE(plain && weighted);
-  EXPECT_NEAR(*weighted, 2.0f * *plain, 1e-3f);
+  // d1 holds the exact word and an inflection, d3 the root, d2 an inflection.
+  for (const char *doc : {"d1", "d2", "d3"}) {
+    auto plain = Score(*schema, "@text:running", doc);
+    auto weighted = Score(*schema, "(@text:running) => { $weight: 2; }", doc);
+    ASSERT_TRUE(plain && weighted) << doc;
+    EXPECT_NEAR(*weighted, 2.0f * *plain, 1e-3f) << doc;
+  }
 }
 
 // The recompute path must match the shard-side extra-step path on a STEMMED
@@ -2179,6 +2182,39 @@ TEST_F(ScoreTextQueryTestBase, StemRecomputePathMatchesExtraStep) {
   auto recomputed = Recompute(*schema, filter, "d1");
   ASSERT_TRUE(recomputed.has_value());
   EXPECT_FLOAT_EQ(*recomputed, *extra_step);
+}
+
+// A stemmed term under an OR next to a numeric filter is checked one key at a
+// time; a key holding only another form of the word must still match.
+TEST_F(ScoreTextQueryTestBase, StemInflectionMatchesInPerKeyOr) {
+  auto schema = BuildTextTagSchema(
+      {{"d1", "orange", ""}, {"d2", "listening", ""}, {"d3", "orange", ""}},
+      /*no_stem=*/false);
+  auto rating = schema->GetIndex("rating").value();
+  for (const auto &[k, v] : {std::pair{"d1", "100"}, std::pair{"d2", "100"},
+                             std::pair{"d3", "200"}}) {
+    VMSDK_EXPECT_OK(
+        rating->AddRecord(StringInternStore::Intern(k),
+                          AttributeData(vmsdk::MakeUniqueValkeyString(v))));
+  }
+  auto parsed =
+      FilterParser(*schema, "(@text:oranges | @text:listened) @rating:[97 137]",
+                   TextParsingOptions{})
+          .Parse();
+  ASSERT_TRUE(parsed.ok()) << parsed.status();
+  query::QueryContext query_ctx(
+      *schema,
+      indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std));
+  indexes::PrefilterEvaluator evaluator(query_ctx, parsed->query_operations,
+                                        *schema);
+  vmsdk::ReaderMutexLock lock(&schema->GetTimeSlicedMutex());
+  auto matches = [&](const char *k) {
+    return evaluator.Evaluate(*parsed->root_predicate,
+                              StringInternStore::Intern(k));
+  };
+  EXPECT_TRUE(matches("d1"));
+  EXPECT_TRUE(matches("d2"));
+  EXPECT_FALSE(matches("d3"));  // out of the numeric range
 }
 
 // --- Field-scoped extra-step admission ---

@@ -246,7 +246,8 @@ class TextIndexSchema {
   //
   Rax stem_tree_;
 
-  // Guards structural changes to stem_tree_.
+  // Guards structural changes to stem_tree_. Acquired before
+  // text_index_mutex_ when both are held.
   mutable absl::Mutex stem_tree_mutex_;
 
   // Per-word bucket locks for concurrent Rax target updates.

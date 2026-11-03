@@ -444,9 +444,7 @@ void RevalidateArmsBeforeFusion(MultiSearchParameters &params) {
         continue;
       }
       const RecordsMap &records = *fetched;
-      auto verification = query::VerifyFilter(
-          *arm, records, n, query_ctx,
-          /*recompute_score_override=*/!arm_score_is_distance);
+      auto verification = query::VerifyFilter(*arm, records, n, query_ctx);
       if (!verification.matches) {
         drop[j] = 1;
         ++dropped;

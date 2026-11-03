@@ -218,8 +218,9 @@ class TestStaleMatchAllScore(_ParkedMutation, ValkeySearchTestCaseDebugMode):
     def test_match_all_score_follows_the_mutation(self):
         client: Valkey = self.server.get_new_client()
         self.setup_index(client)
-        assert [r[b"__key"] for r in self._hybrid()] == [b"p:1", b"p:2",
-                                                         b"p:3"]
+        before = self._hybrid()
+        assert [r[b"__key"] for r in before] == [b"p:1", b"p:2", b"p:3"]
+        before_s = {r[b"__key"]: float(r[b"s"]) for r in before}
 
         # p:1 grows from the shortest document to the longest, so its match-all
         # score must fall from best to worst and take its rank with it. The
@@ -230,7 +231,11 @@ class TestStaleMatchAllScore(_ParkedMutation, ValkeySearchTestCaseDebugMode):
 
         parked_s = {r[b"__key"]: float(r[b"s"]) for r in parked}
         fresh_s = {r[b"__key"]: float(r[b"s"]) for r in fresh}
-        # Only the mutated doc is rescored, so only p:1 is checked.
         assert parked_s[b"p:1"] == pytest.approx(fresh_s[b"p:1"]), (
             f"stale match-all score for the mutated document: parked "
             f"{parked_s[b'p:1']} vs settled {fresh_s[b'p:1']}")
+        # Only mutated docs are rescored; the rest keep their original score.
+        for key in (b"p:2", b"p:3"):
+            assert parked_s[key] == before_s[key], (
+                f"unmutated {key!r} was rescored: parked {parked_s[key]} vs "
+                f"before {before_s[key]}")

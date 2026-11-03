@@ -1127,6 +1127,22 @@ class TestNonVector(ValkeySearchTestCaseBase):
         create_bulk_data_standalone(client)
         validate_tag_and_negate_queries(client)
 
+    def test_tag_case_only_update_keeps_membership(self):
+        """
+            A case-only update on a case-insensitive TAG field must keep the key searchable.
+        """
+        client: Valkey = self.server.get_new_client()
+        client.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "k:",
+            "SCHEMA", "color", "TAG")
+        for old, new in [("Red", "red"), ("red", "RED"), ("Red,red", "RED")]:
+            client.execute_command("HSET", "k:1", "color", old)
+            client.execute_command("HSET", "k:1", "color", new)
+            IndexingTestHelper.wait_for_indexing_complete_on_node(client, "idx")
+            result = client.execute_command(
+                "FT.SEARCH", "idx", "@color:{red}", "NOCONTENT")
+            assert result == [1, b"k:1"], f"{old} -> {new}: {result}"
+
 class TestSortKeyPrefixGate(ValkeySearchTestCaseDebugMode):
     """
         The WITHSORTKEYS sort-key prefix ('#' for NUMERIC, '$' otherwise;

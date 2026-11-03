@@ -1427,15 +1427,37 @@ void AggregateParameters::ReplyRecords(ValkeyModuleCtx *ctx, RecordSet &records,
   auto &parameters = *this;
   ValkeyModule_ReplyWithArray(ctx, 1 + count);
   ValkeyModule_ReplyWithLongLong(ctx, static_cast<long long>(count));
-  // Under the 1.3.0 `LOAD *` rule a stored field is hidden by a column of its
-  // name that holds a value; known only after the pipeline ran.
+  // RediSearch applies LOAD clauses in command order, so under the 1.3.0
+  // `LOAD *` rule a stored field shown by a later `LOAD *` replaces an earlier
+  // rename onto its name; known only after the pipeline ran.
   absl::flat_hash_map<std::string_view, std::vector<size_t>> columns_by_name;
+  absl::flat_hash_set<size_t> yields_to_stored;
   if (parameters.loadall_named_loads_ &&
       parameters.index_schema->GetAttributeDataType().ToProto() !=
           data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON) {
+    const auto score_name = vmsdk::ToStringView(parameters.score_as.get());
+    absl::flat_hash_set<std::string_view> renamed_onto;
+    for (size_t i = 0; i < parameters.loads_before_loadall_; ++i) {
+      const auto &load = parameters.loads_[i];
+      // The key and the score keep their names.
+      if (load.renamed && load.alias != load.identifier &&
+          load.alias != "__key" && load.alias != score_name) {
+        renamed_onto.insert(load.alias);
+      }
+    }
+    absl::flat_hash_set<size_t> applied;
+    for (const auto &stage : parameters.stages_) {
+      if (const auto *apply = dynamic_cast<const Apply *>(stage.get())) {
+        applied.insert(apply->name_->record_index_);
+      }
+    }
     for (size_t i = 0; i < parameters.record_info_by_index_.size(); ++i) {
-      columns_by_name[parameters.record_info_by_index_[i].output_name_]
-          .push_back(i);
+      const auto &name = parameters.record_info_by_index_[i].output_name_;
+      if (renamed_onto.contains(name) && !applied.contains(i)) {
+        yields_to_stored.insert(i);
+      } else {
+        columns_by_name[name].push_back(i);
+      }
     }
   }
 
@@ -1448,6 +1470,12 @@ void AggregateParameters::ReplyRecords(ValkeyModuleCtx *ctx, RecordSet &records,
     CHECK(rec->fields_.size() <= parameters.record_info_by_index_.size());
     for (size_t i = 0; i < rec->fields_.size(); ++i) {
       if (parameters.suppressed_reply_column_ == i) {
+        continue;
+      }
+      const auto &name = parameters.record_info_by_index_[i].output_name_;
+      if (yields_to_stored.contains(i) &&
+          std::any_of(rec->extra_fields_.begin(), rec->extra_fields_.end(),
+                      [&](const auto &field) { return field.first == name; })) {
         continue;
       }
       if (ReplyWithValue(

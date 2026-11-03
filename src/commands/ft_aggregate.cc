@@ -108,9 +108,13 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
     params.all_content = true;
   }
   // ADDSCORES may follow LOAD, so the parser cannot see that `__score` is
-  // emitted; reject a rename onto or of it here.
+  // emitted; reject a rename onto or of it here, under the same condition as
+  // the parser's other ambiguous names.
+  const bool newly_loadable =
+      std::any_of(params.loads_.begin(), params.loads_.end(),
+                  [](const LoadField &f) { return f.newly_loadable; });
   const auto score_sv = vmsdk::ToStringView(params.score_as.get());
-  if (params.addscores_ && !params.IsVectorQuery()) {
+  if (newly_loadable && params.addscores_ && !params.IsVectorQuery()) {
     for (const auto &load : params.loads_) {
       const bool touches_score =
           load.alias == score_sv || load.identifier == score_sv;

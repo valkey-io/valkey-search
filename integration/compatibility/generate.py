@@ -1143,17 +1143,15 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
             "load 3 @nosuch as t2 load *",
         ]:
             self.check(dialect, f"ft.aggregate {idx} * load 1 @__key {loads}")
-        # KNOWN DIFFERENCES. A rename onto the name of a field `LOAD *` also
-        # returns is ambiguous; Redisearch applies the clauses in command
-        # order, valkey-search lets the rename win. Excluded from comparison.
+        # A rename onto the name of a field `LOAD *` also returns: the clause
+        # written later wins.
         for loads in [
             "load * load 3 @n1 as e2",
             "load 3 @n1 as e2 load *",
             "load * load 3 @n1 as t1",
             "load * load 3 @n1 as t2 load *",
         ]:
-            self.check(dialect, f"ft.aggregate {idx} * load 1 @__key {loads}",
-                       excluded=True)
+            self.check(dialect, f"ft.aggregate {idx} * load 1 @__key {loads}")
 
     def test_aggregate_load_after_groupby(self, key_type, dialect, vector_data_type):
         # After GROUPBY each record is a group; any later LOAD is rejected,

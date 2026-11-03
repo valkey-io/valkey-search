@@ -665,12 +665,3 @@ valkey-search types the field from the schema and sorts it as a number. That
 is a deliberate difference, not a gap, so the case is not compared. JSON is
 compared normally: there the value arrives as a JSON number and both engines
 sort it numerically.
-
-### 8.2. A rename onto a stored field's name under `LOAD *` — excluded
-
-In `test_aggregate_loadall_with_named_loads`, the cases that rename a field
-onto the name of another stored field (`load * load 3 @n1 as e2`, and the same
-with `LOAD *` after the rename) are marked `excluded`. Redis applies the
-`LOAD` clauses in command order, so a later `LOAD *` returns the stored `e2`.
-valkey-search returns the renamed value wherever it has one. The command names
-one output for two fields; the rule that settles it is undocumented.

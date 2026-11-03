@@ -81,22 +81,26 @@ The response is a three element array:
 
 ## Reply
 
-Array: the first element is an integer, the number of keys that match the query, which isn't affected by `LIMIT`.
-For a KNN vector query the count is at most K.
-It's followed by these elements for each returned key, one after another:
+Array. The first element, `[0]`, is an integer: the number of keys that match the query, which isn't affected by `LIMIT`. For a KNN vector query the count is at most K.
 
-* String: the key name.
-* String: the key's relevance score, if `WITHSCORES` is specified.
-* String: the value of the `SORTBY` field, prefixed with `#` for a numeric field or `$` for a string field, if `WITHSORTKEYS` is specified and neither `NOCONTENT` nor `RETURN 0` is specified.
-  Null if the key doesn't have that field.
-  Below `search.emulate-release` 1.3.0, the prefix is always `#` and a missing value is replied as `#`.
-* Array: the key's field/value pairs, unless `NOCONTENT` or `RETURN 0` is specified.
+It is followed, for each returned key in turn, by these elements:
+
+| Element  | Type           | Contents                                                                                                                                                                                                                                  |
+| :------- | :------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Key name | String         | Always present.                                                                                                                                                                                                                           |
+| Score    | String         | The key's relevance score. Present if `WITHSCORES` is specified.                                                                                                                                                                          |
+| Sort key | String or Null | The value of the `SORTBY` field, prefixed with `#` for a numeric field or `$` for a string field, or Null if the key doesn't have that field. Present if `WITHSORTKEYS` is specified and neither `NOCONTENT` nor `RETURN 0` is specified. |
+| Fields   | Array          | The key's field/value pairs. Present unless `NOCONTENT` or `RETURN 0` is specified.                                                                                                                                                       |
+
+Below `search.emulate-release` 1.3.0, the sort key prefix is always `#` and a missing sort key is replied as `#`.
 
 If `WITHCURSOR` is specified, an array of three elements:
 
-1. Integer: the number of keys that match the query, as above.
-2. Array: one array per returned key, containing that key's elements listed above.
-3. Integer: the cursor id to pass to [`FT.CURSOR READ`](ft.cursor.md), or 0 if all keys were returned.
+| Element | Type    | Contents                                                                                   |
+| :------ | :------ | :----------------------------------------------------------------------------------------- |
+| `[0]`   | Integer | The number of keys that match the query, as above.                                         |
+| `[1]`   | Array   | One array per returned key, holding that key's elements listed above.                      |
+| `[2]`   | Integer | The cursor id to pass to [`FT.CURSOR READ`](ft.cursor.md), or 0 if all keys were returned. |
 
 # Examples
 

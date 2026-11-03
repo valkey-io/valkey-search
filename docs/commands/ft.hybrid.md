@@ -50,24 +50,31 @@ FT.HYBRID <index-name>
 
 # Result
 
-The output is an array. The first element is a scalar that repeats the number of records returned and carries no other information — in particular it is not the total number of matches. The remainder is one element per record.
+The output is an array of N+1 elements, where N is the number of records returned. The first element is N — it is not the total number of matches. Each of the remaining N elements is one record.
 
 Each record is an array of field/value pairs. Without a `LOAD` clause every record carries `__key` and the fused score, under `__score` or under the alias given by `COMBINE ... YIELD_SCORE_AS`. A `LOAD` clause replaces those two implicit columns with the fields it names: load `@__key` to keep the key, and name the fused score with `COMBINE ... YIELD_SCORE_AS` to keep it. Per-arm scores appear under their own `YIELD_SCORE_AS` aliases either way.
 
-If `WITHCURSOR` is specified the output is a two element array, as for `FT.AGGREGATE`. The first element is an array whose first element is the number of records returned, followed by one element for each returned record. The second element is the cursor id to pass to [`FT.CURSOR READ`](ft.cursor.md), or 0 if all records were returned, in which case no cursor is created. The cursor pages through the records the command would have returned without `WITHCURSOR`, so the default `LIMIT` of 10 described below still applies.
+If `WITHCURSOR` is specified the output is a two element array, as for `FT.AGGREGATE`. The first element is an array of N+1 elements: N, the number of records returned, followed by the N records. The second element is the cursor id to pass to [`FT.CURSOR READ`](ft.cursor.md), or 0 if all records were returned, in which case no cursor is created. The cursor pages through the records the command would have returned without `WITHCURSOR`, so the default `LIMIT` of 10 described below still applies.
 
 Unlike `FT.AGGREGATE`, which returns every record, `FT.HYBRID` returns at most 10 records when the command writes no `LIMIT` clause. An explicit `LIMIT` stays where it is written in the pipeline; only the default is appended, so it runs after every other stage.
 
 ## Reply
 
-Array: the first element is an integer, the number of records returned (not the total number of matches), followed by one array per record.
-Each record's array contains its field/value pairs.
+Array of N+1 elements, where N is the number of records returned:
+
+| Element         | Type    | Contents                                                                     |
+| :-------------- | :------ | :--------------------------------------------------------------------------- |
+| `[0]`           | Integer | N, the number of records that follow. It is not the total number of matches. |
+| `[1]` ... `[N]` | Array   | One record per element: its field/value pairs.                               |
+
 Without a `LOAD` clause each record carries `__key` and the fused score.
 
 If `WITHCURSOR` is specified, an array of two elements, as for [`FT.AGGREGATE`](ft.aggregate.md):
 
-1. Array: an integer, the number of records returned, followed by one array per record.
-2. Integer: the cursor id to pass to [`FT.CURSOR READ`](ft.cursor.md), or 0 if all records were returned.
+| Element | Type    | Contents                                                                                                 |
+| :------ | :------ | :------------------------------------------------------------------------------------------------------- |
+| `[0]`   | Array   | N+1 elements: `[0]` is N, the number of records returned, and `[1]` ... `[N]` are the records, as above. |
+| `[1]`   | Integer | The cursor id to pass to [`FT.CURSOR READ`](ft.cursor.md), or 0 if all records were returned.            |
 
 # Fusion methods
 

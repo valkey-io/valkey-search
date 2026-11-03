@@ -58,21 +58,27 @@ FT.AGGREGATE <index-name> <query>
 
 # Result
 
-The output is an array. The first element of this array is the number of records in the reply. The remainder of the array is one element for each record output by the final processing stage.
+The output is an array of N+1 elements, where N is the number of records output by the final processing stage. The first element is N. Each of the remaining N elements is one record.
 
 Each record is represented by an array which contains the field/value pairs of each record.
 
-If `WITHCURSOR` is specified the output is a two element array. The first element is an array whose first element is the number of records returned, followed by one element for each returned record. The second element is the cursor id to pass to [`FT.CURSOR READ`](ft.cursor.md), or 0 if all records were returned, in which case no cursor is created.
+If `WITHCURSOR` is specified the output is a two element array. The first element is an array of N+1 elements: N, the number of records returned, followed by the N records. The second element is the cursor id to pass to [`FT.CURSOR READ`](ft.cursor.md), or 0 if all records were returned, in which case no cursor is created.
 
 ## Reply
 
-Array: the first element is an integer, the number of records in the reply, followed by one array per record output by the final processing stage.
-Each record's array contains its field/value pairs.
+Array of N+1 elements, where N is the number of records output by the final processing stage:
+
+| Element         | Type    | Contents                                       |
+| :-------------- | :------ | :--------------------------------------------- |
+| `[0]`           | Integer | N, the number of records that follow.          |
+| `[1]` ... `[N]` | Array   | One record per element: its field/value pairs. |
 
 If `WITHCURSOR` is specified, an array of two elements:
 
-1. Array: an integer, the number of records returned, followed by one array per record.
-2. Integer: the cursor id to pass to [`FT.CURSOR READ`](ft.cursor.md), or 0 if all records were returned.
+| Element | Type    | Contents                                                                                                 |
+| :------ | :------ | :------------------------------------------------------------------------------------------------------- |
+| `[0]`   | Array   | N+1 elements: `[0]` is N, the number of records returned, and `[1]` ... `[N]` are the records, as above. |
+| `[1]`   | Integer | The cursor id to pass to [`FT.CURSOR READ`](ft.cursor.md), or 0 if all records were returned.            |
 
 # Processing Stages
 

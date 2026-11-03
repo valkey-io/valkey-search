@@ -19,7 +19,7 @@ A cursor is destroyed when its last row has been read, when it is deleted with `
 
 `FT.CURSOR READ` returns a two element array. The same format is used for cursors created by `FT.AGGREGATE`, `FT.HYBRID` and `FT.SEARCH`.
 
-1. An array whose first element is the number of rows returned, followed by one element for each row. A row of an `FT.AGGREGATE` or `FT.HYBRID` cursor is an array of field/value pairs. A row of an `FT.SEARCH` cursor is an array containing the elements for one key of a non-cursor `FT.SEARCH` response, i.e. the key name followed by the optional score, the optional sort key and the array of field/value pairs.
+1. An array of N+1 elements: N, the number of rows returned by this read, followed by the N rows. A row of an `FT.AGGREGATE` or `FT.HYBRID` cursor is an array of field/value pairs. A row of an `FT.SEARCH` cursor is an array containing the elements for one key of a non-cursor `FT.SEARCH` response, i.e. the key name followed by the optional score, the optional sort key and the array of field/value pairs.
 2. The cursor id to use for the next `FT.CURSOR READ`, or 0 if all rows have been returned, in which case the cursor has been destroyed.
 
 `FT.CURSOR DEL` returns OK. It applies the same checks as `FT.CURSOR READ`: `<index-name>` must name an existing index, which need not be the cursor's own, the cursor must belong to the currently selected database, and the user must have permission to read the cursor's index.
@@ -33,10 +33,16 @@ Errors:
 
 ## Reply
 
-* `FT.CURSOR READ`: an array of two elements.
-  The first is an array whose first element is an integer, the number of rows returned, followed by one array per row.
-  The second is an integer, the cursor id for the next read, or 0 if all rows have been returned.
-* `FT.CURSOR DEL`: `OK`.
+`FT.CURSOR READ`: an array of two elements:
+
+| Element | Type    | Contents                                                                                              |
+| :------ | :------ | :---------------------------------------------------------------------------------------------------- |
+| `[0]`   | Array   | N+1 elements: `[0]` is N, the number of rows returned by this read, and `[1]` ... `[N]` are the rows. |
+| `[1]`   | Integer | The cursor id for the next read, or 0 if all rows have been returned.                                 |
+
+A row of an `FT.AGGREGATE` or `FT.HYBRID` cursor is an array of field/value pairs. A row of an `FT.SEARCH` cursor is an array holding the elements for one key of a non-cursor `FT.SEARCH` reply.
+
+`FT.CURSOR DEL`: `OK`.
 
 # Example
 

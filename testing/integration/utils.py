@@ -1894,8 +1894,6 @@ def restart_node(
         cluster_args = {
             "cluster-enabled": "yes",
             "cluster-config-file": os.path.join(node_dir, "nodes.conf"),
-            # Must match the stability tests' cluster-node-timeout, the only
-            # callers of the failover path.
             "cluster-node-timeout": "15000",
         }
         

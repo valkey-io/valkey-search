@@ -54,6 +54,39 @@ The supported field types (`TEXT`, `TAG`, `NUMERIC`, `VECTOR`, and others in the
 
 In some cases Redisearch silently accepts extraneous or malformed syntax — for example, unrecognized trailing arguments or query fragments that do not conform to the documented grammar — and returns a successful reply. Valkey Search may be stricter: in these cases it may reject the input with an error rather than accept it. This stricter validation is an intentional choice and is **not** considered a compatibility bug, even though it falls on a surface that is otherwise expected to be compatible. Applications that have been relying (knowingly or not) on Redisearch's tolerant parsing will need to clean up the offending call sites as part of migration.
 
+This covers only malformed input: arguments the documented grammar does not define, or fragments that do not parse. Well-formed input follows the two notes below.
+
+### A note on well-formed input
+
+Valkey Search aims to be compatible with both Redisearch and its own earlier releases. Where the two differ, the default emulated release keeps the earlier Valkey Search behavior, for compatibility in the short term, and the newest emulated release follows Redisearch, for compatibility in the long term. This is required for well-formed, unambiguous input and best effort for ambiguous input.
+
+A well-formed, unambiguous command must return Redisearch's answer; rejecting it, or answering differently, is a compatibility bug. The only exception is a Redisearch answer that depends on something the caller does not control, such as the order in which keys are read; there Valkey Search may return any reasonable answer, which need not be deterministic either, and documents the difference.
+
+| Redisearch | Valkey Search before the change | Valkey Search after the change | Gated |
+|---|---|---|---|
+| some answer | any | Redisearch's answer — required | if a successful reply changes |
+| some answer, depending on key order or timing | any | any reasonable answer, documented as a known difference | if a successful reply changes |
+| error | error | the error, or an answer (see "New combinations of existing elements") | no |
+
+### A note on ambiguous input
+
+Some well-formed commands are ambiguous: a name in them could mean two different things. Valkey Search treats such a command as a user oversight or mistake and provides only best-effort compatibility with Redisearch, which answers them by rules it does not document. Such examples include, among many others:
+
+- `FT.SEARCH idx * RETURN 6 price AS x qty AS x`, which asks for two fields under one name;
+- `FT.AGGREGATE idx * LOAD 3 @price AS __key`, which renames a field onto the key's name.
+
+Matching Redisearch exactly on such commands is deliberately not required. Reproducing undocumented Redisearch behavior adds a lot of code for commands nobody should write, every reproduced rule creates new combinations that need rules of their own, and a guess about a rule that turns out wrong breaks replies that worked. Instead, an ambiguous command is matched on a best-effort basis, with one exception that is not best effort: **when Valkey Search and Redisearch already give the same answer, that answer must be kept.** Otherwise the result must be one of those allowed below; a result outside them is fixed if the fix is small, and documented as a known difference if not.
+
+| Redisearch | Valkey Search before the change | Valkey Search after the change | Gated |
+|---|---|---|---|
+| some answer | error | Redisearch's answer, or the error | no |
+| some answer | the same answer as Redisearch | that shared answer — required | no |
+| some answer | a different answer | Valkey Search's earlier answer, Redisearch's answer, or, if there are very good reasons, an error | Redisearch's answer or an error: yes |
+| error | error | the error | no |
+| error | some answer | Valkey Search's earlier answer, or an error | an error: yes |
+
+The principle is that a working reply is never broken without the `search.emulate-release` rules below. Where Valkey Search errored before, keeping the error is allowed, so a new feature need not invent an answer to an ambiguous command; it must not return a new answer that is wrong.
+
 ### A note on attribute ordering within returned keys
 
 Within a single document returned by `FT.SEARCH` or `FT.AGGREGATE`, the order in which attributes (attribute name / value pairs) appear is not guaranteed to match between Redisearch and Valkey Search. The _set_ of attributes returned for each document is expected to match; the sequence in which those attributes are laid out inside the reply may differ. This is **not** considered a compatibility bug.

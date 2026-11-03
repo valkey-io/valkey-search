@@ -91,13 +91,13 @@ sudo apt install -y clangd          \
 ```
 
 
-**IMPORTANT**: building valkey-search requires GCC version 12 or higher, or Clang version 16 or higher. For Debian/Ubuntu, in case a lower version of GCC is installed, you may upgrade to gcc/g++ 12 with:
+**IMPORTANT**: building valkey-search requires GCC version 13 or higher, or Clang version 16 or higher. For Debian/Ubuntu, in case a lower version of GCC is installed, you may upgrade to gcc/g++ 13 with:
 
 ```sh
 sudo apt update
-sudo apt install -y gcc-12 g++-12
-sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 1000
-sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 1000
+sudo apt install -y gcc-13 g++-13
+sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 1000
+sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 1000
 ```
 
 #### Red Hat / CentOS / Amazon Linux

@@ -2,7 +2,7 @@
 
 # install_deps.sh
 #
-# Installs the system packages and C++ toolchain (GCC >= 12) required to build
+# Installs the system packages and C++ toolchain (GCC >= 13) required to build
 # valkey-search from source. This is the single, maintained source of truth for
 # "pre-build installation activities" — it is invoked by CI (the PR search
 # benchmark workflow) and can be run directly by any developer preparing a fresh
@@ -22,7 +22,7 @@
 # distro dispatch at the bottom of this file.
 
 # Minimum GCC major version required to build valkey-search.
-GCC_MIN_VERSION=12
+GCC_MIN_VERSION=13
 
 # Constants
 RESET='\e[0m'
@@ -56,7 +56,7 @@ function install_amazon_linux() {
     ensure_gcc_amazon_linux
 }
 
-# valkey-search requires GCC >= 12
+# valkey-search requires GCC >= 13
 function ensure_gcc_amazon_linux() {
     local current_version=0
     if /usr/local/bin/gcc --version >/dev/null 2>&1; then

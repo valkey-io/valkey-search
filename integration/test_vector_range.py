@@ -2561,15 +2561,18 @@ class TestVectorRangeInkeysCap(ValkeySearchTestCaseBase):
         client = self.server.get_new_client()
         assert client.execute_command(
             "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:",
-            "SCHEMA", "t", "TAG", "vec", "VECTOR", algo, "6",
+            "SCHEMA", "t", "TAG", "body", "TEXT", "vec", "VECTOR",
+            algo, "6",
             "TYPE", "FLOAT32", "DIM", "2", "DISTANCE_METRIC", "L2",
         ) == b"OK"
         ball = [f"doc:{i}" for i in range(INKEYS_BALL)]
         for i, key in enumerate(ball):
             client.hset(key, mapping={
-                "t": "a", "vec": float_to_bytes([0.1 * (i + 1), 0.0])})
+                "t": "a", "body": "keep" if i % 2 == 0 else "drop",
+                "vec": float_to_bytes([0.1 * (i + 1), 0.0])})
         client.hset("doc:far", mapping={
             "t": "a", "vec": float_to_bytes([10.0, 0.0])})
+        client.hset("doc:tag-only", mapping={"t": "a", "body": "keep"})
         wait_indexed([client], ("idx",))
         client.config_set("search.max-nonvector-search-results-fetched",
                           str(INKEYS_CAP))
@@ -2582,6 +2585,17 @@ class TestVectorRangeInkeysCap(ValkeySearchTestCaseBase):
                                      [key]) == {key}, (shape, key)
             assert inkeys_search(client, "idx", shape, "vec",
                                  ["doc:far"]) == set(), shape
+
+        text_and = "@{f}:[VECTOR_RANGE 1 $blob] @body:keep"
+        assert inkeys_search(
+            client, "idx", text_and, "vec", ["doc:0"]) == {"doc:0"}
+        assert inkeys_search(
+            client, "idx", text_and, "vec", ["doc:1"]) == set()
+
+        negated = "-@{f}:[VECTOR_RANGE 1 $blob]"
+        assert inkeys_search(
+            client, "idx", negated, "vec",
+            ["doc:tag-only", "doc:missing"]) == {"doc:tag-only"}
 
 
 class TestVectorRangeInkeysCapCluster(ValkeySearchClusterTestCase):
@@ -2597,6 +2611,8 @@ class TestVectorRangeInkeysCapCluster(ValkeySearchClusterTestCase):
         for i, key in enumerate(ball):
             primaries[1].hset(key, mapping={
                 "v": float_to_bytes([0.1 * (i + 1), 0.0])})
+        far = f"sc:{{{tag}}}:far"
+        primaries[1].hset(far, mapping={"v": float_to_bytes([10.0, 0.0])})
         wait_indexed(primaries, indexes)
         for primary in primaries:
             primary.config_set(
@@ -2608,3 +2624,6 @@ class TestVectorRangeInkeysCapCluster(ValkeySearchClusterTestCase):
             for key in ball:
                 assert inkeys_search(primaries[0], index, INKEYS_SHAPES[0],
                                      "v", [key]) == {key}, (index, key)
+            assert inkeys_search(
+                primaries[0], index, "-@{f}:[VECTOR_RANGE 1 $blob]", "v",
+                [far, "sc:missing"]) == {far}, index

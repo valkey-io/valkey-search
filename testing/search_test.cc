@@ -1908,7 +1908,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
 // Five keys lie in the ball and the cap is 3. INKEYS must be applied before
 // the cap, as KNN and the non-vector drain do: a post-filter over the first
 // three in-range keys returns nothing for an in-set key beyond them. {v2, v3,
-// v4} is exactly the cap, which sends HNSW through its bounded exact scan.
+// v4} is exactly the cap and verifies that direct checks do not truncate it.
 TEST_F(ValkeySearchTest, VectorRangeAppliesInkeysBeforeHardCap)
 ABSL_NO_THREAD_SAFETY_ANALYSIS {
   constexpr int kCap = 3;
@@ -1960,15 +1960,40 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
       VMSDK_EXPECT_OK(tag_index->AddRecord(
           key, AttributeData(vmsdk::MakeUniqueValkeyString("a"))));
     }
+    // These keys are outside the radius. Sparse INKEYS evaluation must not
+    // walk or scan them before checking the one requested key.
+    constexpr int kExtraKeys = 300;
+    for (int i = 0; i < kExtraKeys; ++i) {
+      std::vector<float> v(kVectorDimensions, 0.0f);
+      v[0] = 20.0f + static_cast<float>(i);
+      auto key = StringInternStore::Intern(absl::StrCat("extra", i));
+      schema->SetIndexMutationSequenceNumber(key, 0);
+      VMSDK_EXPECT_OK(
+          testing_infra::AddVectorRecord(*vector_index, key, VectorToStr(v)));
+      VMSDK_EXPECT_OK(tag_index->AddRecord(
+          key, AttributeData(vmsdk::MakeUniqueValkeyString("a"))));
+    }
     const std::vector<float> zero(kVectorDimensions, 0.0f);
 
+    class CountingToken : public cancel::Base {
+     public:
+      bool IsCancelled() override {
+        ++polls;
+        return false;
+      }
+      void Cancel() override {}
+      int polls{0};
+    };
     auto search = [&](absl::string_view filter,
-                      absl::flat_hash_set<std::string> inkeys) {
+                      absl::flat_hash_set<std::string> inkeys,
+                      int *polls = nullptr) {
+      auto counting = std::make_shared<CountingToken>();
       UnitTestSearchParameters params;
       params.index_schema_name = schema_name;
       params.index_schema = schema;
       params.dialect = kDialect;
       params.inkeys = std::move(inkeys);
+      params.cancellation_token = counting;
       TextParsingOptions parsing_options{};
       params.filter_parse_results = std::move(
           FilterParser(*schema, filter, parsing_options).Parse().value());
@@ -1989,6 +2014,9 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
       for (const auto &neighbor : params.search_result.neighbors) {
         keys.emplace_back(neighbor.external_id->Str());
       }
+      if (polls != nullptr) {
+        *polls = counting->polls;
+      }
       return keys;
     };
 
@@ -1999,7 +2027,9 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
       SCOPED_TRACE(filter);
       int64_t counter = query::GetVectorRangeResultsFetchedLimitedCount();
       for (const char *key : {"v0", "v4"}) {
-        EXPECT_THAT(search(filter, {key}), ::testing::ElementsAre(key));
+        int polls = 0;
+        EXPECT_THAT(search(filter, {key}, &polls), ::testing::ElementsAre(key));
+        EXPECT_LE(polls, 3) << "sparse INKEYS scanned unrelated index keys";
         EXPECT_EQ(query::GetVectorRangeResultsFetchedLimitedCount(), counter)
             << "a query with one in-range key in INKEYS is not truncated";
       }

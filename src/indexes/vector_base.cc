@@ -149,10 +149,12 @@ std::vector<char> NormalizeVector(absl::string_view record,
 
 PrefilterEvaluator::PrefilterEvaluator(query::QueryContext &query_ctx,
                                        QueryOperations query_operations,
-                                       const IndexSchema &index_schema)
+                                       const IndexSchema &index_schema,
+                                       bool source_resolves_text)
     : query::Evaluator(query_operations),
       query_ctx_(query_ctx),
-      index_schema_(index_schema) {}
+      index_schema_(index_schema),
+      source_resolves_text_(source_resolves_text) {}
 
 bool PrefilterEvaluator::Evaluate(const query::Predicate &predicate,
                                   const InternedStringPtr &key) {

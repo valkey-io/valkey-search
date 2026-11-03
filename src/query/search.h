@@ -426,8 +426,7 @@ class Predicate;
 size_t EvaluateFilterAsPrimary(
     const SearchParameters &parameters, const Predicate *predicate,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
-    bool negate, float or_weight_multiplier = 1.0f, bool *truncated = nullptr,
-    QueryContext *query_ctx = nullptr);
+    bool negate, float or_weight_multiplier = 1.0f, bool *truncated = nullptr);
 
 // Defined in the header to support testing
 absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
@@ -436,10 +435,12 @@ absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
 
 // Vector Range query (no KNN): returns the keys matching the filter, with the
 // VR distance in Neighbor::distance, in key order. A query that is only the VR
-// predicate is answered by VectorBase::SearchRange; a compound one evaluates
-// the full predicate tree per fetched key.
+// predicate and has no INKEYS delegates to VectorBase::SearchRange. INKEYS is
+// evaluated directly as the complete candidate set; other compound queries
+// evaluate the full predicate tree per fetched key.
 absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
-    const SearchParameters &parameters, QueryContext &query_ctx);
+    const SearchParameters &parameters, QueryContext &query_ctx)
+    ABSL_SHARED_LOCKS_REQUIRED(parameters.index_schema->GetTimeSlicedMutex());
 
 std::priority_queue<std::pair<float, hnswlib::labeltype>>
 CalcBestMatchingPrefilteredKeys(

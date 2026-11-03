@@ -763,7 +763,8 @@ class PrefilterEvaluator : public query::Evaluator {
   // Built once per query and reused across candidates.
   PrefilterEvaluator(query::QueryContext &query_ctx,
                      QueryOperations query_operations,
-                     const IndexSchema &index_schema);
+                     const IndexSchema &index_schema,
+                     bool source_resolves_text = true);
   bool Evaluate(const query::Predicate &predicate,
                 const InternedStringPtr &key);
   // Like Evaluate(), but returns the full EvaluationResult so that callers
@@ -775,7 +776,7 @@ class PrefilterEvaluator : public query::Evaluator {
     CHECK(key_);
     return *key_;
   }
-  bool IsPrefilterEvaluator() const override { return true; }
+  bool IsPrefilterEvaluator() const override { return source_resolves_text_; }
 
  private:
   query::EvaluationResult EvaluateTags(
@@ -792,6 +793,7 @@ class PrefilterEvaluator : public query::Evaluator {
 
   query::QueryContext &query_ctx_;
   const IndexSchema &index_schema_;
+  const bool source_resolves_text_;
   const InternedStringPtr *key_{nullptr};
   const text::TextIndex *per_key_index_{nullptr};
   bool per_key_index_fetched_{false};

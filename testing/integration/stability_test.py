@@ -719,20 +719,16 @@ class StabilityTests(parameterized.TestCase):
         # A wedged node never dies, so the termination check below cannot see
         # it. Checked before the memtier and background-task assertions, which
         # only see the errors it causes.
+        # Nodes still down after an intentional failover are terminated and
+        # skipped, so a restarted failover node is checked like any other.
         unresponsive = self.valkey_cluster_under_test.get_unresponsive_servers()
-        unexpected_unresponsive = [
-            port
-            for port in unresponsive
-            if port not in results.intentionally_failed_ports
-        ]
-        if unexpected_unresponsive:
+        if unresponsive:
             self.fail(
                 "Valkey servers stopped responding to PING but are still "
-                f"running, ports: {unexpected_unresponsive}. This is a hang, "
+                f"running, ports: {unresponsive}. This is a hang, "
                 "not a crash, so there is no bug report: check the last "
                 "main-thread line in each per-node *_stdout.txt (the "
-                "[THREAD_MNG] heartbeat is a different thread). "
-                f"Intentionally failed ports: {results.intentionally_failed_ports}"
+                "[THREAD_MNG] heartbeat is a different thread)."
             )
 
         # Check for unexpectedly terminated servers

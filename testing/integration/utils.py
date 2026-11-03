@@ -448,8 +448,8 @@ def start_valkey_cluster(
             cluster_args["cluster-config-file"] = os.path.join(
                 node_dir, "nodes.conf"
             )
-            # setdefault: this used to overwrite the caller's value, so the
-            # cluster never ran the timeout the test asked for.
+            # Default only: callers such as the stability tests set their own
+            # value, and it must not be overridden here.
             cluster_args.setdefault("cluster-node-timeout", "10000")
             if os.path.exists(node_dir):
                 shutil.rmtree(node_dir, ignore_errors=True)
@@ -1894,7 +1894,9 @@ def restart_node(
         cluster_args = {
             "cluster-enabled": "yes",
             "cluster-config-file": os.path.join(node_dir, "nodes.conf"),
-            "cluster-node-timeout": "10000"  # Use same timeout as initial startup (not 45000)
+            # Must match the stability tests' cluster-node-timeout, the only
+            # callers of the failover path.
+            "cluster-node-timeout": "15000",
         }
         
         # Reuse start_valkey_process to ensure identical configuration

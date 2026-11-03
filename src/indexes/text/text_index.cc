@@ -31,6 +31,7 @@
 #include "rax/rax.h"
 #include "src/valkey_search_options.h"
 #include "string_interning.h"
+#include "vmsdk/src/debug.h"
 namespace valkey_search::indexes::text {
 
 namespace {
@@ -404,6 +405,7 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
     iter.Next();
   }
 
+  BACKGROUND_PAUSEPOINT("delete_key_data_stem_update");
   if ((!empty_words.empty() || !stem_roots.empty()) &&
       (stem_text_field_mask_ != 0u)) {
     absl::WriterMutexLock stem_lock(&stem_tree_mutex_);
@@ -427,6 +429,13 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
           stem_filter ? stem_filter->GetStemRoot(word, min_stem_size_, unit)
                       : word;
       if (stem != word) {
+        {
+          // Another key may have re-added the word concurrently; keep it.
+          absl::ReaderMutexLock tree_read(&text_index_mutex_);
+          if (text_index_->GetPrefix().FindPostingsTarget(word)) {
+            continue;
+          }
+        }
         auto stem_remove_fn = CreateSimpleTargetMutateFn<StemParents>(
             [&word](InvasivePtr<StemParents> existing) {
               // The term may not exist in the stem tree if it was only present

@@ -9,7 +9,7 @@ extend-exclude = [
     "src/indexes/text/languages/**",
     "testing/snowball_language_test.cc",
     "testing/snowball_stem_test.cc",
-    "integration/compatibility/data_sets.py",
+    "integration/compatibility/**",
     "rfc/multi-language-support.md"
 ]
 

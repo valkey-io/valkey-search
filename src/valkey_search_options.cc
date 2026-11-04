@@ -84,6 +84,17 @@ static auto cursor_max_count =
                           INT64_MAX)              // max
         .Build();
 
+/// Register the "--max-regex-pattern-bytes" flag. The longest REGEX pattern
+/// (in bytes) accepted by FT._LIST.
+constexpr absl::string_view kMaxRegexPatternBytesConfig{
+    "max-regex-pattern-bytes"};
+static auto max_regex_pattern_bytes =
+    config::NumberBuilder(kMaxRegexPatternBytesConfig,  // name
+                          1024,                         // default
+                          1,                            // min
+                          1 << 20)                      // max
+        .Build();
+
 /// Register the "--cursor-max-idle-ms" flag. The largest MAXIDLE accepted by
 /// WITHCURSOR.
 constexpr absl::string_view kCursorMaxIdleMsConfig{"cursor-max-idle-ms"};
@@ -746,6 +757,10 @@ vmsdk::config::Number &GetMaxTermExpansions() {
 
 vmsdk::config::Number &GetCursorMaxCount() {
   return dynamic_cast<vmsdk::config::Number &>(*cursor_max_count);
+}
+
+vmsdk::config::Number &GetMaxRegexPatternBytes() {
+  return dynamic_cast<vmsdk::config::Number &>(*max_regex_pattern_bytes);
 }
 
 vmsdk::config::Number &GetCursorMaxIdleMs() {

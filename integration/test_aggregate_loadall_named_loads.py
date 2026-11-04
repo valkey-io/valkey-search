@@ -74,6 +74,18 @@ class TestAggregateLoadallNamedLoads(ValkeySearchTestCaseDebugMode):
         for loads, _, fixed in CASES:
             assert self._run(client, *loads, *SORTBY) == (fixed, (0, 0)), loads
 
+    def test_ambiguous_name_keeps_the_reply_without_the_rule(self):
+        # Two entries claim `x`, so the stored fields are not added beside
+        # them; the reply is the one 1.3.0 gave before this rule.
+        client = self._client("1.3.0")
+        reply = client.execute_command(
+            "FT.AGGREGATE", "idx", "*", "LOAD", "*", "LOAD", "3", "@n", "AS",
+            "x", "LOAD", "3", "@g", "AS", "x", *SORTBY)
+        rows = [sorted(zip(r[::2], r[1::2])) for r in reply[1:]]
+        assert rows == [
+            sorted([(b"x", b"1"), (b"x", b"a"), (b"extra", b"e1")]),
+            sorted([(b"x", b"2"), (b"x", b"b"), (b"extra", b"e2")])]
+
     def test_plain_named_load_is_not_counted(self):
         # Without a rename or `__key` the reply is the same at every release.
         client = self._client("1.0.0")

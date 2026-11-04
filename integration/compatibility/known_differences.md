@@ -323,6 +323,26 @@ Redis 8 rejects a `$param` inside an APPLY, FILTER or SORTBY expression
 number is a number, any other is a string, as the text would be if written in
 place unquoted.
 
+### 1.18 A stage reading a renamed name that `LOAD *` also loads
+
+When a `LOAD ... AS` rename takes the name of a stored field and a later
+`LOAD *` loads that field, Redis applies the clauses in command order: stages
+after the `LOAD *` see the stored field. valkey-search shows the stored field
+in the reply, but stages still read the renamed value.
+
+```
+HSET d:1 price 10 p1 99
+FT.AGGREGATE idx * LOAD 3 @price AS p1 LOAD * APPLY @p1 AS p2
+
+Redis:          p1 99  p2 99  price 10
+valkey-search:  p1 99  p2 10  price 10
+```
+
+The rename and the original field share one column, so making stages see the
+stored field would change what `@price` reads too. The command uses one name
+for two fields, so this is best effort under "A note on ambiguous input" in
+`COMPATIBILITY.md`.
+
 ## 2. Where the two reference engines disagree
 
 These are not valkey-search defects. They are places where `redis:latest` and

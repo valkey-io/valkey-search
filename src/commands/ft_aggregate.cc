@@ -76,12 +76,15 @@ absl::Status ResolveLoadsUnderLoadAll(AggregateParameters &params) {
   if (!reply_differs) {
     return absl::OkStatus();
   }
-  params.loadall_named_loads_ = VALKEY_SEARCH_COMPATIBILITY_FIX(
+  const bool fixed = VALKEY_SEARCH_COMPATIBILITY_FIX(
       1, 3, 0, "ft_aggregate_loadall_named_loads", [] { return true; },
       [] { return false; });
-  if (!params.loadall_named_loads_) {
+  if (!fixed) {
     return absl::OkStatus();
   }
+  // An ambiguous command keeps the reply 1.3.0 gave before this rule (see
+  // COMPATIBILITY.md), which already included `__key`.
+  params.loadall_named_loads_ = params.ambiguous_load_name_.ok();
   for (const auto &load : params.loads_) {
     if (!load.after_groupby && load.identifier == "__key") {
       params.load_key = true;

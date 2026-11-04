@@ -4,6 +4,10 @@ This fork explores the managed-index alternative to #1568 / #1587 and the
 dense+sparse RRF use case discussed in #1601. It is a prototype, not a release
 or a supported migration path for existing deployments.
 
+This upstream base requires Valkey **9.1.0 or newer** (tested with 9.1.2).
+It cannot replace the standalone C module on a Valkey 9.0.x deployment without
+upgrading the server and qualifying the full Search module.
+
 ```text
 FT.CREATE items ON HASH PREFIX 1 item: SCHEMA embedding SPARSE region TAG
 HSET item:1 embedding <blob> region 77

@@ -180,10 +180,10 @@ DEV_INTEGER_COUNTER(query, predicate_revalidation);
 FilterVerification VerifyFilter(const query::SearchParameters &parameters,
                                 const RecordsMap &records,
                                 const indexes::Neighbor &n,
-                                std::unique_ptr<QueryContext> &query_ctx,
-                                std::optional<bool> recompute_score_override) {
+                                std::unique_ptr<QueryContext> &query_ctx) {
   auto predicate = parameters.filter_parse_results.root_predicate.get();
-  if (predicate == nullptr) {
+  // Match-all has no filter to recheck, but its score can still change.
+  if (predicate == nullptr && !parameters.ScoreIsRelevance()) {
     return {true, std::nullopt};
   }
   auto db_seq =
@@ -213,17 +213,15 @@ FilterVerification VerifyFilter(const query::SearchParameters &parameters,
   PredicateEvaluator evaluator(records, n.external_id, *query_ctx,
                                parameters.filter_parse_results.query_operations,
                                index_schema);
-  EvaluationResult result = predicate->Evaluate(evaluator);
+  // A null predicate is a match-all query: every document matches.
+  EvaluationResult result = predicate != nullptr
+                                ? predicate->Evaluate(evaluator)
+                                : EvaluationResult(true);
 
   // The document changed between shard-side scoring and this content fetch, so
   // its carried Neighbor.score is stale; recompute it through the same Scorer
-  // seam ScoreTextQuery uses. A query whose Neighbor.score is a KNN distance
-  // rather than a relevance score is skipped: by default that means a vector
-  // query without a scored predicate (or with vector_score_only), and FT.HYBRID
-  // overrides the choice per arm.
-  const bool recompute_score =
-      recompute_score_override.value_or(parameters.ScoreIsRelevance());
-  if (!result.matches || !recompute_score) {
+  // seam ScoreTextQuery uses.
+  if (!result.matches || !parameters.ScoreIsRelevance()) {
     return {result.matches, std::nullopt};
   }
   // nullopt (empty corpus / non-match) degrades to 0 rather than dropping the

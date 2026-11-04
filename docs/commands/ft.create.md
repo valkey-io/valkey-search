@@ -16,6 +16,7 @@ FT.CREATE <index-name>
     [SCORE_FIELD <field_name>]
     [LANGUAGE <language>]
     [SKIPINITIALSCAN]
+    [QUERY_TIMEOUT <timeout>]
     [MINSTEMSIZE <min_stem_size>]
     [WITHOFFSETS | NOOFFSETS]
     [NOHL]
@@ -59,6 +60,8 @@ FT.CREATE <index-name>
 - `PUNCTUATION <punctuation>` (optional): A string of characters that define the separation points between words, in addition to whitespace characters (spaces, tabs, newlines, carriage returns, and control characters) which always break words. Each character, including a multi-byte one such as `—`, is matched as a whole Unicode code point; before 1.3 each byte of a multi-byte character was matched separately, which also split unrelated characters sharing those bytes. The default value depends on `LANGUAGE`; for English it is `,.<>{}[]"':;!@#$%^&\*()-+=~/\|?`.
 
 - `SKIPINITIALSCAN` (optional): If specified, this option skips the normal backfill operation for an index. If this option is specified, pre-existing keys which match the `PREFIX` clause will not be loaded into the index during a backfill operation. This clause has no effect on processing of key mutations _after_ an index is created, i.e., keys which are mutated after an index is created and satisfy the data type and `PREFIX` clause will be inserted into that index.
+
+- `QUERY_TIMEOUT <timeout>` (optional): The default timeout, in milliseconds, for `FT.SEARCH`, `FT.AGGREGATE` and `FT.HYBRID` on this index. It must be between 1 and 60000. A query's own `TIMEOUT` argument takes precedence. If this option is omitted, `search.default-timeout-ms` is used.
 
 - `SCORE` (optional): Sets the default document score used for text search ranking. The value must be between 0.0 and 1.0. When `SCORE_FIELD` is configured, this value is used as the fallback if a document's score field is missing or cannot be parsed. (default: 1.0)
 

@@ -10,6 +10,7 @@ import logging
 from typing import Any, Union
 from valkeytestframework.util import waiters
 import threading
+import pytest
 import time
 from utils import pausepoint_hit, wait_for_background_tasks
 
@@ -285,6 +286,50 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
             self, "search_entries_fetcher", setup,
             ["FT.SEARCH", "idx", "@tag:{value1}", "TIMEOUT", "5000"]
         )
+
+    def _search_while_paused(self, client, search_cmd):
+        """Runs search_cmd while the entries fetcher is paused and returns the
+        error message and elapsed seconds. The worker either parks at the
+        pausepoint or is cancelled before reaching it; either way the client
+        gets the timeout reply, so the pausepoint hit is not asserted."""
+        client.execute_command("FT._DEBUG PAUSEPOINT SET search_entries_fetcher")
+        try:
+            start = time.monotonic()
+            with pytest.raises(ResponseError) as e:
+                client.execute_command(*search_cmd)
+            elapsed = time.monotonic() - start
+        finally:
+            client.execute_command(
+                "FT._DEBUG PAUSEPOINT RESET search_entries_fetcher")
+        return str(e.value).lower(), elapsed
+
+    @wait_for_background_tasks()
+    def test_index_query_timeout_used_without_query_timeout(self):
+        """Index-level QUERY_TIMEOUT is used when FT.SEARCH has no TIMEOUT."""
+        client = self.server.get_new_client()
+        client.execute_command("CONFIG SET search.default-timeout-ms 60000")
+        client.execute_command(
+            "FT.CREATE idx ON HASH PREFIX 1 doc: QUERY_TIMEOUT 50 SCHEMA tag TAG")
+        client.hset("doc:1", "tag", "value1")
+
+        error, elapsed = self._search_while_paused(
+            client, ["FT.SEARCH", "idx", "@tag:{value1}"])
+        assert "timeout" in error
+        # Must be the 50ms index timeout, not the 60s global default.
+        assert elapsed < 10
+
+    @wait_for_background_tasks()
+    def test_query_timeout_overrides_index_query_timeout(self):
+        """FT.SEARCH TIMEOUT takes precedence over index-level QUERY_TIMEOUT."""
+        client = self.server.get_new_client()
+        client.execute_command(
+            "FT.CREATE idx ON HASH PREFIX 1 doc: QUERY_TIMEOUT 60000 SCHEMA tag TAG")
+        client.hset("doc:1", "tag", "value1")
+
+        error, elapsed = self._search_while_paused(
+            client, ["FT.SEARCH", "idx", "@tag:{value1}", "TIMEOUT", "50"])
+        assert "timeout" in error
+        assert elapsed < 10
 
     @wait_for_background_tasks()
     def test_pausepoint_prefilter_eval(self):

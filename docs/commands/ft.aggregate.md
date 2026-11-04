@@ -46,7 +46,7 @@ FT.AGGREGATE <index-name> <query>
 - `PARAMS <count> <name> <value> [<name> <value> ...]` (optional): `count` is of the number of arguments, i.e., twice the number of `name`/`value` pairs. `PARAMS` can be used in both the query string as well as within an expression context. See [Search - query language](../topics/search-query.md) for usage details.
 - `SCORER <scorer>` (optional): Selects the relevance scoring function used to rank text results. The only supported scorer is `BM25STD`, which is also the default.
 - `SLOP <slop>` (Optional): Specifies a slop value for proximity matching of terms.
-- `TIMEOUT <timeout>` (optional): Lets you set a timeout value for the search command. This must be an integer in milliseconds.
+- `TIMEOUT <timeout>` (optional): Lets you set a timeout value for the search command. This must be an integer in milliseconds. If omitted, the index's [`QUERY_TIMEOUT`](ft.create.md) is used, or `search.default-timeout-ms` if the index does not set one.
 - `VERBATIM` (Optional): If specified stemming is not applied to term searches.
 - `WITHCURSOR [COUNT <count>] [MAXIDLE <maxidle>]` (optional): Returns at most `<count>` records and saves the remaining records in a cursor, which is read with [`FT.CURSOR`](ft.cursor.md). `<count>` must be between 1 and `search.cursor-max-count`, the default is 1000. `<maxidle>` is the number of milliseconds the cursor may go unread before it is destroyed; it must be between 1 and `search.cursor-max-idle-ms`, the default is 300000. `WITHCURSOR` may appear anywhere after the query, including between stages. If it is given more than once, the last one is used.
 

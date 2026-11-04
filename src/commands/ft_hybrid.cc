@@ -108,8 +108,14 @@ std::vector<indexes::Neighbor> BuildFusedNeighbors(
       auto metric = i < params.per_arm_distance_metric.size()
                         ? params.per_arm_distance_metric[i]
                         : data_model::DISTANCE_METRIC_UNSPECIFIED;
-      ConvertVectorArmScoresToSimilarity(params.per_arm_results[i].neighbors,
-                                         metric);
+      if (i < params.per_arm_sparse.size() && params.per_arm_sparse[i]) {
+        for (auto &neighbor : params.per_arm_results[i].neighbors) {
+          neighbor.score = -neighbor.distance;
+        }
+      } else {
+        ConvertVectorArmScoresToSimilarity(params.per_arm_results[i].neighbors,
+                                           metric);
+      }
     }
     rank_fusion::ArmInput in;
     in.neighbors = &params.per_arm_results[i].neighbors;

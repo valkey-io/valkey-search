@@ -38,6 +38,7 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/scoring/scorer.h"
+#include "src/indexes/sparse.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
 #include "src/indexes/text/fuzzy.h"
@@ -743,6 +744,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
           }
           break;
         }
+        case indexes::IndexerType::kSparse:
         case indexes::IndexerType::kText: {
           // Text indexes don't store retrievable raw values
           any_value_missing = true;
@@ -1448,6 +1450,22 @@ absl::StatusOr<std::vector<indexes::Neighbor>> DoSearchVector(
     vmsdk::ReaderMutexLock &lock) {
   VMSDK_ASSIGN_OR_RETURN(auto index, parameters.index_schema->GetIndex(
                                          parameters.attribute_alias));
+  if (auto *sparse = dynamic_cast<indexes::Sparse *>(index.get())) {
+    QueryContext query_ctx(*parameters.index_schema,
+                           indexes::scoring::GetScorer(parameters.scorer));
+    indexes::PrefilterEvaluator evaluator(
+        query_ctx, parameters.filter_parse_results.query_operations,
+        *parameters.index_schema);
+    auto filter = [&](const InternedStringPtr &key) {
+      if (parameters.inkeys && !parameters.inkeys->contains(key->Str())) {
+        return false;
+      }
+      auto *predicate = parameters.filter_parse_results.root_predicate.get();
+      return !predicate || evaluator.Evaluate(*predicate, key);
+    };
+    auto cancellation = parameters.cancellation_token;
+    return sparse->Search(parameters.query, parameters.k, cancellation, filter);
+  }
   auto *vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
   if (index->GetIndexerType() != indexes::IndexerType::kHNSW &&
       index->GetIndexerType() != indexes::IndexerType::kFlat) {
@@ -2112,6 +2130,7 @@ absl::Status query::SearchParameters::PreParseQueryString() {
     // Validate the index exists and is a vector index.
     VMSDK_ASSIGN_OR_RETURN(auto index, index_schema->GetIndex(attribute_alias));
     if (index->GetIndexerType() != indexes::IndexerType::kHNSW &&
+        index->GetIndexerType() != indexes::IndexerType::kSparse &&
         index->GetIndexerType() != indexes::IndexerType::kFlat) {
       return absl::InvalidArgumentError(absl::StrCat(
           "Index field `", attribute_alias, "` is not a Vector index "));
@@ -2186,6 +2205,23 @@ absl::Status PostParseVectorParameters(query::SearchParameters &parameters) {
 
   VMSDK_ASSIGN_OR_RETURN(auto index, parameters.index_schema->GetIndex(
                                          parameters.attribute_alias));
+  if (index->GetIndexerType() == indexes::IndexerType::kSparse) {
+    parameters.vector_score_only = true;
+    VMSDK_ASSIGN_OR_RETURN(auto entries,
+                           indexes::Sparse::Decode(parameters.query));
+    if (!parameters.parse_vars.ef_string.empty() ||
+        !parameters.parse_vars.hybrid_policy_string.empty()) {
+      return absl::InvalidArgumentError(
+          "SPARSE does not support EF_RUNTIME or HYBRID_POLICY");
+    }
+    if (!parameters.parse_vars.score_as_string.empty()) {
+      VMSDK_ASSIGN_OR_RETURN(
+          auto alias,
+          SubstituteParam(parameters, parameters.parse_vars.score_as_string));
+      parameters.score_as = vmsdk::MakeUniqueValkeyString(alias);
+    }
+    return absl::OkStatus();
+  }
   auto *vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
   CHECK(vector_index != nullptr);
   if (parameters.query.size() !=

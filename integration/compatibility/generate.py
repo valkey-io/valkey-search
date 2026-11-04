@@ -132,10 +132,10 @@ class BaseCompatibilityTest:
                 sys.exit(1)
         else:
             if os.system(f"docker run --rm -d --name {cls.container_name} "
-                         f"-p 0:6379 redis:latest{server_args}") != 0:
+                         f"-p 127.0.0.1:0:6379 redis:latest{server_args}") != 0:
                 print("Failed to start Redis server, please check your Docker setup.")
                 sys.exit(1)
-            port = cls._published_port()
+            port = cls._published_port(cls.container_name)
             if port is None:
                 os.system(f"docker stop {cls.container_name}")
                 print(f"Could not read the published port of {cls.container_name}.")
@@ -158,23 +158,31 @@ class BaseCompatibilityTest:
                 print("Waiting for R system to be ready...")
                 time.sleep(.25)
         if cls.CLUSTER:
-            cls.client.client = valkey.ValkeyCluster(host=cls.address[0], port=6379)
+            cls.client.client = valkey.ValkeyCluster(
+                host=cls.address[0], port=cls.address[1],
+                address_remap=lambda addr: cls.node_addresses.get(addr, addr))
         print("Done initializing")
 
     @classmethod
     def _create_cluster(cls, server_args):
         """Start 3 primaries with ValkeySearchClusterTestCase's slot split.
 
-        The host reaches the nodes on their docker bridge IPs, which only a
-        Linux host can route to -- Docker Desktop cannot.
+        The nodes meet on their docker bridge IPs, which only a Linux host can
+        route to -- Docker Desktop cannot. So the host reaches each node on its
+        published port, and node_addresses maps the bridge address CLUSTER
+        SLOTS reports to that port.
         """
         cls.containers += [f"{cls.container_name}-{i}" for i in (1, 2)]
         for node in cls.containers:
-            if os.system(f"docker run --rm -d --name {node} redis:latest{server_args}") != 0:
+            if os.system(f"docker run --rm -d --name {node} -p 127.0.0.1:0:6379 redis:latest{server_args}") != 0:
                 raise RuntimeError(f"could not start {node}")
         ips = [os.popen("docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "
                         + node).read().strip() for node in cls.containers]
-        nodes = [valkey.Valkey(host=ip, port=6379) for ip in ips]
+        ports = [cls._published_port(node) for node in cls.containers]
+        if None in ports:
+            raise RuntimeError("could not read the published port of a node")
+        cls.node_addresses = {(ip, 6379): ("localhost", port) for ip, port in zip(ips, ports)}
+        nodes = [valkey.Valkey(host="localhost", port=port) for port in ports]
         for node in nodes:
             cls._wait_for(node.ping, "a node to answer PING")
         # Same ranges as _split_range_pairs(0, 16384, 3). redis-cli --cluster
@@ -187,7 +195,7 @@ class BaseCompatibilityTest:
             node.execute_command("CLUSTER MEET", ips[0], 6379)
         cls._wait_for(lambda: all(node.execute_command("CLUSTER INFO")["cluster_state"] == "ok"
                                   for node in nodes), "the cluster to be up")
-        cls.address = (ips[0], 6379)
+        cls.address = ("localhost", ports[0])
         print(f"Started cluster {' '.join(cls.containers)}")
 
     @staticmethod
@@ -203,7 +211,7 @@ class BaseCompatibilityTest:
         raise RuntimeError(f"timed out waiting for {what}")
 
     @classmethod
-    def _published_port(cls):
+    def _published_port(cls, container):
         """The host port docker chose for the container's 6379.
 
         `docker port` prints one line per binding -- the IPv4 and IPv6 forms
@@ -212,7 +220,7 @@ class BaseCompatibilityTest:
         retries rather than losing a run to that race.
         """
         for _ in range(40):
-            out = os.popen(f"docker port {cls.container_name} 6379").read().strip()
+            out = os.popen(f"docker port {container} 6379").read().strip()
             if out:
                 return int(out.splitlines()[0].rsplit(":", 1)[1])
             time.sleep(.25)

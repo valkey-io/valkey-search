@@ -909,8 +909,9 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                   "empty index has a non-trivial max_level");
       } else {
         loadCheck(maxlevel_ >= 0, "non-empty index has a negative max_level");
-        loadCheck(maxlevel_ <= static_cast<int>(cur_element_count_),
-                  "max_level exceeds the element count");
+        // Sanity upper bound on the maxlevel_ to ensure an entrypoint with
+        // a crazy large level and corresponding linked list isn't loaded.
+        loadCheck(maxlevel_ <= 256, "max level above expected range");
         loadCheck(enterpoint_node_ < cur_element_count_,
                   "enterpoint_node is out of range");
       }

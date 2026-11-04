@@ -98,6 +98,9 @@ TEST_P(ResponseGeneratorTest, ProcessNeighborsForReply) {
   auto &params = GetParam();
   RedisModuleCtx fake_ctx;
 
+  EXPECT_CALL(*kMockRedisModule, GetExpire(testing::_))
+      .WillRepeatedly(testing::Return(REDISMODULE_NO_EXPIRE));
+
   std::deque<indexes::Neighbor> expected_neighbors;
   for (const auto &external_id : params.external_id_neighbors) {
     auto string_interned_external_id = StringInternStore::Intern(external_id);

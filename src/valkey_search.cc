@@ -590,6 +590,12 @@ static vmsdk::info_field::Integer svs_conversion_failures_count(
       return Metrics::GetStats().svs_conversion_failures_cnt;
     }));
 
+static vmsdk::info_field::Integer svs_unavailable_indexes(
+    "svs", "svs_unavailable_indexes",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      return Metrics::GetStats().svs_unavailable_indexes;
+    }));
+
 static vmsdk::info_field::Integer string_interning_store_size(
     "string_interning", "string_interning_store_size",
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {

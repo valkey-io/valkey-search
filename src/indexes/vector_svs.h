@@ -13,6 +13,7 @@
 #include <memory>
 #include <optional>
 #include <queue>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -23,6 +24,7 @@
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "src/attribute_data_type.h"
+#include "src/index_schema.pb.h"
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_type.h"
 #include "src/rdb_serialization.h"
@@ -215,6 +217,15 @@ class VectorSVS : public VectorType<T> {
   // Set by LoadFromRDB when the saved SVS payload was skipped; consumed by
   // OnTrackedKeysLoaded on the main thread before the index is published.
   bool rebuild_from_keyspace_{false};
+  // Why this build can't create the index's storage (a compression from an
+  // RDB or definition written by another build); empty when it can. Set in
+  // Create. Such an index tracks its keys, fails searches with this reason,
+  // and saves no payload, so a build that can rebuilds it from the keyspace.
+  std::string unavailable_;
+  // The SVS settings an index without storage was given, kept as received:
+  // this build may not know all their fields (e.g. ones only another build
+  // defines), and its saves must pass them on unchanged.
+  data_model::SVSVamanaAlgorithm unavailable_settings_;
   // Slots deleted in SVS since the last consolidation (or save, which also
   // consolidates).
   mutable std::atomic<size_t> deleted_since_consolidate_{0};

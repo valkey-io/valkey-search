@@ -89,6 +89,8 @@ class Metrics {
     std::atomic<uint64_t> svs_duplicate_label_on_load_cnt{0};
     std::atomic<uint64_t> svs_conversions_cnt{0};
     std::atomic<uint64_t> svs_conversion_failures_cnt{0};
+    // Gauge: SVS_VAMANA indexes currently loaded without their storage.
+    std::atomic<int64_t> svs_unavailable_indexes{0};
     std::atomic<uint64_t> coordinator_server_get_global_metadata_success_cnt{0};
     std::atomic<uint64_t> coordinator_server_get_global_metadata_failure_cnt{0};
     std::atomic<uint64_t> coordinator_server_search_index_partition_success_cnt{

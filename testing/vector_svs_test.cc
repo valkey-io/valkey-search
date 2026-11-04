@@ -41,6 +41,7 @@
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
 #include "gmock/gmock.h"
+#include "google/protobuf/unknown_field_set.h"
 #include "gtest/gtest.h"
 #include "src/attribute_data.h"
 #include "src/attribute_data_type.h"
@@ -2334,6 +2335,224 @@ TEST_P(VectorSVSL2CosineTest, SearchRangeChecksDeadlineAfterSvs) {
   EXPECT_TRUE(token->IsCancelled());
   ASSERT_EQ(result->size(), 1u);
   EXPECT_EQ((*result)[0].external_id, IndexToKey(0));
+}
+
+// SVS settings as a build with an extra compression writes them: that
+// compression, its training threshold, and a field this build doesn't define
+// (field 6, which such a build uses for the reduced dimension count).
+void AsOtherBuildWrites(data_model::SVSVamanaAlgorithm &settings,
+                        data_model::SVSCompressionType compression) {
+  settings.set_compression(compression);
+  settings.set_training_threshold(256);
+  settings.GetReflection()->MutableUnknownFields(&settings)->AddVarint(6, 3);
+}
+
+void ExpectSettingsKept(const data_model::SVSVamanaAlgorithm &settings,
+                        data_model::SVSCompressionType compression) {
+  EXPECT_EQ(settings.compression(), compression);
+  EXPECT_EQ(settings.training_threshold(), 256u);
+  const auto &unknown = settings.GetReflection()->GetUnknownFields(settings);
+  ASSERT_EQ(unknown.field_count(), 1);
+  EXPECT_EQ(unknown.field(0).number(), 6);
+  EXPECT_EQ(unknown.field(0).varint(), 3u);
+}
+
+// An RDB or definition written by another build can carry a compression this
+// build can't create. The index loads without storage: its payload is
+// skipped, its keys stay tracked, searches fail with the reason, and its save
+// is a header alone that a capable build rebuilds from (next test).
+TEST_P(VectorSVSL2CosineTest,
+       CompressionThisBuildCannotCreateLoadsWithoutStorage) {
+  // Not a compression this build defines; the RDB came from another build.
+  const auto unsupported = static_cast<data_model::SVSCompressionType>(5);
+  auto vectors = RandomVectors(5, kDimensions);
+  std::vector<ValkeyModuleString *> records(vectors.size());
+  absl::Cleanup free_records = [&records]() {
+    for (auto *record : records) ValkeyModule_FreeString(nullptr, record);
+  };
+  auto source_proto = CreateSVSVectorIndexProto(
+      kDimensions, GetParam(), data_model::SVS_COMPRESSION_NONE);
+  auto source = VectorSVS<float>::Create(source_proto, attribute_identifier,
+                                         attribute_data_type, 0);
+  ASSERT_TRUE(source.ok()) << source.status();
+  for (size_t i = 0; i < vectors.size(); ++i) {
+    records[i] = ValkeyModule_CreateString(
+        nullptr, (const char *)vectors[i].data(), kDimensions * sizeof(float));
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(**source, IndexToKey(i),
+                                                   VectorToStr(vectors[i])));
+  }
+  FakeSafeRDB saved;
+  VMSDK_EXPECT_OK((*source)->SaveIndex(RDBChunkOutputStream(&saved)));
+  VMSDK_EXPECT_OK((*source)->SaveTrackedKeys(RDBChunkOutputStream(&saved)));
+
+  // The same RDB as the other build would write it: the header names the
+  // compression, and the payload follows.
+  FakeSafeRDB rdb;
+  {
+    SupplementalContentChunkIter in(&saved);
+    RDBChunkOutputStream out(&rdb);
+    bool first = true;
+    while (in.HasNext()) {
+      auto chunk = in.Next();
+      ASSERT_TRUE(chunk.ok());
+      std::string content = (*chunk)->binary_content();
+      if (first) {
+        data_model::SVSIndexHeader header;
+        ASSERT_TRUE(header.ParseFromString(content));
+        ASSERT_TRUE(header.has_index());
+        AsOtherBuildWrites(*header.mutable_build_config(), unsupported);
+        // The other build may write its settings differently from the
+        // definition; with no payload to load, that must not stop the load.
+        header.mutable_build_config()->set_graph_max_degree(
+            header.build_config().graph_max_degree() + 1);
+        ASSERT_TRUE(header.SerializeToString(&content));
+        first = false;
+      }
+      VMSDK_EXPECT_OK(out.SaveString(content));
+    }
+    VMSDK_EXPECT_OK(out.Close());
+    SupplementalContentChunkIter keys_in(&saved);
+    RDBChunkOutputStream keys_out(&rdb);
+    while (keys_in.HasNext()) {
+      auto chunk = keys_in.Next();
+      ASSERT_TRUE(chunk.ok());
+      VMSDK_EXPECT_OK(keys_out.SaveString((*chunk)->binary_content()));
+    }
+    VMSDK_EXPECT_OK(keys_out.Close());
+  }
+
+  auto proto = source_proto;
+  AsOtherBuildWrites(*proto.mutable_svs_vamana_algorithm(), unsupported);
+  const int64_t unavailable_before =
+      Metrics::GetStats().svs_unavailable_indexes;
+  ExpectHashGetsForRecords(records);
+  auto loaded = VectorSVS<float>::LoadFromRDB(
+      &fake_ctx_, &hash_attribute_data_type_, proto, "attribute_identifier_2",
+      SupplementalContentChunkIter(&rdb), 0);
+  ASSERT_TRUE(loaded.ok()) << loaded.status();
+  VMSDK_EXPECT_OK(
+      (*loaded)->LoadTrackedKeys(&fake_ctx_, &hash_attribute_data_type_,
+                                 SupplementalContentChunkIter(&rdb)));
+  EXPECT_EQ(Metrics::GetStats().svs_unavailable_indexes,
+            unavailable_before + 1);
+  EXPECT_EQ(AsBase(*loaded)->GetLabelCount(), vectors.size());
+
+  auto search = (*loaded)->Search(VectorToStr(vectors[0]), 1, CancelNever());
+  EXPECT_EQ(search.status().code(), absl::StatusCode::kFailedPrecondition);
+  EXPECT_THAT(search.status().message(),
+              testing::HasSubstr("not available in this build"));
+  // Writes keep tracking keys, so a rebuild sees them.
+  VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(
+      **loaded, IndexToKey(vectors.size()), VectorToStr(vectors[0])));
+  VMSDK_EXPECT_OK(
+      (*loaded)->RemoveRecord(IndexToKey(0), DeletionType::kRecord));
+  VMSDK_EXPECT_OK((*loaded)->ModifyRecord(IndexToKey(1),
+                                          VectorData(**loaded, 1, vectors[2])));
+  EXPECT_TRUE((*loaded)->IsTracked(IndexToKey(vectors.size())));
+  EXPECT_FALSE((*loaded)->IsTracked(IndexToKey(0)));
+  EXPECT_TRUE((*loaded)->IsTracked(IndexToKey(1)));
+  EXPECT_EQ(AsBase(*loaded)->GetLabelCount(), vectors.size());
+
+  FakeSafeRDB resaved;
+  VMSDK_EXPECT_OK((*loaded)->SaveIndex(RDBChunkOutputStream(&resaved)));
+  SupplementalContentChunkIter header_only(&resaved);
+  ASSERT_TRUE(header_only.HasNext());
+  auto header_chunk = header_only.Next();
+  ASSERT_TRUE(header_chunk.ok());
+  data_model::SVSIndexHeader header;
+  ASSERT_TRUE(header.ParseFromString((*header_chunk)->binary_content()));
+  EXPECT_EQ(header.svs_version(), 0u);
+  EXPECT_TRUE(header.has_index());
+  EXPECT_FALSE(header.compression_pending());
+  EXPECT_FALSE(header_only.HasNext());
+  // The settings go back out as they came in, including fields this build
+  // doesn't define, so the build that wrote them can rebuild the index.
+  ExpectSettingsKept(header.build_config(), unsupported);
+  ExpectSettingsKept(
+      AsBase(*loaded)->ToProto()->vector_index().svs_vamana_algorithm(),
+      unsupported);
+
+  // The same build loads its own save the same way.
+  FakeSafeRDB own_save;
+  VMSDK_EXPECT_OK((*loaded)->SaveIndex(RDBChunkOutputStream(&own_save)));
+  auto reloaded = VectorSVS<float>::LoadFromRDB(
+      &fake_ctx_, &hash_attribute_data_type_, proto, "attribute_identifier_3",
+      SupplementalContentChunkIter(&own_save), 0);
+  ASSERT_TRUE(reloaded.ok()) << reloaded.status();
+  EXPECT_EQ((*reloaded)
+                ->Search(VectorToStr(vectors[0]), 1, CancelNever())
+                .status()
+                .code(),
+            absl::StatusCode::kFailedPrecondition);
+  EXPECT_EQ(Metrics::GetStats().svs_unavailable_indexes,
+            unavailable_before + 2);
+  reloaded->reset();
+  EXPECT_EQ(Metrics::GetStats().svs_unavailable_indexes,
+            unavailable_before + 1);
+
+  // With no keys it saves no index, so a capable build has nothing to rebuild.
+  auto empty = VectorSVS<float>::Create(proto, "attribute_identifier_4",
+                                        attribute_data_type, 0);
+  ASSERT_TRUE(empty.ok()) << empty.status();
+  FakeSafeRDB empty_rdb;
+  VMSDK_EXPECT_OK((*empty)->SaveIndex(RDBChunkOutputStream(&empty_rdb)));
+  SupplementalContentChunkIter empty_in(&empty_rdb);
+  ASSERT_TRUE(empty_in.HasNext());
+  auto empty_chunk = empty_in.Next();
+  ASSERT_TRUE(empty_chunk.ok());
+  data_model::SVSIndexHeader empty_header;
+  ASSERT_TRUE(empty_header.ParseFromString((*empty_chunk)->binary_content()));
+  EXPECT_EQ(empty_header.svs_version(), 0u);
+  EXPECT_FALSE(empty_header.has_index());
+}
+
+// The other side of the save above: a header with SVS version 0 and no payload
+// is rebuilt from the tracked keys by a build that can create the storage.
+TEST_P(VectorSVSL2CosineTest, HeaderWithoutPayloadRebuildsFromKeyspace) {
+  auto vectors = RandomVectors(5, kDimensions);
+  std::vector<ValkeyModuleString *> records(vectors.size());
+  absl::Cleanup free_records = [&records]() {
+    for (auto *record : records) ValkeyModule_FreeString(nullptr, record);
+  };
+  auto proto = CreateSVSVectorIndexProto(kDimensions, GetParam(),
+                                         data_model::SVS_COMPRESSION_NONE);
+  auto source = VectorSVS<float>::Create(proto, attribute_identifier,
+                                         attribute_data_type, 0);
+  ASSERT_TRUE(source.ok()) << source.status();
+  for (size_t i = 0; i < vectors.size(); ++i) {
+    records[i] = ValkeyModule_CreateString(
+        nullptr, (const char *)vectors[i].data(), kDimensions * sizeof(float));
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(**source, IndexToKey(i),
+                                                   VectorToStr(vectors[i])));
+  }
+  FakeSafeRDB rdb;
+  {
+    data_model::SVSIndexHeader header = ValidHeaderFor(proto);
+    header.set_svs_version(0);
+    header.set_has_index(true);
+    std::string serialized;
+    ASSERT_TRUE(header.SerializeToString(&serialized));
+    RDBChunkOutputStream out(&rdb);
+    VMSDK_EXPECT_OK(out.SaveString(serialized));
+    VMSDK_EXPECT_OK(out.Close());
+  }
+  VMSDK_EXPECT_OK((*source)->SaveTrackedKeys(RDBChunkOutputStream(&rdb)));
+
+  ExpectHashGetsForRecords(records);
+  auto loaded = VectorSVS<float>::LoadFromRDB(
+      &fake_ctx_, &hash_attribute_data_type_, proto, "attribute_identifier_2",
+      SupplementalContentChunkIter(&rdb), 0);
+  ASSERT_TRUE(loaded.ok()) << loaded.status();
+  VMSDK_EXPECT_OK(
+      (*loaded)->LoadTrackedKeys(&fake_ctx_, &hash_attribute_data_type_,
+                                 SupplementalContentChunkIter(&rdb)));
+  ASSERT_NE(VectorSVSTestPeer::Handle(**loaded), nullptr);
+  for (size_t i = 0; i < vectors.size(); ++i) {
+    auto result = (*loaded)->Search(VectorToStr(vectors[i]), 1, CancelNever());
+    ASSERT_TRUE(result.ok()) << result.status();
+    ASSERT_EQ(result->size(), 1u);
+    EXPECT_EQ((*result)[0].external_id, IndexToKey(i)) << "key " << i;
+  }
 }
 
 INSTANTIATE_TEST_SUITE_P(

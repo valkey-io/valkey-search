@@ -9,8 +9,9 @@ message SVSIndexHeader {
   // InvalidArgumentError on load and prevents partial loading.
   uint32 format_version = 1;
 
-  // SVS library version that produced the payload. A mismatch hard-fails the
-  // load, because the stream format is still in development.
+  // SVS library version that produced the payload. On a mismatch the payload
+  // is skipped and the index rebuilt from the keyspace. 0 means the index was
+  // saved without a payload, by a build that could not create its storage.
   uint32 svs_version = 2;
 
   // False when the index held no vectors at save time. Load then skips the

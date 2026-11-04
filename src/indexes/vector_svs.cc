@@ -93,6 +93,9 @@ namespace {
 // RDB header format, bumped whenever SVSIndexHeader's shape changes in a
 // way that breaks backward compatibility with older readers.
 constexpr uint32_t kSvsHeaderFormatVersion = 1;
+// SVSIndexHeader.svs_version of an index saved without storage, and so
+// without a payload. No SVS release has version 0.
+constexpr uint32_t kSvsVersionWithoutPayload = 0;
 
 // Sequential threadpool vtable: SVS invokes parallel_for on the calling
 // reader thread. Matches HNSW's concurrency model (one search occupies
@@ -641,6 +644,9 @@ VectorSVS<T>::VectorSVS(int dimensions, absl::string_view attribute_identifier,
 template <typename T>
 VectorSVS<T>::~VectorSVS() {
 #if defined(__linux__) && defined(__x86_64__)
+  if (!unavailable_.empty()) {
+    --Metrics::GetStats().svs_unavailable_indexes;
+  }
   if (svs_index_ != nullptr) {
     svs_index_free(svs_index_);
     svs_index_ = nullptr;
@@ -659,17 +665,30 @@ absl::StatusOr<std::shared_ptr<VectorSVS<T>>> VectorSVS<T>::Create(
         "SVS_VAMANA: unsupported DISTANCE_METRIC");
   }
   const auto& svs_proto = vector_index_proto.svs_vamana_algorithm();
-  if (!CompressionToSvsDataType(svs_proto.compression()).has_value()) {
-    return absl::InvalidArgumentError(
-        "SVS_VAMANA: COMPRESSION is proprietary / v2 and not available in "
-        "this build");
-  }
 
   auto instance = std::shared_ptr<VectorSVS<T>>(
       new VectorSVS<T>(vector_index_proto.dimension_count(),
                        attribute_identifier, attribute_data_type, db_num),
       vmsdk::DestructByMainThread<VectorSVS<T>>{});
   instance->Init(vector_index_proto.distance_metric());
+  // FT.CREATE rejects a compression this build can't create, so one only
+  // arrives from an RDB or a definition written by another build. The index
+  // still loads, so the rest of the keyspace does too.
+  if (!CompressionToSvsDataType(svs_proto.compression()).has_value()) {
+    instance->unavailable_ = absl::StrCat(
+        "SVS_VAMANA: COMPRESSION ", static_cast<int>(svs_proto.compression()),
+        " is proprietary / v2 and not available in this build");
+  }
+  if (!instance->unavailable_.empty()) {
+    instance->unavailable_settings_ = svs_proto;
+    ++Metrics::GetStats().svs_unavailable_indexes;
+    VMSDK_LOG(WARNING, nullptr)
+        << "SVS_VAMANA index " << attribute_identifier << ": "
+        << instance->unavailable_
+        << ". It tracks its keys; searches that need its storage fail, exact "
+           "(pre-filtered) searches still run, and a build that supports it "
+           "rebuilds it from the keyspace.";
+  }
   instance->build_config_ = SVSBuildConfig{
       svs_proto.graph_max_degree(),   svs_proto.construction_window_size(),
       svs_proto.search_window_size(), svs_proto.alpha(),
@@ -742,6 +761,12 @@ absl::StatusOr<std::shared_ptr<VectorSVS<T>>> VectorSVS<T>::LoadFromRDB(
     VMSDK_ASSIGN_OR_RETURN(auto instance,
                            Create(vector_index_proto, attribute_identifier,
                                   attribute_data_type->ToProto(), db_num));
+    // No storage to load into: the payload is drained below, and the tracked
+    // keys still load. Create logged why. The build-config and element-type
+    // checks only guard a payload load, so they don't apply.
+    if (!instance->unavailable_.empty()) {
+      return instance;
+    }
     if (!BuildConfigMatches(instance->build_config_, header.build_config())) {
       return absl::InvalidArgumentError(
           "SVS_VAMANA RDB header build_config does not match the index "
@@ -753,11 +778,18 @@ absl::StatusOr<std::shared_ptr<VectorSVS<T>>> VectorSVS<T>::LoadFromRDB(
           instance->GetVectorDataType(), ", got ", header.element_type()));
     }
     if (svs_version_mismatch) {
-      VMSDK_LOG(WARNING, nullptr)
-          << "SVS_VAMANA index " << attribute_identifier
-          << " was saved with SVS version " << header.svs_version()
-          << "; this build is SVS version " << current_svs_version
-          << ". Rebuilding it from the keyspace.";
+      if (header.svs_version() == kSvsVersionWithoutPayload) {
+        VMSDK_LOG(WARNING, nullptr)
+            << "SVS_VAMANA index " << attribute_identifier
+            << " was saved by a build that could not create its storage. "
+               "Rebuilding it from the keyspace.";
+      } else {
+        VMSDK_LOG(WARNING, nullptr)
+            << "SVS_VAMANA index " << attribute_identifier
+            << " was saved with SVS version " << header.svs_version()
+            << "; this build is SVS version " << current_svs_version
+            << ". Rebuilding it from the keyspace.";
+      }
       instance->rebuild_from_keyspace_ = header.has_index();
       return instance;
     }
@@ -834,7 +866,7 @@ absl::StatusOr<std::shared_ptr<VectorSVS<T>>> VectorSVS<T>::LoadFromRDB(
   // A skipped payload is reported when the index is rebuilt instead. The C
   // API reports no load-validation warnings or index-growth events (SVS grows
   // by allocating blocks), so neither is logged.
-  if (!(*result)->rebuild_from_keyspace_) {
+  if (!(*result)->rebuild_from_keyspace_ && (*result)->unavailable_.empty()) {
     size_t num_elements = 0;
     {
       absl::ReaderMutexLock lock(&(*result)->resize_mutex_);
@@ -884,6 +916,9 @@ VectorSVS<T>::SearchKnn(absl::string_view query, uint64_t count,
                         hnswlib::BaseFilterFunctor* filter,
                         std::optional<size_t> ef_runtime) {
   std::priority_queue<std::pair<float, hnswlib::labeltype>> knn;
+  if (!unavailable_.empty()) {
+    return absl::FailedPreconditionError(unavailable_);
+  }
   if (!IsValidSizeVector(query)) {
     return absl::InvalidArgumentError(
         absl::StrCat("SVS_VAMANA search: query vector blob size (",
@@ -1182,6 +1217,9 @@ absl::Status VectorSVS<T>::ModifyRecordImpl(uint64_t internal_id,
 template <typename T>
 absl::Status VectorSVS<T>::InsertVector(uint64_t internal_id,
                                         const float* fp32) {
+  // Without storage there is nothing to insert into; the caller still tracks
+  // the key, so a build that can create the storage rebuilds from it.
+  if (!unavailable_.empty()) return absl::OkStatus();
   {
     SvsMutationLock lock(&resize_mutex_,
                          mutations_exclusive_.load(std::memory_order_acquire));
@@ -1314,7 +1352,11 @@ void VectorSVS<T>::ToProtoImpl(
     data_model::VectorIndex* vector_index_proto) const {
   this->SetProtoDataType(vector_index_proto);
   auto svs_proto = std::make_unique<data_model::SVSVamanaAlgorithm>();
-  FillSvsVamanaProto(build_config_, svs_proto.get());
+  if (unavailable_.empty()) {
+    FillSvsVamanaProto(build_config_, svs_proto.get());
+  } else {
+    *svs_proto = unavailable_settings_;
+  }
   vector_index_proto->set_allocated_svs_vamana_algorithm(svs_proto.release());
 }
 
@@ -1323,7 +1365,8 @@ int VectorSVS<T>::RespondWithInfoImpl(ValkeyModuleCtx* ctx) const {
   EmitDataTypeInfo(ctx);
   ValkeyModule_ReplyWithSimpleString(ctx, "algorithm");
   const bool trained = build_config_.training_threshold > 0;
-  ValkeyModule_ReplyWithArray(ctx, trained ? 18 : 14);
+  const bool unavailable = !unavailable_.empty();
+  ValkeyModule_ReplyWithArray(ctx, (trained ? 18 : 14) + (unavailable ? 2 : 0));
   ValkeyModule_ReplyWithSimpleString(ctx, "name");
   ValkeyModule_ReplyWithSimpleString(
       ctx, std::string(
@@ -1341,9 +1384,16 @@ int VectorSVS<T>::RespondWithInfoImpl(ValkeyModuleCtx* ctx) const {
   ValkeyModule_ReplyWithDouble(
       ctx, EffectiveAlpha(build_config_, this->distance_metric_));
   ValkeyModule_ReplyWithSimpleString(ctx, "compression");
-  ValkeyModule_ReplyWithSimpleString(
-      ctx,
-      data_model::SVSCompressionType_Name(build_config_.compression).c_str());
+  // A compression this build doesn't define has no name; show its value.
+  const std::string compression_name =
+      data_model::SVSCompressionType_IsValid(build_config_.compression)
+          ? data_model::SVSCompressionType_Name(build_config_.compression)
+          : absl::StrCat(static_cast<int>(build_config_.compression));
+  ValkeyModule_ReplyWithSimpleString(ctx, compression_name.c_str());
+  if (unavailable) {
+    ValkeyModule_ReplyWithSimpleString(ctx, "unavailable");
+    ValkeyModule_ReplyWithSimpleString(ctx, unavailable_.c_str());
+  }
   if (trained) {
     ValkeyModule_ReplyWithSimpleString(ctx, "training_threshold");
     ValkeyModule_ReplyWithLongLong(ctx, build_config_.training_threshold);
@@ -1388,17 +1438,27 @@ absl::Status VectorSVS<T>::SaveIndexImpl(
       return SvsErrorToStatus(size_err.get(), "index_get_size");
     }
   }
-  const bool has_index = live_entries > 0;
+  // An index without storage saves its header alone; kSvsVersionWithoutPayload
+  // makes a build that can create the storage rebuild it from the tracked
+  // keys, the same way as after an SVS version change.
+  const bool unavailable = !unavailable_.empty();
+  const bool has_index = unavailable ? GetLabelCount() > 0 : live_entries > 0;
 
   data_model::SVSIndexHeader header;
   header.set_format_version(kSvsHeaderFormatVersion);
-  header.set_svs_version(svs_get_version());
+  header.set_svs_version(unavailable ? kSvsVersionWithoutPayload
+                                     : svs_get_version());
   header.set_has_index(has_index);
   header.set_compression_pending(
-      has_index && compression_pending_.load(std::memory_order_relaxed));
+      has_index && !unavailable &&
+      compression_pending_.load(std::memory_order_relaxed));
   header.set_element_type(GetVectorDataType());
   header.set_dimensionality(static_cast<uint32_t>(dimensions_));
-  FillSvsVamanaProto(build_config_, header.mutable_build_config());
+  if (unavailable) {
+    *header.mutable_build_config() = unavailable_settings_;
+  } else {
+    FillSvsVamanaProto(build_config_, header.mutable_build_config());
+  }
 
   std::string serialized;
   if (!header.SerializeToString(&serialized)) {
@@ -1408,9 +1468,9 @@ absl::Status VectorSVS<T>::SaveIndexImpl(
   // from tellp() at its stream's start, so a prefix would shift alignment.
   VMSDK_RETURN_IF_ERROR(chunked_out.SaveString(serialized));
 
-  if (!has_index) {
-    // Handle-less empty index: nothing to hand to SVS. chunked_out's
-    // destructor still emits the EOF sentinel below.
+  if (!has_index || unavailable) {
+    // Handle-less empty index, or no storage: nothing to hand to SVS.
+    // chunked_out's destructor still emits the EOF sentinel below.
     return absl::OkStatus();
   }
 

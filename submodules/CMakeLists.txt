@@ -260,6 +260,7 @@ else()
   update_cmake_prefix("GTest" __CMAKE_PREFIX_PATH)
   update_cmake_prefix("grpc" __CMAKE_PREFIX_PATH)
   update_cmake_prefix("protobuf" __CMAKE_PREFIX_PATH)
+  update_cmake_prefix("re2" __CMAKE_PREFIX_PATH)
   update_cmake_prefix("utf8_range" __CMAKE_PREFIX_PATH)
   
   if("${SAN_BUILD_LOWER}" STREQUAL "no")

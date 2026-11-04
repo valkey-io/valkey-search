@@ -48,6 +48,17 @@ target_include_directories(thread_pool_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(thread_pool_test PUBLIC vmsdklib)
 finalize_test_flags(thread_pool_test)
 
+set(SRCS_SCOPED_THREAD_CPU_MONITOR_TEST
+    ${CMAKE_CURRENT_LIST_DIR}/scoped_thread_cpu_monitor_test.cc)
+add_executable(scoped_thread_cpu_monitor_test
+               ${SRCS_SCOPED_THREAD_CPU_MONITOR_TEST})
+target_include_directories(scoped_thread_cpu_monitor_test
+                           PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(scoped_thread_cpu_monitor_test PUBLIC vmsdklib)
+target_link_libraries(scoped_thread_cpu_monitor_test
+                      PUBLIC vmsdk_testing_infra)
+finalize_test_flags(scoped_thread_cpu_monitor_test)
+
 set(SRCS_TIME_SLICED_MRMW_MUTEX_TEST
     ${CMAKE_CURRENT_LIST_DIR}/mrmw_mutex_test.cc)
 add_executable(time_sliced_mrmw_mutex_test ${SRCS_TIME_SLICED_MRMW_MUTEX_TEST})

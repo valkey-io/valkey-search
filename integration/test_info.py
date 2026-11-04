@@ -133,6 +133,7 @@ class TestAppMetrics(ValkeySearchTestCaseDebugMode):
             "coordinator_server_search_index_partition_failure_count",
             "coordinator_server_search_index_partition_failure_latency_usec",
             "coordinator_server_search_index_partition_success_count",
+            "coordinator_server_search_index_partition_cpu_time_usec",
             "coordinator_server_search_index_partition_success_latency_usec",
             "coordinator_threads_cpu_time_sec",
             "hnsw_add_exceptions_count",

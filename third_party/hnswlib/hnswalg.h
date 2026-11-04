@@ -338,10 +338,10 @@ class HierarchicalNSW
     return fstdistfunc_(
         a.GetRawVector(), b.GetRawVector(), dist_func_param_,
         kNormalized ? a.GetReciprocalMagnitude() * b.GetReciprocalMagnitude()
-                    : 1.0f);
+                    : dist_t{1});
   }
 
-  // Both magnitudes are applied in float to the raw vectors, matching the
+  // Both magnitudes are applied in dist_t to the raw vectors, matching the
   // StoredVectorT-to-StoredVectorT overload and RecomputeDistance. Tombstones
   // are re-stored normalized with reciprocal magnitude 1.0 (see
   // VectorHNSW::AlgoDeleteRecord and the RDB load generator), so the regular
@@ -353,7 +353,7 @@ class HierarchicalNSW
     return fstdistfunc_(
         a.GetRawVector(), b.GetRawVector(), dist_func_param_,
         kNormalized ? a.GetReciprocalMagnitude() * b.GetReciprocalMagnitude()
-                    : 1.0f);
+                    : dist_t{1});
   }
 
   // Same as above, for a raw stored-vector pointer (non-null)
@@ -364,7 +364,7 @@ class HierarchicalNSW
                         kNormalized
                             ? a.GetReciprocalMagnitude() *
                                   StoredVectorT::ReciprocalMagnitudeOf(b)
-                            : 1.0f);
+                            : dist_t{1});
   }
 
   inline dist_t EvaluateDistance(const StoredVectorT &a,

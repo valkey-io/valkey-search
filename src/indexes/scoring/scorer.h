@@ -23,6 +23,8 @@ namespace valkey_search::indexes::scoring {
 // built with); detect ±inf and NaN by IEEE 754 bit pattern instead.
 bool IsInf(float f);
 bool IsNaN(float f);
+bool IsInf(double d);
+bool IsNaN(double d);
 
 // Produces a +inf whose bit pattern survives -ffast-math. A source-level
 // std::numeric_limits<float>::infinity() may be folded to a finite value under

@@ -838,9 +838,9 @@ TEST_P(FetchFilteredKeysTest, ParseParams) {
   query::QueryContext query_ctx(
       *index_schema,
       indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std));
-  auto results = CalcBestMatchingPrefilteredKeys(params, entries_fetchers,
-                                                 vector_index, 0, query_ctx);
-  auto neighbors = vector_index->CreateReply(results).value();
+  auto neighbors = CalcBestMatchingPrefilteredKeys(params, entries_fetchers,
+                                                   vector_index, 0, query_ctx)
+                       .value();
   EXPECT_EQ(neighbors.size(), test_case.expected_keys.size());
   for (auto it = neighbors.begin(); it != neighbors.end(); ++it) {
     EXPECT_TRUE(

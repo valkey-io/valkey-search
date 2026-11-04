@@ -7,13 +7,21 @@
 
 #include "src/indexes/vector_type.h"
 
+#include <cstdint>
 #include <memory>
+#include <optional>
+#include <queue>
 #include <string>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
+#include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/numbers.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
 #include "absl/strings/strip.h"
@@ -21,6 +29,8 @@
 #include "src/indexes/bfloat16.h"
 #include "src/indexes/fp16.h"
 #include "src/indexes/vector_base.h"
+#include "src/utils/cancel.h"
+#include "src/utils/string_interning.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "third_party/hnswlib/space_ip.h"
 #include "third_party/hnswlib/space_ip_bfloat16.h"
@@ -29,6 +39,7 @@
 #include "third_party/hnswlib/space_l2_bfloat16.h"
 #include "third_party/hnswlib/space_l2_fp16.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -38,10 +49,10 @@ namespace {
 
 // Constructs the right hnswlib space for T + metric. Kept private to
 // this TU -- callers reach it via VectorType<T>::Init below. Note that
-// SpaceInterface is templated on the distance dtype (float); the storage
-// element type is baked into the concrete space class chosen here.
+// SpaceInterface is templated on the distance dtype; the storage element type
+// is baked into the concrete space class chosen here.
 template <typename StorageT>
-std::unique_ptr<hnswlib::SpaceInterface<float>> CreateSpace(
+std::unique_ptr<hnswlib::SpaceInterface<MagnitudeOf<StorageT>>> CreateSpace(
     int dimensions, data_model::DistanceMetric distance_metric) {
   const bool is_ip =
       distance_metric == data_model::DistanceMetric::DISTANCE_METRIC_COSINE ||
@@ -108,10 +119,163 @@ void VectorType<T>::Init(data_model::DistanceMetric distance_metric) {
 }
 
 template <typename T>
-float VectorType<T>::ComputeReciprocalMagnitude(
-    absl::string_view record) const {
-  return CalcReciprocalMagnitude(reinterpret_cast<const T *>(record.data()),
-                                 record.size() / sizeof(T));
+VectorRecord VectorType<T>::ConstructRecord(absl::string_view record,
+                                            Allocator *allocator) const {
+  return VectorRecord::Construct<MagnitudeT>(
+      record,
+      CalcReciprocalMagnitude(reinterpret_cast<const T *>(record.data()),
+                              record.size() / sizeof(T)),
+      allocator);
+}
+
+template <typename T>
+absl::StatusOr<std::pair<typename VectorType<T>::DistanceT, hnswlib::labeltype>>
+VectorType<T>::ComputeDistanceFromRecord(const InternedStringPtr &key,
+                                         absl::string_view query,
+                                         MagnitudeT query_magnitude) const {
+  VMSDK_ASSIGN_OR_RETURN(auto internal_id, GetInternalIdDuringSearch(key));
+  const auto &vector_record = GetVectorLockFree(internal_id);
+  if (!vector_record) {
+    return absl::InternalError(
+        absl::StrCat("Couldn't find internal id: ", internal_id));
+  }
+  if (normalize_) {
+    query_magnitude *=
+        StoredVector::ReciprocalMagnitudeOf(vector_record.GetRawVector());
+  }
+  return std::pair<DistanceT, hnswlib::labeltype>{
+      ComputeDistance(query, vector_record, query_magnitude), internal_id};
+}
+
+template <typename T>
+absl::StatusOr<std::optional<double>> VectorType<T>::IsWithinVectorRange(
+    const InternedStringPtr &key, absl::string_view query,
+    double radius) const {
+  VMSDK_ASSIGN_OR_RETURN(
+      auto result,
+      ComputeDistanceFromRecord(key, query, QueryReciprocalMagnitude(query)));
+  const DistanceT distance = ClampCosineDistance(result.first);
+  if (distance > RangeRadius(radius)) {
+    return std::nullopt;
+  }
+  return std::optional<double>(distance);
+}
+
+template <typename T>
+absl::StatusOr<typename VectorType<T>::DistanceT>
+VectorType<T>::ComputeDistanceToBytes(absl::string_view record,
+                                      absl::string_view query) const {
+  if (!IsValidSizeVector(record)) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Vector record of size ", record.size(),
+                     " does not match the index dimensions"));
+  }
+  // Built with the default allocator rather than the index's own: this runs on
+  // the main thread while writers may be using that allocator, and one record
+  // per mutated key is not worth sharing.
+  auto vector_record = ConstructRecord(record, nullptr);
+  if (!vector_record) {
+    return absl::InternalError("Could not construct a vector record");
+  }
+  MagnitudeT query_magnitude = QueryReciprocalMagnitude(query);
+  if (normalize_) {
+    query_magnitude *=
+        StoredVector::ReciprocalMagnitudeOf(vector_record.GetRawVector());
+  }
+  return ComputeDistance(query, vector_record, query_magnitude);
+}
+
+template <typename T>
+absl::StatusOr<double> VectorType<T>::RecomputeDistance(
+    absl::string_view record, absl::string_view query) const {
+  VMSDK_ASSIGN_OR_RETURN(DistanceT distance,
+                         ComputeDistanceToBytes(record, query));
+  return double{distance};
+}
+
+template <typename T>
+bool VectorType<T>::IsRecordWithinVectorRange(absl::string_view record,
+                                              absl::string_view query,
+                                              double radius) const {
+  auto distance = ComputeDistanceToBytes(record, query);
+  return distance.ok() && ClampCosineDistance(*distance) <= RangeRadius(radius);
+}
+
+template <typename T>
+std::vector<Neighbor> VectorType<T>::SearchRangeExhaustive(
+    absl::string_view query, double radius, cancel::Token &cancellation_token,
+    hnswlib::BaseFilterFunctor *filter) const {
+  const DistanceT range_radius = RangeRadius(radius);
+  auto nq = NormalizeQueryIfNeeded(query);
+  const MagnitudeT query_magnitude = QueryReciprocalMagnitude(nq.view);
+  std::vector<Neighbor> neighbors;
+  neighbors.reserve(kRangeReserve);
+  for (const auto &[key, metadata] : GetTrackedMetadataDuringSearch()) {
+    if (cancellation_token->IsCancelled()) {
+      break;
+    }
+    if (filter && !(*filter)(metadata.internal_id)) {
+      continue;
+    }
+    const auto &vector_record = GetVectorLockFree(metadata.internal_id);
+    if (!vector_record) {
+      continue;
+    }
+    const DistanceT distance =
+        RangeDistance(nq.view, query_magnitude, vector_record);
+    if (distance <= range_radius) {
+      neighbors.emplace_back(key, distance);
+    }
+  }
+  return neighbors;
+}
+
+template <typename T>
+class VectorType<T>::NearestKeysImpl : public VectorBase::NearestKeys {
+ public:
+  NearestKeysImpl(VectorType<T> *index, absl::string_view query, uint64_t count)
+      : index_(index),
+        query_(query),
+        query_magnitude_(index->QueryReciprocalMagnitude(query)),
+        count_(count) {}
+
+  bool Add(const InternedStringPtr &key,
+           absl::flat_hash_set<const char *> &top_keys) override {
+    auto result =
+        index_->ComputeDistanceFromRecord(key, query_, query_magnitude_);
+    if (!result.ok()) {
+      return false;
+    }
+    if (results_.size() < count_) {
+      results_.emplace(result.value());
+      return true;
+    }
+    if (result.value().first < results_.top().first) {
+      auto vector_key = index_->GetKeyDuringSearch(results_.top().second);
+      top_keys.erase(vector_key.value()->Str().data());
+      results_.pop();
+      results_.emplace(result.value());
+      return true;
+    }
+    return false;
+  }
+
+  absl::StatusOr<std::vector<Neighbor>> CreateReply() override {
+    return index_->CreateReply(results_);
+  }
+
+ private:
+  VectorType<T> *index_;
+  absl::string_view query_;
+  MagnitudeT query_magnitude_;
+  uint64_t count_;
+  std::priority_queue<std::pair<DistanceT, hnswlib::labeltype>> results_;
+};
+
+template <typename T>
+std::unique_ptr<VectorBase::NearestKeys> VectorType<T>::CreateNearestKeys(
+    absl::string_view query, uint64_t count) {
+  return std::make_unique<NearestKeysImpl>(this, query, count);
 }
 
 template <typename T>

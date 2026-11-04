@@ -326,6 +326,11 @@ class TestAggregateLoadAs(ValkeySearchTestCaseDebugMode):
         assert pairs(knn("LOAD", "3", "@price", "AS", "dist")) == [
             [("dist", b"1"), ("dist", b"10")]]
         assert rows(knn("LOAD", "3", "@dist", "AS", "dist")) == [{"dist": b"1"}]
+        # Main's reply: its second clause renames the column again.
+        assert sorted(pairs(knn(
+            "LOAD", "6", "@dist", "AS", "price", "@price", "AS", "p",
+            "LOAD", "3", "@price", "AS", "p"))[0]) == [
+                ("p", b"10"), ("price", b"1")]
         with pytest.raises(valkey.exceptions.ResponseError,
                            match="score name `__score`"):
             client.execute_command(

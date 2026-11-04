@@ -305,9 +305,12 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
               if (auto *attr = dynamic_cast<Attribute *>(ref->get())) {
                 size_t index = attr->record_index_;
                 auto &columns = parameters.record_info_by_index_;
-                // The same field under the same name again reuses its column.
+                // A repeated field under the same name shows once, as in
+                // RediSearch. A command with an ambiguous LOAD name (see
+                // COMPATIBILITY.md) keeps main's reply, a column per repeat.
                 auto same = parameters.record_indexes_by_alias_.find(alias);
-                if (same != parameters.record_indexes_by_alias_.end() &&
+                if (parameters.ambiguous_load_name_.ok() &&
+                    same != parameters.record_indexes_by_alias_.end() &&
                     columns[same->second].output_name_ == alias &&
                     columns[same->second].identifier_ ==
                         columns[index].identifier_) {

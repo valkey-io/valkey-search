@@ -360,6 +360,94 @@ inline bool NeedsDeduplication(QueryOperations query_operations) {
   return has_or || has_tag || has_negate;
 }
 
+// Whether evaluating `predicate` as a primary candidate source can reach a
+// non-negated VECTOR_RANGE leaf and call SearchRange.
+bool MayExecuteVectorRange(const Predicate *predicate, bool negate) {
+  if (predicate->GetType() == PredicateType::kComposedAnd ||
+      predicate->GetType() == PredicateType::kComposedOr) {
+    auto *composed = static_cast<const ComposedPredicate *>(predicate);
+    return std::any_of(composed->GetChildren().begin(),
+                       composed->GetChildren().end(),
+                       [negate](const auto &child) {
+                         return MayExecuteVectorRange(child.get(), negate);
+                       });
+  }
+  if (predicate->GetType() == PredicateType::kNegate) {
+    auto *negated = static_cast<const NegatePredicate *>(predicate);
+    return MayExecuteVectorRange(negated->GetPredicate(), !negate);
+  }
+  return !negate && predicate->GetType() == PredicateType::kVectorRange;
+}
+
+struct PrimaryFilterEstimate {
+  size_t size;
+  bool executes_vector_range;
+};
+
+// Estimates the candidate count without running SearchRange. Tag and numeric
+// searches only construct their lightweight fetchers; text already exposes an
+// estimate. The result is used solely to decide whether a VECTOR_RANGE-bearing
+// subtree can beat an already-materialized sibling of an AND.
+PrimaryFilterEstimate EstimatePrimaryFilter(const SearchParameters &parameters,
+                                            const Predicate *predicate,
+                                            bool negate) {
+  const IndexSchema *index_schema = parameters.index_schema.get();
+  const bool is_vec_query = parameters.IsVectorQuery();
+  if (predicate->GetType() == PredicateType::kComposedAnd ||
+      predicate->GetType() == PredicateType::kComposedOr) {
+    auto *composed = static_cast<const ComposedPredicate *>(predicate);
+    const PredicateType effective_type =
+        EvaluateAsComposedPredicate(composed, negate);
+    size_t estimate =
+        effective_type == PredicateType::kComposedAnd ? SIZE_MAX : 0;
+    bool executes_vector_range = false;
+    for (const auto &child : composed->GetChildren()) {
+      auto child_estimate =
+          EstimatePrimaryFilter(parameters, child.get(), negate);
+      executes_vector_range |= child_estimate.executes_vector_range;
+      if (effective_type == PredicateType::kComposedAnd) {
+        estimate = std::min(estimate, child_estimate.size);
+      } else if (child_estimate.size > SIZE_MAX - estimate) {
+        estimate = SIZE_MAX;
+      } else {
+        estimate += child_estimate.size;
+      }
+    }
+    return {estimate, executes_vector_range};
+  }
+  if (predicate->GetType() == PredicateType::kTag) {
+    auto *tag = static_cast<const TagPredicate *>(predicate);
+    return {tag->GetIndex()->Search(*tag, negate)->Size(), false};
+  }
+  if (predicate->GetType() == PredicateType::kNumeric) {
+    auto *numeric = static_cast<const NumericPredicate *>(predicate);
+    return {numeric->GetIndex()->Search(*numeric, negate)->Size(), false};
+  }
+  if (predicate->GetType() == PredicateType::kText) {
+    auto *text = static_cast<const TextPredicate *>(predicate);
+    return {text->EstimateSize(is_vec_query), false};
+  }
+  if (predicate->GetType() == PredicateType::kNegate) {
+    auto *negated = static_cast<const NegatePredicate *>(predicate);
+    return EstimatePrimaryFilter(parameters, negated->GetPredicate(), !negate);
+  }
+  CHECK(predicate->GetType() == PredicateType::kVectorRange);
+  CHECK(index_schema != nullptr) << "IndexSchema required for vector range";
+  if (!negate) {
+    auto *vr = static_cast<const VectorRangePredicate *>(predicate);
+    auto index_result = index_schema->GetIndex(vr->GetAlias());
+    if (index_result.ok()) {
+      auto *vector_index =
+          dynamic_cast<indexes::VectorBase *>(index_result.value().get());
+      if (vector_index != nullptr && !vr->GetQueryVector().empty()) {
+        return {vector_index->GetTrackedKeyCount(), true};
+      }
+    }
+  }
+  // Negated or invalid VECTOR_RANGE evaluation uses the universal fetcher.
+  return {indexes::UniversalSetFetcher(index_schema).Size(), false};
+}
+
 // Builds TextIterator for text predicates. Returns pair of iterator and
 // estimated size.
 // or_weight_multiplier lands on this node only; children are built with 1.0f.
@@ -488,20 +576,64 @@ size_t EvaluateFilterAsPrimary(
         return size;
       }
       size_t min_size = SIZE_MAX;
+      size_t best_child_index = SIZE_MAX;
       bool best_truncated = false;
       std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> best_fetchers;
-      for (const auto &child : composed_predicate->GetChildren()) {
+      auto consider_child =
+          [&](size_t child_index, size_t child_size, bool child_truncated,
+              std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>
+                  child_fetchers) {
+            if (min_size == SIZE_MAX || (best_truncated && !child_truncated) ||
+                (best_truncated == child_truncated &&
+                 (child_size < min_size || (child_size == min_size &&
+                                            child_index < best_child_index)))) {
+              min_size = child_size;
+              best_child_index = child_index;
+              best_truncated = child_truncated;
+              best_fetchers = std::move(child_fetchers);
+            }
+          };
+
+      // SearchRange materializes every matching vector. Defer the one child
+      // subtree that can execute it while a cheap recursive estimate is
+      // compared with the other AND siblings, then run it only if it can still
+      // win. The parser permits at most one VECTOR_RANGE predicate per query.
+      const Predicate *deferred_vector_range_child = nullptr;
+      size_t deferred_vector_range_child_index = SIZE_MAX;
+      size_t deferred_vector_range_estimate = SIZE_MAX;
+      const auto &children = composed_predicate->GetChildren();
+      for (size_t child_index = 0; child_index < children.size();
+           ++child_index) {
+        const auto &child = children[child_index];
+        if (parameters.has_vector_range &&
+            MayExecuteVectorRange(child.get(), negate)) {
+          auto estimate =
+              EstimatePrimaryFilter(parameters, child.get(), negate);
+          if (estimate.executes_vector_range) {
+            deferred_vector_range_child = child.get();
+            deferred_vector_range_child_index = child_index;
+            deferred_vector_range_estimate = estimate.size;
+            continue;
+          }
+        }
         std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> child_fetchers;
         bool child_truncated = false;
         size_t child_size = EvaluateFilterAsPrimary(
             parameters, child.get(), child_fetchers, negate,
             or_weight_multiplier, &child_truncated);
-        if (min_size == SIZE_MAX || (best_truncated && !child_truncated) ||
-            (best_truncated == child_truncated && child_size < min_size)) {
-          min_size = child_size;
-          best_truncated = child_truncated;
-          best_fetchers = std::move(child_fetchers);
-        }
+        consider_child(child_index, child_size, child_truncated,
+                       std::move(child_fetchers));
+      }
+      if (deferred_vector_range_child != nullptr &&
+          (min_size == SIZE_MAX || best_truncated ||
+           deferred_vector_range_estimate <= min_size)) {
+        std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> child_fetchers;
+        bool child_truncated = false;
+        size_t child_size = EvaluateFilterAsPrimary(
+            parameters, deferred_vector_range_child, child_fetchers, negate,
+            or_weight_multiplier, &child_truncated);
+        consider_child(deferred_vector_range_child_index, child_size,
+                       child_truncated, std::move(child_fetchers));
       }
       if (truncated != nullptr) {
         *truncated = best_truncated;

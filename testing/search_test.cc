@@ -1711,7 +1711,10 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
           key, AttributeData(vmsdk::MakeUniqueValkeyString("keep"))));
     }
   }
-  for (int i = 0; i < 2; ++i) {
+  // Match the vector index's cardinality so the planner evaluates the range
+  // child on an estimate tie, then rejects its truncated candidate set in
+  // favor of this complete tag source.
+  for (int i = 0; i < 3; ++i) {
     auto key = StringInternStore::Intern(absl::StrCat("tag-only-", i));
     schema->SetIndexMutationSequenceNumber(key, 0);
     VMSDK_EXPECT_OK(tag_index->AddRecord(
@@ -2093,10 +2096,10 @@ std::shared_ptr<MockIndexSchema> MakeVectorRangeSchema(
 
 // Runs `filter`, whose one VECTOR_RANGE searches at `query`, and returns the
 // number of keys returned.
-size_t CountVectorRangeMatches(const std::shared_ptr<MockIndexSchema> &schema,
-                               absl::string_view filter,
-                               const std::vector<float> &query,
-                               cancel::Token token = cancel::Token{}) {
+size_t CountVectorRangeMatches(
+    const std::shared_ptr<MockIndexSchema> &schema, absl::string_view filter,
+    const std::vector<float> &query, cancel::Token token = cancel::Token{},
+    std::vector<std::string> *matched_keys = nullptr) {
   UnitTestSearchParameters params;
   if (token != nullptr) {
     params.cancellation_token = std::move(token);
@@ -2107,22 +2110,70 @@ size_t CountVectorRangeMatches(const std::shared_ptr<MockIndexSchema> &schema,
   params.filter_parse_results =
       std::move(FilterParser(*schema, filter, parsing_options).Parse().value());
   params.has_vector_range = true;
-  query::Predicate *vr = params.filter_parse_results.root_predicate.get();
-  if (vr->GetType() != query::PredicateType::kVectorRange) {
-    for (const auto &child :
-         static_cast<query::ComposedPredicate *>(vr)->GetChildren()) {
-      if (child->GetType() == query::PredicateType::kVectorRange) {
-        vr = child.get();
-      }
-    }
+  const auto *vr = query::GetVectorRangePredicate(params);
+  EXPECT_NE(vr, nullptr);
+  if (vr == nullptr) {
+    return 0;
   }
-  static_cast<query::VectorRangePredicate *>(vr)->SetQueryVector(
+  const_cast<query::VectorRangePredicate *>(vr)->SetQueryVector(
       std::string(VectorToStr(query)));
   query::QueryContext query_ctx(*schema,
                                 indexes::scoring::GetScorer(params.scorer));
   auto result = query::SearchVectorRangeQuery(params, query_ctx);
   EXPECT_TRUE(result.ok()) << result.status();
+  if (result.ok() && matched_keys != nullptr) {
+    for (const auto &neighbor : *result) {
+      matched_keys->emplace_back(neighbor.external_id->Str());
+    }
+  }
   return result.ok() ? result->size() : 0;
+}
+
+// A selective sibling should drive an AND without materializing a broad
+// VECTOR_RANGE merely to compare candidate counts. FLAT polls once per stored
+// vector, so the token exposes an eager range scan without timing assertions.
+TEST_F(ValkeySearchTest, VectorRangeAndSkipsRangeSearchWhenTagIsSmaller)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  constexpr int kKeys = 2000;
+  std::vector<std::vector<float>> vectors(
+      kKeys, std::vector<float>(kVectorDimensions, 0.0f));
+  auto schema = MakeVectorRangeSchema(
+      /*hnsw=*/false, data_model::DISTANCE_METRIC_L2, vectors);
+  auto tag_index =
+      std::dynamic_pointer_cast<indexes::Tag>(schema->GetIndex("tag").value());
+  ASSERT_NE(tag_index, nullptr);
+  auto rare = StringInternStore::Intern("v7");
+  VMSDK_EXPECT_OK(tag_index->ModifyRecord(
+      rare, AttributeData(vmsdk::MakeUniqueValkeyString("keep,rare"))));
+
+  class CountingToken : public cancel::Base {
+   public:
+    bool IsCancelled() override {
+      ++polls;
+      return false;
+    }
+    void Cancel() override {}
+    int polls{0};
+  };
+  const std::vector<float> query(kVectorDimensions, 0.0f);
+  for (absl::string_view filter :
+       {"@tag:{rare} @vector:[VECTOR_RANGE 1e30 $q]",
+        "@vector:[VECTOR_RANGE 1e30 $q] @tag:{rare}",
+        "@tag:{rare} (@vector:[VECTOR_RANGE 1e30 $q] @tag:{keep})",
+        "(@vector:[VECTOR_RANGE 1e30 $q] @tag:{keep}) @tag:{rare}",
+        "@tag:{rare} (@vector:[VECTOR_RANGE 1e30 $q] | @tag:{none})",
+        "(@vector:[VECTOR_RANGE 1e30 $q] | @tag:{none}) @tag:{rare}"}) {
+    SCOPED_TRACE(filter);
+    auto counting = std::make_shared<CountingToken>();
+    std::vector<std::string> matched_keys;
+    EXPECT_EQ(
+        CountVectorRangeMatches(schema, filter, query, counting, &matched_keys),
+        1u);
+    EXPECT_THAT(matched_keys, ::testing::ElementsAre("v7"));
+    EXPECT_LT(counting->polls, kKeys / 10)
+        << "the AND planner scanned VECTOR_RANGE while the tag selects one "
+           "key";
+  }
 }
 
 // `inside` keys at squared L2 distance 0.01 * (i + 1)^2 from the origin, all

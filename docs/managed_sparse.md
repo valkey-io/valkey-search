@@ -1,6 +1,7 @@
 # Experimental managed sparse vectors
 
-This branch tests `both`; see [ablation scope](sparse_ablation.md).
+This branch combines numeric document IDs with an adaptive sparse search plan;
+see [optimization scope](sparse_ablation.md).
 
 This fork explores the managed-index alternative to #1568 / #1587 and the
 dense+sparse RRF use case discussed in #1601. It is a prototype, not a release
@@ -28,11 +29,13 @@ old vector, HDEL removes the field, DEL/expiry removes its postings. Invalid
 values follow the existing invalid-field policy. Schema metadata is persisted;
 postings are rebuilt from the HASH values during RDB loading, like TAG/NUMERIC.
 
-Filtered searches enumerate matching keys first and score their forward
-vectors. Unfiltered searches accumulate over the union of query posting
-lists. Both select top-K with a bounded heap. The unconditional filtered path
-is an experiment: it severely regresses on broad filters. It does not scan vectors with no
-overlap. Accumulation uses double precision in increasing dimension order;
+Filtered searches choose between scoring matching forward vectors and
+accumulating the union of query posting lists. The planner compares the
+filter cardinality estimate times the mean document/query vector lengths
+with the number of query postings. Negated and vector-range filters retain
+the posting path because even estimating their candidates can be expensive.
+Unfiltered searches also use postings. Both select top-K with a bounded heap
+and return only documents with nonzero-weight overlap. Accumulation uses double precision in increasing dimension order;
 the existing query pipeline represents the final distance as FLOAT32. Distance
 is **negative dot product**, sorted ascending with key-ascending ties. Overflow
 outside FLOAT32 is an error. This is exact retrieval for that declared ranking
@@ -43,8 +46,7 @@ mutations and queries share the schema's reader/writer phase synchronization;
 the sparse index owns its data instead of borrowing Valkey STRING buffers.
 This ablation uses recycled numeric document IDs, contiguous posting arrays
 and forward vectors with deletion back-references. Query-local score arrays
-avoid per-candidate string-key hashing. It has no compressed blocks or
-selectivity-aware sparse plan chooser yet.
+avoid per-candidate string-key hashing. It has no compressed posting blocks or approximate pruning.
 
 ## Dense + sparse RRF
 

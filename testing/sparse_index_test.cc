@@ -99,6 +99,33 @@ TEST_F(SparseIndexTest, SignedDotProductsTiesFilterAndUpdates) {
   EXPECT_EQ(Search(query).status().code(), absl::StatusCode::kDeadlineExceeded);
 }
 
+TEST_F(SparseIndexTest, PlanEstimateTracksReplacementAndRemoval) {
+  ASSERT_TRUE(Add("a", Encode({{1, 2}, {2, 1}})).ok());
+  ASSERT_TRUE(Add("b", Encode({{1, 3}, {2, 1}})).ok());
+  const auto query = Encode({{1, 1}});
+  EXPECT_TRUE(*index.PreferPrefilter(query, 0));
+  EXPECT_FALSE(*index.PreferPrefilter(query, 2));
+  EXPECT_FALSE(index.PreferPrefilter("invalid", 0).ok());
+  auto a = StringInternStore::Intern("a");
+  ASSERT_TRUE(index
+                  .ModifyRecord(a, AttributeData(vmsdk::MakeUniqueValkeyString(
+                                       Encode({{1, 2}}))))
+                  .ok());
+  ASSERT_TRUE(
+      index.RemoveRecord(StringInternStore::Intern("b"), DeletionType::kRecord)
+          .ok());
+  ASSERT_TRUE(Add("c", Encode({{1, 4}})).ok());
+  // Two postings now cost as much as one two-pointer forward scan. A stale
+  // count left by replacement/removal would choose the other plan.
+  EXPECT_TRUE(*index.PreferPrefilter(query, 1));
+  EXPECT_FALSE(*index.PreferPrefilter(query, 2));
+  ASSERT_TRUE(index
+                  .ModifyRecord(a, AttributeData(vmsdk::MakeUniqueValkeyString(
+                                       "invalid")))
+                  .ok());
+  EXPECT_FALSE(*index.PreferPrefilter(query, 1));
+}
+
 TEST_F(SparseIndexTest, RescoringAndOverflow) {
   auto record = Encode({{1, -2}, {3, 4}});
   EXPECT_EQ(*Sparse::RecomputeDistance(record, Encode({{1, 2}, {3, 3}})), -8);

@@ -131,6 +131,7 @@ absl::StatusOr<RecordResult> Sparse::AddRecord(const InternedStringPtr &key,
 }
 
 void Sparse::AddPostings(DocId id) {
+  posting_count_ += records_[id].entries.size();
   for (auto &entry : records_[id].entries) {
     auto &posting = postings_[entry.dimension];
     entry.posting_offset = static_cast<uint32_t>(posting.size());
@@ -139,6 +140,7 @@ void Sparse::AddPostings(DocId id) {
 }
 
 void Sparse::ErasePostings(DocId id) {
+  posting_count_ -= records_[id].entries.size();
   for (const auto &entry : records_[id].entries) {
     auto it = postings_.find(entry.dimension);
     auto &posting = it->second;
@@ -195,6 +197,22 @@ absl::StatusOr<bool> Sparse::RemoveRecord(const InternedStringPtr &key,
   ids_.erase(it);
   free_ids_.push_back(id);
   return true;
+}
+
+absl::StatusOr<bool> Sparse::PreferPrefilter(absl::string_view query,
+                                             size_t candidate_count) const
+    ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  VMSDK_ASSIGN_OR_RETURN(auto entries, Decode(query));
+  double posting_work = 0;
+  for (const auto &entry : entries) {
+    auto it = postings_.find(entry.dimension);
+    if (it != postings_.end()) {
+      posting_work += it->second.size();
+    }
+  }
+  const double mean_nnz =
+      ids_.empty() ? 0 : double(posting_count_) / ids_.size();
+  return double(candidate_count) * (mean_nnz + entries.size()) <= posting_work;
 }
 
 absl::StatusOr<std::vector<Neighbor>> Sparse::Search(

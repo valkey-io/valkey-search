@@ -1,27 +1,29 @@
-# Sparse ablation: both
+# Sparse traversal and numeric IDs
 
-This is an isolated experiment based on d08ad005ed82b1d188c47452b3d8714e343853b9,
-not a production release or an automatic change to the default PR branch.
-
+This prototype builds on the isolated numeric-ID and prefilter experiments.
 The HASH wire format, signed dot product, FLOAT32 final distances, overlap-only
 candidate contract and key-ascending ties are unchanged.
 
-`prefilter` enumerates matching keys with the existing filter planner and scores
-their forward vectors. It is intentionally unconditional for filtered queries
-in this ablation. A filter matching most documents is a severe performance
-regression; a selectivity-aware plan chooser is required before general use.
+Postings contain recycled uint32 document IDs and FLOAT32 weights. Swap deletion
+and forward back-references support replacement/removal without tombstones.
+Query-local score arrays avoid per-candidate string hashing; their memory scales
+with the highest allocated slot count, not just current matches.
 
-`numeric` uses recycled uint32 document IDs, contiguous (ID, FLOAT32 weight)
-postings, swap deletion with forward back-references, and query-local arrays
-for score accumulation. Query memory scales with the highest allocated slot
-count, not only the current number of matching documents.
+For a selective filter, the existing filter engine enumerates candidates and
+sparse search scores their forward vectors. An adaptive plan compares estimated
+forward work with the sum of query posting lengths. It retains posting traversal
+when enumeration is more expensive. Negation and vector-range predicates bypass
+estimation because constructing their fetchers can itself perform substantial
+work. Their predicates and INKEYS are still evaluated on the posting path.
 
-`both` combines those two changes. See the comparison in PR #1 for measured
-throughput, latency, memory and the broad-filter negative result. In each of
-these branches the name identifies the enabled treatment; the unmodified
-parent is the control. Numeric-only retains the candidate-list helper so the
-representation can be tested independently of its use by the query planner.
+The cost estimate is a heuristic for execution time, not a relevance or recall
+heuristic. Both traversals implement the same ranking and candidate contract.
+Average vector length is maintained on updates/removals and rebuilt with the
+index after RDB loading. A skewed corpus can make the cost estimate inaccurate;
+that affects performance, not the requested result.
 
-Tests exercise signed/zero sums, deletion and ID reuse, Boolean and numeric
-filters, INKEYS, mutations, RDB restore and independent dense/sparse RRF.
-Benchmark harnesses and private corpora are intentionally outside the branch.
+Tests cover signed/zero sums, replacement, deletion and ID reuse, Boolean and
+numeric filters, negation with INKEYS, RDB restore and dense/sparse RRF.
+Benchmark harnesses and private corpora remain outside this branch. This is an
+experimental managed index, not a replacement for the standalone QP C command
+on existing Valkey 9.0 deployments.

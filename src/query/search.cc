@@ -1465,29 +1465,50 @@ absl::StatusOr<std::vector<indexes::Neighbor>> DoSearchVector(
     };
     auto cancellation = parameters.cancellation_token;
     std::vector<InternedStringPtr> candidates;
+    bool use_prefilter = false;
     auto *predicate = parameters.filter_parse_results.root_predicate.get();
-    if (predicate) {
+    const auto operations = parameters.filter_parse_results.query_operations;
+    // Negated TAG fetchers enumerate the tag dictionary while being created;
+    // vector-range fetchers may run a search. Avoid paying that cost merely to
+    // estimate a plan that could be rejected. The posting path handles both.
+    const bool cheap_estimate =
+        !(operations & QueryOperations::kContainsNegate) &&
+        !(operations & QueryOperations::kContainsVectorRange);
+    if (predicate && cheap_estimate) {
       std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> fetchers;
       auto estimate =
           EvaluateFilterAsPrimary(parameters, predicate, fetchers, false);
-      EvaluatePrefilteredKeys(
-          parameters, fetchers,
-          [&](const InternedStringPtr &key, auto &) {
-            candidates.push_back(key);
-            return true;
-          },
-          estimate, false, query_ctx);
-    } else if (parameters.inkeys) {
-      for (const auto &key : *parameters.inkeys) {
-        candidates.push_back(StringInternStore::Intern(key));
+      VMSDK_ASSIGN_OR_RETURN(
+          use_prefilter, sparse->PreferPrefilter(parameters.query, estimate));
+      if (use_prefilter) {
+        EvaluatePrefilteredKeys(
+            parameters, fetchers,
+            [&](const InternedStringPtr &key, auto &) {
+              candidates.push_back(key);
+              return true;
+            },
+            estimate, false, query_ctx);
+      }
+    } else if (!predicate && parameters.inkeys) {
+      VMSDK_ASSIGN_OR_RETURN(
+          use_prefilter,
+          sparse->PreferPrefilter(parameters.query, parameters.inkeys->size()));
+      if (use_prefilter) {
+        for (const auto &key : *parameters.inkeys) {
+          candidates.push_back(StringInternStore::Intern(key));
+        }
       }
     }
     if (cancellation->IsCancelled()) {
       return absl::DeadlineExceededError("Sparse prefilter cancelled");
     }
-    return sparse->Search(
-        parameters.query, parameters.k, cancellation, filter,
-        (predicate || parameters.inkeys) ? &candidates : nullptr);
+    if (use_prefilter) {
+      // The enumerator has already applied the complete predicate and INKEYS.
+      return sparse->Search(
+          parameters.query, parameters.k, cancellation,
+          [](const auto &) { return true; }, &candidates);
+    }
+    return sparse->Search(parameters.query, parameters.k, cancellation, filter);
   }
   auto *vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
   if (index->GetIndexerType() != indexes::IndexerType::kHNSW &&

@@ -69,6 +69,11 @@ class Sparse : public IndexBase {
       absl::AnyInvocable<bool(const InternedStringPtr &)> filter,
       const std::vector<InternedStringPtr> *candidates = nullptr) const;
 
+  // Reader-phase cost estimate; chooses a traversal without changing results.
+  // Forward work includes both sorted vectors, posting work their list sizes.
+  absl::StatusOr<bool> PreferPrefilter(absl::string_view query,
+                                       size_t candidate_count) const;
+
  private:
   using DocId = uint32_t;
   struct Posting {
@@ -85,6 +90,7 @@ class Sparse : public IndexBase {
   InternedStringHashMap<DocId> ids_ ABSL_GUARDED_BY(mutex_);
   std::vector<Record> records_ ABSL_GUARDED_BY(mutex_);
   std::vector<DocId> free_ids_ ABSL_GUARDED_BY(mutex_);
+  size_t posting_count_ ABSL_GUARDED_BY(mutex_) = 0;
   BagOfInternedStringPtrs untracked_ ABSL_GUARDED_BY(mutex_);
   absl::flat_hash_map<uint32_t, std::vector<Posting>> postings_
       ABSL_GUARDED_BY(mutex_);

@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <bit>
 #include <limits>
+#include <optional>
 #include <queue>
 
 #include "src/attribute_data.h"
@@ -28,6 +29,26 @@ absl::StatusOr<float> Distance(double dot) {
     return absl::InvalidArgumentError("Sparse dot product exceeds FLOAT32");
   }
   return -static_cast<float>(dot);
+}
+
+// Both inputs are ordered by dimension; preserve the unfiltered summation
+// order.
+std::optional<double> Dot(const std::vector<Sparse::Entry> &record,
+                          const std::vector<Sparse::Entry> &query) {
+  size_t i = 0, j = 0;
+  double sum = 0;
+  bool overlap = false;
+  while (i < record.size() && j < query.size()) {
+    if (record[i].dimension < query[j].dimension) {
+      ++i;
+    } else if (record[i].dimension > query[j].dimension) {
+      ++j;
+    } else {
+      sum += double(record[i++].weight) * double(query[j++].weight);
+      overlap = true;
+    }
+  }
+  return overlap ? std::optional<double>(sum) : std::nullopt;
 }
 }  // namespace
 
@@ -88,25 +109,54 @@ absl::StatusOr<RecordResult> Sparse::AddRecord(const InternedStringPtr &key,
     untracked_.insert(key);
     return entries.ok() ? RecordResult::kMissing : RecordResult::kInvalidData;
   }
-  auto [it, inserted] = records_.emplace(key, std::move(*entries));
-  if (!inserted) {
+  if (ids_.contains(key)) {
     return absl::AlreadyExistsError("Sparse record already exists");
   }
-  for (const auto &entry : it->second) {
-    postings_[entry.dimension].emplace(key, entry.weight);
+  DocId id;
+  if (free_ids_.empty()) {
+    if (records_.size() >= std::numeric_limits<DocId>::max()) {
+      return absl::ResourceExhaustedError("Sparse document ID space exhausted");
+    }
+    id = static_cast<DocId>(records_.size());
+    records_.emplace_back();
+  } else {
+    id = free_ids_.back();
+    free_ids_.pop_back();
   }
+  records_[id] = {key, std::move(*entries)};
+  ids_.emplace(key, id);
+  AddPostings(id);
   untracked_.erase(key);
   return RecordResult::kAdded;
 }
 
-void Sparse::ErasePostings(const InternedStringPtr &key,
-                           const std::vector<Entry> &entries) {
-  for (const auto &entry : entries) {
+void Sparse::AddPostings(DocId id) {
+  for (auto &entry : records_[id].entries) {
+    auto &posting = postings_[entry.dimension];
+    entry.posting_offset = static_cast<uint32_t>(posting.size());
+    posting.push_back({id, entry.weight});
+  }
+}
+
+void Sparse::ErasePostings(DocId id) {
+  for (const auto &entry : records_[id].entries) {
     auto it = postings_.find(entry.dimension);
-    it->second.erase(key);
-    if (it->second.empty()) {
-      postings_.erase(it);
+    auto &posting = it->second;
+    const Posting moved = posting.back();
+    posting[entry.posting_offset] = moved;
+    posting.pop_back();
+    if (moved.id != id) {
+      // Each record has one forward entry per dimension. Repair the swapped
+      // posting's back-reference so a later replacement/removal stays O(nnz).
+      auto &forward = records_[moved.id].entries;
+      auto moved_entry =
+          std::lower_bound(forward.begin(), forward.end(), entry.dimension,
+                           [](const Entry &a, uint32_t dimension) {
+                             return a.dimension < dimension;
+                           });
+      moved_entry->posting_offset = entry.posting_offset;
     }
+    if (posting.empty()) postings_.erase(it);
   }
 }
 
@@ -114,88 +164,111 @@ absl::StatusOr<RecordResult> Sparse::ModifyRecord(const InternedStringPtr &key,
                                                   AttributeData &&data) {
   auto entries = Decode(data.GetStringView());
   absl::MutexLock lock(&mutex_);
-  auto it = records_.find(key);
-  if (it == records_.end()) {
-    return absl::NotFoundError("Sparse record not found");
-  }
-  ErasePostings(key, it->second);
+  auto it = ids_.find(key);
+  if (it == ids_.end()) return absl::NotFoundError("Sparse record not found");
+  const DocId id = it->second;
+  ErasePostings(id);
   if (!entries.ok() || entries->empty()) {
-    records_.erase(it);
+    ids_.erase(it);
+    records_[id] = {};
+    free_ids_.push_back(id);
     untracked_.insert(key);
     return entries.ok() ? RecordResult::kMissing : RecordResult::kInvalidData;
   }
-  it->second = std::move(*entries);
-  for (const auto &entry : it->second) {
-    postings_[entry.dimension].emplace(key, entry.weight);
-  }
+  records_[id].entries = std::move(*entries);
+  AddPostings(id);
   return RecordResult::kAdded;
 }
 
 absl::StatusOr<bool> Sparse::RemoveRecord(const InternedStringPtr &key,
                                           DeletionType deletion_type) {
   absl::MutexLock lock(&mutex_);
-  if (deletion_type == DeletionType::kRecord) {
+  if (deletion_type == DeletionType::kRecord)
     untracked_.erase(key);
-  } else {
+  else
     untracked_.insert(key);
-  }
-  auto it = records_.find(key);
-  if (it == records_.end()) {
-    return false;
-  }
-  ErasePostings(key, it->second);
-  records_.erase(it);
+  auto it = ids_.find(key);
+  if (it == ids_.end()) return false;
+  const DocId id = it->second;
+  ErasePostings(id);
+  records_[id] = {};
+  ids_.erase(it);
+  free_ids_.push_back(id);
   return true;
 }
 
 absl::StatusOr<std::vector<Neighbor>> Sparse::Search(
     absl::string_view query, size_t count, cancel::Token &cancellation,
-    absl::AnyInvocable<bool(const InternedStringPtr &)> filter) const
+    absl::AnyInvocable<bool(const InternedStringPtr &)> filter,
+    const std::vector<InternedStringPtr> *candidates) const
     ABSL_NO_THREAD_SAFETY_ANALYSIS {
   VMSDK_ASSIGN_OR_RETURN(auto entries, Decode(query));
-  InternedStringHashMap<double> scores;
-  size_t visited = 0;
-  for (const auto &entry : entries) {
-    auto posting = postings_.find(entry.dimension);
-    if (posting == postings_.end()) {
-      continue;
+  struct Hit {
+    DocId id;
+    float distance;
+  };
+  auto better = [this](const Hit &a,
+                       const Hit &b) ABSL_NO_THREAD_SAFETY_ANALYSIS {
+    return a.distance != b.distance
+               ? a.distance < b.distance
+               : records_[a.id].key->Str() < records_[b.id].key->Str();
+  };
+  std::priority_queue<Hit, std::vector<Hit>, decltype(better)> heap(better);
+  auto add = [&](DocId id, double score)
+                 ABSL_NO_THREAD_SAFETY_ANALYSIS -> absl::Status {
+    if (count == 0 || !filter(records_[id].key)) return absl::OkStatus();
+    VMSDK_ASSIGN_OR_RETURN(auto distance, Distance(score));
+    Hit hit{id, distance};
+    if (heap.size() < count)
+      heap.push(hit);
+    else if (better(hit, heap.top())) {
+      heap.pop();
+      heap.push(hit);
     }
-    for (const auto &[key, weight] : posting->second) {
+    return absl::OkStatus();
+  };
+  size_t visited = 0;
+  if (candidates) {
+    for (const auto &key : *candidates) {
       if ((visited++ & 255) == 0 && cancellation->IsCancelled()) {
         return absl::DeadlineExceededError("Sparse search cancelled");
       }
-      scores[key] += double(weight) * double(entry.weight);
+      auto it = ids_.find(key);
+      if (it == ids_.end()) continue;
+      auto score = Dot(records_[it->second].entries, entries);
+      if (score) VMSDK_RETURN_IF_ERROR(add(it->second, *score));
     }
-  }
-  struct Hit {
-    InternedStringPtr key;
-    float distance;
-  };
-  auto better = [](const Hit &a, const Hit &b) {
-    return a.distance != b.distance ? a.distance < b.distance
-                                    : a.key->Str() < b.key->Str();
-  };
-  std::priority_queue<Hit, std::vector<Hit>, decltype(better)> heap(better);
-  for (const auto &[key, score] : scores) {
-    if ((visited++ & 255) == 0 && cancellation->IsCancelled()) {
-      return absl::DeadlineExceededError("Sparse search cancelled");
+  } else {
+    // Query-local arrays: independent concurrent readers, no shared scratch or
+    // retained state. Marks preserve overlapping documents whose sum is zero.
+    std::vector<double> scores(records_.size(), 0);
+    std::vector<uint8_t> seen(records_.size(), 0);
+    std::vector<DocId> touched;
+    for (const auto &entry : entries) {
+      auto posting = postings_.find(entry.dimension);
+      if (posting == postings_.end()) continue;
+      for (const auto &[id, weight] : posting->second) {
+        if ((visited++ & 255) == 0 && cancellation->IsCancelled()) {
+          return absl::DeadlineExceededError("Sparse search cancelled");
+        }
+        if (!seen[id]) {
+          seen[id] = 1;
+          touched.push_back(id);
+        }
+        scores[id] += double(weight) * double(entry.weight);
+      }
     }
-    if (count == 0 || !filter(key)) {
-      continue;
-    }
-    VMSDK_ASSIGN_OR_RETURN(auto distance, Distance(score));
-    Hit hit{key, distance};
-    if (heap.size() < count) {
-      heap.push(std::move(hit));
-    } else if (better(hit, heap.top())) {
-      heap.pop();
-      heap.push(std::move(hit));
+    for (DocId id : touched) {
+      if ((visited++ & 255) == 0 && cancellation->IsCancelled()) {
+        return absl::DeadlineExceededError("Sparse search cancelled");
+      }
+      VMSDK_RETURN_IF_ERROR(add(id, scores[id]));
     }
   }
   std::vector<Neighbor> result;
   result.reserve(heap.size());
   while (!heap.empty()) {
-    result.emplace_back(heap.top().key, heap.top().distance);
+    result.emplace_back(records_[heap.top().id].key, heap.top().distance);
     heap.pop();
   }
   std::reverse(result.begin(), result.end());
@@ -220,7 +293,7 @@ uint32_t Sparse::GetMutationWeight() const {
 
 size_t Sparse::GetTrackedKeyCount() const {
   absl::MutexLock lock(&mutex_);
-  return records_.size();
+  return ids_.size();
 }
 size_t Sparse::GetUnTrackedKeyCount() const {
   absl::MutexLock lock(&mutex_);
@@ -228,7 +301,7 @@ size_t Sparse::GetUnTrackedKeyCount() const {
 }
 bool Sparse::IsTracked(const InternedStringPtr &key) const {
   absl::MutexLock lock(&mutex_);
-  return records_.contains(key);
+  return ids_.contains(key);
 }
 bool Sparse::IsUnTracked(const InternedStringPtr &key) const {
   absl::MutexLock lock(&mutex_);
@@ -241,7 +314,7 @@ void Sparse::UnTrack(const InternedStringPtr &key) {
 absl::Status Sparse::ForEachTrackedKey(
     absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn) const {
   absl::MutexLock lock(&mutex_);
-  for (const auto &[key, entries] : records_) {
+  for (const auto &[key, id] : ids_) {
     VMSDK_RETURN_IF_ERROR(fn(key));
   }
   return absl::OkStatus();

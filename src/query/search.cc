@@ -1464,7 +1464,30 @@ absl::StatusOr<std::vector<indexes::Neighbor>> DoSearchVector(
       return !predicate || evaluator.Evaluate(*predicate, key);
     };
     auto cancellation = parameters.cancellation_token;
-    return sparse->Search(parameters.query, parameters.k, cancellation, filter);
+    std::vector<InternedStringPtr> candidates;
+    auto *predicate = parameters.filter_parse_results.root_predicate.get();
+    if (predicate) {
+      std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> fetchers;
+      auto estimate =
+          EvaluateFilterAsPrimary(parameters, predicate, fetchers, false);
+      EvaluatePrefilteredKeys(
+          parameters, fetchers,
+          [&](const InternedStringPtr &key, auto &) {
+            candidates.push_back(key);
+            return true;
+          },
+          estimate, false, query_ctx);
+    } else if (parameters.inkeys) {
+      for (const auto &key : *parameters.inkeys) {
+        candidates.push_back(StringInternStore::Intern(key));
+      }
+    }
+    if (cancellation->IsCancelled()) {
+      return absl::DeadlineExceededError("Sparse prefilter cancelled");
+    }
+    return sparse->Search(
+        parameters.query, parameters.k, cancellation, filter,
+        (predicate || parameters.inkeys) ? &candidates : nullptr);
   }
   auto *vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
   if (index->GetIndexerType() != indexes::IndexerType::kHNSW &&

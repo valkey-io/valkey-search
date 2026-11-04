@@ -24,6 +24,7 @@ class Sparse : public IndexBase {
   struct Entry {
     uint32_t dimension;
     float weight;
+    uint32_t posting_offset = 0;
   };
   Sparse() : IndexBase(IndexerType::kSparse) {}
 
@@ -65,16 +66,27 @@ class Sparse : public IndexBase {
   // breaking ties by key ascending. Filter runs before top-K truncation.
   absl::StatusOr<std::vector<Neighbor>> Search(
       absl::string_view query, size_t count, cancel::Token &cancellation,
-      absl::AnyInvocable<bool(const InternedStringPtr &)> filter) const;
+      absl::AnyInvocable<bool(const InternedStringPtr &)> filter,
+      const std::vector<InternedStringPtr> *candidates = nullptr) const;
 
  private:
-  void ErasePostings(const InternedStringPtr &key,
-                     const std::vector<Entry> &entries)
-      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+  using DocId = uint32_t;
+  struct Posting {
+    DocId id;
+    float weight;
+  };
+  struct Record {
+    InternedStringPtr key;
+    std::vector<Entry> entries;
+  };
+  void AddPostings(DocId id) ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+  void ErasePostings(DocId id) ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
   mutable absl::Mutex mutex_;
-  InternedStringHashMap<std::vector<Entry>> records_ ABSL_GUARDED_BY(mutex_);
+  InternedStringHashMap<DocId> ids_ ABSL_GUARDED_BY(mutex_);
+  std::vector<Record> records_ ABSL_GUARDED_BY(mutex_);
+  std::vector<DocId> free_ids_ ABSL_GUARDED_BY(mutex_);
   BagOfInternedStringPtrs untracked_ ABSL_GUARDED_BY(mutex_);
-  absl::flat_hash_map<uint32_t, InternedStringHashMap<float>> postings_
+  absl::flat_hash_map<uint32_t, std::vector<Posting>> postings_
       ABSL_GUARDED_BY(mutex_);
 };
 }  // namespace valkey_search::indexes

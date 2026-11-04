@@ -163,48 +163,69 @@ Examples of numeric matchers
 
 ### Vector Range Match
 
-The vector range matcher selects keys whose vector field is within a given distance, the radius, of a query vector.
-Unlike a KNN query, it has no query-supplied result count. The number retained by each shard is instead limited by `search.max-nonvector-search-results-fetched`, as described below.
-It can be combined with other matchers using AND, OR and negation.
+A `VECTOR_RANGE` matcher selects keys whose vector is within a specified radius of a query vector. It can be combined with other matchers using AND, OR, and negation.
+
+#### Syntax
 
 ```
 @<field-name>:[VECTOR_RANGE <radius> $<parameter> [EF_RUNTIME <ef>] [AS <name>]]
 @<field-name>:[VECTOR_RANGE <radius> $<parameter>]=>{$YIELD_DISTANCE_AS: <name>}
+@<field-name>:[VECTOR_RANGE <radius> $<parameter>]=>{$EPSILON: <epsilon>}
 @<field-name>:[VECTOR_RANGE <radius> $<parameter>]=>{$YIELD_DISTANCE_AS: <name>; $EPSILON: <epsilon>}
 ```
 
 - `field-name` (required): A `VECTOR` field of the index.
-- `radius` (required): A non-negative floating point number, or `$<name>` to take it from `PARAMS`. A key matches when its distance to the query vector is less than or equal to the radius, which can be `inf`. The radius is compared with the distance as computed for the `DISTANCE_METRIC` of the field, see [FT.CREATE](../commands/ft.create.md):
-  - `L2`: the distance is the squared Euclidean distance, so to match keys within a Euclidean distance `d`, use the radius `d^2`, for example 0.25 for 0.5.
-  - `IP`: the distance is `1 - dot(X,Y)`, which is negative when the dot product is greater than 1, as it can be for unnormalized vectors. A radius of 0 matches every key whose dot product with the query vector is at least 1.
-  - `COSINE`: because of floating-point rounding, the distance between identical vectors can be slightly greater than 0. To match identical vectors, for example to find duplicates, use a small positive radius rather than 0.
-- `parameter` (required): A `PARAMS` name whose value is the query vector, encoded as for a KNN query (see above).
-- `EF_RUNTIME <ef>` (optional): A Valkey Search extension for `VECTOR_RANGE`; Redis rejects this option on range queries. On `HNSW` fields, it replaces the field's `EF_RUNTIME`, configured by `FT.CREATE`, for this query; it is ignored on `FLAT` fields. It must be an integer from 1 to `search.max-vector-ef-runtime`, as for KNN. A higher value can improve recall at the cost of more distance computations. A value above `search.max-nonvector-search-results-fetched` acts as that value. With `INKEYS`, the listed keys are checked directly and the value does not affect execution.
-- `AS <name>` or `$YIELD_DISTANCE_AS: <name>` (optional): Returns the distance of each key within the radius under `<name>`. Without it, no distance is returned. When `RETURN` is used, the distance is returned only if `RETURN` lists `<name>`. `<name>` can be used by `SORTBY`, and as `@<name>` by the stages of `FT.AGGREGATE`. `FT.SEARCH` rejects a name that is an attribute of the index; `FT.AGGREGATE` accepts it, and `@<name>` then refers to the distance, not the attribute.
-- `$EPSILON: <epsilon>` (optional): On `HNSW` fields, the search also walks through keys within `radius * (1 + epsilon)` of the query vector, to reach keys within the radius that are connected only through keys just outside it. A larger value raises recall and costs more distance computations. When `$EPSILON` is omitted, its effective value is 0.01. `0`, `-0`, a negative value (including `-inf` and `-nan`) and text that does not parse as a number are errors. `nan`, `inf` and values above the float range, such as `1e40`, are accepted and act as the largest float, so the search can walk through every key and cost more than an exact scan. A positive value too small for a float, such as `1e-50`, can round to 0 and then gives no widening. No value widens a radius of 0, because `0 * (1 + epsilon)` remains 0. A shard does not re-check a value forwarded by a coordinator: it treats 0 as no widening and a negative value as the largest float. With `INKEYS`, the listed keys are checked directly and no shell is walked. `$EPSILON` is an error on `FLAT` fields.
+- `radius` (required): A non-negative floating-point number, or `$<name>` to read the radius from `PARAMS`. A key matches when its distance is less than or equal to the radius.
+- `parameter` (required): The name of a `PARAMS` entry containing the query vector, encoded as for a KNN query.
+- `EF_RUNTIME <ef>` (optional): Overrides the HNSW field's `EF_RUNTIME` for this query. It must be an integer from 1 through `search.max-vector-ef-runtime`. It is ignored for `FLAT` fields.
+- `AS <name>` or `$YIELD_DISTANCE_AS: <name>` (optional): Makes the distance available as `<name>`. When `RETURN` is used, it must list `<name>` to return the distance. `SORTBY` and `FT.AGGREGATE` stages can also use the name. `FT.SEARCH` rejects a name that is already an index attribute; `FT.AGGREGATE` accepts it and resolves `@<name>` to the distance.
+- `$EPSILON: <epsilon>` (optional): Controls how far an HNSW search explores beyond the radius. Use a value greater than 0. It is rejected for `FLAT` fields.
 
-The keyword and the attribute names are case-insensitive.
+The keyword and attribute names are case-insensitive.
 
 Restrictions:
 
-- A query can contain at most one vector range matcher, and a vector range matcher cannot be used in the filter of a KNN query.
-- The attributes must directly follow the closing `]`, so `(@v:[VECTOR_RANGE 0.2 $vec])=>{$YIELD_DISTANCE_AS: dist}` is an error. Attribute values are not substituted from `PARAMS`.
-- `$weight` is not supported.
+- A query can contain at most one `VECTOR_RANGE` matcher.
+- `VECTOR_RANGE` cannot be used in the filter of a KNN query.
+- Query attributes must directly follow the closing `]`. For example, `(@v:[VECTOR_RANGE 0.2 $vec])=>{$YIELD_DISTANCE_AS: dist}` is invalid.
+- Query attribute values cannot be read from `PARAMS`.
+- `$weight` is not a supported `VECTOR_RANGE` attribute.
 
-Order and scores: a vector range query is a non-vector query, so its results are not sorted by distance, and `WITHSCORES` reports the relevance score of the other matchers of the query (0 if there are none).
-To get the closest keys first, yield the distance and sort on it, for example `SORTBY <name> ASC`.
+#### Distances and ordering
 
-Non-finite distances: a NaN or `+inf` distance is within no radius, not even `inf`; a `-inf` distance, which only `IP` can produce, is within every radius. NaN can come from a NaN vector component, but it can also arise when a non-finite query interacts with a finite stored vector, for example an `IP` query whose infinite component is multiplied by a stored zero component.
+The radius uses the distance metric configured for the field:
 
-Result cap: `search.max-nonvector-search-results-fetched` (default 100000), `N` below, is the most keys each shard returns for a query containing `VECTOR_RANGE`. Further matches are dropped without an error, and the reply total counts only the keys returned. When `INKEYS` is present, the shard evaluates only those listed keys before applying the cap. The INFO counter `search_vector_range_results_fetched_limited_count` increments once on each shard that found a match beyond the `N` it returned, so a query with exactly `N` matches does not increment it. With `N = 0` a shard returns no keys. Which keys are returned is unspecified; they need not be the nearest matches. In a cluster, the coordinator sums the shard totals, so a query can return up to `shard_count * N` keys. `SORTBY`, `LIMIT` and pagination, aggregation stages and reducers, and cursors see only the returned keys. This is an intentional compatibility difference: Redis Search does not apply this Valkey Search setting as a hard `VECTOR_RANGE` result cap.
+- `L2`: Squared Euclidean distance. To match keys within Euclidean distance `d`, use radius `d²`. For example, use `0.25` for distance `0.5`.
+- `IP`: `1 - dot(X,Y)`. The distance can be negative for unnormalized vectors. A radius of 0 matches vectors whose dot product with the query vector is at least 1.
+- `COSINE`: Floating-point rounding can make the distance between identical vectors slightly greater than 0. Use a small positive radius when searching for identical vectors.
 
-`HNSW` fields without `INKEYS`: the result is approximate, as for a KNN query, and can miss keys within the radius. The effective `EF_RUNTIME`, the query's `EF_RUNTIME` when given and otherwise the field's, controls recall: a higher value can find more of the keys within the radius and computes more distances. `$EPSILON` widens the region the search walks through to `radius * (1 + epsilon)`, but only keys within the radius are returned. For `L2`, the radius and the widened region are both in squared-distance units. A `COSINE` radius of 2 or more covers the whole cosine distance range `[0, 2]`, so the shard compares every key exactly instead of walking the graph. If the walk computes a NaN distance, or an infinite distance on a `COSINE` field, it stops and the shard compares every key exactly. If the walk finds `N` keys within `radius * (1 + epsilon)`, where `N` is `search.max-nonvector-search-results-fetched`, but not `N + 1` keys within the radius, the shard also compares every key exactly, because the walk cannot tell exactly `N` matches from truncation. A query whose radius holds exactly `N` keys therefore costs one distance computation per indexed key, while a walk that finds `N + 1` keys within the radius returns without this scan. If the query times out, the shard skips the exact comparison and keeps the keys found so far; `FT.SEARCH` then returns them or a timeout error, as `SOMESHARDS` or `ALLSHARDS` selects. `FLAT` fields compare every key exactly and stop once more than `N` keys match.
+`VECTOR_RANGE` results are not sorted by distance. To return the closest keys first, yield the distance and use `SORTBY <name> ASC`. `WITHSCORES` returns the relevance score from other matchers, or 0 when there are none.
 
-OR: when a key matches through another branch of a `|` (OR), its distance is still computed. It is returned under `<name>` only if the key is within the radius. When sorting by `<name>`, a key without a vector range distance sorts after every key that has one, for both `ASC` and `DESC`.
+The `VECTOR_RANGE` matcher does not match a key when its computed distance is NaN or positive infinity, even when the radius is `inf`. An `IP` distance of negative infinity matches every valid radius.
 
-Compound queries: the cap counts unique keys that match the whole query, after AND, OR and negation are applied. Which of those keys a shard keeps is unspecified. The truncation counter increments at most once per query on each shard, even when the vector range part of the query is also truncated.
+#### Result limit
 
-Rolling upgrades: earlier versions that support `VECTOR_RANGE` accept `EF_RUNTIME` and `$EPSILON` on it but ignore them. A shard running such a version also does not apply this result cap, so a query can return more than `shard_count * N` keys until every shard is upgraded. A coordinator running such a version does not forward the query's `EF_RUNTIME`, so upgraded shards use the field's `EF_RUNTIME`.
+`search.max-nonvector-search-results-fetched`, which defaults to 100000, limits how many matching keys each shard retains. If more keys match, the shard drops the additional matches without returning an error. The reported total includes only retained keys, and the retained keys are not guaranteed to be the nearest matches.
+
+In a cluster, each shard applies the limit independently, so a query can retain up to `number of shards × limit` keys before command-level pagination. `SORTBY`, `LIMIT`, aggregation stages, reducers, and cursors operate on the retained keys and cannot recover dropped matches.
+
+With `INKEYS`, each shard evaluates only the listed keys before applying the result limit.
+
+A limit of 0 returns no keys. The `search_vector_range_results_fetched_limited_count` INFO counter increments once on each shard that confirms at least one matching key was dropped. A query with exactly the configured number of matches does not increment it.
+
+#### HNSW search
+
+`FLAT` evaluates vector distances exactly. `HNSW` uses the graph and can miss keys that are within the radius.
+
+A larger `EF_RUNTIME` can improve HNSW recall by examining more graph candidates, at the cost of more distance calculations. If the query does not provide `EF_RUNTIME`, the field's configured value is used.
+
+HNSW also explores vectors within `radius × (1 + epsilon)` so it can reach matching vectors through nearby graph nodes outside the radius. Only vectors within the original radius are returned. The default epsilon is `0.01`; a larger value can improve recall but performs more work. With `INKEYS`, the listed keys are checked directly, so `EF_RUNTIME` and `$EPSILON` do not affect execution.
+
+#### Compound queries
+
+The result limit is applied to unique keys after the complete AND, OR, and negation expression is evaluated.
+
+A key can match through another branch of an OR expression while remaining outside the vector radius. The key stays in the result, but it has no yielded VECTOR_RANGE distance. When sorting by the distance, keys without one appear after keys with a distance for both `ASC` and `DESC`.
 
 For examples, see [Example Vector Range Queries](#example-vector-range-queries).
 

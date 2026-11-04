@@ -100,6 +100,10 @@ bool IsValidPrefix(absl::string_view str) {
 Tag::Tag(const data_model::TagIndex &tag_index_proto)
     : IndexBase(IndexerType::kTag),
       separator_(tag_index_proto.separator()[0]),
+      explicit_separator_(
+          tag_index_proto.has_explicit_separator()
+              ? std::optional<bool>(tag_index_proto.explicit_separator())
+              : std::nullopt),
       case_sensitive_(tag_index_proto.case_sensitive()),
       tree_(raxNew()) {}
 
@@ -327,6 +331,9 @@ std::unique_ptr<data_model::Index> Tag::ToProto() const {
   auto index_proto = std::make_unique<data_model::Index>();
   auto tag_index = std::make_unique<data_model::TagIndex>();
   tag_index->set_separator(absl::string_view(&separator_, 1));
+  if (explicit_separator_.has_value()) {
+    tag_index->set_explicit_separator(*explicit_separator_);
+  }
   tag_index->set_case_sensitive(case_sensitive_);
   index_proto->set_allocated_tag_index(tag_index.release());
   return index_proto;

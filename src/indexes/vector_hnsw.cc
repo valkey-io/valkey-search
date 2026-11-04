@@ -477,5 +477,6 @@ size_t VectorHNSW<T>::GetLabelCount() const {
 template class VectorHNSW<float>;
 template class VectorHNSW<float16>;
 template class VectorHNSW<bfloat16>;
+template class VectorHNSW<double>;
 
 }  // namespace valkey_search::indexes

@@ -483,16 +483,41 @@ class TestVectorFieldTypeConflict(ValkeySearchTestCaseDebugMode):
         assert b"second" not in names, f"rejected index was still created: {names}"
 
     @pytest.mark.parametrize(
+        "type_a,type_b",
+        [
+            ("FLOAT32", "FLOAT64"),
+            ("FLOAT64", "FLOAT32"),
+            ("FLOAT64", "FLOAT16"),
+            ("BFLOAT16", "FLOAT64"),
+        ],
+    )
+    def test_float64_conflicting_types_rejected(self, type_a, type_b):
+        """FLOAT64 records carry a wider header than the other types, so a
+        shared field must never be deduplicated across FLOAT64 and another
+        type."""
+        client: Valkey = self.server.get_new_client()
+        assert self._create(client, "first", "k:", "v", type_a) == ""
+        err = self._create(client, "second", "k:", "v", type_b)
+        assert err, "second index should have been rejected"
+        assert type_a in err and "first" in err, (
+            f"error should name the conflicting type and index: {err}"
+        )
+        names = client.execute_command("FT._LIST")
+        assert b"second" not in names, f"rejected index was still created: {names}"
+
+    @pytest.mark.parametrize(
         "desc,prefix_a,field_a,type_a,prefix_b,field_b,type_b",
         [
             # Same type is fine -- e.g. an HNSW and a FLAT index over one field.
             ("same type", "q:", "v", "FLOAT16", "q:", "v", "FLOAT16"),
+            ("same type FLOAT64", "u:", "v", "FLOAT64", "u:", "v", "FLOAT64"),
             # Different fields never conflict.
             ("different fields", "r:", "v1", "FLOAT16", "r:", "v2", "BFLOAT16"),
             # Disjoint prefixes can never share a key.
             ("disjoint prefixes", "s:", "v", "FLOAT16", "t:", "v", "BFLOAT16"),
         ],
-        ids=["same_type", "different_fields", "disjoint_prefixes"],
+        ids=["same_type", "same_type_float64", "different_fields",
+             "disjoint_prefixes"],
     )
     def test_non_conflicting_combinations_allowed(
         self, desc, prefix_a, field_a, type_a, prefix_b, field_b, type_b
@@ -535,6 +560,20 @@ class TestVectorFieldTypeConflict(ValkeySearchTestCaseDebugMode):
                     "should have been rejected"
         assert "FLOAT16" in err and "v" in err, (
             f"error should name the field and the conflicting type: {err}"
+        )
+        names = client.execute_command("FT._LIST")
+        assert b"selfconflict" not in names, (
+            f"rejected index was still created: {names}"
+        )
+
+    def test_self_conflicting_float64_schema_rejected(self):
+        client: Valkey = self.server.get_new_client()
+        err = self._create_two_vector_fields(client, "selfconflict",
+                                             "FLOAT32", "FLOAT64")
+        assert err, "schema declaring `v` as both FLOAT32 and FLOAT64 " \
+                    "should have been rejected"
+        assert "FLOAT32" in err and "FLOAT64" in err, (
+            f"error should name both conflicting types: {err}"
         )
         names = client.execute_command("FT._LIST")
         assert b"selfconflict" not in names, (

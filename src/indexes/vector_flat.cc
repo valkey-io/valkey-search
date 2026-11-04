@@ -367,5 +367,6 @@ VectorRecord &VectorFlat<T>::GetVector(uint64_t internal_id) const {
 template class VectorFlat<float>;
 template class VectorFlat<float16>;
 template class VectorFlat<bfloat16>;
+template class VectorFlat<double>;
 
 }  // namespace valkey_search::indexes

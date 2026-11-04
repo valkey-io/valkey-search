@@ -53,10 +53,14 @@ template <>
 constexpr double UnitRoundoff<bfloat16>() {
   return 1.0 / (1 << 8);  // 7 explicit mantissa bits
 }
+template <>
+constexpr double UnitRoundoff<double>() {
+  return 1.0 / (uint64_t{1} << 53);  // 52 explicit mantissa bits
+}
 
 template <typename T>
 T Quantize(double v) {
-  return static_cast<T>(static_cast<float>(v));
+  return static_cast<T>(static_cast<MagnitudeOf<T>>(v));
 }
 
 template <typename T>
@@ -78,7 +82,7 @@ template <typename T>
 double ExactMagnitude(const std::vector<T>& q) {
   double sum = 0.0;
   for (const T& x : q) {
-    double d = static_cast<double>(static_cast<float>(x));
+    double d = static_cast<double>(static_cast<MagnitudeOf<T>>(x));
     sum += d * d;
   }
   return std::sqrt(sum);
@@ -96,13 +100,14 @@ template <typename T>
 void ExpectMagnitudeMatchesReference(const std::vector<double>& raw) {
   auto q = QuantizeAll<T>(raw);
   const double expected_recip = 1.0 / ExactMagnitude<T>(q);
-  const float got = CalcReciprocalMagnitude(q.data(), q.size());
+  const MagnitudeOf<T> got = CalcReciprocalMagnitude(q.data(), q.size());
 
-  // The accumulator runs in float, so the achievable bound is float's unit
-  // roundoff scaled by the term count -- NOT T's. If the accumulation were
+  // The accumulator runs in MagnitudeOf<T>, so the achievable bound is its
+  // unit roundoff scaled by the term count -- NOT T's. If the accumulation were
   // (incorrectly) done in T, the error would land near UnitRoundoff<T>(),
   // which for bf16 is ~2500x looser than this bound.
-  const double tol = expected_recip * UnitRoundoff<float>() * q.size() * 4;
+  const double tol =
+      expected_recip * UnitRoundoff<MagnitudeOf<T>>() * q.size() * 4;
   EXPECT_NEAR(static_cast<double>(got), expected_recip, tol);
 }
 
@@ -114,6 +119,9 @@ TEST(VectorNormalizeValidation, ReciprocalMagnitudeFloat16) {
 }
 TEST(VectorNormalizeValidation, ReciprocalMagnitudeBFloat16) {
   ExpectMagnitudeMatchesReference<bfloat16>(Sample());
+}
+TEST(VectorNormalizeValidation, ReciprocalMagnitudeFloat64) {
+  ExpectMagnitudeMatchesReference<double>(Sample());
 }
 
 // The magnitude accumulator must not inherit T's exponent range. Squaring
@@ -132,7 +140,7 @@ TEST(VectorNormalizeValidation, Float16MagnitudeDoesNotOverflowInAccumulator) {
 template <typename T>
 void ExpectNormalizeRoundsOnce(const std::vector<double>& raw) {
   auto q = QuantizeAll<T>(raw);
-  const float recip = CalcReciprocalMagnitude(q.data(), q.size());
+  const MagnitudeOf<T> recip = CalcReciprocalMagnitude(q.data(), q.size());
 
   std::vector<char> out = NormalizeVector<T>(AsBytes(q), recip);
   ASSERT_EQ(out.size(), q.size() * sizeof(T));
@@ -141,8 +149,8 @@ void ExpectNormalizeRoundsOnce(const std::vector<double>& raw) {
   std::memcpy(got.data(), out.data(), out.size());
 
   for (size_t i = 0; i < q.size(); ++i) {
-    // Reference: scale in float, then a single rounding into T.
-    const T want = static_cast<T>(recip * static_cast<float>(q[i]));
+    // Reference: scale in MagnitudeOf<T>, then a single rounding into T.
+    const T want = static_cast<T>(recip * static_cast<MagnitudeOf<T>>(q[i]));
     EXPECT_EQ(std::memcmp(&got[i], &want, sizeof(T)), 0)
         << "element " << i << " was not a single-rounding of the float scale";
   }
@@ -157,6 +165,9 @@ TEST(VectorNormalizeValidation, NormalizeRoundsOnceFloat16) {
 TEST(VectorNormalizeValidation, NormalizeRoundsOnceBFloat16) {
   ExpectNormalizeRoundsOnce<bfloat16>(Sample());
 }
+TEST(VectorNormalizeValidation, NormalizeRoundsOnceFloat64) {
+  ExpectNormalizeRoundsOnce<double>(Sample());
+}
 
 // After normalizing, the vector's magnitude must be 1 to within the
 // quantization of T. This is the property the COSINE save/restore path
@@ -165,7 +176,7 @@ TEST(VectorNormalizeValidation, NormalizeRoundsOnceBFloat16) {
 template <typename T>
 void ExpectUnitMagnitudeAfterNormalize(const std::vector<double>& raw) {
   auto q = QuantizeAll<T>(raw);
-  const float recip = CalcReciprocalMagnitude(q.data(), q.size());
+  const MagnitudeOf<T> recip = CalcReciprocalMagnitude(q.data(), q.size());
   std::vector<char> out = NormalizeVector<T>(AsBytes(q), recip);
 
   std::vector<T> norm(q.size());
@@ -186,6 +197,9 @@ TEST(VectorNormalizeValidation, UnitMagnitudeAfterNormalizeFloat16) {
 TEST(VectorNormalizeValidation, UnitMagnitudeAfterNormalizeBFloat16) {
   ExpectUnitMagnitudeAfterNormalize<bfloat16>(Sample());
 }
+TEST(VectorNormalizeValidation, UnitMagnitudeAfterNormalizeFloat64) {
+  ExpectUnitMagnitudeAfterNormalize<double>(Sample());
+}
 
 // NormalizeVector must interpret the payload with T's element width. Reading
 // a 2-byte vector as 4-byte floats would both halve the element count and
@@ -193,7 +207,7 @@ TEST(VectorNormalizeValidation, UnitMagnitudeAfterNormalizeBFloat16) {
 template <typename T>
 void ExpectElementWidthRespected() {
   auto q = QuantizeAll<T>(Sample());
-  float magnitude = 0.0f;
+  MagnitudeOf<T> magnitude = 0;
   std::vector<char> out = NormalizeVector<T>(AsBytes(q), &magnitude);
   EXPECT_EQ(out.size(), Sample().size() * sizeof(T));
   EXPECT_NEAR(static_cast<double>(magnitude), ExactMagnitude<T>(q),
@@ -209,12 +223,15 @@ TEST(VectorNormalizeValidation, ElementWidthFloat16) {
 TEST(VectorNormalizeValidation, ElementWidthBFloat16) {
   ExpectElementWidthRespected<bfloat16>();
 }
+TEST(VectorNormalizeValidation, ElementWidthFloat64) {
+  ExpectElementWidthRespected<double>();
+}
 
 // Zero vectors must not produce inf/NaN: the reciprocal is defined as 1.0.
 template <typename T>
 void ExpectZeroVectorSafe() {
   std::vector<T> q(8, Quantize<T>(0.0));
-  const float recip = CalcReciprocalMagnitude(q.data(), q.size());
+  const MagnitudeOf<T> recip = CalcReciprocalMagnitude(q.data(), q.size());
   EXPECT_EQ(recip, 1.0f);
   std::vector<char> out = NormalizeVector<T>(AsBytes(q), recip);
   std::vector<T> norm(q.size());
@@ -232,6 +249,9 @@ TEST(VectorNormalizeValidation, ZeroVectorFloat16) {
 }
 TEST(VectorNormalizeValidation, ZeroVectorBFloat16) {
   ExpectZeroVectorSafe<bfloat16>();
+}
+TEST(VectorNormalizeValidation, ZeroVectorFloat64) {
+  ExpectZeroVectorSafe<double>();
 }
 
 }  // namespace

@@ -68,8 +68,8 @@ inline constexpr size_t UpperBoundToMultipleOf64(size_t num) {
   return (num + 63) & ~size_t(63);
 }
 
-// Storage header placed immediately before a VectorRecord's vector data. Its
-// layout depends on the type the reciprocal magnitude is kept in.
+// Header placed before a VectorRecord's vector data. In every layout the
+// reference count is at data - 8.
 template <typename MagnitudeT>
 struct VectorRecordHeader;
 
@@ -79,10 +79,25 @@ struct VectorRecordHeader<float> {
   const float reciprocal_magnitude_{1.0f};
 };
 
-static_assert(sizeof(VectorRecordHeader<float>) == 8);
+template <>
+struct VectorRecordHeader<double> {
+  const double reciprocal_magnitude_{1.0};
+  mutable std::atomic<uint32_t> ref_count_{1};
+  const uint32_t padding_{0};
+};
 
-// Type-erased handle to vector data that carries a VectorRecordHeader. Code
-// that knows the header type statically uses TypedVectorRecord instead.
+static_assert(sizeof(VectorRecordHeader<float>) == 8);
+static_assert(sizeof(VectorRecordHeader<double>) == 16);
+static_assert(sizeof(VectorRecordHeader<float>) -
+                  offsetof(VectorRecordHeader<float>, ref_count_) ==
+              8);
+static_assert(sizeof(VectorRecordHeader<double>) -
+                  offsetof(VectorRecordHeader<double>, ref_count_) ==
+              8);
+
+// Type-erased handle to vector data that carries a VectorRecordHeader. The top
+// bit of the reference count marks a VectorRecordHeader<double>; code that
+// knows the header type statically uses TypedVectorRecord instead.
 class VectorRecord {
  public:
   VectorRecord() noexcept : data_(nullptr) {}
@@ -155,14 +170,20 @@ class VectorRecord {
     return data_.load(std::memory_order_relaxed);
   }
 
-  float GetReciprocalMagnitude() const noexcept {
+  double GetReciprocalMagnitude() const noexcept {
     const char *ptr = data_.load(std::memory_order_relaxed);
-    return ptr ? GetHeader<float>(ptr)->reciprocal_magnitude_ : 1.0f;
+    if (!ptr) {
+      return 1.0;
+    }
+    return HasDoubleHeader(ptr) ? GetHeader<double>(ptr)->reciprocal_magnitude_
+                                : GetHeader<float>(ptr)->reciprocal_magnitude_;
   }
 
   uint32_t RefCount() const noexcept {
     const char *ptr = data_.load(std::memory_order_relaxed);
-    return ptr ? GetRefCount(ptr)->load(std::memory_order_relaxed) : 0;
+    return ptr ? GetRefCount(ptr)->load(std::memory_order_relaxed) &
+                     kRefCountMask
+               : 0;
   }
 
   bool empty() const noexcept {
@@ -199,13 +220,28 @@ class VectorRecord {
   }
 
  private:
+  // Set in the reference count of a record with a VectorRecordHeader<double>.
+  static constexpr uint32_t kDoubleHeaderBit = 1u << 31;
+  static constexpr uint32_t kRefCountMask = ~kDoubleHeaderBit;
+
   static std::atomic<uint32_t> *GetRefCount(const char *data_ptr) noexcept {
-    return &GetHeader<float>(data_ptr)->ref_count_;
+    return reinterpret_cast<std::atomic<uint32_t> *>(
+        const_cast<char *>(data_ptr) - 8);
+  }
+
+  static bool HasDoubleHeader(const char *data_ptr) noexcept {
+    return GetRefCount(data_ptr)->load(std::memory_order_relaxed) &
+           kDoubleHeaderBit;
   }
 
   static void Release(const char *data_ptr) noexcept {
-    if (GetRefCount(data_ptr)->fetch_sub(1, std::memory_order_acq_rel) == 1) {
-      Allocator::Free(reinterpret_cast<char *>(GetHeader<float>(data_ptr)));
+    uint32_t prev =
+        GetRefCount(data_ptr)->fetch_sub(1, std::memory_order_acq_rel);
+    if ((prev & kRefCountMask) == 1) {
+      size_t header_size = (prev & kDoubleHeaderBit)
+                               ? sizeof(VectorRecordHeader<double>)
+                               : sizeof(VectorRecordHeader<float>);
+      Allocator::Free(const_cast<char *>(data_ptr) - header_size);
     }
   }
 
@@ -247,6 +283,7 @@ class TypedVectorRecord : public VectorRecord {
 };
 
 static_assert(sizeof(TypedVectorRecord<float>) == sizeof(VectorRecord));
+static_assert(sizeof(TypedVectorRecord<double>) == sizeof(VectorRecord));
 
 struct VectorRecordWithSize {
   VectorRecord vector_record;
@@ -263,9 +300,11 @@ struct VectorRecordWithSize {
   bool operator!=(absl::string_view bytes) const { return !(*this == bytes); }
 };
 
-// Type a T vector's magnitude and distances are computed in.
+// Type a T vector's magnitude and distances are computed in: double for
+// FLOAT64, float otherwise.
 template <typename T>
-using MagnitudeOf = float;
+using MagnitudeOf =
+    std::conditional_t<std::is_same_v<T, double>, double, float>;
 
 // Computes 1/||v|| over `size` elements of storage type T. Templated because
 // FLOAT16/BFLOAT16 vectors are 2 bytes per element: reading them as float
@@ -278,6 +317,7 @@ extern template float CalcReciprocalMagnitude<float>(const float *, size_t);
 extern template float CalcReciprocalMagnitude<float16>(const float16 *, size_t);
 extern template float CalcReciprocalMagnitude<bfloat16>(const bfloat16 *,
                                                         size_t);
+extern template double CalcReciprocalMagnitude<double>(const double *, size_t);
 
 // Verify the running CPU exposes a SIMD-targeted BF16 path required by the
 // current simsimd build. Returns OkStatus when:
@@ -400,7 +440,8 @@ const absl::NoDestructor<
     absl::flat_hash_map<absl::string_view, data_model::VectorDataType>>
     kVectorDataTypeByStr({{"FLOAT32", data_model::VECTOR_DATA_TYPE_FLOAT32},
                           {"FLOAT16", data_model::VECTOR_DATA_TYPE_FLOAT16},
-                          {"BFLOAT16", data_model::VECTOR_DATA_TYPE_BFLOAT16}});
+                          {"BFLOAT16", data_model::VECTOR_DATA_TYPE_BFLOAT16},
+                          {"FLOAT64", data_model::VECTOR_DATA_TYPE_FLOAT64}});
 
 template <typename V>
 absl::string_view LookupKeyByValue(

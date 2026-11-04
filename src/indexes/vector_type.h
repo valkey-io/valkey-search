@@ -41,6 +41,12 @@ struct FloatBits<float> {
   static constexpr Bits kExponentMask = 0x7f800000U;
   static constexpr Bits kSignBit = 0x80000000U;
 };
+template <>
+struct FloatBits<double> {
+  using Bits = uint64_t;
+  static constexpr Bits kExponentMask = 0x7ff0000000000000ULL;
+  static constexpr Bits kSignBit = 0x8000000000000000ULL;
+};
 
 // Intermediate layer between the type-erased VectorBase and the
 // algorithm-specific leaves (VectorHNSW<T>, VectorFlat<T>). Carries all
@@ -63,10 +69,11 @@ struct FloatBits<float> {
 // Downstream callers keep talking to VectorBase* -- the type-erased
 // seam is preserved.
 //
-// Note the space is templated on the *distance* dtype, never on T. Only the
-// concrete space class chosen by CreateSpace<T> knows the storage layout.
-// Templating the space on T (as upstream's float-only code did) conflates the
-// two and breaks for 2-byte storage.
+// Note the space is templated on the *distance* dtype (double for FLOAT64,
+// float otherwise), never on T. Only the concrete space class chosen by
+// CreateSpace<T> knows the storage layout. Templating the space on T (as
+// upstream's float-only code did) conflates the two and breaks for 2-byte
+// storage.
 template <typename T>
 class VectorType : public VectorBase {
  public:

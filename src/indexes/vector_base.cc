@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -55,6 +56,19 @@ namespace valkey_search {
 
 namespace indexes {
 
+namespace {
+
+// Tracked as a float, the type 1.1 and 1.2 read back from the RDB. Those
+// versions cannot load a FLOAT64 index, so a FLOAT64 magnitude beyond the float
+// range is clamped: converting it would be undefined behavior.
+float TrackedMagnitude(const VectorRecord &vector_record) {
+  return static_cast<float>(
+      std::min(1.0 / vector_record.GetReciprocalMagnitude(),
+               double{std::numeric_limits<float>::max()}));
+}
+
+}  // namespace
+
 template <typename T>
 MagnitudeOf<T> CalcReciprocalMagnitude(const T *src, size_t size) {
   // Accumulate in float even when T is 2 bytes: squaring a half-precision
@@ -71,6 +85,7 @@ MagnitudeOf<T> CalcReciprocalMagnitude(const T *src, size_t size) {
 template float CalcReciprocalMagnitude<float>(const float *, size_t);
 template float CalcReciprocalMagnitude<float16>(const float16 *, size_t);
 template float CalcReciprocalMagnitude<bfloat16>(const bfloat16 *, size_t);
+template double CalcReciprocalMagnitude<double>(const double *, size_t);
 
 template <typename T>
 std::vector<char> NormalizeVector(absl::string_view record,
@@ -107,10 +122,12 @@ std::vector<char> NormalizeVector(absl::string_view record,
 template std::vector<char> NormalizeVector<float>(absl::string_view, float);
 template std::vector<char> NormalizeVector<float16>(absl::string_view, float);
 template std::vector<char> NormalizeVector<bfloat16>(absl::string_view, float);
+template std::vector<char> NormalizeVector<double>(absl::string_view, double);
 template std::vector<char> NormalizeVector<float>(absl::string_view, float *);
 template std::vector<char> NormalizeVector<float16>(absl::string_view, float *);
 template std::vector<char> NormalizeVector<bfloat16>(absl::string_view,
                                                      float *);
+template std::vector<char> NormalizeVector<double>(absl::string_view, double *);
 
 PrefilterEvaluator::PrefilterEvaluator(query::QueryContext &query_ctx,
                                        QueryOperations query_operations,
@@ -201,7 +218,7 @@ absl::StatusOr<RecordResult> VectorBase::AddRecord(const InternedStringPtr &key,
     return RecordResult::kInvalidData;
   }
   auto vector_record = data.ConsumeVector();
-  float magnitude = 1.0f / vector_record.GetReciprocalMagnitude();
+  float magnitude = TrackedMagnitude(vector_record);
   VMSDK_ASSIGN_OR_RETURN(auto internal_id, TrackKey(key, magnitude));
   absl::Status add_result =
       AddRecordImpl(internal_id, std::move(vector_record));
@@ -248,7 +265,7 @@ absl::StatusOr<RecordResult> VectorBase::ModifyRecord(
     return RecordResult::kInvalidData;
   }
   auto vector_record = data.ConsumeVector();
-  float magnitude = 1.0f / vector_record.GetReciprocalMagnitude();
+  float magnitude = TrackedMagnitude(vector_record);
   VMSDK_ASSIGN_OR_RETURN(auto internal_id, GetInternalId(key));
   VMSDK_ASSIGN_OR_RETURN(bool res,
                          IsVectorUnchanged(key, magnitude, vector_record));
@@ -533,6 +550,8 @@ absl::Status VectorBase::ForEachUnTrackedKey(
 
 template absl::StatusOr<std::vector<Neighbor>> VectorBase::CreateReply<float>(
     std::priority_queue<std::pair<float, hnswlib::labeltype>> &knn_res);
+template absl::StatusOr<std::vector<Neighbor>> VectorBase::CreateReply<double>(
+    std::priority_queue<std::pair<double, hnswlib::labeltype>> &knn_res);
 
 absl::Status CheckSimsimdBf16Capability() {
 #if defined(__SSE2__) || defined(__AVX512F__) || \
@@ -571,7 +590,12 @@ VectorRecord VectorRecord::Construct(
                         : ::operator new(total_size);
   MagnitudeT mag = reciprocal_magnitude == MagnitudeT{0} ? MagnitudeT{1}
                                                          : reciprocal_magnitude;
-  new (mem) Header{/*ref_count_=*/{1}, /*reciprocal_magnitude_=*/mag};
+  if constexpr (std::is_same_v<MagnitudeT, double>) {
+    new (mem) Header{/*reciprocal_magnitude_=*/mag,
+                     /*ref_count_=*/{1 | kDoubleHeaderBit}};
+  } else {
+    new (mem) Header{/*ref_count_=*/{1}, /*reciprocal_magnitude_=*/mag};
+  }
   char *data = reinterpret_cast<char *>(mem) + sizeof(Header);
   std::memcpy(data, vector.data(), vector.size());
   return VectorRecord(static_cast<const char *>(data));
@@ -579,6 +603,8 @@ VectorRecord VectorRecord::Construct(
 
 template VectorRecord VectorRecord::Construct<float>(absl::string_view, float,
                                                      Allocator *);
+template VectorRecord VectorRecord::Construct<double>(absl::string_view, double,
+                                                      Allocator *);
 }  // namespace indexes
 
 }  // namespace valkey_search

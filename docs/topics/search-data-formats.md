@@ -112,7 +112,7 @@ A vector field contains a fixed-length array of floating-point numbers. The data
 
 ## Supported Data Types
 
-Three element types are supported. All are little-endian and all work with every
+Four element types are supported. All are little-endian and all work with every
 distance metric; they differ only in how many bytes each element occupies and how
 much precision it retains.
 
@@ -121,6 +121,7 @@ much precision it retains.
 | `FLOAT32` | 4 | 1 / 8 / 23 | ~3.4e38 | ~7 |
 | `FLOAT16` | 2 | 1 / 5 / 10 | 65504 | ~3 |
 | `BFLOAT16` | 2 | 1 / 8 / 7 | ~3.4e38 | ~2 |
+| `FLOAT64` | 8 | 1 / 11 / 52 | ~1.8e308 | ~16 |
 
 `FLOAT16` and `BFLOAT16` both halve the memory a vector occupies compared with
 `FLOAT32`. They differ in how they spend their 16 bits. `FLOAT16` keeps more
@@ -131,6 +132,9 @@ away precision instead.
 
 As a rule of thumb, embeddings that are normalized or otherwise bounded suit
 `FLOAT16`, while data with a wide dynamic range suits `BFLOAT16`.
+
+`FLOAT64` uses twice the memory of `FLOAT32`, preserves approximately 16
+decimal digits, and accumulates vector distances in double precision.
 
 Choosing a 2-byte type is lossy: each element is rounded to the target type when
 it is ingested, and the rounded value is what the index stores and compares. Recall
@@ -144,9 +148,9 @@ FT.CREATE idx SCHEMA embedding VECTOR HNSW 6 TYPE FLOAT16 DIM 3 DISTANCE_METRIC 
 
 ### Version requirement
 
-An index schema that declares `FLOAT16` or `BFLOAT16` records a minimum module
-version of 1.3.0. A module older than that refuses to load such an index rather
-than misreading its 2-byte elements as `FLOAT32`. This matters when downgrading,
+An index schema that declares `FLOAT16`, `BFLOAT16`, or `FLOAT64` records a
+minimum module version of 1.3.0. An older module refuses to load such an index
+rather than misreading its elements as `FLOAT32`. This matters when downgrading
 and in mixed-version clusters: keep to `FLOAT32` if an index has to be readable
 by modules earlier than 1.3.0. Indexes that use only `FLOAT32` are unaffected.
 
@@ -163,7 +167,8 @@ no such requirement.
 For HASH-type indexes, vectors are stored as raw binary blobs. Each element is
 written in little-endian byte order using the index's declared `TYPE`, so the
 total blob size must be exactly `DIM * <bytes per element>`: `DIM * 4` for
-`FLOAT32`, `DIM * 2` for `FLOAT16` and `BFLOAT16`.
+`FLOAT32`, `DIM * 2` for `FLOAT16` and `BFLOAT16`, and `DIM * 8` for
+`FLOAT64`.
 
 The same 3-dimensional vector `[0.0, 0.0, 1.0]` in each type:
 
@@ -171,6 +176,7 @@ The same 3-dimensional vector `[0.0, 0.0, 1.0]` in each type:
 FLOAT32  (12 bytes)   \x00\x00\x00\x00  \x00\x00\x00\x00  \x00\x00\x80\x3f
 FLOAT16  (6 bytes)    \x00\x00          \x00\x00          \x00\x3c
 BFLOAT16 (6 bytes)    \x00\x00          \x00\x00          \x80\x3f
+FLOAT64  (24 bytes)   \x00\x00\x00\x00\x00\x00\x00\x00  \x00\x00\x00\x00\x00\x00\x00\x00  \x00\x00\x00\x00\x00\x00\xf0\x3f
 ```
 
 Note that the `BFLOAT16` encoding of 1.0 is the high half of the `FLOAT32`
@@ -188,16 +194,20 @@ vector = np.array([0.0, 0.0, 1.0], dtype=np.float32).tobytes()
 # FLOAT16
 vector = np.array([0.0, 0.0, 1.0], dtype=np.float16).tobytes()
 
+# FLOAT64
+vector = np.array([0.0, 0.0, 1.0], dtype=np.float64).tobytes()
+
 client.hset("doc:1", mapping={"embedding": vector})
 ```
 
-Or equivalently with `struct`, whose format characters are `f` for `FLOAT32` and
-`e` for `FLOAT16`:
+Or equivalently with `struct`, whose format characters are `f` for `FLOAT32`,
+`e` for `FLOAT16`, and `d` for `FLOAT64`:
 
 ```python
 import struct
 vector = struct.pack("<3f", 0.0, 0.0, 1.0)  # '<' = little-endian, 'f' = FLOAT32
 vector = struct.pack("<3e", 0.0, 0.0, 1.0)  # 'e' = FLOAT16
+vector = struct.pack("<3d", 0.0, 0.0, 1.0)  # 'd' = FLOAT64
 ```
 
 Neither `numpy` nor `struct` has a native `BFLOAT16` type. Encode it by rounding

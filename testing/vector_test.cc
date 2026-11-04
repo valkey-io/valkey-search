@@ -636,7 +636,7 @@ class RecomputeDistanceTest : public VectorIndexTest {
 
   // The 2-byte types carry about three decimal digits, so they are compared
   // the way space_distance_test.cc compares them.
-  static float Tolerance() { return std::is_same_v<T, float> ? 1e-5f : 1e-2f; }
+  static float Tolerance() { return sizeof(T) >= 4 ? 1e-5f : 1e-2f; }
 
   static std::vector<data_model::DistanceMetric> Metrics() {
     return {data_model::DISTANCE_METRIC_L2, data_model::DISTANCE_METRIC_IP,
@@ -796,6 +796,7 @@ class RecomputeDistanceTest : public VectorIndexTest {
 using RecomputeDistanceFp32 = RecomputeDistanceTest<float>;
 using RecomputeDistanceFp16 = RecomputeDistanceTest<float16>;
 using RecomputeDistanceBf16 = RecomputeDistanceTest<bfloat16>;
+using RecomputeDistanceFp64 = RecomputeDistanceTest<double>;
 
 TEST_F(RecomputeDistanceFp32, AgreesWithTheIndexForTheStoredVector) {
   AgreesWithTheIndexForTheStoredVector();
@@ -827,6 +828,16 @@ TEST_F(RecomputeDistanceBf16, RecomputedDistancesRankTheSameWayTheIndexDoes) {
   RecomputedDistancesRankTheSameWayTheIndexDoes();
 }
 
+TEST_F(RecomputeDistanceFp64, AgreesWithTheIndexForTheStoredVector) {
+  AgreesWithTheIndexForTheStoredVector();
+}
+TEST_F(RecomputeDistanceFp64, AnswersForBytesTheIndexHasNeverSeen) {
+  AnswersForBytesTheIndexHasNeverSeen();
+}
+TEST_F(RecomputeDistanceFp64, RecomputedDistancesRankTheSameWayTheIndexDoes) {
+  RecomputedDistancesRankTheSameWayTheIndexDoes();
+}
+
 // Range search over every storage type, metric and algorithm. The expected
 // neighbors come from scoring each tracked key with IsWithinVectorRange
 // against the normalized query, the per-key evaluation the compound VR path
@@ -841,7 +852,7 @@ class SearchRangeTest : public VectorIndexTest {
   static constexpr int kVectors = 300;
 
   static float Tolerance() {
-    if (std::is_same_v<T, float>) {
+    if (sizeof(T) >= 4) {
       return 1e-4f;
     }
     return std::is_same_v<T, float16> ? 1e-2f : 5e-2f;
@@ -1045,6 +1056,7 @@ class SearchRangeTest : public VectorIndexTest {
 using SearchRangeFp32 = SearchRangeTest<float>;
 using SearchRangeFp16 = SearchRangeTest<float16>;
 using SearchRangeBf16 = SearchRangeTest<bfloat16>;
+using SearchRangeFp64 = SearchRangeTest<double>;
 
 TEST_F(SearchRangeFp32, MatchesPerKeyReferenceAndBruteForce) {
   MatchesPerKeyReferenceAndBruteForce(/*hnsw=*/false);
@@ -1053,6 +1065,9 @@ TEST_F(SearchRangeFp16, MatchesPerKeyReferenceAndBruteForce) {
   MatchesPerKeyReferenceAndBruteForce(/*hnsw=*/false);
 }
 TEST_F(SearchRangeBf16, MatchesPerKeyReferenceAndBruteForce) {
+  MatchesPerKeyReferenceAndBruteForce(/*hnsw=*/false);
+}
+TEST_F(SearchRangeFp64, MatchesPerKeyReferenceAndBruteForce) {
   MatchesPerKeyReferenceAndBruteForce(/*hnsw=*/false);
 }
 
@@ -1065,6 +1080,9 @@ TEST_F(SearchRangeFp16, HnswScanMatchesPerKeyReferenceAndBruteForce) {
   MatchesPerKeyReferenceAndBruteForce(/*hnsw=*/true);
 }
 TEST_F(SearchRangeBf16, HnswScanMatchesPerKeyReferenceAndBruteForce) {
+  MatchesPerKeyReferenceAndBruteForce(/*hnsw=*/true);
+}
+TEST_F(SearchRangeFp64, HnswScanMatchesPerKeyReferenceAndBruteForce) {
   MatchesPerKeyReferenceAndBruteForce(/*hnsw=*/true);
 }
 
@@ -1410,6 +1428,9 @@ TEST_F(RecomputeDistanceFp16, CosineSearchMatchesRecomputeExactly) {
   CosineSearchMatchesRecomputeExactly();
 }
 TEST_F(RecomputeDistanceBf16, CosineSearchMatchesRecomputeExactly) {
+  CosineSearchMatchesRecomputeExactly();
+}
+TEST_F(RecomputeDistanceFp64, CosineSearchMatchesRecomputeExactly) {
   CosineSearchMatchesRecomputeExactly();
 }
 
@@ -3370,6 +3391,216 @@ TEST_F(VectorIndexTest, SearchRangeCosineRadiusTwoKeepsAntipodes) {
   }
 }
 
+absl::string_view AsBytes(const std::vector<double> &v) {
+  return {reinterpret_cast<const char *>(v.data()), v.size() * sizeof(double)};
+}
+
+TEST(VectorRecordTest, FloatHeaderLayout) {
+  const std::vector<double> v = {1.5, -2.5};
+  auto record = VectorRecord::Construct(AsBytes(v), 0.25f, nullptr);
+  const char *data = record.GetRawVector();
+
+  uint32_t ref_count;
+  float magnitude;
+  std::memcpy(&ref_count, data - 8, sizeof(ref_count));
+  std::memcpy(&magnitude, data - 4, sizeof(magnitude));
+  EXPECT_EQ(ref_count, 1u);
+  EXPECT_EQ(magnitude, 0.25f);
+  EXPECT_EQ(record.GetReciprocalMagnitude(), 0.25);
+  EXPECT_EQ(TypedVectorRecord<float>::ReciprocalMagnitudeOf(data), 0.25f);
+  EXPECT_EQ(std::memcmp(data, v.data(), AsBytes(v).size()), 0);
+}
+
+TEST(VectorRecordTest, DoubleHeaderKeepsDoublePrecision) {
+  const std::vector<double> v = {1.5, -2.5};
+  const double kMagnitude = 1.0 / 3.0;
+  ASSERT_NE(static_cast<double>(static_cast<float>(kMagnitude)), kMagnitude);
+  auto record =
+      VectorRecord::Construct<double>(AsBytes(v), kMagnitude, nullptr);
+  const char *data = record.GetRawVector();
+
+  EXPECT_EQ(reinterpret_cast<uintptr_t>(data) % alignof(double), 0u);
+  EXPECT_EQ(record.RefCount(), 1u);
+  EXPECT_EQ(record.GetReciprocalMagnitude(), kMagnitude);
+  TypedVectorRecord<double> typed(record);
+  EXPECT_EQ(typed.GetReciprocalMagnitude(), kMagnitude);
+  EXPECT_EQ(TypedVectorRecord<double>::ReciprocalMagnitudeOf(data), kMagnitude);
+  EXPECT_EQ(record.RefCount(), 2u);
+  EXPECT_EQ(std::memcmp(data, v.data(), AsBytes(v).size()), 0);
+}
+
+TEST(VectorRecordTest, ZeroMagnitudeDefaultsToOne) {
+  const std::vector<double> v = {0.0, 0.0};
+  EXPECT_EQ(VectorRecord::Construct(AsBytes(v), 0.0f, nullptr)
+                .GetReciprocalMagnitude(),
+            1.0);
+  EXPECT_EQ(VectorRecord::Construct<double>(AsBytes(v), 0.0, nullptr)
+                .GetReciprocalMagnitude(),
+            1.0);
+}
+
+template <typename MagnitudeT>
+void ExpectReleaseFreesAllocationStart() {
+  constexpr size_t kHeaderSize =
+      TypedVectorRecord<MagnitudeT>::kStorageHeaderSize;
+  const std::vector<double> v = {1.5, -2.5};
+  auto allocator = CREATE_UNIQUE_PTR(FixedSizeAllocator,
+                                     kHeaderSize + AsBytes(v).size(), true);
+  // Keeps the chunk from being returned when the record below is freed.
+  auto pin =
+      VectorRecord::Construct<MagnitudeT>(AsBytes(v), 1, allocator.get());
+  const char *data;
+  {
+    auto record =
+        VectorRecord::Construct<MagnitudeT>(AsBytes(v), 1, allocator.get());
+    data = record.GetRawVector();
+    EXPECT_EQ(VectorRecord(record).RefCount(), 2u);
+    EXPECT_EQ(record.RefCount(), 1u);
+    EXPECT_EQ(allocator->ActiveAllocations(), 2u);
+  }
+  EXPECT_EQ(allocator->ActiveAllocations(), 1u);
+  // The freed entry must be the start of the allocation, not a pointer into it.
+  char *reused = allocator->Allocate();
+  EXPECT_EQ(reused, data - kHeaderSize);
+  Allocator::Free(reused);
+}
+
+TEST(VectorRecordTest, ReleaseFreesAllocationStartFloat) {
+  ExpectReleaseFreesAllocationStart<float>();
+}
+
+TEST(VectorRecordTest, ReleaseFreesAllocationStartDouble) {
+  ExpectReleaseFreesAllocationStart<double>();
+}
+
+TEST_F(VectorIndexTest, Fp64NormalizeStringAttributeKeepsDoublePrecision) {
+  auto index = VectorFlat<double>::Create(
+      CreateFlatVectorIndexProto(2, data_model::DISTANCE_METRIC_L2, 10, 10),
+      attribute_identifier, attribute_data_type, 0);
+  ASSERT_TRUE(index.ok());
+  auto normalized = index.value()->NormalizeStringAttribute(
+      vmsdk::MakeUniqueValkeyString("[0.1, -2.5]"));
+  ASSERT_NE(normalized, nullptr);
+  const std::vector<double> expected = {0.1, -2.5};
+  EXPECT_EQ(vmsdk::ToStringView(normalized.get()), AsBytes(expected));
+}
+
+TEST_F(VectorIndexTest, Fp64ConstructRecordKeepsDoubleMagnitude) {
+  auto index = VectorFlat<double>::Create(
+      CreateFlatVectorIndexProto(2, data_model::DISTANCE_METRIC_COSINE, 10, 10),
+      attribute_identifier, attribute_data_type, 0);
+  ASSERT_TRUE(index.ok());
+  const std::vector<double> v = {3.0, 0.0};
+  auto record = index.value()->ConstructRecord(AsBytes(v), nullptr);
+  EXPECT_EQ(record.GetReciprocalMagnitude(), 1.0 / 3.0);
+  EXPECT_EQ(
+      TypedVectorRecord<double>::ReciprocalMagnitudeOf(record.GetRawVector()),
+      1.0 / 3.0);
+}
+
+// The two stored vectors are identical once rounded to float, so only an
+// index that keeps the elements, magnitudes and distances in double can tell
+// which one is nearer. On a tie the lower label, key 1, would be returned.
+class Fp64IndexRankingTest : public VectorIndexTest {
+ protected:
+  void ExpectNearerVectorWins(
+      data_model::DistanceMetric metric, const std::vector<double> &farther,
+      const std::vector<double> &nearer,
+      const std::vector<double> &query) ABSL_NO_THREAD_SAFETY_ANALYSIS {
+    auto flat = VectorFlat<double>::Create(
+        CreateFlatVectorIndexProto(4, metric, 10, 10), attribute_identifier,
+        attribute_data_type, 0);
+    auto hnsw = VectorHNSW<double>::Create(
+        CreateHNSWVectorIndexProto(4, metric, 10, kM, kEFConstruction,
+                                   kEFRuntime),
+        attribute_identifier, attribute_data_type, 0);
+    ASSERT_TRUE(flat.ok() && hnsw.ok());
+    for (VectorBase *index : {static_cast<VectorBase *>(flat.value().get()),
+                              static_cast<VectorBase *>(hnsw.value().get())}) {
+      VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(*index, IndexToKey(1),
+                                                     AsBytes(farther)));
+      VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(*index, IndexToKey(2),
+                                                     AsBytes(nearer)));
+      auto knn = index->Search(AsBytes(query), 1, CancelNever());
+      ASSERT_TRUE(knn.ok()) << knn.status();
+      ASSERT_EQ(knn->size(), 1u);
+      EXPECT_EQ((*knn)[0].external_id->Str(), IndexToKey(2)->Str());
+    }
+  }
+};
+
+TEST_F(Fp64IndexRankingTest, L2RanksBeyondFloatPrecision) {
+  ExpectNearerVectorWins(data_model::DISTANCE_METRIC_L2,
+                         {1.0 + 3e-12, 0.0, 0.0, 0.0},
+                         {1.0 + 1e-12, 0.0, 0.0, 0.0}, {1.0, 0.0, 0.0, 0.0});
+}
+
+TEST_F(Fp64IndexRankingTest, CosineRanksBeyondFloatPrecision) {
+  ExpectNearerVectorWins(data_model::DISTANCE_METRIC_COSINE,
+                         {1.0, 3e-6, 0.0, 0.0}, {1.0, 1e-6, 0.0, 0.0},
+                         {1.0, 0.0, 0.0, 0.0});
+}
+
+// The distance a FLOAT64 index reports keeps double precision all the way to
+// the Neighbor, and agrees with RecomputeDistance.
+TEST_F(RecomputeDistanceFp64, KeepsFp64Precision)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  auto index = MakeIndex(data_model::DISTANCE_METRIC_L2);
+  ASSERT_TRUE(index.ok());
+  const std::string stored = Bytes({0.0f, 0.0f, 0.0f, 0.0f});
+  const std::string query = Bytes({1.0f, 1e-6f, 0.0f, 0.0f});
+  VMSDK_EXPECT_OK(
+      testing_infra::AddVectorRecord(*index.value(), IndexToKey(1), stored));
+
+  auto search = index.value()->Search(query, 1, CancelNever());
+  ASSERT_TRUE(search.ok());
+  ASSERT_EQ(search.value().size(), 1u);
+  auto recomputed = index.value()->RecomputeDistance(stored, query);
+  ASSERT_TRUE(recomputed.ok());
+
+  // The distance is 1 + ~1e-12, which float would round to exactly 1.
+  EXPECT_NE(*recomputed, static_cast<double>(static_cast<float>(*recomputed)));
+  EXPECT_EQ(search.value()[0].distance, *recomputed);
+}
+
+// Only the radius separates the two keys, by less than float can resolve.
+TEST_F(Fp64IndexRankingTest, RangeSearchResolvesBeyondFloatPrecision)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  const std::vector<double> within = {1.0, 1e-6, 0.0, 0.0};
+  const std::vector<double> outside = {1.0, 1.7e-6, 0.0, 0.0};
+  const std::vector<double> query = {0.0, 0.0, 0.0, 0.0};
+  // L2 distances are 1 + 1e-12 and 1 + 2.89e-12.
+  const double radius = 1.0 + 2e-12;
+  auto flat = VectorFlat<double>::Create(
+      CreateFlatVectorIndexProto(4, data_model::DISTANCE_METRIC_L2, 10, 10),
+      attribute_identifier, attribute_data_type, 0);
+  auto hnsw = VectorHNSW<double>::Create(
+      CreateHNSWVectorIndexProto(4, data_model::DISTANCE_METRIC_L2, 10, kM,
+                                 kEFConstruction, kEFRuntime),
+      attribute_identifier, attribute_data_type, 0);
+  ASSERT_TRUE(flat.ok() && hnsw.ok());
+  for (VectorBase *index : {static_cast<VectorBase *>(flat.value().get()),
+                            static_cast<VectorBase *>(hnsw.value().get())}) {
+    VMSDK_EXPECT_OK(
+        testing_infra::AddVectorRecord(*index, IndexToKey(1), AsBytes(within)));
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(*index, IndexToKey(2),
+                                                   AsBytes(outside)));
+    auto range = index->SearchRange(AsBytes(query), radius, CancelNever());
+    ASSERT_TRUE(range.ok()) << range.status();
+    ASSERT_EQ(range->size(), 1u);
+    EXPECT_EQ((*range)[0].external_id->Str(), IndexToKey(1)->Str());
+    EXPECT_GT((*range)[0].distance, 1.0);
+
+    auto in = index->IsWithinVectorRange(IndexToKey(1), AsBytes(query), radius);
+    ASSERT_TRUE(in.ok());
+    EXPECT_TRUE(in->has_value());
+    auto out =
+        index->IsWithinVectorRange(IndexToKey(2), AsBytes(query), radius);
+    ASSERT_TRUE(out.ok());
+    EXPECT_FALSE(out->has_value());
+  }
+}
+
 // A float index compares against the radius rounded to float, as it did when
 // the radius was passed as a float: a distance of exactly 1 stays within a
 // radius just below 1 that rounds to 1.
@@ -3396,6 +3627,47 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
       index.value()->IsWithinVectorRange(IndexToKey(1), bytes(query), radius);
   ASSERT_TRUE(within.ok());
   EXPECT_TRUE(within->has_value());
+}
+
+// Reads back the single TrackedKeyMetadata chunk SaveTrackedKeys wrote.
+data_model::TrackedKeyMetadata SaveSingleTrackedKey(const VectorBase &index) {
+  FakeSafeRDB rdb;
+  VMSDK_EXPECT_OK(index.SaveTrackedKeys(RDBChunkOutputStream(&rdb)));
+  SupplementalContentChunkIter iter(&rdb);
+  data_model::TrackedKeyMetadata metadata;
+  EXPECT_TRUE(iter.HasNext());
+  auto chunk = iter.Next();
+  VMSDK_EXPECT_OK(chunk);
+  EXPECT_TRUE(metadata.ParseFromString((*chunk)->binary_content()));
+  EXPECT_FALSE(iter.HasNext());
+  return metadata;
+}
+
+// A FLOAT64 magnitude outside the float range is saved as the largest float.
+TEST_F(VectorIndexTest, Fp64SaveTrackedKeysClampsMagnitude) {
+  auto index = VectorFlat<double>::Create(
+      CreateFlatVectorIndexProto(2, data_model::DISTANCE_METRIC_COSINE, 10, 10),
+      attribute_identifier, attribute_data_type, 0);
+  ASSERT_TRUE(index.ok());
+  const std::vector<double> v = {1e100, 0.0};
+  VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(*index.value(), IndexToKey(1),
+                                                 AsBytes(v)));
+  auto metadata = SaveSingleTrackedKey(*index.value());
+  EXPECT_EQ(metadata.magnitude(), std::numeric_limits<float>::max());
+}
+
+TEST_F(VectorIndexTest, FloatSaveTrackedKeysKeepsMagnitude) {
+  auto index = VectorFlat<float>::Create(
+      CreateFlatVectorIndexProto(2, data_model::DISTANCE_METRIC_COSINE, 10, 10),
+      attribute_identifier, attribute_data_type, 0);
+  ASSERT_TRUE(index.ok());
+  const std::vector<float> v = {3.0f, 4.0f};
+  VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(
+      *index.value(), IndexToKey(1),
+      absl::string_view(reinterpret_cast<const char *>(v.data()),
+                        v.size() * sizeof(float))));
+  auto metadata = SaveSingleTrackedKey(*index.value());
+  EXPECT_FLOAT_EQ(metadata.magnitude(), 5.0f);
 }
 
 }  // namespace

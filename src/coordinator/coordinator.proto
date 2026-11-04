@@ -205,9 +205,17 @@ message InkeysFilter {
 
 message NeighborEntry {
   string key = 1;
-  float distance = 2;
+  // The *_fp64 arms carry values a float cannot hold exactly, and infinity and
+  // NaN.
+  oneof distance_value {
+    float distance = 2;
+    double distance_fp64 = 5;
+  }
   repeated AttributeContentEntry attribute_contents = 3;
-  float score = 4;
+  oneof score_value {
+    float score = 4;
+    double score_fp64 = 6;
+  }
 }
 
 message SearchIndexPartitionResponse {

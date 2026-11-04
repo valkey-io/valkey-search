@@ -33,8 +33,8 @@
 #include "src/coordinator/coordinator.pb.h"
 #include "src/coordinator/search_converter.h"
 #include "src/coordinator/util.h"
-#include "src/indexes/scoring/scorer.h"
 #include "src/indexes/vector_base.h"
+#include "src/indexes/vector_type.h"
 #include "src/query/multi_search.h"
 #include "src/query/search.h"
 #include "src/utils/string_interning.h"
@@ -156,9 +156,13 @@ struct SearchPartitionResultsTracker {
                                              vmsdk::MakeUniqueValkeyString(
                                                  attribute_content.content())));
       }
+      // An unset oneof reads as a float 0, which is how a shard predating the
+      // fp64 arms sends a zero distance.
       indexes::Neighbor neighbor{
           StringInternStore::Intern(neighbor_entry->key()),
-          neighbor_entry->distance(), std::move(attribute_contents)};
+          neighbor_entry->has_distance_fp64() ? neighbor_entry->distance_fp64()
+                                              : neighbor_entry->distance(),
+          std::move(attribute_contents)};
       // Single-VR model: the VR distance is carried in Neighbor::distance
       // above. Cluster merge concatenates per-shard matches; the merged set is
       // ordered like any non-vector result.
@@ -168,10 +172,11 @@ struct SearchPartitionResultsTracker {
       // marker, since no radius includes a +inf distance; an IP distance of
       // -inf is a VR distance and is kept. Compare the bits: -ffast-math makes
       // float comparisons with infinity unreliable.
-      neighbor.has_vr_distance =
-          std::bit_cast<uint32_t>(neighbor_entry->distance()) !=
-          std::bit_cast<uint32_t>(indexes::scoring::PositiveInf());
-      neighbor.score = neighbor_entry->score();
+      neighbor.has_vr_distance = std::bit_cast<uint64_t>(neighbor.distance) !=
+                                 indexes::FloatBits<double>::kExponentMask;
+      neighbor.score = neighbor_entry->has_score_fp64()
+                           ? neighbor_entry->score_fp64()
+                           : neighbor_entry->score();
       AddResult(neighbor);
     }
   }

@@ -2763,15 +2763,16 @@ TEST_F(VectorIndexTest, SaveAndLoadFlatNewKeyGetsUnusedLabel) {
   }
 }
 
-// The keyspace can lack a valid vector for a key the RDB's index section
-// tracks: the key expired before the load, or a delete or update was still
-// queued when the RDB was saved. LoadTrackedKeys must keep the vector from the
-// index content, so searches stay safe until post-load reconciliation removes
-// the key.
+// The keyspace can disagree with a key the RDB's index section tracks: the key
+// expired before the load, or a delete or update was still queued when the RDB
+// was saved. LoadTrackedKeys must keep the vector from the index content, so
+// searches stay safe and the graph edges still match the stored vector until
+// post-load reconciliation removes or re-indexes the key.
 TEST_F(VectorIndexTest, LoadTrackedKeysWithoutKeyspaceVector) {
   constexpr size_t kLoaded = 10;
   constexpr size_t kMissingKey = 1;
   constexpr size_t kInvalidVector = 2;
+  constexpr size_t kChangedVector = 3;
   for (auto &distance_metric :
        {data_model::DISTANCE_METRIC_COSINE, data_model::DISTANCE_METRIC_L2}) {
     for (bool hnsw : {false, true}) {
@@ -2808,12 +2809,19 @@ TEST_F(VectorIndexTest, LoadTrackedKeysWithoutKeyspaceVector) {
         VMSDK_EXPECT_OK((*index)->SaveTrackedKeys(RDBChunkOutputStream(&rdb)));
         proto = (*index)->ToProto()->vector_index();
       }
+      // An update queued at save time: the opposite direction, so the key is
+      // no longer its saved vector's nearest neighbor under either metric.
+      std::vector<float> changed_vector(kDimensions);
+      changed_vector[kChangedVector] = -vectors[kChangedVector][kChangedVector];
       ValkeyModuleString *records[kLoaded];
       for (size_t i = 0; i < kLoaded; ++i) {
+        const auto &keyspace_vector =
+            i == kChangedVector ? changed_vector : vectors[i];
         records[i] = new ValkeyModuleString{
-            i == kInvalidVector ? std::string("bad")
-                                : std::string((char *)&vectors[i][0],
-                                              kDimensions * sizeof(float))};
+            i == kInvalidVector
+                ? std::string("bad")
+                : std::string((char *)&keyspace_vector[0],
+                              kDimensions * sizeof(float))};
       }
       EXPECT_CALL(*kMockValkeyModule,
                   OpenKey(testing::_, testing::_, testing::_))
@@ -2877,19 +2885,24 @@ TEST_F(VectorIndexTest, LoadTrackedKeysWithoutKeyspaceVector) {
         ASSERT_TRUE(range.ok()) << range.status();
         EXPECT_EQ(keys_of(*range), self) << "SearchRange, vector " << i;
       };
-      // The kept vectors stay searchable. On HNSW a null vector in a live node
-      // would crash the graph traversal.
+      // The kept vectors stay searchable, including the changed key's saved
+      // one. On HNSW a null vector in a live node would crash the graph
+      // traversal.
       for (size_t i = 0; i < kLoaded; ++i) {
         expect_self_match(i);
       }
-      // Post-load reconciliation then deletes the keys the keyspace lacks.
+      // Post-load reconciliation re-indexes the changed key: the stored vector
+      // differs from the update, so the update is not skipped as a no-op.
+      VERIFY_MODIFY(index.get(), changed_vector, kChangedVector,
+                    ExpectedResults::kSuccess, true);
+      // It then deletes the keys the keyspace lacks.
       for (size_t i : {kMissingKey, kInvalidVector}) {
         VMSDK_EXPECT_OK(
             index->RemoveRecord(IndexToKey(i), DeletionType::kRecord));
       }
       EXPECT_EQ(index->GetTrackedKeyCount(), kLoaded - 2);
       for (size_t i = 0; i < kLoaded; ++i) {
-        if (i != kMissingKey && i != kInvalidVector) {
+        if (i != kMissingKey && i != kInvalidVector && i != kChangedVector) {
           expect_self_match(i);
         }
       }

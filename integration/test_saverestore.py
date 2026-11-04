@@ -451,11 +451,12 @@ class TestLoadTrackedKeyMissingFromKeyspace(ValkeySearchTestCaseDebugMode):
         self.reload_and_check({b"k:0", b"k:2", b"k:3"})
 
     @pytest.mark.parametrize("algo", ["FLAT", "HNSW"])
-    @pytest.mark.parametrize("change", ["hdel", "wrong_size"])
+    @pytest.mark.parametrize("change", ["hdel", "wrong_size", "update"])
     @pytest.mark.parametrize("rdb_v2", ["yes", "no"])
-    def test_invalid_vector_queued_at_save(self, algo, change, rdb_v2):
-        # The key still exists at load, but its vector is gone or has the wrong
-        # size, so V1 relies on the backfill rather than the stale-entry scan.
+    def test_vector_changed_queued_at_save(self, algo, change, rdb_v2):
+        # The key still exists at load, but its vector is gone, has the wrong
+        # size or was updated, so V1 relies on the backfill rather than the
+        # stale-entry scan.
         self.use_rdb_v2(rdb_v2)
         self.client.execute_command(
             "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "k:",
@@ -474,9 +475,13 @@ class TestLoadTrackedKeyMissingFromKeyspace(ValkeySearchTestCaseDebugMode):
         if change == "hdel":
             writer = threading.Thread(
                 target=writer_client.hdel, args=("k:1", "v"))
-        else:
+        elif change == "wrong_size":
             writer = threading.Thread(
                 target=writer_client.hset, args=("k:1", "v", "bad"))
+        else:
+            writer = threading.Thread(
+                target=writer_client.hset,
+                args=("k:1", "v", float_to_bytes([-5.0, 1.0])))
         writer.start()
         try:
             waiters.wait_for_true(lambda: self.info().mutation_queue_size == 1)
@@ -485,7 +490,17 @@ class TestLoadTrackedKeyMissingFromKeyspace(ValkeySearchTestCaseDebugMode):
             self.client.execute_command(
                 "FT._DEBUG", "PAUSEPOINT", "RESET", "block_mutation_queue")
             writer.join()
-        self.reload_and_check({b"k:0", b"k:2", b"k:3"})
+        if change != "update":
+            self.reload_and_check({b"k:0", b"k:2", b"k:3"})
+            return
+        self.reload_and_check({b"k:0", b"k:1", b"k:2", b"k:3"})
+        # The load keeps the saved vector; the queued update must still land.
+        res = self.client.execute_command(
+            "FT.SEARCH", "idx", "*=>[KNN 10 @v $B AS d]", "RETURN", "1", "d",
+            "PARAMS", "2", "B", float_to_bytes([1.0, 1.0]), "DIALECT", "2",
+        )
+        distances = {res[i]: float(res[i + 1][1]) for i in range(1, len(res), 2)}
+        assert distances[b"k:1"] == 36.0
 
 
 class TestMutationQueue(ValkeySearchTestCaseDebugMode):

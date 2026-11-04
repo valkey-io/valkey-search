@@ -492,7 +492,21 @@ absl::Status VectorBase::LoadTrackedKeys(
     ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
     SupplementalContentChunkIter &&iter) {
   absl::WriterMutexLock lock(&key_to_metadata_mutex_);
-  size_t keys_without_vector = 0;
+  // A normalized index saves every vector normalized (see SaveIndexImpl), so
+  // the keyspace vector is normalized the same way before comparing.
+  auto matches_saved_vector = [this](absl::string_view vector,
+                                     const VectorRecord &saved) {
+    std::vector<char> normalized;
+    if (normalize_) {
+      normalized = NormalizeVector(
+          vector, GetVectorDataType(),
+          CalcReciprocalMagnitude(vector, GetVectorDataType()));
+      vector = absl::string_view(normalized.data(), normalized.size());
+    }
+    return std::memcmp(vector.data(), saved.GetRawVector(),
+                       GetVectorDataSize()) == 0;
+  };
+  size_t keys_changed_since_save = 0;
   while (iter.HasNext()) {
     VMSDK_ASSIGN_OR_RETURN(auto metadata_str, iter.Next(),
                            _ << "Error loading metadata");
@@ -522,21 +536,29 @@ absl::Status VectorBase::LoadTrackedKeys(
     if (attribute_data_type->AttributesProvidedAsString() && attribute_val) {
       attribute_val = NormalizeStringAttribute(std::move(attribute_val));
     }
+    auto &saved_vector = GetVectorLockFree(tracked_key_metadata.internal_id());
     if (!attribute_val ||
-        !IsValidSizeVector(vmsdk::ToStringView(attribute_val.get()))) {
-      ++keys_without_vector;
+        !IsValidSizeVector(vmsdk::ToStringView(attribute_val.get())) ||
+        !matches_saved_vector(vmsdk::ToStringView(attribute_val.get()),
+                              saved_vector)) {
+      // The key changed after the index was saved: it expired, or its delete
+      // or update was still queued. Keep the saved vector, which matches the
+      // node's graph edges; the queued change re-indexes or removes the key
+      // after the load.
+      ++keys_changed_since_save;
       continue;
     }
     auto vector_record_with_size = VectorRegistry::Instance().DedupOrConstruct(
         interned_key, attribute_val.get(), attribute_data_type->ToProto(),
         db_num_, this);
-    auto &save_vector = GetVectorLockFree(tracked_key_metadata.internal_id());
-    save_vector = std::move(vector_record_with_size.vector_record);
+    saved_vector = std::move(vector_record_with_size.vector_record);
   }
-  if (keys_without_vector > 0) {
-    VMSDK_LOG(NOTICE, ctx) << keys_without_vector
-                           << " tracked keys have no valid vector in the "
-                              "keyspace; reconciling them after the load";
+  if (keys_changed_since_save > 0) {
+    VMSDK_LOG(NOTICE, ctx)
+        << keys_changed_since_save
+        << " indexed keys changed after the index was saved (expired, deleted "
+           "or updated); keeping their saved vectors until the change is "
+           "applied after the load";
   }
   inc_id_ = GetMaxLoadedLabel() + 1;
   return absl::OkStatus();

@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <functional>
 #include <limits>
+#include <map>
 #include <memory>
 #include <numeric>
 #include <optional>
@@ -30,6 +31,7 @@
 #include "absl/algorithm/container.h"
 #include "absl/cleanup/cleanup.h"
 #include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -2438,7 +2440,7 @@ TEST_P(VectorSVSL2CosineTest,
   EXPECT_EQ(AsBase(*loaded)->GetLabelCount(), vectors.size());
 
   auto search = (*loaded)->Search(VectorToStr(vectors[0]), 1, CancelNever());
-  EXPECT_EQ(search.status().code(), absl::StatusCode::kFailedPrecondition);
+  EXPECT_EQ(search.status().code(), absl::StatusCode::kUnimplemented);
   EXPECT_THAT(search.status().message(),
               testing::HasSubstr("not available in this build"));
   // Writes keep tracking keys, so a rebuild sees them.
@@ -2452,6 +2454,49 @@ TEST_P(VectorSVSL2CosineTest,
   EXPECT_FALSE((*loaded)->IsTracked(IndexToKey(0)));
   EXPECT_TRUE((*loaded)->IsTracked(IndexToKey(1)));
   EXPECT_EQ(AsBase(*loaded)->GetLabelCount(), vectors.size());
+
+  // Exact pre-filtered search still runs from the tracked vectors, with the
+  // add, modify and remove above applied: same keys and distances as FLAT
+  // holding the same vectors.
+  auto flat = VectorFlat<float>::Create(
+      CreateFlatVectorIndexProto(kDimensions, GetParam(),
+                                 /*initial_cap=*/10, /*block_size=*/10),
+      "attribute_identifier_flat", attribute_data_type, 0);
+  ASSERT_TRUE(flat.ok()) << flat.status();
+  for (size_t i = 1; i <= vectors.size(); ++i) {
+    const auto &v = i == 1                ? vectors[2]
+                    : i == vectors.size() ? vectors[0]
+                                          : vectors[i];
+    VMSDK_EXPECT_OK(
+        testing_infra::AddVectorRecord(**flat, IndexToKey(i), VectorToStr(v)));
+  }
+  auto prefiltered = [&](VectorBase *index) {
+    const std::string query(VectorToStr(vectors[3]));
+    float magnitude = kDefaultMagnitude;
+    if (index->GetNormalize()) {
+      magnitude = CalcReciprocalMagnitude(query, index->GetVectorDataType());
+    }
+    std::priority_queue<std::pair<float, hnswlib::labeltype>> results;
+    absl::flat_hash_set<const char *> top_keys;
+    for (size_t i = 1; i <= vectors.size(); ++i) {
+      index->AddPrefilteredKey(query, magnitude, IndexToKey(i), vectors.size(),
+                               results, top_keys);
+    }
+    std::map<std::string, float> by_key;
+    for (; !results.empty(); results.pop()) {
+      auto key = index->GetKeyDuringSearch(results.top().second);
+      EXPECT_TRUE(key.ok()) << key.status();
+      if (key.ok()) by_key[std::string((*key)->Str())] = results.top().first;
+    }
+    return by_key;
+  };
+  const auto expected = prefiltered(flat->get());
+  const auto actual = prefiltered(AsBase(*loaded));
+  ASSERT_EQ(actual.size(), expected.size());
+  for (const auto &[key, distance] : expected) {
+    ASSERT_TRUE(actual.contains(key)) << key;
+    EXPECT_NEAR(actual.at(key), distance, 1e-5f) << key;
+  }
 
   FakeSafeRDB resaved;
   VMSDK_EXPECT_OK((*loaded)->SaveIndex(RDBChunkOutputStream(&resaved)));
@@ -2483,7 +2528,7 @@ TEST_P(VectorSVSL2CosineTest,
                 ->Search(VectorToStr(vectors[0]), 1, CancelNever())
                 .status()
                 .code(),
-            absl::StatusCode::kFailedPrecondition);
+            absl::StatusCode::kUnimplemented);
   EXPECT_EQ(Metrics::GetStats().svs_unavailable_indexes,
             unavailable_before + 2);
   reloaded->reset();

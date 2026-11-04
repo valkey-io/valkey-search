@@ -916,8 +916,10 @@ VectorSVS<T>::SearchKnn(absl::string_view query, uint64_t count,
                         hnswlib::BaseFilterFunctor* filter,
                         std::optional<size_t> ef_runtime) {
   std::priority_queue<std::pair<float, hnswlib::labeltype>> knn;
+  // Unimplemented, not FailedPrecondition: fan-out reads the latter as a
+  // cluster consistency failure and would replace the reason.
   if (!unavailable_.empty()) {
-    return absl::FailedPreconditionError(unavailable_);
+    return absl::UnimplementedError(unavailable_);
   }
   if (!IsValidSizeVector(query)) {
     return absl::InvalidArgumentError(
@@ -1066,6 +1068,19 @@ absl::Status VectorSVS<T>::AddRecordImpl(uint64_t internal_id,
                                          VectorRecord&& vector_record) {
 #if defined(__linux__) && defined(__x86_64__)
   const T* raw = reinterpret_cast<const T*>(vector_record.GetRawVector());
+  if (!unavailable_.empty()) {
+    // No storage: only track the record, without preparing SVS input.
+    VMSDK_RETURN_IF_ERROR(
+        CheckFiniteVector<T>(raw, static_cast<size_t>(dimensions_)));
+    absl::MutexLock map_lock(&label_mutex_);
+    auto [it, inserted] =
+        label_to_record_.try_emplace(internal_id, std::move(vector_record));
+    if (!inserted) {
+      return absl::AlreadyExistsError(
+          absl::StrCat("SVS internal_id already present: ", internal_id));
+    }
+    return absl::OkStatus();
+  }
   std::vector<float> scratch;
   VMSDK_ASSIGN_OR_RETURN(
       const float* fp32,
@@ -1156,6 +1171,14 @@ absl::Status VectorSVS<T>::ModifyRecordImpl(uint64_t internal_id,
   // No replace primitive in the C API and add_points rejects a duplicate id,
   // so modify is delete then add; the gap is invisible to search (phase gate).
   const T* raw = reinterpret_cast<const T*>(vector_record.GetRawVector());
+  if (!unavailable_.empty()) {
+    // No storage: only track the record, without preparing SVS input.
+    VMSDK_RETURN_IF_ERROR(
+        CheckFiniteVector<T>(raw, static_cast<size_t>(dimensions_)));
+    absl::MutexLock map_lock(&label_mutex_);
+    label_to_record_[internal_id] = std::move(vector_record);
+    return absl::OkStatus();
+  }
   std::vector<float> scratch;
   VMSDK_ASSIGN_OR_RETURN(
       const float* fp32,
@@ -1217,9 +1240,6 @@ absl::Status VectorSVS<T>::ModifyRecordImpl(uint64_t internal_id,
 template <typename T>
 absl::Status VectorSVS<T>::InsertVector(uint64_t internal_id,
                                         const float* fp32) {
-  // Without storage there is nothing to insert into; the caller still tracks
-  // the key, so a build that can create the storage rebuilds from it.
-  if (!unavailable_.empty()) return absl::OkStatus();
   {
     SvsMutationLock lock(&resize_mutex_,
                          mutations_exclusive_.load(std::memory_order_acquire));

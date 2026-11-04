@@ -293,6 +293,12 @@ constexpr absl::string_view kSearchResultBackgroundCleanup{
 static config::Boolean search_result_background_cleanup(
     kSearchResultBackgroundCleanup, false);
 
+/// Enable background shard reply
+/// If set to true, a shard sends its fanout reply from a reader thread once the
+/// main thread has fetched the content, instead of from the main thread.
+constexpr absl::string_view kBackgroundShardReply{"background-shard-reply"};
+static config::Boolean background_shard_reply(kBackgroundShardReply, false);
+
 /// Configure the weight for high priority tasks in thread pools (0-100)
 /// Low priority weight = 100 - high_priority_weight
 constexpr absl::string_view kHighPriorityWeight{"high-priority-weight"};
@@ -717,6 +723,10 @@ vmsdk::config::Number &GetMaxQueryQueueDepth() {
 const vmsdk::config::Boolean &GetSearchResultBackgroundCleanup() {
   return static_cast<vmsdk::config::Boolean &>(
       search_result_background_cleanup);
+}
+
+const vmsdk::config::Boolean &GetBackgroundShardReply() {
+  return static_cast<vmsdk::config::Boolean &>(background_shard_reply);
 }
 
 vmsdk::config::Number &GetHighPriorityWeight() {

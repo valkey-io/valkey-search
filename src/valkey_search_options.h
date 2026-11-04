@@ -39,6 +39,9 @@ config::Number &GetUtilityThreadCount();
 /// Return the configuration entry for search result background cleanup
 const config::Boolean &GetSearchResultBackgroundCleanup();
 
+/// Return the configuration entry for background shard reply
+const config::Boolean &GetBackgroundShardReply();
+
 /// Return the max time in seconds that the worker thread pool is
 /// suspended after fork started
 config::Number &GetMaxWorkerSuspensionSecs();

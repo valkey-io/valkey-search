@@ -138,6 +138,9 @@ class RemoteResponderSearch : public query::SearchParameters {
   // would be wrong with no error anywhere to say so. So partial-results
   // tolerance, which is about losing a whole shard, does not apply per arm.
   bool multi_arm{false};
+  // Pool the search ran on; with background-shard-reply, a main-thread
+  // completion hands the gRPC reply to it.
+  vmsdk::ThreadPool *reader_thread_pool{nullptr};
   void QueryCompleteBackground(
       std::unique_ptr<SearchParameters> self) override {
     CHECK(!vmsdk::IsMainThread());
@@ -167,6 +170,23 @@ class RemoteResponderSearch : public query::SearchParameters {
     }
     SerializeNeighbors(response, search_result.neighbors);
     response->set_total_count(search_result.total_count);
+    // The reply is fully serialized, so a reader thread can send it. This
+    // object, and the module strings its neighbors hold, is still freed on the
+    // main thread.
+    if (vmsdk::IsMainThread() && reader_thread_pool != nullptr &&
+        options::GetBackgroundShardReply().GetValue()) {
+      auto send = [on_done = on_done,
+                   latency_sample = std::move(latency_sample)]() mutable {
+        (*on_done)(grpc::Status::OK);
+        RecordSearchMetrics(false, std::move(latency_sample));
+      };
+      if (reader_thread_pool->Schedule(std::move(send),
+                                       vmsdk::ThreadPool::Priority::kHigh)) {
+        return;
+      }
+      // The pool is stopping and dropped the task, latency sample included,
+      // so reply here; the moved-from sample is null and is not recorded.
+    }
     (*on_done)(grpc::Status::OK);
     RecordSearchMetrics(false, std::move(latency_sample));
   }
@@ -207,6 +227,7 @@ void Service::EnqueueSearchRequest(
     ArmCompletionCallback on_done) {
   search_operation->response = response;
   search_operation->latency_sample = std::move(latency_sample);
+  search_operation->reader_thread_pool = reader_thread_pool;
   // Keep a handle on the (move-only) completion callback. The operation is
   // about to be moved into SearchAsync, so on failure it is gone and cannot be
   // asked for its callback back; sharing it is what lets this frame finish the

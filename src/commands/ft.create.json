@@ -311,6 +311,11 @@
                                 "name": "bfloat16",
                                 "type": "pure-token",
                                 "token": "BFLOAT16"
+                              },
+                              {
+                                "name": "float64",
+                                "type": "pure-token",
+                                "token": "FLOAT64"
                               }
                             ]
                           },

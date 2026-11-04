@@ -46,6 +46,24 @@ bool IsNaN(float f) {
   return (bits & kExponentMask) == kExponentMask && (bits & kMantissaMask) != 0;
 }
 
+bool IsInf(double d) {
+  constexpr uint64_t kDoubleExponentMask = 0x7FF0000000000000ULL;
+  constexpr uint64_t kDoubleMantissaMask = 0x000FFFFFFFFFFFFFULL;
+  uint64_t bits;
+  std::memcpy(&bits, &d, sizeof(bits));
+  return (bits & kDoubleExponentMask) == kDoubleExponentMask &&
+         (bits & kDoubleMantissaMask) == 0;
+}
+
+bool IsNaN(double d) {
+  constexpr uint64_t kDoubleExponentMask = 0x7FF0000000000000ULL;
+  constexpr uint64_t kDoubleMantissaMask = 0x000FFFFFFFFFFFFFULL;
+  uint64_t bits;
+  std::memcpy(&bits, &d, sizeof(bits));
+  return (bits & kDoubleExponentMask) == kDoubleExponentMask &&
+         (bits & kDoubleMantissaMask) != 0;
+}
+
 float PositiveInf() { return BitsToFloat(kExponentMask); }
 
 const Scorer* GetScorer(ScorerType type) {

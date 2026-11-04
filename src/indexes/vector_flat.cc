@@ -115,10 +115,10 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::LoadFromRDB(
 
     auto generator = [allocator = index->GetVectorAllocator()](
                          absl::string_view vector_data) {
-      float reciprocal_magnitude = CalcReciprocalMagnitude(
+      MagnitudeT reciprocal_magnitude = CalcReciprocalMagnitude(
           reinterpret_cast<const T *>(vector_data.data()),
           vector_data.size() / sizeof(T));
-      return VectorRecord::Construct(
+      return VectorRecord::Construct<MagnitudeT>(
           vector_data, reciprocal_magnitude,
           static_cast<FixedSizeAllocator *>(allocator));
     };
@@ -166,10 +166,13 @@ absl::Status VectorFlat<T>::ResizeIfFull() {
 template <typename T>
 absl::Status VectorFlat<T>::AddRecordImpl(uint64_t internal_id,
                                           VectorRecord &&vector_record) {
+  // addPoint takes the record only once it succeeds, so a retry after a
+  // resize still has it.
+  StoredVector stored_vector(std::move(vector_record));
   do {
     try {
       absl::ReaderMutexLock lock(&resize_mutex_);
-      algo_->addPoint(std::move(vector_record), internal_id);
+      algo_->addPoint(std::move(stored_vector), internal_id);
     } catch (const std::exception &e) {
       ++Metrics::GetStats().flat_add_exceptions_cnt;
       if (absl::StrContains(
@@ -242,14 +245,14 @@ absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::Search(
   try {
     CancelCondition canceler(cancellation_token);
     // The query stays raw and carries its reciprocal magnitude, applied in
-    // float during the scan (see BruteforceSearch::EvaluateDistance).
+    // DistanceT during the scan (see BruteforceSearch::EvaluateDistance).
     // Normalizing it into T would add rounding for two-byte types.
-    const float reciprocal_magnitude =
+    const MagnitudeT reciprocal_magnitude =
         normalize_ ? CalcReciprocalMagnitude(
                          reinterpret_cast<const T *>(query.data()), dimensions_)
                    : kDefaultMagnitude;
-    auto embedding =
-        VectorRecord::Construct(query, reciprocal_magnitude, nullptr);
+    StoredVector embedding(VectorRecord::Construct<MagnitudeT>(
+        query, reciprocal_magnitude, nullptr));
     auto res = algo_->searchKnn(
         embedding,
         std::min(count, static_cast<uint64_t>(algo_->cur_element_count_)),
@@ -267,9 +270,9 @@ absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::Search(
 }
 
 template <typename T>
-float VectorFlat<T>::ComputeDistance(absl::string_view query,
-                                     const VectorRecord &vector_record,
-                                     float query_magnitude) const {
+typename VectorFlat<T>::DistanceT VectorFlat<T>::ComputeDistance(
+    absl::string_view query, const VectorRecord &vector_record,
+    MagnitudeT query_magnitude) const {
   return algo_->fstdistfunc_(query.data(), vector_record.GetRawVector(),
                              algo_->dist_func_param_, query_magnitude);
 }
@@ -278,12 +281,11 @@ float VectorFlat<T>::ComputeDistance(absl::string_view query,
 // FLAT KNN (BruteforceSearch::searchKnn), resolving a key only for a match.
 template <typename T>
 absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::SearchRange(
-    absl::string_view query, float radius, cancel::Token &cancellation_token,
+    absl::string_view query, double radius, cancel::Token &cancellation_token,
     std::unique_ptr<hnswlib::BaseFilterFunctor> filter) {
+  const DistanceT range_radius = this->RangeRadius(radius);
   auto nq = this->NormalizeQueryIfNeeded(query);
-  const float query_magnitude =
-      normalize_ ? CalcReciprocalMagnitude(nq.view, this->GetVectorDataType())
-                 : kDefaultMagnitude;
+  const MagnitudeT query_magnitude = this->QueryReciprocalMagnitude(nq.view);
 
   std::vector<Neighbor> neighbors;
   neighbors.reserve(kRangeReserve);
@@ -296,9 +298,9 @@ absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::SearchRange(
     if (!*stored_vector || (filter && !(*filter)(label))) {
       continue;
     }
-    float distance =
+    const DistanceT distance =
         this->RangeDistance(nq.view, query_magnitude, *stored_vector);
-    if (distance <= radius) {
+    if (distance <= range_radius) {
       if (const auto *key = this->FindKeyDuringSearch(label)) {
         neighbors.emplace_back(*key, distance);
       }
@@ -365,5 +367,6 @@ VectorRecord &VectorFlat<T>::GetVector(uint64_t internal_id) const {
 template class VectorFlat<float>;
 template class VectorFlat<float16>;
 template class VectorFlat<bfloat16>;
+template class VectorFlat<double>;
 
 }  // namespace valkey_search::indexes

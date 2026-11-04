@@ -7,7 +7,6 @@
 
 #include "src/indexes/vector_hnsw.h"
 
-#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -36,7 +35,6 @@
 #include "src/query/search.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/cancel.h"
-#include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
 #include "src/valkey_search_options.h"
 #include "valkey_search_options.h"
@@ -349,8 +347,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
     }
     return CreateReply(res);
   } catch (const std::exception &e) {
-    Metrics::GetStats().hnsw_search_exceptions_cnt.fetch_add(
-        1, std::memory_order_relaxed);
+    ++Metrics::GetStats().hnsw_search_exceptions_cnt;
     return absl::InternalError(e.what());
   }
 }
@@ -385,8 +382,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
                                   filter.get(), &cancel_condition);
       return res;
     } catch (const std::exception &e) {
-      Metrics::GetStats().hnsw_search_exceptions_cnt.fetch_add(
-          1, std::memory_order_relaxed);
+      ++Metrics::GetStats().hnsw_search_exceptions_cnt;
       return absl::InternalError(e.what());
     }
   };

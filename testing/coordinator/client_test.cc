@@ -7,7 +7,6 @@
 
 #include "src/coordinator/client.h"
 
-#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
@@ -206,8 +205,8 @@ class ClientByteCountingTest : public vmsdk::ValkeyTest {
  protected:
   void SetUp() override {
     vmsdk::ValkeyTest::SetUp();
-    Metrics::GetStats().coordinator_bytes_out.store(0);
-    Metrics::GetStats().coordinator_bytes_in.store(0);
+    Metrics::GetStats().coordinator_bytes_out.Reset();
+    Metrics::GetStats().coordinator_bytes_in.Reset();
   }
 };
 
@@ -257,9 +256,9 @@ TEST_F(ClientByteCountingTest, CountsResponseBytesBeforeCallbackMutation) {
       });
 
   EXPECT_TRUE(callback_called);
-  EXPECT_EQ(Metrics::GetStats().coordinator_bytes_out.load(),
+  EXPECT_EQ(Metrics::GetStats().coordinator_bytes_out.GetTotal(),
             actual_request_size);
-  EXPECT_EQ(Metrics::GetStats().coordinator_bytes_in.load(),
+  EXPECT_EQ(Metrics::GetStats().coordinator_bytes_in.GetTotal(),
             actual_response_size);
 }
 
@@ -327,9 +326,9 @@ TEST_F(ClientByteCountingTest, CountsCorrectBytesOnSuccess) {
   EXPECT_TRUE(callback_called);
 
   // Verify byte counters match the actual sizes of the protobuf objects
-  EXPECT_EQ(Metrics::GetStats().coordinator_bytes_out.load(),
+  EXPECT_EQ(Metrics::GetStats().coordinator_bytes_out.GetTotal(),
             actual_request_size);
-  EXPECT_EQ(Metrics::GetStats().coordinator_bytes_in.load(),
+  EXPECT_EQ(Metrics::GetStats().coordinator_bytes_in.GetTotal(),
             actual_response_size);
 }
 
@@ -378,9 +377,9 @@ TEST_F(ClientByteCountingTest, DoesNotCountResponseBytesOnError) {
   EXPECT_TRUE(callback_called);
 
   // Verify only request bytes were counted, not response bytes
-  EXPECT_EQ(Metrics::GetStats().coordinator_bytes_out.load(),
+  EXPECT_EQ(Metrics::GetStats().coordinator_bytes_out.GetTotal(),
             actual_request_size);
-  EXPECT_EQ(Metrics::GetStats().coordinator_bytes_in.load(), 0);
+  EXPECT_EQ(Metrics::GetStats().coordinator_bytes_in.GetTotal(), 0);
 }
 
 TEST_F(ClientByteCountingTest, CountsInfoResponseBytesBeforeCallbackMutation) {
@@ -421,9 +420,9 @@ TEST_F(ClientByteCountingTest, CountsInfoResponseBytesBeforeCallbackMutation) {
       });
 
   EXPECT_TRUE(callback_called);
-  EXPECT_EQ(Metrics::GetStats().coordinator_bytes_out.load(),
+  EXPECT_EQ(Metrics::GetStats().coordinator_bytes_out.GetTotal(),
             actual_request_size);
-  EXPECT_EQ(Metrics::GetStats().coordinator_bytes_in.load(),
+  EXPECT_EQ(Metrics::GetStats().coordinator_bytes_in.GetTotal(),
             actual_response_size);
 }
 

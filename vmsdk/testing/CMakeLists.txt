@@ -54,6 +54,8 @@ add_executable(time_sliced_mrmw_mutex_test ${SRCS_TIME_SLICED_MRMW_MUTEX_TEST})
 target_include_directories(time_sliced_mrmw_mutex_test
                            PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(time_sliced_mrmw_mutex_test PUBLIC vmsdklib)
+target_link_libraries(time_sliced_mrmw_mutex_test PUBLIC vmsdk_testing_infra)
+target_link_libraries(time_sliced_mrmw_mutex_test PUBLIC valkey_module)
 finalize_test_flags(time_sliced_mrmw_mutex_test)
 
 set(SRCS_STATUS_MACROS_TEST ${CMAKE_CURRENT_LIST_DIR}/status_macros_test.cc)

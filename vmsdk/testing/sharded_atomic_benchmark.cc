@@ -9,6 +9,7 @@
 
 #include "benchmark/benchmark.h"
 #include "vmsdk/src/sharded_atomic.h"
+#include "vmsdk/src/testing_infra/module.h"
 
 namespace vmsdk {
 
@@ -24,14 +25,14 @@ struct StandardAtomicWrapper {
 
 static StandardAtomicWrapper global_std_atomic;
 
-static void BM_StandardAtomic_Add(benchmark::State& state) {
+static void BM_StandardAtomic_Add(benchmark::State &state) {
   // Each thread runs this loop
   for (auto _ : state) {
     global_std_atomic.Add(1);
   }
 }
 
-static void BM_StandardAtomic_GetTotal(benchmark::State& state) {
+static void BM_StandardAtomic_GetTotal(benchmark::State &state) {
   for (auto _ : state) {
     benchmark::DoNotOptimize(global_std_atomic.GetTotal());
   }
@@ -39,7 +40,7 @@ static void BM_StandardAtomic_GetTotal(benchmark::State& state) {
 
 static vmsdk::ShardedAtomic<int64_t> global_sharded_atomic;
 
-static void BM_ShardedAtomic_Add(benchmark::State& state) {
+static void BM_ShardedAtomic_Add(benchmark::State &state) {
   // Each thread runs this loop
   for (auto _ : state) {
     // This hits the "Hot Path" (TLS lookup + relaxed store)
@@ -47,7 +48,7 @@ static void BM_ShardedAtomic_Add(benchmark::State& state) {
   }
 }
 
-static void BM_ShardedAtomic_GetTotal(benchmark::State& state) {
+static void BM_ShardedAtomic_GetTotal(benchmark::State &state) {
   for (auto _ : state) {
     benchmark::DoNotOptimize(global_sharded_atomic.GetTotal());
   }

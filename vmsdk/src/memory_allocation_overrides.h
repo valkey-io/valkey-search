@@ -8,14 +8,13 @@
 #ifndef VMSDK_SRC_MEMORY_ALLOCATION_OVERRIDES_H_
 #define VMSDK_SRC_MEMORY_ALLOCATION_OVERRIDES_H_
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdlib>
 
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
-
-// VMSDK_USE_VALKEY_ALLOC_OVERRIDES is defined when this build routes the
-// module's heap through ValkeyModule_Alloc/Free. When it is not defined, the
-// allocator definitions in memory_allocation_c_api.cc are compiled out and
+// VMSDK_USE_VALKEY_ALLOC_OVERRIDES is defined by CMake when the build routes
+// the module's heap through ValkeyModule_Alloc/Free. When it is not defined,
+// the allocator definitions in memory_allocation_c_api.cc are compiled out and
 // everything runs on the system allocator.
 //
 // Sanitizer builds opt out so that the sanitizer's own allocator sees every
@@ -36,18 +35,32 @@
 // VMSDK_USE_VALKEY_ALLOC_OVERRIDES on macOS without that would reintroduce the
 // bug this design removes: static initializers allocating from the system
 // allocator and later being freed with ValkeyModule_Free.
-#if !defined(SAN_BUILD) && !defined(__APPLE__)
-#define VMSDK_USE_VALKEY_ALLOC_OVERRIDES 1
+#ifdef VMSDK_USE_VALKEY_ALLOC_OVERRIDES
+#if defined(SAN_BUILD) || defined(__APPLE__)
+#error "VMSDK_USE_VALKEY_ALLOC_OVERRIDES is not supported on SAN_BUILD or macOS"
+#endif
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #endif
 
 namespace vmsdk {
 
+// Valkey exposes no aligned allocation entry point. jemalloc returns memory
+// aligned to the size class, so rounding the request up to a multiple of the
+// alignment gets us the alignment we need.
+//
+// See https://linux.die.net/man/3/jemalloc: "... Chunks are always aligned to
+// multiples of the chunk size..."
+inline std::size_t AlignSize(std::size_t size, std::size_t alignment = 16) {
+  return (size + alignment - 1) & ~(alignment - 1);
+}
+
 // An allocation that is never reported to the memory accounting, which is what
 // makes it safe to use from inside the accounting itself.
 //
-// The module defines malloc, and every call to it reports, so the counters
-// cannot use malloc without re-entering themselves. ValkeyModule_Alloc is the
-// same heap without the reporting, so it breaks that cycle.
+// When VMSDK_USE_VALKEY_ALLOC_OVERRIDES is enabled, the module defines malloc
+// and every call to it reports, so the counters cannot use malloc without
+// re-entering themselves. ValkeyModule_Alloc is the same heap without the
+// reporting, so it breaks that cycle.
 //
 // It is always established by the time this runs. In the module the only path
 // here is from inside the module's own malloc, which has just called it, and
@@ -57,11 +70,25 @@ namespace vmsdk {
 // malloc-backed implementation before main -- late enough to need no
 // allocation during static initialization, which is why ShardedAtomic's
 // containers carry inline capacity.
-inline void* RawSystemMalloc(std::size_t size) {
-  return ValkeyModule_Alloc(size);
+//
+// When VMSDK_USE_VALKEY_ALLOC_OVERRIDES is not defined, the module uses the
+// system allocator directly without reporting, so std::malloc/std::free are
+// used.
+inline void* RawSystemMalloc(std::size_t size, std::size_t alignment = 16) {
+#ifdef VMSDK_USE_VALKEY_ALLOC_OVERRIDES
+  return ValkeyModule_Alloc(AlignSize(size, alignment));
+#else
+  return std::malloc(AlignSize(size, alignment));
+#endif
 }
 
-inline void RawSystemFree(void* ptr) { ValkeyModule_Free(ptr); }
+inline void RawSystemFree(void* ptr) {
+#ifdef VMSDK_USE_VALKEY_ALLOC_OVERRIDES
+  ValkeyModule_Free(ptr);
+#else
+  std::free(ptr);
+#endif
+}
 
 }  // namespace vmsdk
 
@@ -81,17 +108,25 @@ namespace vmsdk {
 //
 // Reporting is not optional here, which is why there is no knob for it: an
 // instance that reported would be exactly the cycle above.
-template <typename T>
+template <typename T, std::size_t Alignment = alignof(T)>
 struct RawSystemAllocator {
   // NOLINTNEXTLINE
   typedef T value_type;
+  static constexpr std::size_t kAlignment =
+      std::max({std::size_t{16}, alignof(T), Alignment});
+
+  template <typename U>
+  struct rebind {
+    using other = RawSystemAllocator<U, Alignment>;
+  };
 
   RawSystemAllocator() = default;
-  template <typename U>
-  constexpr RawSystemAllocator(const RawSystemAllocator<U>&) noexcept {}
+  template <typename U, std::size_t OtherAlignment>
+  constexpr RawSystemAllocator(
+      const RawSystemAllocator<U, OtherAlignment>&) noexcept {}
   // NOLINTNEXTLINE
   T* allocate(std::size_t n) {
-    return static_cast<T*>(RawSystemMalloc(n * sizeof(T)));
+    return static_cast<T*>(RawSystemMalloc(n * sizeof(T), kAlignment));
   }
   // NOLINTNEXTLINE
   void deallocate(T* p, std::size_t) { RawSystemFree(p); }

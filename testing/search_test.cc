@@ -580,17 +580,17 @@ TEST_P(LocalSearchTest, LocalSearchTest) {
   params.index_schema = index_schema;
 
   auto prefiltering_requests =
-      Metrics::GetStats().query_prefiltering_requests_cnt.load();
-  auto time_slice_queries = Metrics::GetStats().time_slice_queries.load();
+      Metrics::GetStats().query_prefiltering_requests_cnt.GetTotal();
+  auto time_slice_queries = Metrics::GetStats().time_slice_queries.GetTotal();
   auto status = Search(params, valkey_search::query::SearchMode::kLocal);
 
   if (test_case.is_vector_search_query) {
     EXPECT_EQ(prefiltering_requests + 1,
-              Metrics::GetStats().query_prefiltering_requests_cnt.load());
+              Metrics::GetStats().query_prefiltering_requests_cnt.GetTotal());
   }
 
   EXPECT_EQ(time_slice_queries + 1,
-            Metrics::GetStats().time_slice_queries.load());
+            Metrics::GetStats().time_slice_queries.GetTotal());
   VMSDK_EXPECT_OK(status);
   EXPECT_EQ(params.search_result.neighbors.size(),
             test_case.expected_neighbors_size);
@@ -709,15 +709,16 @@ TEST_F(ValkeySearchTest,
   auto run_policy = [&](query::HybridPolicy policy, bool expect_prefilter) {
     params.hybrid_policy = policy;
     auto prefiltering_requests =
-        Metrics::GetStats().query_prefiltering_requests_cnt.load();
+        Metrics::GetStats().query_prefiltering_requests_cnt.GetTotal();
     auto inline_filtering_requests =
-        Metrics::GetStats().query_inline_filtering_requests_cnt.load();
+        Metrics::GetStats().query_inline_filtering_requests_cnt.GetTotal();
     VMSDK_EXPECT_OK(Search(params, query::SearchMode::kLocal));
     expect_inkeys_results();
-    EXPECT_EQ(Metrics::GetStats().query_prefiltering_requests_cnt.load(),
+    EXPECT_EQ(Metrics::GetStats().query_prefiltering_requests_cnt.GetTotal(),
               prefiltering_requests + expect_prefilter);
-    EXPECT_EQ(Metrics::GetStats().query_inline_filtering_requests_cnt.load(),
-              inline_filtering_requests + !expect_prefilter);
+    EXPECT_EQ(
+        Metrics::GetStats().query_inline_filtering_requests_cnt.GetTotal(),
+        inline_filtering_requests + !expect_prefilter);
   };
 
   for (bool with_filter : {true, false}) {

@@ -18,6 +18,7 @@
 #include "absl/time/time.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
+#include "vmsdk/src/testing_infra/utils.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/time_sliced_mrmw_mutex.h"
 #include "vmsdk/src/utils.h"
@@ -31,9 +32,9 @@ class MockTask {
   MOCK_METHOD(void, Execute, ());
 };
 
-class MRMWMutexTest : public ::testing::Test {};
+class MRMWMutexTest : public vmsdk::ValkeyTest {};
 enum class Mode { kRead, kWrite, kMix };
-void ModeTest(Mode mode, ThreadPool& readers_pool, ThreadPool& writers_pool,
+void ModeTest(Mode mode, ThreadPool &readers_pool, ThreadPool &writers_pool,
               bool rand_delay, uint32_t may_prolong_frequency) {
   MRMWMutexOptions options;
   options.read_quota_duration = absl::Seconds(1000);
@@ -313,7 +314,7 @@ TEST_F(MRMWMutexTest, ReaderLockMetrics) {
   options.write_switch_grace_period = absl::Microseconds(50);
   TimeSlicedMRMWMutex mrmw_mutex(options);
 
-  auto& stats = GetGlobalTimeSlicedMRMWStats();
+  auto &stats = GetGlobalTimeSlicedMRMWStats();
   uint64_t initial_read_periods = stats.read_periods;
   uint64_t initial_read_time = stats.read_time_microseconds;
 
@@ -337,7 +338,7 @@ TEST_F(MRMWMutexTest, WriterLockMetrics) {
   options.write_switch_grace_period = absl::Microseconds(50);
   TimeSlicedMRMWMutex mrmw_mutex(options);
 
-  auto& stats = GetGlobalTimeSlicedMRMWStats();
+  auto &stats = GetGlobalTimeSlicedMRMWStats();
   uint64_t initial_write_periods = stats.write_periods;
   uint64_t initial_write_time = stats.write_time_microseconds;
 
@@ -361,7 +362,7 @@ TEST_F(MRMWMutexTest, MultipleLockMetrics) {
   options.write_switch_grace_period = absl::Microseconds(50);
   TimeSlicedMRMWMutex mrmw_mutex(options);
 
-  auto& stats = GetGlobalTimeSlicedMRMWStats();
+  auto &stats = GetGlobalTimeSlicedMRMWStats();
   uint64_t initial_read_periods = stats.read_periods;
   uint64_t initial_write_periods = stats.write_periods;
   uint64_t initial_read_time = stats.read_time_microseconds;
@@ -401,7 +402,7 @@ TEST_F(MRMWMutexTest, ConcurrentMetrics) {
   ThreadPool thread_pool("test-pool-", 4);
   thread_pool.StartWorkers();
 
-  auto& stats = GetGlobalTimeSlicedMRMWStats();
+  auto &stats = GetGlobalTimeSlicedMRMWStats();
   uint64_t initial_read_periods = stats.read_periods;
   uint64_t initial_write_periods = stats.write_periods;
 
@@ -447,7 +448,7 @@ TEST_F(MRMWMutexTest, GlobalStatisticsVerification) {
   TimeSlicedMRMWMutex mutex1(options);
   TimeSlicedMRMWMutex mutex2(options);
 
-  auto& stats = GetGlobalTimeSlicedMRMWStats();
+  auto &stats = GetGlobalTimeSlicedMRMWStats();
   uint64_t initial_read_periods = stats.read_periods;
   uint64_t initial_write_periods = stats.write_periods;
 
@@ -466,7 +467,7 @@ TEST_F(MRMWMutexTest, GlobalStatisticsVerification) {
   EXPECT_EQ(stats.write_periods, initial_write_periods + 1);
 
   // Verify GetGlobalTimeSlicedMRMWStats returns the same instance
-  auto& stats2 = GetGlobalTimeSlicedMRMWStats();
+  auto &stats2 = GetGlobalTimeSlicedMRMWStats();
   EXPECT_EQ(&stats, &stats2);
 }
 
@@ -478,7 +479,7 @@ TEST_F(MRMWMutexTest, TimingAccuracy) {
   options.write_switch_grace_period = absl::Microseconds(50);
   TimeSlicedMRMWMutex mrmw_mutex(options);
 
-  auto& stats = GetGlobalTimeSlicedMRMWStats();
+  auto &stats = GetGlobalTimeSlicedMRMWStats();
 
   // Test different sleep durations
   const std::vector<int> sleep_durations = {100, 200, 500};

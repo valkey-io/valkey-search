@@ -10,9 +10,7 @@
 
 #include <algorithm>
 #include <atomic>
-#include <memory>
-#include <new>
-#include <vector>
+#include <type_traits>
 
 #include "absl/base/no_destructor.h"
 #include "absl/base/thread_annotations.h"
@@ -33,12 +31,18 @@ class ShardedAtomic {
   // Public API
   // ------------------------------------------------------------------------
 
-  ShardedAtomic() : index_(CounterRegistry::Instance().AllocateIndex()) {
-    ref_keeper_ = std::shared_ptr<size_t>(new size_t(index_), [](size_t *p) {
-      CounterRegistry::Instance().FreeIndex(*p);
-      delete p;
-    });
+  ShardedAtomic() : index_(CounterRegistry::Instance().AllocateIndex()) {}
+
+  explicit ShardedAtomic(T initial_value) : ShardedAtomic() {
+    if (initial_value != 0) {
+      Add(initial_value);
+    }
   }
+
+  ~ShardedAtomic() { CounterRegistry::Instance().FreeIndex(index_); }
+
+  ShardedAtomic(const ShardedAtomic &) = delete;
+  ShardedAtomic &operator=(const ShardedAtomic &) = delete;
 
   // THE HOT PATH (Write)
   inline void Add(T n) {
@@ -65,6 +69,16 @@ class ShardedAtomic {
     node.values[index_].store(current - n, std::memory_order_relaxed);
   }
 
+  inline ShardedAtomic &operator+=(T n) {
+    Add(n);
+    return *this;
+  }
+
+  inline ShardedAtomic &operator-=(T n) {
+    Subtract(n);
+    return *this;
+  }
+
   // Prefix increment
   inline ShardedAtomic &operator++() {
     Add(1);
@@ -88,17 +102,23 @@ class ShardedAtomic {
     return CounterRegistry::Instance().GetTotal(index_, order);
   }
 
+  inline operator T() const { return GetTotal(); }
+
   T GetNonNegativeTotal(
       std::memory_order order = std::memory_order_relaxed) const {
     T total = GetTotal(order);
-    return total > 0 ? total : 0;
+    return static_cast<std::make_signed_t<T>>(total) > 0 ? total : 0;
   }
 
   void Reset() const { CounterRegistry::Instance().Reset(index_); }
 
  private:
+  static constexpr size_t kCacheLineSize = 64;
+
   // ThreadLocalNode is the TLS container for unbounded dynamic counters
-  struct alignas(64) ThreadLocalNode {
+  struct alignas(kCacheLineSize) ThreadLocalNode {
+    using ValueAllocator = RawSystemAllocator<std::atomic<T>, kCacheLineSize>;
+
     std::atomic<T> *values{nullptr};
     size_t capacity{0};
     mutable absl::Mutex resize_mutex;
@@ -210,11 +230,8 @@ class ShardedAtomic {
     // Every instance's constructor calls AllocateIndex, which appends to
     // retired_totals_, and the instances that matter are globals -- so without
     // this, the first allocation of the process happens during static
-    // initialization, before anything has established an allocator. Eight
-    // covers the three counters the module defines today with room to spare;
-    // beyond that these grow on the heap as before, by which time the
-    // allocator is in place.
-    static constexpr size_t kInlineCapacity = 8;
+    // initialization, before anything has established an allocator.
+    static constexpr size_t kInlineCapacity = 128;
 
     mutable absl::Mutex mutex_;
     absl::InlinedVector<ThreadLocalNode *, kInlineCapacity,
@@ -262,7 +279,6 @@ class ShardedAtomic {
 
  private:
   size_t index_;
-  std::shared_ptr<size_t> ref_keeper_;
 };
 
 // ------------------------------------------------------------------------
@@ -281,7 +297,7 @@ ShardedAtomic<T>::ThreadLocalNode::~ThreadLocalNode() {
   node_destroyed_ = true;
   CounterRegistry::Instance().Unregister(this);
   if (values) {
-    RawSystemAllocator<std::atomic<T>> alloc;
+    ValueAllocator alloc;
     alloc.deallocate(values, capacity);
   }
 }
@@ -300,7 +316,7 @@ void ShardedAtomic<T>::ThreadLocalNode::EnsureCapacity(size_t min_capacity) {
   size_t new_capacity =
       std::max(capacity * 2, std::max(min_capacity, (size_t)64));
 
-  RawSystemAllocator<std::atomic<T>> alloc;
+  ValueAllocator alloc;
   std::atomic<T> *new_values = alloc.allocate(new_capacity);
 
   for (size_t i = 0; i < capacity; ++i) {

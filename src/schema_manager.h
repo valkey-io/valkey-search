@@ -79,7 +79,7 @@ class SchemaManager {
   bool IsIndexingInProgress() const;
   IndexSchema::Stats::ResultCnt<uint64_t> AccumulateIndexSchemaResults(
       absl::AnyInvocable<const IndexSchema::Stats::ResultCnt<
-          std::atomic<uint64_t>> &(const IndexSchema::Stats &) const>
+          vmsdk::ShardedAtomic<uint64_t>> &(const IndexSchema::Stats &) const>
           get_result_cnt_func) const;
 
   // An empty dbnum means every database was flushed.

@@ -632,7 +632,7 @@ bool SchemaManager::IsIndexingInProgress() const {
 IndexSchema::Stats::ResultCnt<uint64_t>
 SchemaManager::AccumulateIndexSchemaResults(
     absl::AnyInvocable<const IndexSchema::Stats::ResultCnt<
-        std::atomic<uint64_t>> &(const IndexSchema::Stats &) const>
+        vmsdk::ShardedAtomic<uint64_t>> &(const IndexSchema::Stats &) const>
         get_result_cnt_func) const {
   IndexSchema::Stats::ResultCnt<uint64_t> total_cnt;
   absl::MutexLock lock(&db_to_index_schemas_mutex_);

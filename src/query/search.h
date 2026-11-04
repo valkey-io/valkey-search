@@ -261,6 +261,9 @@ struct SearchParameters {
   // FT.AGGREGATE sets this from `LOAD *`. FT.SEARCH derives it in
   // PostParseQueryString, where a bare search means the whole record.
   bool all_content{false};
+  // Set on deserialized fanout requests when the originating command's
+  // derived parameters require content processing despite no_content.
+  bool force_content_processing{false};
   FilterParseResults filter_parse_results;
   // True when the filter tree contains a (single) VectorRangePredicate. In the
   // single-VR model the matched distance is carried in Neighbor::distance;
@@ -330,7 +333,8 @@ struct SearchParameters {
   // set first. When true, the query can complete on the background thread and
   // skip content loading.
   virtual bool NoProcessingRequired() const {
-    return no_content && !sortby_parameter.has_value();
+    return !force_content_processing && no_content &&
+           !sortby_parameter.has_value();
   }
 
   virtual absl::Status PreParseQueryString();
@@ -448,6 +452,10 @@ CalcBestMatchingPrefilteredKeys(
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
     indexes::VectorBase *vector_index, size_t qualified_entries,
     QueryContext &query_ctx);
+
+// Returns the single VECTOR_RANGE predicate in `parameters`, or nullptr.
+const VectorRangePredicate *GetVectorRangePredicate(
+    const SearchParameters &parameters);
 
 // Returns the distance score field name for the single VR predicate in the
 // query: the $yield_distance_as (or AS) name if set, otherwise "" (empty).

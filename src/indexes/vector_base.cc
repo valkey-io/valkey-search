@@ -586,6 +586,12 @@ absl::StatusOr<float> VectorBase::RecomputeDistance(
   return ComputeDistance(query, vector_record, query_magnitude);
 }
 
+absl::StatusOr<float> VectorBase::RecomputeRangeDistance(
+    absl::string_view record, absl::string_view query) const {
+  VMSDK_ASSIGN_OR_RETURN(float distance, RecomputeDistance(record, query));
+  return ClampCosineDistance(distance);
+}
+
 bool VectorBase::AddPrefilteredKey(
     absl::string_view query, float query_magnitude,
     const InternedStringPtr &key, uint64_t count,

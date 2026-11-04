@@ -979,27 +979,15 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
   // when it lies within the radius; Redisearch yields the distance regardless
   // of which branch matched, so recompute it per key below. The recompute only
   // runs when HasVrScore() is false, so gating on has_vector_range is cheap.
-  const VectorRangePredicate *vr_predicate = nullptr;
+  const VectorRangePredicate *vr_predicate =
+      GetVectorRangePredicate(parameters);
   indexes::VectorBase *vr_vector_index = nullptr;
-  if (parameters.has_vector_range &&
-      parameters.filter_parse_results.root_predicate) {
-    // Single-VR invariant: parse-time rejection (PreParseQueryString) enforces
-    // at most one VECTOR_RANGE predicate per query, so the first node found is
-    // authoritative — there is nothing to disambiguate.
-    ForEachVectorRangePredicate(
-        parameters.filter_parse_results.root_predicate.get(),
-        [&](VectorRangePredicate *vr) -> absl::Status {
-          if (vr_predicate == nullptr) vr_predicate = vr;
-          return absl::OkStatus();
-        })
-        .IgnoreError();
-    if (vr_predicate != nullptr) {
-      auto index_result =
-          parameters.index_schema->GetIndex(vr_predicate->GetAlias());
-      if (index_result.ok()) {
-        vr_vector_index =
-            dynamic_cast<indexes::VectorBase *>(index_result.value().get());
-      }
+  if (vr_predicate != nullptr) {
+    auto index_result =
+        parameters.index_schema->GetIndex(vr_predicate->GetAlias());
+    if (index_result.ok()) {
+      vr_vector_index =
+          dynamic_cast<indexes::VectorBase *>(index_result.value().get());
     }
   }
 
@@ -2013,6 +2001,25 @@ size_t CountVectorRangePredicates(const Predicate *predicate) {
   return count;
 }
 
+const VectorRangePredicate *GetVectorRangePredicate(
+    const SearchParameters &parameters) {
+  if (!parameters.has_vector_range ||
+      !parameters.filter_parse_results.root_predicate) {
+    return nullptr;
+  }
+  const VectorRangePredicate *result = nullptr;
+  ForEachVectorRangePredicate(
+      parameters.filter_parse_results.root_predicate.get(),
+      [&](VectorRangePredicate *vr) -> absl::Status {
+        if (result == nullptr) {
+          result = vr;
+        }
+        return absl::OkStatus();
+      })
+      .IgnoreError();
+  return result;
+}
+
 // Return the score field name for the single VR predicate in the query: the
 // name given by $yield_distance_as (or AS) if set, otherwise "". Returns ""
 // when the query has no VR predicate. Single-VR only: the first VR predicate
@@ -2026,26 +2033,11 @@ size_t CountVectorRangePredicates(const Predicate *predicate) {
 // ft_aggregate registration/write), keeping the distance a pure filter unless
 // yielded via an alias.
 std::string GetVrScoreFieldName(const SearchParameters &parameters) {
-  if (!parameters.has_vector_range ||
-      !parameters.filter_parse_results.root_predicate) {
+  const auto *vr = GetVectorRangePredicate(parameters);
+  if (vr == nullptr || !vr->GetScoreAs().has_value()) {
     return "";
   }
-  std::string field_name;
-  bool found = false;
-  ForEachVectorRangePredicate(
-      parameters.filter_parse_results.root_predicate.get(),
-      [&](VectorRangePredicate *vr) -> absl::Status {
-        if (!found) {
-          found = true;
-          const auto &score_as = vr->GetScoreAs();
-          if (score_as.has_value()) {
-            field_name = score_as.value();
-          }
-        }
-        return absl::OkStatus();
-      })
-      .IgnoreError();
-  return field_name;
+  return vr->GetScoreAs().value();
 }
 
 absl::StatusOr<absl::string_view> SubstituteParam(

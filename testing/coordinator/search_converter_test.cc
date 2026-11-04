@@ -244,6 +244,26 @@ TEST_F(SearchConverterTest, IsMatchAllRoundTrips) {
   }
 }
 
+TEST_F(SearchConverterTest, ForceContentProcessingRoundTrips) {
+  for (bool value : {false, true}) {
+    UnitTestSearchParameters parameters;
+    parameters.index_schema_name = "index_schema_name";
+    parameters.score_as = vmsdk::MakeUniqueValkeyString("__score");
+    parameters.no_content = true;
+    parameters.force_content_processing = value;
+
+    auto request = ParametersToGRPCSearchRequest(parameters);
+    ASSERT_NE(request, nullptr);
+    EXPECT_EQ(request->force_content_processing(), value);
+
+    UnitTestSearchParameters decoded;
+    VMSDK_EXPECT_OK(
+        GRPCSearchRequestToParameters(*request, /*context=*/nullptr, &decoded));
+    EXPECT_EQ(decoded.force_content_processing, value);
+    EXPECT_EQ(decoded.NoProcessingRequired(), !value);
+  }
+}
+
 TEST_F(SearchConverterTest, EfRuntimePresenceRoundTrips) {
   UnitTestSearchParameters omitted;
   omitted.index_schema_name = "index_schema_name";

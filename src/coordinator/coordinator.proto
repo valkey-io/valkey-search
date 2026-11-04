@@ -198,6 +198,9 @@ message SearchIndexPartitionRequest {
   // -- so a mixed-version fanout does not turn `LOAD *` into a fetch of
   // nothing.
   bool all_content = 25;
+  // Preserves a derived command's NoProcessingRequired() decision after the
+  // shard reconstructs this request as base SearchParameters.
+  bool force_content_processing = 26;
 }
 
 message InkeysFilter {

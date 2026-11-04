@@ -536,8 +536,8 @@ class VectorBase : public IndexBase {
   // IsWithinVectorRange is not.
   bool IsRecordWithinVectorRange(absl::string_view record,
                                  absl::string_view query, float radius) const {
-    auto distance = RecomputeDistance(record, query);
-    return distance.ok() && ClampCosineDistance(*distance) <= radius;
+    auto distance = RecomputeRangeDistance(record, query);
+    return distance.ok() && *distance <= radius;
   }
   bool IsVectorIndex() const override { return true; }
   virtual uint64_t GetMaxLoadedLabel() const { return 0; }
@@ -592,6 +592,9 @@ class VectorBase : public IndexBase {
   // under a reader lock.
   absl::StatusOr<float> RecomputeDistance(absl::string_view record,
                                           absl::string_view query) const;
+  // Recomputes and clamps a VECTOR_RANGE distance using current record bytes.
+  absl::StatusOr<float> RecomputeRangeDistance(absl::string_view record,
+                                               absl::string_view query) const;
   const InternedStringPtr &GetInternedAttributeIdentifier() const {
     return interned_attribute_identifier_;
   }

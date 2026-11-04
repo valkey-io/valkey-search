@@ -158,8 +158,13 @@ class PredicateEvaluator : public query::Evaluator {
       }
       record = converted.get();
     }
-    return EvaluationResult(vector_index->IsRecordWithinVectorRange(
-        vmsdk::ToStringView(record), query_vector, predicate.GetRadius()));
+    auto distance = vector_index->RecomputeRangeDistance(
+        vmsdk::ToStringView(record), query_vector);
+    if (!distance.ok() ||
+        *distance > static_cast<float>(predicate.GetRadius())) {
+      return EvaluationResult(false);
+    }
+    return {true, *distance};
   }
 
  private:
@@ -214,6 +219,26 @@ FilterVerification VerifyFilter(const query::SearchParameters &parameters,
                                parameters.filter_parse_results.query_operations,
                                index_schema);
   EvaluationResult result = predicate->Evaluate(evaluator);
+  FilterVerification verification{.matches = result.matches};
+  if (!result.matches) {
+    return verification;
+  }
+
+  if (const auto *vr = GetVectorRangePredicate(parameters); vr != nullptr) {
+    verification.vector_range_distance_recomputed = true;
+    if (result.HasVrScore()) {
+      verification.recomputed_vector_range_distance = result.vr_distance;
+    } else {
+      // An OR may have short-circuited through another matching child. Check
+      // the range leaf independently so a current in-range vector gains its
+      // distance and a current out-of-range vector loses a stale one.
+      auto range_result = evaluator.EvaluateVectorRange(*vr);
+      if (range_result.matches && range_result.HasVrScore()) {
+        verification.recomputed_vector_range_distance =
+            range_result.vr_distance;
+      }
+    }
+  }
 
   // The document changed between shard-side scoring and this content fetch, so
   // its carried Neighbor.score is stale; recompute it through the same Scorer
@@ -223,15 +248,14 @@ FilterVerification VerifyFilter(const query::SearchParameters &parameters,
   // overrides the choice per arm.
   const bool recompute_score =
       recompute_score_override.value_or(parameters.ScoreIsRelevance());
-  if (!result.matches || !recompute_score) {
-    return {result.matches, std::nullopt};
+  if (recompute_score) {
+    // nullopt (empty corpus / non-match) degrades to 0 rather than dropping the
+    // already-admitted document.
+    verification.recomputed_score =
+        RecomputeDocumentScore(predicate, n.external_id, *query_ctx, records)
+            .value_or(0.0f);
   }
-  // nullopt (empty corpus / non-match) degrades to 0 rather than dropping the
-  // already-admitted document.
-  result.score =
-      RecomputeDocumentScore(predicate, n.external_id, *query_ctx, records)
-          .value_or(0.0f);
-  return {true, result.score};
+  return verification;
 }
 
 // Check if this node owns the slot for the given key in cluster mode
@@ -252,7 +276,7 @@ absl::StatusOr<RecordsMap> GetContent(
     const indexes::Neighbor &neighbor,
     const std::optional<std::string> &vector_identifier,
     std::unique_ptr<query::QueryContext> &query_ctx,
-    std::optional<float> *out_recomputed_score = nullptr) {
+    FilterVerification *out_verification = nullptr) {
   auto key = neighbor.external_id->Str();
   const bool is_json = attribute_data_type.ToProto() ==
                        data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON;
@@ -313,8 +337,8 @@ absl::StatusOr<RecordsMap> GetContent(
     if (!verification.matches) {
       return absl::NotFoundError("Verify filter failed");
     }
-    if (out_recomputed_score != nullptr && verification.recomputed_score) {
-      *out_recomputed_score = verification.recomputed_score;
+    if (out_verification != nullptr) {
+      *out_verification = std::move(verification);
     }
   }
   // Every other fetch is projected below, filter or not. `content` cannot be
@@ -478,17 +502,28 @@ void ProcessNeighborsForReply(
       // Skip this neighbor - we don't own its slot.
       continue;
     }
-    std::optional<float> recomputed_score;
+    FilterVerification verification;
     auto content = GetContent(ctx, attribute_data_type, parameters, neighbor,
-                              vector_identifier, query_ctx, &recomputed_score);
+                              vector_identifier, query_ctx, &verification);
     if (!content.ok()) {
       continue;
     }
     // Apply the fresh, scale-consistent score (only set when Neighbor.score is
     // a relevance, never when it is a KNN distance).
-    if (recomputed_score.has_value()) {
-      neighbor.score = *recomputed_score;
+    if (verification.recomputed_score.has_value()) {
+      neighbor.score = *verification.recomputed_score;
       any_score_recomputed = true;
+    }
+    // VECTOR_RANGE is a non-vector query, but its yielded distance becomes
+    // stale across the same mutation window as a KNN distance. Revalidation
+    // independently checks the current range leaf so an OR-only survivor can
+    // either gain or lose the yielded distance.
+    if (verification.vector_range_distance_recomputed) {
+      neighbor.has_vr_distance =
+          verification.recomputed_vector_range_distance.has_value();
+      neighbor.distance =
+          verification.recomputed_vector_range_distance.value_or(
+              indexes::scoring::PositiveInf());
     }
     // A vector query's distance is stale for the same reason and is refreshed
     // the same way, against the vector the document holds now rather than the

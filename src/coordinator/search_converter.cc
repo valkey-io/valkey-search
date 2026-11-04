@@ -363,6 +363,7 @@ absl::Status GRPCSearchRequestToParameters(
   parameters->limit = query::LimitParameter{request.limit().first_index(),
                                             request.limit().number()};
   parameters->no_content = request.no_content();
+  parameters->force_content_processing = request.force_content_processing();
   parameters->enable_partial_results = request.enable_partial_results();
   parameters->enable_consistency = request.enable_consistency();
   if (request.has_root_filter_predicate()) {
@@ -587,14 +588,16 @@ std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
   request->mutable_limit()->set_number(parameters.limit.number);
   request->set_timeout_ms(parameters.timeout_ms);
   request->set_no_content(parameters.no_content);
+  request->set_force_content_processing(!parameters.NoProcessingRequired());
   request->set_all_content(parameters.all_content);
   request->set_enable_partial_results(parameters.enable_partial_results);
   request->set_enable_consistency(parameters.enable_consistency);
   if (parameters.filter_parse_results.root_predicate != nullptr) {
-    request->set_allocated_root_filter_predicate(
-        PredicateToGRPCPredicate(
-            *parameters.filter_parse_results.root_predicate)
-            .release());
+    auto predicate = PredicateToGRPCPredicate(
+        *parameters.filter_parse_results.root_predicate);
+    if (predicate != nullptr) {
+      request->mutable_root_filter_predicate()->Swap(predicate.get());
+    }
   } else {
     request->clear_root_filter_predicate();
   }

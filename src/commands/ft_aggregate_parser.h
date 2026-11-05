@@ -15,6 +15,8 @@
 #include "absl/container/flat_hash_set.h"
 #include "absl/container/inlined_vector.h"
 #include "absl/status/status.h"
+#include "absl/strings/numbers.h"
+#include "absl/strings/str_cat.h"
 #include "src/commands/commands.h"
 #include "src/expr/expr.h"
 #include "src/expr/value.h"
@@ -121,9 +123,18 @@ struct AggregateParameters : public expr::Expression::CompileContext,
       it->second.first++;
       // Owned copy: the map views argv, and a WITHCURSOR reply outlives argv.
       return expr::Value(std::string(it->second.second));
-    } else {
-      return absl::NotFoundError(absl::StrCat("parameter ", s, " not found."));
     }
+    auto jit = parse_vars.jparams.find(s);
+    if (jit != parse_vars.jparams.end()) {
+      double number;
+      if (!absl::SimpleAtod(jit->second.second, &number)) {
+        return absl::InvalidArgumentError(absl::StrCat(
+            "JPARAMS `", s, "` must be a number in an expression."));
+      }
+      jit->second.first++;
+      return expr::Value(std::string(jit->second.second));
+    }
+    return absl::NotFoundError(absl::StrCat("parameter ", s, " not found."));
   }
 
   // Determine if we need full results or if we can optimize with trimming via

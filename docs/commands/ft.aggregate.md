@@ -15,6 +15,7 @@ FT.AGGREGATE <index-name> <query>
     [INORDER]
     [LOAD * | LOAD <count> <field> [AS <alias>] [<field> [AS <alias>] ...]]
     [PARAMS <count> <name> <value> [ <name> <value> ...]]
+    [JPARAMS <count> <name> <value> [ <name> <value> ...]]
     [SCORER <scorer>]
     [SLOP <slop>]
     [TIMEOUT <timeout>]
@@ -44,6 +45,7 @@ FT.AGGREGATE <index-name> <query>
 
   Honoring `AS` in the `LOAD` clause is a compatibility fix gated on `search.emulate-release` being `1.3.0` or greater; under an emulated release below that, `AS` is treated as an ordinary field name. Accepting a JSON path as `<field>` is not gated, since before it was supported such a load simply failed. See [COMPATIBILITY.md](../../COMPATIBILITY.md) for details.
 - `PARAMS <count> <name> <value> [<name> <value> ...]` (optional): `count` is of the number of arguments, i.e., twice the number of `name`/`value` pairs. `PARAMS` can be used in both the query string as well as within an expression context. See [Search - query language](../topics/search-query.md) for usage details.
+- `JPARAMS <count> <name> <value> [<name> <value> ...]` (optional): Like `PARAMS`, except that each value is JSON. A query vector is a JSON array of numbers, such as `[0.1, 0.2, 0.3]`, converted to the index's declared `TYPE`; a number is used exactly as the same `PARAMS` value would be. Other JSON values are not supported. A name may not be defined by both `PARAMS` and `JPARAMS`. In an expression context only a number is accepted.
 - `SCORER <scorer>` (optional): Selects the relevance scoring function used to rank text results. The only supported scorer is `BM25STD`, which is also the default.
 - `SLOP <slop>` (Optional): Specifies a slop value for proximity matching of terms.
 - `TIMEOUT <timeout>` (optional): Lets you set a timeout value for the search command. This must be an integer in milliseconds.

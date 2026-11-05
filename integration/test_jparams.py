@@ -70,6 +70,20 @@ QUERIES = [
      lambda p: ["FT.SEARCH", INDEX, "@vec:[VECTOR_RANGE $r $q]", *p,
                 "NOCONTENT"],
      _keys),
+    ("aggregate_knn",
+     lambda p: ["FT.AGGREGATE", INDEX, "*=>[KNN $k @vec $q AS d]", *p,
+                "LOAD", "1", "@__key"],
+     _rows),
+    ("aggregate_range",
+     lambda p: ["FT.AGGREGATE", INDEX,
+                "@vec:[VECTOR_RANGE $r $q]=>{$yield_distance_as: d}", *p,
+                "LOAD", "2", "@__key", "@d"],
+     _rows),
+    ("aggregate_apply",
+     lambda p: ["FT.AGGREGATE", INDEX, "@vec:[VECTOR_RANGE $r $q]", *p,
+                "LOAD", "2", "@__key", "@n", "APPLY", "@n + $k", "AS", "m",
+                "FILTER", "@m > $k"],
+     _rows),
 ]
 
 PARAMS = ["PARAMS", "6", "q", _blob(QUERY), "k", "2", "r", "3"]
@@ -115,6 +129,14 @@ class TestJParams(ValkeySearchTestCaseBase):
             with pytest.raises(ResponseError,
                                match="Parameter k is already defined"):
                 client.execute_command(*build(clause))
+
+    def test_non_number_in_expression_rejected(self):
+        client = self._setup()
+        with pytest.raises(ResponseError,
+                           match="JPARAMS `x` must be a number"):
+            client.execute_command(
+                "FT.AGGREGATE", INDEX, "*", "JPARAMS", "2", "x", "[1, 2]",
+                "LOAD", "1", "@n", "APPLY", "@n + $x", "AS", "m")
 
 
 class TestJParamsCluster(ValkeySearchClusterTestCase):

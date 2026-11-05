@@ -72,10 +72,14 @@ struct SearchCommand : public QueryCommand {
   };
   RowFormat GetRowFormat() const;
   // Replies a document's elements: key, [score], [sort key], fields. Returns
-  // the number of elements replied.
+  // the number of elements replied, always RowElementCount().
   size_t ReplyRowElements(ValkeyModuleCtx *ctx,
                           const indexes::Neighbor &neighbor,
                           const RowFormat &format) const;
+  // Number of elements ReplyRowElements replies for any row, so arrays can be
+  // replied with their length up front rather than VALKEYMODULE_POSTPONED_LEN
+  // (each postponed length costs the server a reply-list node).
+  size_t RowElementCount() const;
 };
 
 }  // namespace valkey_search

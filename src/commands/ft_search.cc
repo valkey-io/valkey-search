@@ -372,6 +372,12 @@ SearchCommand::RowFormat SearchCommand::GetRowFormat() const {
   return format;
 }
 
+size_t SearchCommand::RowElementCount() const {
+  // Document ID, [score], then unless NOCONTENT: [sort key], fields array.
+  return 1 + (with_scores ? 1 : 0) +
+         (no_content ? 0 : (with_sort_keys ? 1 : 0) + 1);
+}
+
 size_t SearchCommand::ReplyRowElements(ValkeyModuleCtx *ctx,
                                        const indexes::Neighbor &neighbor,
                                        const RowFormat &format) const {
@@ -444,34 +450,44 @@ size_t SearchCommand::ReplyRowElements(ValkeyModuleCtx *ctx,
       ValkeyModule_ReplyWithString(ctx, attribute_content.second.value.get());
     }
   } else {
-    ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_LEN);
-    size_t cnt = 0;
-    for (const auto &return_attribute : return_attributes) {
-      absl::string_view ret_id =
-          vmsdk::ToStringView(return_attribute.identifier.get());
-      if (is_vector && vmsdk::ToStringView(score_as.get()) == ret_id) {
-        ReplyScore(ctx, *score_as, neighbor);
-        ++cnt;
-        continue;
-      }
-      if (!format.vr_field.empty() && ret_id == format.vr_field) {
-        if (HasVrDistance(neighbor)) {
-          ValkeyModule_ReplyWithString(ctx, return_attribute.alias.get());
-          auto score_value = expr::FormatDouble(neighbor.distance);
-          ValkeyModule_ReplyWithString(
-              ctx, vmsdk::MakeUniqueValkeyString(score_value).get());
+    // Which RETURN fields this document has decides the array length; one
+    // walk counts them so the array is replied with its length up front, and
+    // the same walk then replies them.
+    auto visit_return_fields = [&](bool reply) {
+      size_t cnt = 0;
+      for (const auto &return_attribute : return_attributes) {
+        absl::string_view ret_id =
+            vmsdk::ToStringView(return_attribute.identifier.get());
+        if (is_vector && vmsdk::ToStringView(score_as.get()) == ret_id) {
+          if (reply) ReplyScore(ctx, *score_as, neighbor);
+          ++cnt;
+          continue;
+        }
+        if (!format.vr_field.empty() && ret_id == format.vr_field) {
+          if (HasVrDistance(neighbor)) {
+            if (reply) {
+              ValkeyModule_ReplyWithString(ctx, return_attribute.alias.get());
+              auto score_value = expr::FormatDouble(neighbor.distance);
+              ValkeyModule_ReplyWithString(
+                  ctx, vmsdk::MakeUniqueValkeyString(score_value).get());
+            }
+            ++cnt;
+          }
+          continue;
+        }
+        auto it = contents.find(ret_id);
+        if (it != contents.end()) {
+          if (reply) {
+            ValkeyModule_ReplyWithString(ctx, return_attribute.alias.get());
+            ValkeyModule_ReplyWithString(ctx, it->second.value.get());
+          }
           ++cnt;
         }
-        continue;
       }
-      auto it = contents.find(ret_id);
-      if (it != contents.end()) {
-        ValkeyModule_ReplyWithString(ctx, return_attribute.alias.get());
-        ValkeyModule_ReplyWithString(ctx, it->second.value.get());
-        ++cnt;
-      }
-    }
-    ValkeyModule_ReplySetArrayLength(ctx, 2 * cnt);
+      return cnt;
+    };
+    ValkeyModule_ReplyWithArray(ctx, 2 * visit_return_fields(false));
+    visit_return_fields(true);
   }
   return elements + 1;
 }
@@ -481,9 +497,10 @@ void SearchCommand::ReplyRows(ValkeyModuleCtx *ctx,
                               size_t start, size_t end) const {
   auto format = GetRowFormat();
   for (auto i = start; i < end; ++i) {
-    ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_LEN);
-    ValkeyModule_ReplySetArrayLength(
-        ctx, ReplyRowElements(ctx, search_result.neighbors[i], format));
+    ValkeyModule_ReplyWithArray(ctx, RowElementCount());
+    [[maybe_unused]] size_t replied =
+        ReplyRowElements(ctx, search_result.neighbors[i], format);
+    DCHECK_EQ(replied, RowElementCount());
   }
 }
 
@@ -528,14 +545,15 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
 
   auto range = search_result.GetSerializationRange(*this);
   if (!cursor_options) {
-    ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_LEN);
+    const size_t expected = 1 + range.count() * RowElementCount();
+    ValkeyModule_ReplyWithArray(ctx, expected);
     ReplyAvailNeighbors(ctx, search_result, *this);
     auto format = GetRowFormat();
     size_t elements = 1;
     for (auto i = range.start_index; i < range.end_index; ++i) {
       elements += ReplyRowElements(ctx, search_result.neighbors[i], format);
     }
-    ValkeyModule_ReplySetArrayLength(ctx, elements);
+    DCHECK_EQ(elements, expected);
     return;
   }
 

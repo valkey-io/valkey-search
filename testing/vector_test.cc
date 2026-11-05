@@ -2818,10 +2818,9 @@ TEST_F(VectorIndexTest, LoadTrackedKeysWithoutKeyspaceVector) {
         const auto &keyspace_vector =
             i == kChangedVector ? changed_vector : vectors[i];
         records[i] = new ValkeyModuleString{
-            i == kInvalidVector
-                ? std::string("bad")
-                : std::string((char *)&keyspace_vector[0],
-                              kDimensions * sizeof(float))};
+            i == kInvalidVector ? std::string("bad")
+                                : std::string((char *)&keyspace_vector[0],
+                                              kDimensions * sizeof(float))};
       }
       EXPECT_CALL(*kMockValkeyModule,
                   OpenKey(testing::_, testing::_, testing::_))

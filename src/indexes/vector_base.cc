@@ -498,9 +498,9 @@ absl::Status VectorBase::LoadTrackedKeys(
                                      const VectorRecord &saved) {
     std::vector<char> normalized;
     if (normalize_) {
-      normalized = NormalizeVector(
-          vector, GetVectorDataType(),
-          CalcReciprocalMagnitude(vector, GetVectorDataType()));
+      normalized =
+          NormalizeVector(vector, GetVectorDataType(),
+                          CalcReciprocalMagnitude(vector, GetVectorDataType()));
       vector = absl::string_view(normalized.data(), normalized.size());
     }
     return std::memcmp(vector.data(), saved.GetRawVector(),

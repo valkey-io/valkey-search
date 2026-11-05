@@ -16,6 +16,7 @@
 #include "absl/status/status.h"
 #include "absl/strings/string_view.h"
 #include "vmsdk/src/deferred_init.h"
+#include "vmsdk/src/log.h"
 #include "vmsdk/src/utils.h"  // IWYU pragma: keep
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -48,7 +49,7 @@
     vmsdk::RunDeferredStaticInitializers();                                 \
     /* Dynamically-initialized globals are usable from here on. */          \
     if (!vmsdk::verifyLoadedOnlyOnce()) {                                   \
-      VMSDK_LOG(NOTICE, ctx) << "Module cannot be loaded more than once";   \
+      VMSDK_LOG(NOTICE) << "Module cannot be loaded more than once";        \
       return VALKEYMODULE_ERR;                                              \
     }                                                                       \
     vmsdk::TrackCurrentAsMainThread();                                      \
@@ -68,6 +69,7 @@
     if (options.on_unload.has_value()) {                                    \
       options.on_unload.value()(ctx, options);                              \
     }                                                                       \
+    vmsdk::DisableLoggingContext();                                         \
     return VALKEYMODULE_OK;                                                 \
   }                                                                         \
   }                                                                         \

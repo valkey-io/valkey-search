@@ -24,9 +24,9 @@ absl::Status HandleInternalUpdateFailure(ValkeyModuleCtx *ctx,
                                          const std::string &operation_type,
                                          const std::string &id,
                                          const absl::Status &error_status) {
-  VMSDK_LOG(WARNING, ctx) << "CRITICAL: " << operation_type
-                          << " failed in FT.INTERNAL_UPDATE. "
-                          << "Index ID: " << vmsdk::config::RedactIfNeeded(id);
+  VMSDK_LOG(WARNING) << "CRITICAL: " << operation_type
+                     << " failed in FT.INTERNAL_UPDATE. "
+                     << "Index ID: " << vmsdk::config::RedactIfNeeded(id);
 
   if (operation_type.find("parse") != std::string::npos) {
     Metrics::GetStats().ft_internal_update_parse_failures_cnt++;
@@ -36,7 +36,7 @@ absl::Status HandleInternalUpdateFailure(ValkeyModuleCtx *ctx,
 
   if (ValkeyModule_GetContextFlags(ctx) & VALKEYMODULE_CTX_FLAGS_LOADING) {
     if (options::GetSkipCorruptedInternalUpdateEntries().GetValue()) {
-      VMSDK_LOG(WARNING, ctx)
+      VMSDK_LOG(WARNING)
           << "SKIPPING corrupted FT.INTERNAL_UPDATE AOF entry due to "
              "configuration";
       Metrics::GetStats().ft_internal_update_skipped_entries_cnt++;

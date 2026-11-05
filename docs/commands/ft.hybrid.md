@@ -126,10 +126,12 @@ The fused score is emitted under `__score` unless `COMBINE ... YIELD_SCORE_AS` n
 
 Array of N+1 elements, where N is the number of records returned:
 
-| Element         | Type    | Contents                                                                     |
-| :-------------- | :------ | :--------------------------------------------------------------------------- |
-| `[0]`           | Integer | N, the number of records that follow. It is not the total number of matches. |
-| `[1]` ... `[N]` | Array   | One record per element: its field/value pairs.                               |
+| Element | Type    | Contents                                                                     |
+| :------ | :------ | :--------------------------------------------------------------------------- |
+| `[0]`   | Integer | N, the number of records that follow. It is not the total number of matches. |
+| `[1]`   | Array   | The first record: its field/value pairs.                                     |
+| ...     |         |                                                                              |
+| `[N]`   | Array   | The last record: its field/value pairs.                                      |
 
 Without a `LOAD` clause every record carries `__key` and the fused score, under `__score` or under the alias given by `COMBINE ... YIELD_SCORE_AS`. A `LOAD` clause replaces those two implicit columns with the fields it names: load `@__key` to keep the key, and name the fused score with `COMBINE ... YIELD_SCORE_AS` to keep it. Per-arm scores appear under their own `YIELD_SCORE_AS` aliases either way.
 

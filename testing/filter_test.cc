@@ -2071,6 +2071,13 @@ INSTANTIATE_TEST_SUITE_P(
             .create_success = true,
         },
         {
+            // A bare `$` must not be read as "no override".
+            .test_name = "vector_range_ef_runtime_empty_param",
+            .filter = "@vec:[VECTOR_RANGE 1.5 $blob EF_RUNTIME $]",
+            .create_success = false,
+            .create_expected_error_message = "EF_RUNTIME argument is missing",
+        },
+        {
             .test_name = "vector_range_ef_runtime_zero",
             .filter = "@vec:[VECTOR_RANGE 1.5 $blob EF_RUNTIME 0]",
             .create_success = false,

@@ -481,7 +481,11 @@ FilterParser::ParseVectorRangePredicate(const std::string& attribute_alias) {
       VMSDK_ASSIGN_OR_RETURN(auto ef_value,
                              ParseToken("]", "EF_RUNTIME argument is missing"));
       if (!ef_value.empty() && ef_value[0] == '$') {
-        // Resolved from PARAMS, and checked, after parsing.
+        // Resolved from PARAMS, and checked, after parsing. An empty name
+        // would read as "no override", so reject it like the other $params.
+        if (ef_value.size() == 1) {
+          return absl::InvalidArgumentError("EF_RUNTIME argument is missing");
+        }
         ef_runtime_param_name = ef_value.substr(1);
       } else {
         VMSDK_ASSIGN_OR_RETURN(ef_runtime, ParseVectorRangeEfRuntime(ef_value));

@@ -50,6 +50,12 @@ inline bool HasVrDistance(const indexes::Neighbor &neighbor) {
 // FT.SEARCH idx "*=>[KNN 10 @vec $BLOB AS score]" PARAMS 2 BLOB
 // "\x12\xa9\xf5\x6c" DIALECT 2
 
+// Replies a bulk string straight from a buffer. ValkeyModule_ReplyWithString
+// would need a ValkeyModuleString, allocated and freed per element.
+void ReplyWithStringView(ValkeyModuleCtx *ctx, absl::string_view str) {
+  ValkeyModule_ReplyWithStringBuffer(ctx, str.data(), str.size());
+}
+
 void ReplyAvailNeighbors(ValkeyModuleCtx *ctx,
                          const query::SearchResult &search_result,
                          const query::SearchParameters &parameters) {
@@ -71,16 +77,14 @@ void ReplyScore(ValkeyModuleCtx *ctx, ValkeyModuleString &score_as,
   // For pure vector queries Neighbor.score == distance; for hybrid text=>[KNN]
   // queries Neighbor.score is the text relevance while distance stays here.
   auto score_value = expr::FormatDouble(neighbor.distance);
-  ValkeyModule_ReplyWithString(
-      ctx, vmsdk::MakeUniqueValkeyString(score_value).get());
+  ReplyWithStringView(ctx, score_value);
 }
 
 // Reply with just the score value as a top-level element (Redis WITHSCORES
 // format: score appears between document ID and attributes array).
 void ReplyScoreTopLevel(ValkeyModuleCtx *ctx, float score) {
   auto score_value = expr::FormatDouble(score);
-  ValkeyModule_ReplyWithString(
-      ctx, vmsdk::MakeUniqueValkeyString(score_value).get());
+  ReplyWithStringView(ctx, score_value);
 }
 
 std::optional<std::string> GetSortKeyValue(const indexes::Neighbor &neighbor,
@@ -382,8 +386,7 @@ size_t SearchCommand::ReplyRowElements(ValkeyModuleCtx *ctx,
                                        const indexes::Neighbor &neighbor,
                                        const RowFormat &format) const {
   // Document ID
-  ValkeyModule_ReplyWithString(
-      ctx, vmsdk::MakeUniqueValkeyString(*neighbor.external_id).get());
+  ReplyWithStringView(ctx, *neighbor.external_id);
   size_t elements = 1;
 
   // Score as top-level element when WITHSCORES is specified
@@ -415,9 +418,7 @@ size_t SearchCommand::ReplyRowElements(ValkeyModuleCtx *ctx,
     if (!value.has_value() && format.nil_absent_sort_key) {
       ValkeyModule_ReplyWithNull(ctx);
     } else {
-      ValkeyModule_ReplyWithString(
-          ctx,
-          vmsdk::MakeUniqueValkeyString(prefix + value.value_or("")).get());
+      ReplyWithStringView(ctx, prefix + value.value_or(""));
     }
     ++elements;
   }
@@ -438,11 +439,9 @@ size_t SearchCommand::ReplyRowElements(ValkeyModuleCtx *ctx,
       ReplyScore(ctx, *score_as, neighbor);
     }
     if (emit_vr_field) {
-      ValkeyModule_ReplyWithString(
-          ctx, vmsdk::MakeUniqueValkeyString(format.vr_field).get());
+      ReplyWithStringView(ctx, format.vr_field);
       auto score_value = expr::FormatDouble(neighbor.distance);
-      ValkeyModule_ReplyWithString(
-          ctx, vmsdk::MakeUniqueValkeyString(score_value).get());
+      ReplyWithStringView(ctx, score_value);
     }
     for (const auto &attribute_content : contents) {
       ValkeyModule_ReplyWithString(ctx,
@@ -468,8 +467,7 @@ size_t SearchCommand::ReplyRowElements(ValkeyModuleCtx *ctx,
             if (reply) {
               ValkeyModule_ReplyWithString(ctx, return_attribute.alias.get());
               auto score_value = expr::FormatDouble(neighbor.distance);
-              ValkeyModule_ReplyWithString(
-                  ctx, vmsdk::MakeUniqueValkeyString(score_value).get());
+              ReplyWithStringView(ctx, score_value);
             }
             ++cnt;
           }

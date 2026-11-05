@@ -130,6 +130,7 @@ bool IsTopLevelKeyword(absl::string_view tok) {
          absl::EqualsIgnoreCase(tok, "SORTBY") ||
          absl::EqualsIgnoreCase(tok, "LIMIT") ||
          absl::EqualsIgnoreCase(tok, "PARAMS") ||
+         absl::EqualsIgnoreCase(tok, "JPARAMS") ||
          absl::EqualsIgnoreCase(tok, "TIMEOUT") ||
          absl::EqualsIgnoreCase(tok, "FILTER") ||
          absl::EqualsIgnoreCase(tok, "DIALECT") ||
@@ -1111,6 +1112,7 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
   for (size_t arm_index = 0; arm_index < env.arms.size(); ++arm_index) {
     auto &arm = env.arms[arm_index];
     arm->parse_vars.params = env.agg->parse_vars.params;
+    arm->parse_vars.jparams = env.agg->parse_vars.jparams;
     arm->timeout_ms = env.timeout_ms;
     arm->cancellation_token = env.cancellation_token;
     // Two paths:
@@ -1130,20 +1132,14 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
         return absl::InvalidArgumentError(absl::StrCat(
             "Index field `", arm->attribute_alias, "` is not a Vector index"));
       }
-      // Substitute $name from shared params map.
+      // Substitute $name from the shared params maps.
       auto param_name = arm->parse_vars.query_vector_string;
       if (param_name.empty() || param_name[0] != '$') {
         return absl::InvalidArgumentError(
             "VSIM vector parameter must be a $-prefixed PARAMS reference");
       }
-      param_name.remove_prefix(1);
-      auto it = arm->parse_vars.params.find(param_name);
-      if (it == arm->parse_vars.params.end()) {
-        return absl::InvalidArgumentError(
-            absl::StrCat("Parameter ", param_name, " not found."));
-      }
-      it->second.first++;  // bump usage refcount
-      arm->query = std::string(it->second.second);
+      VMSDK_ASSIGN_OR_RETURN(
+          arm->query, query::SubstituteVectorParam(*arm, param_name, *index));
       // A query string arm reaches this check inside PostParseQueryString ->
       // PostParseVectorParameters; a pure VSIM arm skips both, so it has to
       // ask here. Routing this branch through PostParseVectorParameters is

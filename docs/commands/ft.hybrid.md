@@ -6,6 +6,8 @@ The two ranked lists are then fused into one. Fusion is what makes this a hybrid
 
 The fused list is then fed through the same processing stages as `FT.AGGREGATE`, so the result can be projected, filtered, grouped, sorted and trimmed before it is returned.
 
+Unlike `FT.AGGREGATE`, which returns every record, `FT.HYBRID` returns at most 10 records when the command writes no `LIMIT` clause. An explicit `LIMIT` stays where it is written in the pipeline; only the default is appended, so it runs after every other stage.
+
 ```
 FT.HYBRID <index-name>
     SEARCH <query> [SCORER <scorer>] [YIELD_SCORE_AS <alias>]
@@ -45,7 +47,7 @@ FT.HYBRID <index-name>
 - `LOAD * | LOAD <count> <field> [AS <alias>] [...]` (optional): Which fields of the matched keys are loaded into the working set, exactly as for `FT.AGGREGATE`. Without a `LOAD` clause the result carries the key, the fused score, and any per-arm scores that were named. `AS <alias>` requires `search.emulate-release` to be at least `1.3.0`; below that the `AS` keyword is read as another field name and the load fails.
 - `PARAMS <count> <name> <value> [...]` (optional): `<count>` is the number of arguments, i.e. twice the number of name/value pairs. Used to supply the `VSIM` query vector. A `$name` reference inside either arm's query text is not substituted — the same limitation `FT.SEARCH` and `FT.AGGREGATE` have.
 - `TIMEOUT <timeout>` (optional): A timeout for the command, in milliseconds, between 1 and 60000.
-- `WITHCURSOR [COUNT <count>] [MAXIDLE <maxidle>]` (optional): Returns at most `<count>` records and saves the remaining records in a cursor, which is read with [`FT.CURSOR`](ft.cursor.md), exactly as for [`FT.AGGREGATE`](ft.aggregate.md). `<count>` must be between 1 and `search.cursor-max-count`, the default is 1000. `<maxidle>` is the number of milliseconds the cursor may go unread before it is destroyed; it must be between 1 and `search.cursor-max-idle-ms`, the default is 300000. `WITHCURSOR` may appear anywhere among the clauses that follow `SEARCH`, `VSIM` and `COMBINE`, and ends any of those three clauses the way `LOAD` does. If it is given more than once, the last one is used. A cursor is no exception to the cancellation rules: a query cancelled by its `TIMEOUT` is an error, as it is without `WITHCURSOR`.
+- `WITHCURSOR [COUNT <count>] [MAXIDLE <maxidle>]` (optional): Returns at most `<count>` records and saves the remaining records in a cursor, which is read with [`FT.CURSOR`](ft.cursor.md), exactly as for [`FT.AGGREGATE`](ft.aggregate.md). `<count>` must be between 1 and `search.cursor-max-count`, the default is 1000. `<maxidle>` is the number of milliseconds the cursor may go unread before it is destroyed; it must be between 1 and `search.cursor-max-idle-ms`, the default is 300000. `WITHCURSOR` may appear anywhere among the clauses that follow `SEARCH`, `VSIM` and `COMBINE`, and ends any of those three clauses the way `LOAD` does. If it is given more than once, the last one is used. A cursor is no exception to the cancellation rules: a query cancelled by its `TIMEOUT` is an error, as it is without `WITHCURSOR`. The cursor pages through the records the command would have returned without `WITHCURSOR`, so the default `LIMIT` of 10 described above still applies.
 - `APPLY`, `FILTER`, `GROUPBY`, `LIMIT`, `SORTBY` (optional): The `FT.AGGREGATE` processing stages, applied to the fused list in the order written. See [FT.AGGREGATE](ft.aggregate.md#processing-stages) for what each stage does.
 
 ## Fusion methods
@@ -127,10 +129,6 @@ The fused score is emitted under `__score` unless `COMBINE ... YIELD_SCORE_AS` n
 The reply has the same structure as the [`FT.AGGREGATE` reply](ft.aggregate.md#reply), with and without `WITHCURSOR`; see that page for details. The first element is N, the number of records returned. It is not the total number of matches.
 
 Without a `LOAD` clause every record carries `__key` and the fused score, under `__score` or under the alias given by `COMBINE ... YIELD_SCORE_AS`. A `LOAD` clause replaces those two implicit columns with the fields it names: load `@__key` to keep the key, and name the fused score with `COMBINE ... YIELD_SCORE_AS` to keep it. Per-arm scores appear under their own `YIELD_SCORE_AS` aliases either way.
-
-The cursor pages through the records the command would have returned without `WITHCURSOR`, so the default `LIMIT` of 10 described below still applies.
-
-Unlike `FT.AGGREGATE`, which returns every record, `FT.HYBRID` returns at most 10 records when the command writes no `LIMIT` clause. An explicit `LIMIT` stays where it is written in the pipeline; only the default is appended, so it runs after every other stage.
 
 ## Notes
 

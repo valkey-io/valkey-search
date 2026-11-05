@@ -28,7 +28,7 @@ The module also has developer-only configurations, intended for testing and diag
 | search.high-priority-weight                   | Number | 100 | Weight for high priority tasks in thread pools; low priority = 100 - this value. Range: 0 to 100. |
 | search.hnsw-block-size                        | Number | 10240 | HNSW resize configuration parameter for vector index block allocation. Range: 0 to 4294967295. |
 | search.info-developer-visible                 | Boolean | no | Show developer metrics in `INFO`. See [INFO SEARCH metrics](search-observables.md). |
-| search.local-fanout-queue-wait-threshold      | Number | 50 | Queue wait threshold in milliseconds for preferring local node in fanout operations. Range: 0 to 10000. |
+| search.local-fanout-queue-wait-threshold      | Number | 50 | Queue wait threshold in milliseconds for preferring the local replica in READONLY fanout operations. Range: 0 to 10000. |
 | search.log-level                              | Enum | notice | Controls module log level verbosity. Values: `warning`, `notice`, `verbose`, `debug`. |
 | search.max-attributes                         | Number | 1000 | Controls the max number of attributes per index. Range: 1 to 10000. |
 | search.max-group-key-expansion                | Number | 65536 | Maximum number of groups one record can expand into in an FT.AGGREGATE GROUPBY over multi-value fields; exceeding it fails the query. Range: 1 to 4294967295. |

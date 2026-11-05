@@ -137,10 +137,14 @@ Without a `LOAD` clause every record carries `__key` and the fused score, under 
 
 If `WITHCURSOR` is specified, an array of two elements, as for [`FT.AGGREGATE`](ft.aggregate.md):
 
-| Element | Type    | Contents                                                                                                                                              |
-| :------ | :------ | :---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `[0]`   | Array   | N+1 elements: `[0]` is N, the number of records returned, and `[1]` ... `[N]` are the records, as above.                                              |
-| `[1]`   | Integer | The cursor id to pass to [`FT.CURSOR READ`](ft.cursor.md), or 0 if this reply contains all the remaining records, in which case no cursor is created. |
+| Element  | Type    | Contents                                                                                                                                              |
+| :------- | :------ | :---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `[0]`    | Array   | The records returned by this reply, in N+1 elements:                                                                                                  |
+| `[0][0]` | Integer | N, the number of records returned.                                                                                                                    |
+| `[0][1]` | Array   | The first record: its field/value pairs.                                                                                                              |
+| ...      |         |                                                                                                                                                       |
+| `[0][N]` | Array   | The last record: its field/value pairs.                                                                                                               |
+| `[1]`    | Integer | The cursor id to pass to [`FT.CURSOR READ`](ft.cursor.md), or 0 if this reply contains all the remaining records, in which case no cursor is created. |
 
 The cursor pages through the records the command would have returned without `WITHCURSOR`, so the default `LIMIT` of 10 described below still applies.
 

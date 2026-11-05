@@ -180,17 +180,10 @@ DEV_INTEGER_COUNTER(query, predicate_revalidation);
 FilterVerification VerifyFilter(const query::SearchParameters &parameters,
                                 const RecordsMap &records,
                                 const indexes::Neighbor &n,
-                                std::unique_ptr<QueryContext> &query_ctx,
-                                std::optional<bool> recompute_score_override) {
+                                std::unique_ptr<QueryContext> &query_ctx) {
   auto predicate = parameters.filter_parse_results.root_predicate.get();
-  // A query whose Neighbor.score is a KNN distance rather than a relevance
-  // score is not rescored: by default that means a vector query without a
-  // scored predicate (or with vector_score_only), and FT.HYBRID overrides the
-  // choice per arm.
-  const bool recompute_score =
-      recompute_score_override.value_or(parameters.ScoreIsRelevance());
-  // Match-all has nothing to verify, only a score to refresh.
-  if (predicate == nullptr && !recompute_score) {
+  // Match-all has no filter to recheck, but its score can still change.
+  if (predicate == nullptr && !parameters.ScoreIsRelevance()) {
     return {true, std::nullopt};
   }
   auto db_seq =
@@ -210,12 +203,6 @@ FilterVerification VerifyFilter(const query::SearchParameters &parameters,
   predicate_revalidation.Increment();
 
   const IndexSchema &index_schema = *parameters.index_schema;
-  // nullopt (empty corpus / non-match) degrades to 0 rather than dropping the
-  // already-admitted document.
-  auto recompute = [&]() {
-    return RecomputeDocumentScore(predicate, n.external_id, *query_ctx, records)
-        .value_or(0.0f);
-  };
   // One context per reply: leaves resolve on the first mutated document and are
   // reused for the rest.
   if (!query_ctx) {
@@ -223,21 +210,25 @@ FilterVerification VerifyFilter(const query::SearchParameters &parameters,
         index_schema, indexes::scoring::GetScorer(parameters.scorer),
         LockMode::kShortLocks);
   }
-  if (predicate == nullptr) {
-    return {true, recompute()};
-  }
   PredicateEvaluator evaluator(records, n.external_id, *query_ctx,
                                parameters.filter_parse_results.query_operations,
                                index_schema);
-  EvaluationResult result = predicate->Evaluate(evaluator);
+  // A null predicate is a match-all query: every document matches.
+  EvaluationResult result = predicate != nullptr
+                                ? predicate->Evaluate(evaluator)
+                                : EvaluationResult(true);
 
   // The document changed between shard-side scoring and this content fetch, so
   // its carried Neighbor.score is stale; recompute it through the same Scorer
   // seam ScoreTextQuery uses.
-  if (!result.matches || !recompute_score) {
+  if (!result.matches || !parameters.ScoreIsRelevance()) {
     return {result.matches, std::nullopt};
   }
-  result.score = recompute();
+  // nullopt (empty corpus / non-match) degrades to 0 rather than dropping the
+  // already-admitted document.
+  result.score =
+      RecomputeDocumentScore(predicate, n.external_id, *query_ctx, records)
+          .value_or(0.0f);
   return {true, result.score};
 }
 
@@ -540,10 +531,9 @@ void ProcessNeighborsForReply(
                       ? std::optional(vmsdk::ToStringView(normalized.get()))
                       : std::nullopt;
         }
-        auto distance =
-            bytes.has_value()
-                ? vector_index->RecomputeDistance(*bytes, parameters.query)
-                : absl::NotFoundError("No vector");
+        auto distance = bytes.has_value() ? vector_index->RecomputeDistance(
+                                                *bytes, parameters.query)
+                                          : absl::NotFoundError("No vector");
         if (!distance.ok()) {
           // The document no longer holds a vector the index could use
           // (missing, unparsable, or the wrong size), so it has no distance

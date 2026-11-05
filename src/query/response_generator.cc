@@ -143,23 +143,9 @@ class PredicateEvaluator : public query::Evaluator {
     // Judges the vector as fetched into records_ (like the tag/numeric checks
     // above), not via the index: this runs post-lock on the main thread, so
     // the lock-free index accessors would race writer threads.
-    auto it = records_.find(predicate.GetIdentifier());
-    if (it == records_.end()) {
-      return EvaluationResult(false);
-    }
-    ValkeyModuleString *record = it->second.value.get();
-    // A JSON vector is fetched as text; convert it the way ingestion does.
-    vmsdk::UniqueValkeyString converted;
-    if (index_schema_.GetAttributeDataType().AttributesProvidedAsString()) {
-      converted = vector_index->NormalizeStringAttribute(
-          vmsdk::RetainUniqueValkeyString(record));
-      if (!converted) {
-        return EvaluationResult(false);
-      }
-      record = converted.get();
-    }
     return EvaluationResult(vector_index->IsRecordWithinVectorRange(
-        vmsdk::ToStringView(record), query_vector, predicate.GetRadius()));
+        index_schema_.GetAttributeDataType(), records_, query_vector,
+        predicate.GetRadius()));
   }
 
  private:

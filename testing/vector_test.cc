@@ -1485,6 +1485,55 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   EXPECT_NEAR(*orthogonal, 1.0f, 1e-5f);
 }
 
+TEST_F(VectorIndexTest, RecomputeDistanceFromRecords)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  const int dimensions = 4;
+  auto index = VectorFlat<float>::Create(
+      CreateFlatVectorIndexProto(dimensions, data_model::DISTANCE_METRIC_L2, 10,
+                                 10),
+      attribute_identifier, attribute_data_type, 0);
+  ASSERT_TRUE(index.ok());
+
+  auto bytes = [](std::vector<float> v) {
+    return std::string(reinterpret_cast<const char *>(v.data()),
+                       v.size() * sizeof(float));
+  };
+  auto records = [&](absl::string_view value) {
+    RecordsMap map;
+    map.emplace(
+        attribute_identifier,
+        RecordsMapValue(vmsdk::MakeUniqueValkeyString(attribute_identifier),
+                        vmsdk::MakeUniqueValkeyString(value)));
+    return map;
+  };
+  const std::string query = bytes({0.0f, 0.0f, 0.0f, 0.0f});
+  JsonAttributeDataType json_attribute_data_type;
+
+  auto hash = index.value()->RecomputeDistance(
+      hash_attribute_data_type_, records(bytes({9.0f, 0.0f, 0.0f, 0.0f})),
+      query);
+  ASSERT_TRUE(hash.ok());
+  EXPECT_NEAR(*hash, 81.0f, 1e-4f);
+
+  auto json = index.value()->RecomputeDistance(json_attribute_data_type,
+                                               records("[9, 0, 0, 0]"), query);
+  ASSERT_TRUE(json.ok());
+  EXPECT_NEAR(*json, 81.0f, 1e-4f);
+
+  EXPECT_FALSE(
+      index.value()
+          ->RecomputeDistance(hash_attribute_data_type_, RecordsMap(), query)
+          .ok());
+  EXPECT_FALSE(index.value()
+                   ->RecomputeDistance(json_attribute_data_type,
+                                       records("[1, 0, 0]"), query)
+                   .ok());
+  EXPECT_FALSE(index.value()
+                   ->RecomputeDistance(json_attribute_data_type,
+                                       records("[\"bad\", 0, 0, 0]"), query)
+                   .ok());
+}
+
 float CalcRecall(VectorFlat<float> *flat_index, VectorHNSW<float> *hnsw_index,
                  uint64_t k, int dimensions, std::optional<size_t> ef_runtime) {
   auto search_vectors = DeterministicallyGenerateVectors(50, dimensions, 1.5);

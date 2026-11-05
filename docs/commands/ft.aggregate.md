@@ -107,14 +107,16 @@ The following reducer functions are available. The reducer functions that take a
 
 ## Reply
 
-Array of N+1 elements, where N is the number of records output by the final processing stage:
+There are two reply formats depending on whether the `WITHCURSOR` option was specified.
+
+If `WITHCURSOR` was not specified, then the output is an array of N+1 elements, where N is the number of records output by the final processing stage:
 
 | Element         | Type    | Contents                                       |
 | :-------------- | :------ | :--------------------------------------------- |
 | `[0]`           | Integer | N, the number of records that follow.          |
 | `[1]` ... `[N]` | Array   | One record per element: its field/value pairs. |
 
-If `WITHCURSOR` is specified, an array of two elements:
+If `WITHCURSOR` was specified, then the output is an array of two elements:
 
 | Element | Type    | Contents                                                                                                                          |
 | :------ | :------ | :-------------------------------------------------------------------------------------------------------------------------------- |

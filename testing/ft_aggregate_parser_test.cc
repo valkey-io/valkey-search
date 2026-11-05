@@ -536,6 +536,56 @@ TEST_F(AggregateTest, GetParamReturnsOwnedCopy) {
   EXPECT_EQ(value->AsString(), "param-value");
 }
 
+TEST_F(AggregateTest, JParamsParse) {
+  struct Case {
+    std::string text;
+    bool ok;
+    std::string error;
+  };
+  for (const auto &c : std::vector<Case>{
+           {"PARAMS 2 a 1 JPARAMS 2 b [1,2]", true, ""},
+           {"JPARAMS 4 b [1,2] b 3", true, ""},
+           {"PARAMS 2 a 1 JPARAMS 2 a 2", false,
+            "Parameter a is already defined."},
+           {"JPARAMS 2 a 2 PARAMS 2 a 1", false,
+            "Parameter a is already defined."},
+       }) {
+    auto argv = vmsdk::ToValkeyStringVector(c.text);
+    vmsdk::ArgsIterator itr(argv.data(), argv.size());
+    AggregateParameters params(0);
+    params.parse_vars_.index_interface_ = &fake_index;
+    auto parser = CreateAggregateParser();
+    auto status = parser.Parse(params, itr);
+    EXPECT_EQ(status.ok(), c.ok) << c.text << ": " << status;
+    if (c.ok) {
+      EXPECT_TRUE(params.parse_vars.jparams.contains("b")) << c.text;
+    } else {
+      EXPECT_THAT(std::string(status.message()), testing::HasSubstr(c.error))
+          << c.text;
+    }
+    for (auto arg : argv) {
+      ValkeyModule_FreeString(nullptr, arg);
+    }
+  }
+}
+
+// A JPARAMS number reads in an expression as the same PARAMS text would.
+// Other JSON values are rejected there.
+TEST_F(AggregateTest, GetParamJParams) {
+  AggregateParameters params(0);
+  std::string number = "1.5";
+  std::string vector = "[1, 2]";
+  params.parse_vars.jparams["n"] = {0, number};
+  params.parse_vars.jparams["v"] = {0, vector};
+  auto value = params.GetParam("n");
+  VMSDK_EXPECT_OK(value);
+  EXPECT_EQ(value->AsString(), "1.5");
+  auto status = params.GetParam("v").status();
+  EXPECT_EQ(status.code(), absl::StatusCode::kInvalidArgument);
+  EXPECT_THAT(std::string(status.message()),
+              testing::HasSubstr("JPARAMS `v` must be a number"));
+}
+
 TEST_F(AggregateTest, GetSerializationRange_NoStages) {
   AggregateParameters params(0);
   auto range = params.GetSerializationRange();

@@ -10,6 +10,7 @@ FT.SEARCH <index> <query>
   [LIMIT <offset> <num>]
   [NOCONTENT]
   [PARAMS <count> <name> <value> [ <name> <value> ...]]
+  [JPARAMS <count> <name> <value> [ <name> <value> ...]]
   [RETURN <count> <field> [AS <name>] <field> [AS <name>]...]
   [SCORER <scorer>]
   [SLOP <slop>]
@@ -31,6 +32,7 @@ FT.SEARCH <index> <query>
 - `LIMIT <offset> <count>` (optional): Lets you choose a portion of the result. The first `<offset>` keys are skipped and only a maximum of `<count>` keys are included. The default is LIMIT 0 10, which returns at most 10 keys.
 - `NOCONTENT` (optional): When present, only the resulting key names are returned, no key values are included.
 - `PARAMS <count> <name> <value> [<name> <value> ...]` (optional): `count` is of the number of arguments, i.e., twice the number of value/name pairs. [Search - query language](../topics/search-query.md) for details.
+- `JPARAMS <count> <name> <value> [<name> <value> ...]` (optional): Like `PARAMS`, except that each value is JSON. A query vector is a JSON array of numbers, such as `[0.1, 0.2, 0.3]`, converted to the index's declared `TYPE`; a number is used exactly as the same `PARAMS` value would be. Other JSON values are not supported. A name may not be defined by both `PARAMS` and `JPARAMS`.
 - `RETURN <count> <field> [AS <name>] <field> [AS <name>] ...` (options): `count` is the number of fields to return. Specifies the fields you want to retrieve from your documents, along with any renaming for the returned values. By default, all fields are returned unless the `NOCONTENT` option is set, in which case no fields are returned. If num is set to 0, it behaves the same as `NOCONTENT`.
 - `INORDER` (optional): Indicates that proximity matching of text terms in the query must be in order.
 - `SLOP <slop>` (Optional): Specifies a slop value for proximity matching of text terms in the query.

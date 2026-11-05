@@ -63,7 +63,7 @@ Numeric constants are the usual syntax of decimal integer and floating point exp
 
 String constants are enclosed with single (`'`) or double quotes(`"`). A backslash (`\`) followed by a quote can be used to insert a quote character.
 
-A parameter-ref selects a string value provided by the `PARAMS` clause of the executing `FT.AGGREGATE` command.
+A parameter-ref selects a string value provided by the `PARAMS` clause of the executing `FT.AGGREGATE` command, or a number provided by its `JPARAMS` clause.
 
 A field-ref is used to access values from the record currently being processed. If the field doesn't exist then the reference returns a Nil value.
 

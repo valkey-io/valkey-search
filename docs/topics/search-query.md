@@ -177,7 +177,7 @@ A `VECTOR_RANGE` matcher selects keys whose vector is within a specified radius 
 - `field-name` (required): A `VECTOR` field of the index.
 - `radius` (required): A non-negative floating-point number, or `$<name>` to read the radius from `PARAMS`. A key matches when its distance is less than or equal to the radius.
 - `parameter` (required): The name of a `PARAMS` entry containing the query vector, encoded as for a KNN query.
-- `EF_RUNTIME <ef>` (optional): Overrides the HNSW field's `EF_RUNTIME` for this query. It must be an integer from 1 through `search.max-vector-ef-runtime`. It is ignored for `FLAT` fields.
+- `EF_RUNTIME <ef>` (optional): Overrides the HNSW field's `EF_RUNTIME` for this query. `<ef>` is a literal or `$<name>` to read the value from `PARAMS`. It must be an integer from 1 through `search.max-vector-ef-runtime`. It is ignored for `FLAT` fields.
 - `AS <name>` or `$YIELD_DISTANCE_AS: <name>` (optional): Makes the distance available as `<name>`. When `RETURN` is used, it must list `<name>` to return the distance. `SORTBY` and `FT.AGGREGATE` stages can also use the name. `FT.SEARCH` rejects a name that is already an index attribute; `FT.AGGREGATE` accepts it and resolves `@<name>` to the distance.
 - `$EPSILON: <epsilon>` (optional): Controls how far an HNSW search explores beyond the radius. Use a value greater than 0. It is rejected for `FLAT` fields.
 

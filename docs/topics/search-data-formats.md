@@ -269,7 +269,9 @@ results, exactly as an incorrectly sized binary blob would be.
 
 Regardless of whether the index is on HASH or JSON keys, query vectors provided
 via `PARAMS` to `FT.SEARCH` must always use the binary blob format (the same
-format as HASH vectors), encoded with the index's declared `TYPE`.
+format as HASH vectors), encoded with the index's declared `TYPE`. A query
+vector provided via `JPARAMS` is instead a JSON array of numbers, which is
+converted to the declared `TYPE`.
 
 A query blob whose length does not match `DIM * <bytes per element>` is
 rejected. Querying a 3-dimensional `FLOAT16` index with a `FLOAT32`-encoded blob,

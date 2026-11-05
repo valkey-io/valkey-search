@@ -1907,8 +1907,11 @@ absl::StatusOr<absl::string_view> SubstituteParam(
     return source;
   } else {
     source.remove_prefix(1);
-    auto itr = parameters.parse_vars.params.find(source);
-    if (itr == parameters.parse_vars.params.end()) {
+    auto &params = parameters.parse_vars.jparams.contains(source)
+                       ? parameters.parse_vars.jparams
+                       : parameters.parse_vars.params;
+    auto itr = params.find(source);
+    if (itr == params.end()) {
       return absl::NotFoundError(
           absl::StrCat("Parameter ", source, " not found."));
     } else {
@@ -1916,6 +1919,23 @@ absl::StatusOr<absl::string_view> SubstituteParam(
       return itr->second.second;
     }
   }
+}
+
+absl::StatusOr<std::string> SubstituteVectorParam(
+    query::SearchParameters &parameters, absl::string_view source,
+    const indexes::IndexBase &index) {
+  VMSDK_ASSIGN_OR_RETURN(auto value, SubstituteParam(parameters, source));
+  if (source.empty() || source[0] != '$' ||
+      !parameters.parse_vars.jparams.contains(source.substr(1))) {
+    return std::string(value);
+  }
+  auto normalized =
+      index.NormalizeStringAttribute(vmsdk::MakeUniqueValkeyString(value));
+  if (!normalized) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "JPARAMS `", source.substr(1), "` is not a valid vector value."));
+  }
+  return std::string(vmsdk::ToStringView(normalized.get()));
 }
 
 absl::Status ParseKnnInner(query::SearchParameters &parameters,
@@ -2180,12 +2200,12 @@ absl::Status PostParseVectorParameters(query::SearchParameters &parameters) {
       SubstituteParam(parameters, parameters.parse_vars.k_string));
   VMSDK_ASSIGN_OR_RETURN(parameters.k, vmsdk::To<unsigned>(k_string));
 
-  VMSDK_ASSIGN_OR_RETURN(
-      parameters.query,
-      SubstituteParam(parameters, parameters.parse_vars.query_vector_string));
-
   VMSDK_ASSIGN_OR_RETURN(auto index, parameters.index_schema->GetIndex(
                                          parameters.attribute_alias));
+  VMSDK_ASSIGN_OR_RETURN(
+      parameters.query,
+      SubstituteVectorParam(parameters,
+                            parameters.parse_vars.query_vector_string, *index));
   auto *vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
   CHECK(vector_index != nullptr);
   if (parameters.query.size() !=

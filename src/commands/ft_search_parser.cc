@@ -83,9 +83,17 @@ std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructLimitParser() {
       });
 }
 
-std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructParamsParser() {
+// Parses PARAMS, or JPARAMS when `json` is set. A name defined by both is an
+// error.
+std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructParamsParser(
+    bool json) {
   return std::make_unique<vmsdk::ParamParser<SearchCommand>>(
-      [](SearchCommand &parameters, vmsdk::ArgsIterator &itr) -> absl::Status {
+      [json](SearchCommand &parameters,
+             vmsdk::ArgsIterator &itr) -> absl::Status {
+        auto &target =
+            json ? parameters.parse_vars.jparams : parameters.parse_vars.params;
+        const auto &other =
+            json ? parameters.parse_vars.params : parameters.parse_vars.jparams;
         unsigned count{0};
         VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, count));
         if (count & 1) {
@@ -99,9 +107,9 @@ std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructParamsParser() {
           itr.Next();
           absl::string_view key = vmsdk::ToStringView(key_str);
           absl::string_view value = vmsdk::ToStringView(value_str);
-          auto [_, inserted] = parameters.parse_vars.params.insert(
-              std::make_pair(key, std::make_pair(0, value)));
-          if (!inserted) {
+          auto [_, inserted] =
+              target.insert(std::make_pair(key, std::make_pair(0, value)));
+          if (!inserted || other.contains(key)) {
             return absl::InvalidArgumentError(
                 absl::StrCat("Parameter ", key, " is already defined."));
           }
@@ -243,7 +251,8 @@ vmsdk::KeyValueParser<SearchCommand> CreateSearchParser() {
                         GENERATE_FLAG_PARSER(SearchCommand, with_scores));
   parser.AddParamParser(query::kReturnParam, ConstructReturnParser());
   parser.AddParamParser(query::kSortByParam, ConstructSortByParser());
-  parser.AddParamParser(query::kParamsParam, ConstructParamsParser());
+  parser.AddParamParser(query::kParamsParam, ConstructParamsParser(false));
+  parser.AddParamParser(query::kJParamsParam, ConstructParamsParser(true));
   parser.AddParamParser(query::kInorder,
                         GENERATE_FLAG_PARSER(SearchCommand, inorder));
   parser.AddParamParser(query::kVerbatim,

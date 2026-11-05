@@ -167,7 +167,12 @@ def range_distances(client, index, field, query, radius, epsilon=None,
 
 
 def knn_radii(client, flat_index, field, query, sizes=RANGE_SIZES):
-    """[(n, radius holding the n nearest keys)] from a FLAT KNN query."""
+    """[(n, radius holding the n nearest keys)] from a FLAT KNN query.
+
+    The index compares float32 distances with a float32 radius, so a size is
+    skipped when no float32 radius separates its nth and (n+1)th distances: a
+    near-tie there cannot form a ball of exactly n keys.
+    """
     k = max(sizes) + 1
     result = client.execute_command(
         "FT.SEARCH", flat_index, f"*=>[KNN {k} @{field} $BLOB AS d]",
@@ -177,7 +182,13 @@ def knn_radii(client, flat_index, field, query, sizes=RANGE_SIZES):
     dists = sorted(float(fields["d"])
                    for fields in parse_result_with_fields(result).values())
     assert len(dists) == k
-    return [(n, (dists[n - 1] + dists[n]) / 2) for n in sizes]
+    radii = []
+    for n in sizes:
+        inner, outer = np.float32(dists[n - 1]), np.float32(dists[n])
+        radius = np.float32((dists[n - 1] + dists[n]) / 2)
+        if inner < radius < outer:
+            radii.append((n, float(radius)))
+    return radii
 
 
 def check_hnsw_range_matches_flat(client, metric, queries, flat_index,
@@ -1692,6 +1703,40 @@ class TestVectorRange(ValkeySearchTestCaseBase):
             {"doc:0", "doc:1", "doc:2"},
             {"doc:0", "doc:1", "doc:2"},
         ]
+
+    def test_parameterized_ef_runtime(self):
+        """
+        EF_RUNTIME specified as $param is resolved from PARAMS and checked as
+        a literal is: a valid value matches the literal's result, an invalid
+        or missing one is an error.
+        """
+        client = self.server.get_new_client()
+        self._create_hnsw_index(client)
+        self._load_vector_data(client)
+
+        query_blob = float_to_bytes(QUERY_VEC)
+
+        def search(ef_clause, *params):
+            return self._search(
+                client, "idx", f"@vec:[VECTOR_RANGE 5 $blob {ef_clause}]",
+                "PARAMS", str(2 + len(params)), "blob", query_blob, *params,
+                "NOCONTENT",
+            )
+
+        literal = parse_result_keys(search("EF_RUNTIME 100"))
+        assert literal == {"doc:0", "doc:1", "doc:2"}
+        assert parse_result_keys(
+            search("EF_RUNTIME $ef", "ef", "100")) == literal
+        for value, message in (
+                ("0", "`EF_RUNTIME` must be a positive integer greater than "
+                      "0 and cannot exceed"),
+                ("abc", "`abc` is not a valid numeric value")):
+            with pytest.raises(ResponseError) as e:
+                search("EF_RUNTIME $ef", "ef", value)
+            assert message in str(e.value), (value, str(e.value))
+        with pytest.raises(ResponseError) as e:
+            search("EF_RUNTIME $ef")
+        assert "Parameter ef not found" in str(e.value), str(e.value)
 
     # =================================================================
     # 38. Optional params: AS (alias for distance field)

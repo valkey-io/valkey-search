@@ -90,6 +90,10 @@ def range_search(client: valkey.client, index: str, timeout: bool,
 def aggregate_command(index: str, filter: Union[int, None], stages: list[str] = None) -> list[str]:
     """Build FT.AGGREGATE command with specified stages and timeout."""
     predicate = "*" if filter is None else f"(@n:[0 {filter}])"
+    # The long TIMEOUT leaves the cancellation to ForceTimeoutAggregate: a
+    # short one can expire during the search/fanout phase on slow (sanitizer)
+    # builds, which replies "Search operation cancelled due to timeout" before
+    # any aggregation stage runs.
     cmd = [
         "FT.AGGREGATE",
         index,
@@ -99,7 +103,7 @@ def aggregate_command(index: str, filter: Union[int, None], stages: list[str] = 
         "BLOB",
         float_to_bytes([10.0, 10.0, 10.0]),
         "TIMEOUT",
-        "10"
+        "10000"
     ]
     
     if stages:

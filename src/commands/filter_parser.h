@@ -193,6 +193,10 @@ class FilterParser {
 std::string PrintPredicateTree(const query::Predicate* predicate,
                                int indent = 0);
 
+// Parses a VECTOR_RANGE EF_RUNTIME value, given literally or resolved from
+// PARAMS: an integer from 1 to search.max-vector-ef-runtime, checked as KNN's.
+absl::StatusOr<size_t> ParseVectorRangeEfRuntime(absl::string_view value);
+
 namespace options {
 
 /// Return the value of the Query String Depth configuration

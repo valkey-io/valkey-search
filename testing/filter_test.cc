@@ -2065,6 +2065,12 @@ INSTANTIATE_TEST_SUITE_P(
             .create_success = true,
         },
         {
+            // Resolved from PARAMS, and range-checked, after parsing.
+            .test_name = "vector_range_ef_runtime_param",
+            .filter = "@vec:[VECTOR_RANGE 1.5 $blob EF_RUNTIME $ef]",
+            .create_success = true,
+        },
+        {
             .test_name = "vector_range_ef_runtime_zero",
             .filter = "@vec:[VECTOR_RANGE 1.5 $blob EF_RUNTIME 0]",
             .create_success = false,

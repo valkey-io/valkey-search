@@ -293,6 +293,14 @@ class VectorRangePredicate : public Predicate {
   void SetRadiusParamName(std::string name) {
     radius_param_name_ = std::move(name);
   }
+  // Returns the PARAMS key for EF_RUNTIME, if it was specified as $param.
+  // Empty if EF_RUNTIME was a literal or absent.
+  absl::string_view GetEfRuntimeParamName() const {
+    return ef_runtime_param_name_;
+  }
+  void SetEfRuntimeParamName(std::string name) {
+    ef_runtime_param_name_ = std::move(name);
+  }
 
  private:
   std::string alias_;
@@ -303,7 +311,8 @@ class VectorRangePredicate : public Predicate {
   std::optional<double> epsilon_;
   std::optional<size_t> ef_runtime_;
   std::string query_vector_;
-  std::string radius_param_name_;  // non-empty when radius is a $param
+  std::string radius_param_name_;      // non-empty when radius is a $param
+  std::string ef_runtime_param_name_;  // non-empty when EF_RUNTIME is a $param
 };
 
 using FieldMaskPredicate = uint64_t;

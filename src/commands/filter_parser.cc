@@ -470,6 +470,7 @@ FilterParser::ParseVectorRangePredicate(const std::string& attribute_alias) {
   std::optional<std::string> score_as;
   std::optional<double> epsilon;
   std::optional<size_t> ef_runtime;
+  std::string ef_runtime_param_name;
   SkipWhitespace();
   while (!IsEnd() && Peek() != ']') {
     // Try to match known optional parameter keywords
@@ -479,19 +480,12 @@ FilterParser::ParseVectorRangePredicate(const std::string& attribute_alias) {
       // results retained by either algorithm.
       VMSDK_ASSIGN_OR_RETURN(auto ef_value,
                              ParseToken("]", "EF_RUNTIME argument is missing"));
-      // Bounded with KNN's EF_RUNTIME check and error text. SimpleAtoi, unlike
-      // vmsdk::To, rejects trailing characters.
-      int64_t ef = 0;
-      if (!absl::SimpleAtoi(ef_value, &ef)) {
-        return absl::InvalidArgumentError(
-            absl::StrCat("`", ef_value, "` is not a valid numeric value"));
+      if (!ef_value.empty() && ef_value[0] == '$') {
+        // Resolved from PARAMS, and checked, after parsing.
+        ef_runtime_param_name = ef_value.substr(1);
+      } else {
+        VMSDK_ASSIGN_OR_RETURN(ef_runtime, ParseVectorRangeEfRuntime(ef_value));
       }
-      const auto max_ef_runtime = options::GetMaxEfRuntime().GetValue();
-      VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(ef, 1, max_ef_runtime))
-          << "`EF_RUNTIME` must be a positive integer greater than 0 and "
-             "cannot exceed "
-          << max_ef_runtime << ".";
-      ef_runtime = static_cast<size_t>(ef);
     } else if (MatchInsensitive("AS")) {
       VMSDK_ASSIGN_OR_RETURN(auto as_name,
                              ParseToken("]", "AS argument is missing"));
@@ -551,7 +545,26 @@ FilterParser::ParseVectorRangePredicate(const std::string& attribute_alias) {
     predicate->SetRadiusParamName(std::move(radius_param_name));
   }
   predicate->SetEfRuntime(ef_runtime);
+  if (!ef_runtime_param_name.empty()) {
+    predicate->SetEfRuntimeParamName(std::move(ef_runtime_param_name));
+  }
   return predicate;
+}
+
+absl::StatusOr<size_t> ParseVectorRangeEfRuntime(absl::string_view value) {
+  // Bounded with KNN's EF_RUNTIME check and error text. SimpleAtoi, unlike
+  // vmsdk::To, rejects trailing characters.
+  int64_t ef = 0;
+  if (!absl::SimpleAtoi(value, &ef)) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("`", value, "` is not a valid numeric value"));
+  }
+  const auto max_ef_runtime = options::GetMaxEfRuntime().GetValue();
+  VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(ef, 1, max_ef_runtime))
+      << "`EF_RUNTIME` must be a positive integer greater than 0 and "
+         "cannot exceed "
+      << max_ef_runtime << ".";
+  return static_cast<size_t>(ef);
 }
 
 absl::StatusOr<absl::string_view> FilterParser::ParseTagString() {

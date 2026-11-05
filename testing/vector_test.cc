@@ -1432,7 +1432,7 @@ TEST_F(SearchRangeFp32, RejectsMalformedRangeInputs) {
       EXPECT_EQ(result.status().code(), absl::StatusCode::kInvalidArgument)
           << "radius bits " << std::bit_cast<uint32_t>(radius);
     }
-    // FLAT ignores epsilon, but both validate it: HNSW CHECKs it in the shell
+    // FLAT ignores epsilon, but both validate it: HNSW checks it in the shell
     // arithmetic, and a negative one would narrow the shell inside the ball.
     constexpr float kNegativeNaN = std::bit_cast<float>(uint32_t{0xffc00000});
     for (float epsilon :

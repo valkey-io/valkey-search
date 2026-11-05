@@ -2559,6 +2559,21 @@ absl::Status PostParseVectorRangeParameters(
           vr_pred->SetRadius(radius);
         }
 
+        // Resolve EF_RUNTIME if it was specified as a $param. The coordinator
+        // fans out the resolved value.
+        if (!vr_pred->GetEfRuntimeParamName().empty()) {
+          VMSDK_ASSIGN_OR_RETURN(
+              auto ef_string,
+              SubstituteParam(
+                  parameters,
+                  absl::StrCat("$", vr_pred->GetEfRuntimeParamName())),
+              _.SetPrepend()
+                  << "Error resolving vector range EF_RUNTIME parameter: ");
+          VMSDK_ASSIGN_OR_RETURN(auto ef_runtime,
+                                 ParseVectorRangeEfRuntime(ef_string));
+          vr_pred->SetEfRuntime(ef_runtime);
+        }
+
         // Resolve the vector blob parameter from PARAMS.
         auto blob_param_key = absl::StrCat("$", vr_pred->GetVectorParamName());
         VMSDK_ASSIGN_OR_RETURN(

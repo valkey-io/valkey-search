@@ -343,12 +343,14 @@ float ComputeRangeShell(float radius, float epsilon) {
 // SearchRange.
 class RangeStopCondition : public hnswlib::BaseSearchStopCondition<float> {
  public:
+  // `ef_cap` bounds the beam independently of `max_results`, so a planner
+  // probe with a small result cap still walks with the query's EF_RUNTIME.
   RangeStopCondition(float shell, float radius, bool normalize, size_t ef,
-                     size_t max_results)
+                     size_t max_results, size_t ef_cap)
       : shell_(shell),
         radius_(radius),
         normalize_(normalize),
-        ef_(std::clamp<size_t>(ef, 1, max_results)),
+        ef_(std::clamp<size_t>(ef, 1, std::max<size_t>(ef_cap, 1))),
         max_results_(max_results),
         max_fetched_(max_results + ef_) {
     CHECK(!scoring::IsNaN(shell_));
@@ -490,8 +492,10 @@ absl::StatusOr<RangeResult> VectorHNSW<T>::SearchRange(
     cancel::Token &cancellation_token) {
   VMSDK_ASSIGN_OR_RETURN(const float radius,
                          this->ValidateRangeSearchInputs(query, range));
-  const size_t max_candidates = static_cast<size_t>(
+  const size_t configured_cap = static_cast<size_t>(
       options::GetMaxNonVectorSearchResultsFetched().GetValue());
+  const size_t max_candidates = RangeResultLimit(range, configured_cap);
+  const bool probe = range.probe_limit.has_value();
   auto exact_scan = [&](RangeFallback fallback) {
     RangeResult result = this->SearchRangeExhaustive(
         query, radius, cancellation_token, max_candidates, range.filter);
@@ -524,9 +528,10 @@ absl::StatusOr<RangeResult> VectorHNSW<T>::SearchRange(
                                                 GetVectorAllocator()),
                         nq.view.size(), normalize_, GetVectorDataType());
   std::vector<std::pair<float, hnswlib::labeltype>> raw_results;
-  RangeStopCondition stop_condition(
-      ComputeRangeShell(radius, range.epsilon), radius, normalize_,
-      range.ef_runtime.value_or(GetEfRuntime()), max_candidates);
+  RangeStopCondition stop_condition(ComputeRangeShell(radius, range.epsilon),
+                                    radius, normalize_,
+                                    range.ef_runtime.value_or(GetEfRuntime()),
+                                    max_candidates, configured_cap);
   try {
     CancelCondition cancel_condition(cancellation_token);
     raw_results = algo_->searchStopConditionClosest(
@@ -542,8 +547,12 @@ absl::StatusOr<RangeResult> VectorHNSW<T>::SearchRange(
 
   // A rejected NaN, or a non-finite COSINE traversal distance, can hide keys
   // reachable only through that graph node. Scan exactly unless cancellation
-  // requests a partial result.
+  // requests a partial result. A probe only has to lose to its sibling, so it
+  // reports truncation instead of paying for the scan.
   if (!cancelled && stop_condition.RequiresExactFallback()) {
+    if (probe) {
+      return RangeResult{.truncated = true};
+    }
     return exact_scan(RangeFallback::kNonFiniteDistance);
   }
   RangeResult result;
@@ -574,6 +583,12 @@ absl::StatusOr<RangeResult> VectorHNSW<T>::SearchRange(
   // did not change the walk, but the scan is kept because it makes such a ball
   // exact; it costs the walk plus one distance per tracked key.
   if (!cancelled && stop_condition.ShellFilled()) {
+    if (probe) {
+      // Undecided: the walk cannot tell whether more than the probe limit
+      // match, so the probe loses to the sibling it was compared with.
+      result.truncated = true;
+      return result;
+    }
     return exact_scan(RangeFallback::kShellFilled);
   }
   return result;

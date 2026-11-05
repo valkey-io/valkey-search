@@ -2174,6 +2174,195 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
         << "the AND planner scanned VECTOR_RANGE while the tag selects one "
            "key";
   }
+  // A sparse radius gives a capped probe no early stop: a FLAT scan would
+  // visit every vector, so the planner must still check the one tagged key.
+  std::vector<float> far(kVectorDimensions, 0.0f);
+  far[0] = 1000.0f;
+  auto counting = std::make_shared<CountingToken>();
+  EXPECT_EQ(
+      CountVectorRangeMatches(schema, "@tag:{rare} @vector:[VECTOR_RANGE 1 $q]",
+                              far, counting),
+      0u);
+  EXPECT_LT(counting->polls, kKeys / 10)
+      << "the AND planner scanned FLAT for a sparse radius";
+}
+
+// The vector field's size is only an upper bound on what a radius matches. A
+// small radius under a broad, but not universal, tag must still drive the AND:
+// the range is probed rather than skipped, so the planner checks its few
+// matches instead of every tagged key.
+TEST_F(ValkeySearchTest, VectorRangeAndKeepsSmallRadiusUnderBroadTag)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  constexpr int kKeys = 1000;
+  constexpr int kTagged = 900;
+  std::vector<std::vector<float>> vectors;
+  for (int i = 0; i < kKeys; ++i) {
+    std::vector<float> v(kVectorDimensions, 0.0f);
+    v[0] = static_cast<float>(i);
+    vectors.push_back(std::move(v));
+  }
+  auto schema = MakeVectorRangeSchema(
+      /*hnsw=*/true, data_model::DISTANCE_METRIC_L2, vectors);
+  auto tag_index =
+      std::dynamic_pointer_cast<indexes::Tag>(schema->GetIndex("tag").value());
+  ASSERT_NE(tag_index, nullptr);
+  for (int i = kTagged; i < kKeys; ++i) {
+    VMSDK_EXPECT_OK(tag_index->ModifyRecord(
+        StringInternStore::Intern(absl::StrCat("v", i)),
+        AttributeData(vmsdk::MakeUniqueValkeyString("other"))));
+  }
+  const std::vector<float> query(kVectorDimensions, 0.0f);
+  // Squared L2 radius 9.5 holds v0..v3.
+  for (absl::string_view filter :
+       {"@tag:{keep} @vector:[VECTOR_RANGE 9.5 $q]",
+        "@vector:[VECTOR_RANGE 9.5 $q] @tag:{keep}"}) {
+    SCOPED_TRACE(filter);
+    UnitTestSearchParameters params;
+    params.index_schema = schema;
+    params.dialect = kDialect;
+    TextParsingOptions parsing_options{};
+    params.filter_parse_results = std::move(
+        FilterParser(*schema, filter, parsing_options).Parse().value());
+    params.has_vector_range = true;
+    const auto *vr = query::GetVectorRangePredicate(params);
+    ASSERT_NE(vr, nullptr);
+    const_cast<query::VectorRangePredicate *>(vr)->SetQueryVector(
+        std::string(VectorToStr(query)));
+
+    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> fetchers;
+    bool truncated = false;
+    const size_t candidates = query::EvaluateFilterAsPrimary(
+        params, params.filter_parse_results.root_predicate.get(), fetchers,
+        /*negate=*/false, /*or_weight_multiplier=*/1.0f, &truncated);
+    EXPECT_FALSE(truncated);
+    EXPECT_GT(candidates, 0u);
+    EXPECT_LE(candidates, 4u)
+        << "the AND planner checked the broad tag instead of the small radius";
+
+    std::vector<std::string> matched_keys;
+    EXPECT_EQ(CountVectorRangeMatches(schema, filter, query, cancel::Token{},
+                                      &matched_keys),
+              4u);
+    EXPECT_THAT(matched_keys,
+                ::testing::UnorderedElementsAre("v0", "v1", "v2", "v3"));
+  }
+}
+
+// A capped probe that cannot decide must lose to its sibling rather than pay
+// for the exact scan an uncapped HNSW search would fall back to. Every key but
+// one lies just outside the radius and inside its epsilon shell, so a walk
+// capped at the rare tag's two candidates fills the shell without a witness.
+TEST_F(ValkeySearchTest, VectorRangeAndProbeSkipsExactFallback)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  constexpr int kKeys = 200;
+  std::vector<std::vector<float>> vectors;
+  for (int i = 0; i < kKeys; ++i) {
+    std::vector<float> v(kVectorDimensions, 0.0f);
+    // v0 at squared distance 0.25; the rest at 1.21, inside the 1.5 shell.
+    v[0] = i == 0 ? 0.5f : 1.1f;
+    v[1] = 0.001f * static_cast<float>(i);
+    vectors.push_back(std::move(v));
+  }
+  auto schema = MakeVectorRangeSchema(
+      /*hnsw=*/true, data_model::DISTANCE_METRIC_L2, vectors);
+  auto tag_index =
+      std::dynamic_pointer_cast<indexes::Tag>(schema->GetIndex("tag").value());
+  ASSERT_NE(tag_index, nullptr);
+  for (const char *key : {"v0", "v1"}) {
+    VMSDK_EXPECT_OK(tag_index->ModifyRecord(
+        StringInternStore::Intern(key),
+        AttributeData(vmsdk::MakeUniqueValkeyString("keep,rare"))));
+  }
+  const std::vector<float> query(kVectorDimensions, 0.0f);
+  const int64_t shell_filled_before =
+      query::GetVectorRangeFallbackCount(indexes::RangeFallback::kShellFilled);
+  std::vector<std::string> matched_keys;
+  EXPECT_EQ(
+      CountVectorRangeMatches(
+          schema, "@tag:{rare} @vector:[VECTOR_RANGE 1 $q]=>{$EPSILON: 0.5}",
+          query, cancel::Token{}, &matched_keys),
+      1u);
+  EXPECT_THAT(matched_keys, ::testing::ElementsAre("v0"));
+  EXPECT_EQ(
+      query::GetVectorRangeFallbackCount(indexes::RangeFallback::kShellFilled),
+      shell_filled_before)
+      << "the AND planner's probe fell back to an exact scan";
+}
+
+// A probe caps the results it keeps, not the beam. The graph is a chain from
+// start through three bridges at increasing distance outside the radius to
+// target, with field EF_RUNTIME 1, so only EF_RUNTIME 3 reaches target. A probe
+// capped at the two tagged keys must still walk with EF 3: a narrower beam
+// would report start alone as a complete candidate set and drop target from the
+// AND.
+TEST_F(ValkeySearchTest, VectorRangeAndProbeKeepsQueryEfRuntime)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  auto schema = CreateIndexSchema("probe_ef_schema").value();
+  EXPECT_CALL(*schema, GetIdentifier(::testing::_))
+      .Times(::testing::AnyNumber());
+  auto vector_index =
+      indexes::VectorHNSW<float>::Create(
+          CreateHNSWVectorIndexProto(kVectorDimensions,
+                                     data_model::DISTANCE_METRIC_L2, 5,
+                                     /*m=*/2, 200, /*ef_runtime=*/1),
+          kVectorAttributeAlias,
+          data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
+          .value();
+  VMSDK_EXPECT_OK(schema->AddIndex(kVectorAttributeAlias, kVectorAttributeAlias,
+                                   vector_index));
+  auto tag_index = std::make_shared<indexes::Tag>(
+      CreateTagIndexProto(/*separator=*/",", /*case_sensitive=*/false));
+  VMSDK_EXPECT_OK(schema->AddIndex("tag", "tag", tag_index));
+  // Bridges lie at increasing squared distances about 1.31, 1.35 and 1.38 from
+  // the query, outside radius 1 and its default shell, so an EF 2 beam rejects
+  // the third. Each bridge is nearer start than target is, so the HNSW
+  // neighbor heuristic prunes a direct start-target link. Inserted first,
+  // start is the entry point.
+  const std::pair<const char *, std::pair<float, float>> kKeys[] = {
+      {"start", {-0.95f, 0.0f}},
+      {"bridge-1", {-0.45f, 1.0507f}},
+      {"bridge-2", {0.0f, 1.1619f}},
+      {"bridge-3", {0.45f, 1.0851f}},
+      {"target", {0.95f, 0.0f}}};
+  for (const auto &[key, xy] : kKeys) {
+    std::vector<float> v(kVectorDimensions, 0.0f);
+    v[0] = xy.first;
+    v[1] = xy.second;
+    auto interned = StringInternStore::Intern(key);
+    schema->SetIndexMutationSequenceNumber(interned, 0);
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(*vector_index, interned,
+                                                   VectorToStr(v)));
+    const bool pair =
+        std::string_view(key) == "start" || std::string_view(key) == "target";
+    VMSDK_EXPECT_OK(tag_index->AddRecord(
+        interned,
+        AttributeData(vmsdk::MakeUniqueValkeyString(pair ? "pair" : "other"))));
+  }
+  const std::vector<float> zero(kVectorDimensions, 0.0f);
+  cancel::Token never = cancel::Make(1000000, nullptr);
+  auto walk = [&](size_t ef, std::optional<size_t> probe_limit) {
+    indexes::RangeQuery range{
+        .radius = 1.0f, .epsilon = 0.01f, .ef_runtime = ef};
+    range.probe_limit = probe_limit;
+    auto result = vector_index->SearchRange(VectorToStr(zero), range, never);
+    EXPECT_TRUE(result.ok()) << result.status();
+    return result.ok() ? std::move(*result) : indexes::RangeResult{};
+  };
+  // The fixture needs EF 3: EF 2 stops at start, EF 3 reaches target.
+  ASSERT_EQ(walk(2, std::nullopt).neighbors.size(), 1u);
+  ASSERT_EQ(walk(3, std::nullopt).neighbors.size(), 2u);
+  // Capped at 2, the EF 3 probe either finds both or reports it is undecided.
+  const auto probe = walk(3, 2);
+  EXPECT_TRUE(probe.truncated || probe.neighbors.size() == 2u)
+      << "the probe narrowed the beam to its result cap and reported "
+      << probe.neighbors.size() << " key(s) as complete";
+
+  std::vector<std::string> matched_keys;
+  EXPECT_EQ(CountVectorRangeMatches(
+                schema, "@vector:[VECTOR_RANGE 1 $q EF_RUNTIME 3] @tag:{pair}",
+                zero, cancel::Token{}, &matched_keys),
+            2u);
+  EXPECT_THAT(matched_keys, ::testing::UnorderedElementsAre("start", "target"));
 }
 
 // `inside` keys at squared L2 distance 0.01 * (i + 1)^2 from the origin, all

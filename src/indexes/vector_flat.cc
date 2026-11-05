@@ -270,8 +270,9 @@ absl::StatusOr<RangeResult> VectorFlat<T>::SearchRange(
     cancel::Token &cancellation_token) {
   VMSDK_ASSIGN_OR_RETURN(const float radius,
                          this->ValidateRangeSearchInputs(query, range));
-  const size_t max_results = static_cast<size_t>(
-      options::GetMaxNonVectorSearchResultsFetched().GetValue());
+  const size_t max_results = RangeResultLimit(
+      range, static_cast<size_t>(
+                 options::GetMaxNonVectorSearchResultsFetched().GetValue()));
   auto nq = this->NormalizeQueryIfNeeded(query);
   const float query_magnitude =
       normalize_ ? CalcReciprocalMagnitude(nq.view, this->GetVectorDataType())

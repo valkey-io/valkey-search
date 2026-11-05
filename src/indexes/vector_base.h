@@ -396,7 +396,19 @@ struct RangeQuery {
   hnswlib::BaseFilterFunctor *filter = nullptr;
   // HNSW beam width; nullopt uses the field's EF_RUNTIME. FLAT ignores it.
   std::optional<size_t> ef_runtime;
+  // Set by the AND planner to ask only whether the range can beat a sibling
+  // with this many candidates. Retains at most this many results (and never
+  // more than the configured cap). An HNSW walk that cannot decide reports
+  // truncation instead of falling back to an exact scan.
+  std::optional<size_t> probe_limit;
 };
+
+// The result cap for `range`: the configured cap, lowered by a probe limit.
+inline size_t RangeResultLimit(const RangeQuery &range, size_t configured_cap) {
+  return range.probe_limit.has_value()
+             ? std::min(configured_cap, *range.probe_limit)
+             : configured_cap;
+}
 
 // Why an HNSW range search scanned every tracked key instead of, or after,
 // walking the graph.

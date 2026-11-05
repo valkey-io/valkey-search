@@ -461,6 +461,12 @@ CalcBestMatchingPrefilteredKeys(
 // returns "" when the query has no VR predicate.
 std::string GetVrScoreFieldName(const SearchParameters &parameters);
 
+// Resolves a $-prefixed vector parameter. A JPARAMS value is converted from a
+// JSON array to the binary format of `index`.
+absl::StatusOr<std::string> SubstituteVectorParam(
+    SearchParameters &parameters, absl::string_view source,
+    const indexes::IndexBase &index);
+
 // Count the number of VectorRangePredicate nodes in the predicate tree. Used
 // at parse time to reject unsupported multi-VR queries (single-VR only).
 // Returns 0 when predicate is null.

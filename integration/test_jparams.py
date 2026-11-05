@@ -84,6 +84,12 @@ QUERIES = [
                 "LOAD", "2", "@__key", "@n", "APPLY", "@n + $k", "AS", "m",
                 "FILTER", "@m > $k"],
      _rows),
+    ("hybrid",
+     lambda p: ["FT.HYBRID", INDEX, "SEARCH", "@title:hello",
+                "VSIM", "@vec", "$q", "KNN", "2", "K", "2",
+                "COMBINE", "RRF", "2", "WINDOW", "100", "LIMIT", "0", "100",
+                *p],
+     _rows),
 ]
 
 PARAMS = ["PARAMS", "6", "q", _blob(QUERY), "k", "2", "r", "3"]

@@ -19,10 +19,10 @@ A cursor is destroyed when its last row has been read, when it is deleted with `
 
 `FT.CURSOR READ` returns a two element array. The same format is used for cursors created by `FT.AGGREGATE`, `FT.HYBRID` and `FT.SEARCH`.
 
-| Element | Type    | Contents                                                                                                                              |
-| :------ | :------ | :------------------------------------------------------------------------------------------------------------------------------------ |
-| `[0]`   | Array   | N+1 elements: `[0]` is N, the number of rows returned by this read, and `[1]` ... `[N]` are the rows.                                 |
-| `[1]`   | Integer | The cursor id to use for the next `FT.CURSOR READ`, or 0 if all rows have been returned, in which case the cursor has been destroyed. |
+| Element | Type    | Contents                                                                                                                                             |
+| :------ | :------ | :--------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `[0]`   | Array   | N+1 elements: `[0]` is N, the number of rows returned by this read, and `[1]` ... `[N]` are the rows.                                                |
+| `[1]`   | Integer | The cursor id to use for the next `FT.CURSOR READ`, or 0 if this reply contains all the remaining rows, in which case the cursor has been destroyed. |
 
 A row of an `FT.AGGREGATE` or `FT.HYBRID` cursor is an array of field/value pairs. A row of an `FT.SEARCH` cursor is an array containing the elements for one key of a non-cursor `FT.SEARCH` response, i.e. the key name followed by the optional score, the optional sort key and the array of field/value pairs.
 

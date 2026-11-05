@@ -120,7 +120,7 @@ If `WITHCURSOR` was not specified, then the output is an array of N+1 elements, 
 
 If `WITHCURSOR` was specified, then the output is an array of two elements:
 
-| Element | Type    | Contents                                                                                                                          |
-| :------ | :------ | :-------------------------------------------------------------------------------------------------------------------------------- |
-| `[0]`   | Array   | N+1 elements: `[0]` is N, the number of records returned, and `[1]` ... `[N]` are the records, as above.                          |
-| `[1]`   | Integer | The cursor id to pass to [`FT.CURSOR READ`](ft.cursor.md), or 0 if all records were returned, in which case no cursor is created. |
+| Element | Type    | Contents                                                                                                                                              |
+| :------ | :------ | :---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `[0]`   | Array   | N+1 elements: `[0]` is N, the number of records returned, and `[1]` ... `[N]` are the records, as above.                                              |
+| `[1]`   | Integer | The cursor id to pass to [`FT.CURSOR READ`](ft.cursor.md), or 0 if this reply contains all the remaining records, in which case no cursor is created. |

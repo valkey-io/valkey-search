@@ -77,7 +77,7 @@ The response is a three element array:
 
 1. The count of the number of keys which match the query, as above.
 2. An array with one element per returned key. Each element is an array holding the entries for that key described above, e.g. the key name and its array of name/value pairs.
-3. The cursor id to pass to [`FT.CURSOR READ`](ft.cursor.md), or 0 if all keys were returned, in which case no cursor is created.
+3. The cursor id to pass to [`FT.CURSOR READ`](ft.cursor.md), or 0 if this reply contains all the remaining keys, in which case no cursor is created.
 
 ## Examples
 

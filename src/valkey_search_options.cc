@@ -398,6 +398,18 @@ static auto max_term_expansions =
                           kMaximumMaxTermExpansions)  // max limit (100k)
         .Build();
 
+/// Register the "--max-inkeys" flag. Caps the key count of FT.SEARCH INKEYS.
+/// Every listed key is evaluated on the main thread, so the count bounds how
+/// long one query can hold it.
+constexpr absl::string_view kMaxInkeysConfig{"max-inkeys"};
+constexpr uint32_t kDefaultMaxInkeys{10000};
+constexpr uint32_t kMinimumMaxInkeys{1};
+constexpr uint32_t kMaximumMaxInkeys{1000000};
+static auto max_inkeys =
+    config::NumberBuilder(kMaxInkeysConfig, kDefaultMaxInkeys,
+                          kMinimumMaxInkeys, kMaximumMaxInkeys)
+        .Build();
+
 /// Register the "--max-combine-window" flag. Caps COMBINE ... WINDOW on
 /// FT.HYBRID. WINDOW decides how many of each arm's results take part in
 /// fusion, and in cluster mode it also sets each shard's fetch limit, so a
@@ -742,6 +754,10 @@ vmsdk::config::Number &GetThreadPoolWaitTimeSamples() {
 
 vmsdk::config::Number &GetMaxTermExpansions() {
   return dynamic_cast<vmsdk::config::Number &>(*max_term_expansions);
+}
+
+vmsdk::config::Number &GetMaxInkeys() {
+  return dynamic_cast<vmsdk::config::Number &>(*max_inkeys);
 }
 
 vmsdk::config::Number &GetCursorMaxCount() {

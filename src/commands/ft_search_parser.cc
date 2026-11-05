@@ -205,6 +205,12 @@ std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructInkeysParser() {
       [](SearchCommand &parameters, vmsdk::ArgsIterator &itr) -> absl::Status {
         uint32_t count{0};
         VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, count));
+        const auto max_inkeys = options::GetMaxInkeys().GetValue();
+        if (count > max_inkeys) {
+          return absl::InvalidArgumentError(
+              absl::StrCat("INKEYS count ", count, " exceeds the maximum of ",
+                           max_inkeys, " (search.max-inkeys)"));
+        }
         parameters.inkeys.emplace();
         for (uint32_t i = 0; i < count; ++i) {
           VMSDK_ASSIGN_OR_RETURN(auto key, itr.PopNext());

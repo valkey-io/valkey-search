@@ -219,3 +219,29 @@ class TestFTSearchInkeysCluster(ValkeySearchClusterTestCase):
         # doc:0 should come first (score=0), doc:9 last (score=9)
         assert keys[0] == "doc:0"
         assert keys[-1] == "doc:9"
+
+    def test_inkeys_json_text_predicate(self):
+        """A text predicate on a JSON index filters and scores INKEYS on the
+        shards. The shards rebuild the text identifiers from the field mask;
+        for JSON those are paths (`$.title`), not aliases, and must still
+        resolve or the predicate is never checked."""
+        client: ValkeyCluster = self.new_cluster_client()
+        client.execute_command(
+            "FT.CREATE", "jidx", "ON", "JSON", "PREFIX", "1", "j:",
+            "SCHEMA", "$.title", "AS", "title", "TEXT", "NOSTEM",
+        )
+        for i in range(8):
+            client.execute_command(
+                "JSON.SET", f"j:{i}", "$",
+                '{"title": "%s"}' % ("alpha x" if i % 2 else "beta y"),
+            )
+        keys = [f"j:{i}" for i in range(8)]
+        result = client.execute_command(
+            "FT.SEARCH", "jidx", "@title:alpha",
+            "INKEYS", str(len(keys)), *keys,
+            "WITHSCORES", "NOCONTENT", "DIALECT", "2",
+        )
+        assert result[0] == 4
+        assert {result[i].decode() for i in range(1, len(result), 2)} == \
+            {"j:1", "j:3", "j:5", "j:7"}
+        assert all(float(result[i]) > 0 for i in range(2, len(result), 2))

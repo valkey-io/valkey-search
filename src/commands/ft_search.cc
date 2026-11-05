@@ -5,8 +5,6 @@
  *
  */
 
-#include "src/commands/ft_search.h"
-
 #include <strings.h>
 
 #include <algorithm>
@@ -161,8 +159,44 @@ void PerformSortingOnRelevantPortion(std::vector<indexes::Neighbor> &neighbors,
   }
 }
 
-}  // namespace
+// INKEYS results bypass SearchResult::TrimResults (RequiresCompleteResults),
+// and in cluster mode arrive as an unranked merge of every shard's matches, so
+// rank them here the way a search would have. A KNN query keeps the k nearest
+// of the listed keys, nearest first, unless its score is a relevance
+// (`text=>[KNN ...]`, `tag=>[KNN ...]`), which then orders those k. Any other
+// query orders by score. SORTBY, applied afterwards, overrides the order but
+// not the k cut.
+void RankInkeysNeighbors(std::vector<indexes::Neighbor> &neighbors,
+                         const SearchCommand &parameters) {
+  auto key_less = [](const indexes::Neighbor &a, const indexes::Neighbor &b) {
+    return a.external_id->Str() < b.external_id->Str();
+  };
+  if (!parameters.IsNonVectorQuery()) {
+    std::sort(neighbors.begin(), neighbors.end(),
+              [&](const indexes::Neighbor &a, const indexes::Neighbor &b) {
+                if (a.distance != b.distance) {
+                  return a.distance < b.distance;
+                }
+                return key_less(a, b);
+              });
+    size_t k = static_cast<size_t>(parameters.k);
+    if (neighbors.size() > k) {
+      neighbors.erase(neighbors.begin() + k, neighbors.end());
+    }
+    if (!parameters.ScoreIsRelevance()) {
+      return;
+    }
+  }
+  std::stable_sort(neighbors.begin(), neighbors.end(),
+                   [&](const indexes::Neighbor &a, const indexes::Neighbor &b) {
+                     if (a.score != b.score) {
+                       return a.score > b.score;
+                     }
+                     return key_less(a, b);
+                   });
+}
 
+}  // namespace
 // Apply sorting to neighbors based on attribute values in attribute_contents
 void ApplySorting(std::vector<indexes::Neighbor> &neighbors,
                   const SearchCommand &parameters) {
@@ -507,8 +541,9 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
 
   // NOCONTENT without SORTBY: skip content resolution entirely. A SORTBY
   // still needs the sort field resolved to order the reply (regression #1215),
-  // so fall through to content resolution when sortby is present.
-  const bool skip_content = no_content && !sortby_parameter.has_value();
+  // and INKEYS candidates are only verified against the predicate there, so
+  // both fall through to content resolution.
+  const bool skip_content = NoProcessingRequired();
   if (!skip_content) {
     auto status = ProcessNeighborsForQuery(ctx, search_result, *this);
     if (!status.ok()) {
@@ -518,9 +553,8 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
     }
   }
 
-  // INKEYS post-filter + sort
   if (inkeys.has_value()) {
-    ApplyInkeysFilter(search_result, *inkeys);
+    RankInkeysNeighbors(search_result.neighbors, *this);
   }
   if (!skip_content) {
     ApplySorting(search_result.neighbors, *this);

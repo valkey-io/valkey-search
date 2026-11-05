@@ -121,15 +121,14 @@ DEV_INTEGER_COUNTER(query_stats, nonvector_results_fetched_limited_count);
 
 class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
  public:
-  InlineVectorFilter(
-      query::Predicate *filter_predicate, indexes::VectorBase *vector_index,
-      query::QueryContext &query_ctx, QueryOperations query_operations,
-      const IndexSchema &index_schema,
-      const std::optional<absl::flat_hash_set<std::string>> &inkeys)
+  InlineVectorFilter(query::Predicate *filter_predicate,
+                     indexes::VectorBase *vector_index,
+                     query::QueryContext &query_ctx,
+                     QueryOperations query_operations,
+                     const IndexSchema &index_schema)
       : filter_predicate_(filter_predicate),
         vector_index_(vector_index),
-        evaluator_(query_ctx, query_operations, index_schema),
-        inkeys_(inkeys) {}
+        evaluator_(query_ctx, query_operations, index_schema) {}
   ~InlineVectorFilter() override = default;
 
   bool operator()(hnswlib::labeltype id) override {
@@ -138,14 +137,6 @@ class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
     if (!key.ok()) {
       return false;
     }
-    // Reject candidates outside INKEYS to avoid silently dropping in-set docs
-    // that rank outside the global top-K.
-    if (inkeys_.has_value() && !inkeys_->contains((*key)->Str())) {
-      return false;
-    }
-    if (filter_predicate_ == nullptr) {
-      return true;
-    }
     return evaluator_.Evaluate(*filter_predicate_, *key);
   }
 
@@ -153,7 +144,6 @@ class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
   query::Predicate *filter_predicate_;
   indexes::VectorBase *vector_index_;
   indexes::PrefilterEvaluator evaluator_;
-  const std::optional<absl::flat_hash_set<std::string>> &inkeys_;
 };
 
 // Adapter that wraps a pre-computed vector of Neighbor keys into the
@@ -193,14 +183,11 @@ absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
     indexes::VectorBase *vector_index, const SearchParameters &parameters,
     query::QueryContext &query_ctx) {
   std::unique_ptr<InlineVectorFilter> inline_filter;
-  // Fold INKEYS into candidate selection so in-set docs outside global top-K
-  // aren't silently dropped by post-filtering.
-  if (parameters.filter_parse_results.root_predicate != nullptr ||
-      parameters.inkeys.has_value()) {
+  if (parameters.filter_parse_results.root_predicate != nullptr) {
     inline_filter = std::make_unique<InlineVectorFilter>(
         parameters.filter_parse_results.root_predicate.get(), vector_index,
         query_ctx, parameters.filter_parse_results.query_operations,
-        *parameters.index_schema, parameters.inkeys);
+        *parameters.index_schema);
     VMSDK_LOG(DEBUG, nullptr) << "Performing vector search with inline filter";
   }
   // Search dispatches virtually on VectorBase, so neither the storage type
@@ -556,12 +543,6 @@ void EvaluatePrefilteredKeys(
         iterator->Next();
         continue;
       }
-      // 2. Skip keys not in the INKEYS set (when specified).
-      if (parameters.inkeys.has_value() &&
-          !parameters.inkeys->contains(key->Str())) {
-        iterator->Next();
-        continue;
-      }
       bool matched = true;
       if (requires_prefilter_evaluation) {
         BACKGROUND_PAUSEPOINT("search_prefilter_eval");
@@ -610,33 +591,6 @@ CalcBestMatchingPrefilteredKeys(
   EvaluatePrefilteredKeys(parameters, entries_fetchers,
                           std::move(results_appender), qualified_entries,
                           /*stop_on_fetch_limit=*/false, query_ctx);
-  return results;
-}
-
-// For pure-vector queries with INKEYS: compute K nearest within the set,
-// not the global top-K filtered by INKEYS (which silently drops in-set docs
-// outside the global top-K).
-std::priority_queue<std::pair<float, hnswlib::labeltype>>
-CalcBestMatchingInkeys(const SearchParameters &parameters,
-                       indexes::VectorBase *vector_index) {
-  std::priority_queue<std::pair<float, hnswlib::labeltype>> results;
-  CHECK(parameters.inkeys.has_value());
-  float query_magnitude = indexes::kDefaultMagnitude;
-  if (vector_index->GetNormalize()) {
-    query_magnitude = indexes::CalcReciprocalMagnitude(
-        parameters.query, vector_index->GetVectorDataType());
-  }
-  // Passed for API compatibility with AddPrefilteredKey, dedup is a no-op here
-  // since INKEYS are already unique (flat_hash_set, iterated once).
-  absl::flat_hash_set<const char *> top_keys;
-  for (const auto &key_str : *parameters.inkeys) {
-    if (parameters.cancellation_token->IsCancelled()) {
-      break;
-    }
-    InternedStringPtr key = StringInternStore::Intern(key_str);
-    vector_index->AddPrefilteredKey(parameters.query, query_magnitude, key,
-                                    parameters.k, results, top_keys);
-  }
   return results;
 }
 
@@ -1370,12 +1324,6 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
       while (!iterator->Done()) {
         const auto &key = **iterator;
         BACKGROUND_PAUSEPOINT("search_entries_fetcher");
-        // Skip keys not in the INKEYS set (when specified).
-        if (parameters.inkeys.has_value() &&
-            !parameters.inkeys->contains(key->Str())) {
-          iterator->Next();
-          continue;
-        }
         // Read before dedup: a repeat sighting is another branch's match.
         float raw = 0.0f;
         if (score_in_drain) {
@@ -1457,35 +1405,25 @@ absl::StatusOr<std::vector<indexes::Neighbor>> DoSearchVector(
 
   QueryContext query_ctx(*parameters.index_schema,
                          indexes::scoring::GetScorer(parameters.scorer));
-  const bool has_filter =
-      parameters.filter_parse_results.root_predicate != nullptr;
-  if (!has_filter && !parameters.inkeys.has_value()) {
+  if (!parameters.filter_parse_results.root_predicate) {
     return PerformVectorSearch(vector_index, parameters, query_ctx);
   }
-
   std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
-  size_t qualified_entries =
-      parameters.inkeys.has_value() ? parameters.inkeys->size() : 0;
-  if (has_filter) {
-    qualified_entries = EvaluateFilterAsPrimary(
-        parameters, parameters.filter_parse_results.root_predicate.get(),
-        entries_fetchers, false);
-  }
+  size_t qualified_entries = EvaluateFilterAsPrimary(
+      parameters, parameters.filter_parse_results.root_predicate.get(),
+      entries_fetchers, false);
 
+  // Query planner makes the decision for pre-filtering vs inline-filtering.
   if (UsePreFiltering(qualified_entries, vector_index, parameters)) {
     VMSDK_LOG(DEBUG, nullptr)
         << "Using pre-filter query execution, qualified entries="
         << qualified_entries;
     // Do an exact nearest neighbour search on the reduced search space.
     ++Metrics::GetStats().query_prefiltering_requests_cnt;
-    std::priority_queue<std::pair<float, hnswlib::labeltype>> results;
-    if (has_filter) {
-      results = CalcBestMatchingPrefilteredKeys(parameters, entries_fetchers,
-                                                vector_index, qualified_entries,
-                                                query_ctx);
-    } else {
-      results = CalcBestMatchingInkeys(parameters, vector_index);
-    }
+    std::priority_queue<std::pair<float, hnswlib::labeltype>> results =
+        CalcBestMatchingPrefilteredKeys(parameters, entries_fetchers,
+                                        vector_index, qualified_entries,
+                                        query_ctx);
 
     VMSDK_ASSIGN_OR_RETURN(auto neighbors, vector_index->CreateReply(results));
     ApplyHybridTextScore(parameters, neighbors, query_ctx);
@@ -1663,6 +1601,40 @@ SerializationRange SearchResult::GetSerializationRange(
   return {start_index, end_index};
 }
 
+// INKEYS names the candidate documents outright, so the index is not searched.
+// Each listed key the index tracks becomes a neighbor carrying
+// kUnverifiedSequenceNumber. Real sequence numbers start at 1
+// (IndexSchema::ProcessMutation), so content resolution (VerifyFilter,
+// ProcessNeighborsForReply) treats every one of them as mutated: it evaluates
+// the predicate against the document and recomputes its text score or KNN
+// distance. Runs on the main thread, which owns db_key_info_, and without the
+// time-sliced lock, which that resolution takes itself (it is non-reentrant).
+absl::Status SearchInkeys(SearchParameters &parameters) {
+  vmsdk::VerifyMainThread();
+  std::vector<indexes::Neighbor> neighbors;
+  neighbors.reserve(parameters.inkeys->size());
+  for (const auto &key : *parameters.inkeys) {
+    // Each key costs main-thread time; stop once the query has timed out.
+    if (parameters.cancellation_token->IsCancelled()) {
+      break;
+    }
+    auto interned = StringInternStore::Intern(key);
+    if (!parameters.index_schema->TryGetDbMutationSequenceNumber(interned)) {
+      continue;
+    }
+    indexes::Neighbor neighbor(interned, 0.0f);
+    neighbor.sequence_number = kUnverifiedSequenceNumber;
+    neighbors.push_back(std::move(neighbor));
+  }
+  // Not through the SearchResult constructor: for an empty page (LIMIT 0 0, or
+  // a KNN offset at or past k) it drops every candidate, so none would be
+  // verified and total_count would count keys that do not match.
+  parameters.search_result = SearchResult();
+  parameters.search_result.total_count = neighbors.size();
+  parameters.search_result.neighbors = std::move(neighbors);
+  return absl::OkStatus();
+}
+
 absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
   // Reject already-cancelled queries before acquiring the time-slice mutex.
   // Without this, expired queries that sat in the queue still acquire a reader
@@ -1674,18 +1646,8 @@ absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
   if (parameters.cancellation_token->IsCancelled()) {
     return absl::OkStatus();
   }
-  // INKEYS with an empty set means no keys can match.
-  // Short-circuit before acquiring the lock to avoid unnecessary contention.
-  if (parameters.inkeys.has_value() && parameters.inkeys->empty()) {
-    parameters.search_result =
-        SearchResult(0, std::vector<indexes::Neighbor>{}, parameters);
-    return absl::OkStatus();
-  }
-  auto &time_sliced_mutex = parameters.index_schema->GetTimeSlicedMutex();
-  vmsdk::ReaderMutexLock lock(&time_sliced_mutex);
-  ++Metrics::GetStats().time_slice_queries;
   // Handle OOM for search requests, defends against request
-  // coming from the coordinator
+  // coming from the coordinator. Ahead of INKEYS, which takes no lock.
   if (search_mode == SearchMode::kRemote) {
     auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
     auto ctx_flags = ValkeyModule_GetContextFlags(ctx.get());
@@ -1693,6 +1655,12 @@ absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
       return absl::ResourceExhaustedError(kOOMMsg);
     }
   }
+  if (parameters.inkeys.has_value()) {
+    return SearchInkeys(parameters);
+  }
+  auto &time_sliced_mutex = parameters.index_schema->GetTimeSlicedMutex();
+  vmsdk::ReaderMutexLock lock(&time_sliced_mutex);
+  ++Metrics::GetStats().time_slice_queries;
   if (parameters.IsNonVectorQuery()) {
     // Standalone vector range queries (no KNN) are routed through a dedicated
     // path that computes and stores distances.
@@ -1743,6 +1711,24 @@ absl::Status ForcedMultiArmFailure(size_t arm_index) {
 absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
                          vmsdk::ThreadPool *thread_pool,
                          SearchMode search_mode) {
+  // INKEYS searches nothing in the background: the listed keys are resolved
+  // entirely on the main thread (see SearchInkeys). force_async keeps the
+  // completion out of the caller's frame, as the thread pool would.
+  if (parameters->inkeys.has_value()) {
+    // Off the main thread during shutdown RunByMain drops the callback, and
+    // the completion with it. Refuse instead, as a stopped thread pool does
+    // below, so the caller can terminate whatever waits on the search.
+    if (!vmsdk::IsMainThread() && vmsdk::IsShuttingDown()) {
+      return absl::UnavailableError(kShuttingDownMsg);
+    }
+    vmsdk::RunByMain(
+        [parameters = std::move(parameters), search_mode]() mutable {
+          parameters->search_result.status = Search(*parameters, search_mode);
+          ResolveContent(std::move(parameters));
+        },
+        /*force_async=*/true);
+    return absl::OkStatus();
+  }
   // The parameters are parked in a holder shared between this frame and the
   // scheduled task. ThreadPool::Schedule refuses -- and destroys -- the task
   // once the pool is in stop mode; because the holder outlives the task, a

@@ -43,8 +43,9 @@ Where:
 - `EF_RUNTIME <ef-value>` (optional): Overrides the default value of `EF_RUNTIME` specified when the index was created. `EF_RUNTIME` is valid with the automatic policy and `HYBRID_POLICY BATCHES`. It is rejected with `HYBRID_POLICY ADHOC_BF`, which performs an exact search over the filtered candidates and does not use the HNSW runtime candidate limit.
 - `HYBRID_POLICY <policy>` (optional; requires a filter expression or `INKEYS`): Overrides the automatic choice between the two filtered-vector execution paths:
   - `ADHOC_BF` evaluates the filter first, then computes exact distances for the matching vectors.
-  - `BATCHES` searches the vector index first and applies the filter while traversing vector candidates. An explicit `BATCHES` also takes precedence when `INKEYS` is supplied; the named keys remain part of the inline candidate filter. With the automatic policy, `INKEYS` uses filter-first execution.
+  - `BATCHES` searches the vector index first and applies the filter while traversing vector candidates.
   - When omitted, Valkey Search chooses the path using its existing planner heuristic.
+  - With `INKEYS` the policy is accepted but ignored: an `INKEYS` query does not search the index, it evaluates each listed key exactly.
 - `AS <name>` (optional): Overrides the default naming of the output distance field; the supplied name is used as-is. By default this field is named `__<field>_score`, where `<field>` is the field named in `@<field>` (the attribute's `AS` alias from `FT.CREATE`, if it has one). For example, `@vec` produces `__vec_score`.
 
 For example, this query forces exact filter-first execution for documents tagged `electronics`:

@@ -1532,6 +1532,21 @@ INSTANTIATE_TEST_SUITE_P(
             .vector_query = false,
         },
         {
+            .test_name = "inkeys_count_exceeds_max_inkeys_error",
+            .success = false,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .expected_error_message =
+                "Error parsing value for the parameter `INKEYS` - INKEYS "
+                "count 10001 exceeds the maximum of 10000 (search.max-inkeys)",
+            .search_parameters_str = "INKEYS 10001 k1",
+            .vector_query = false,
+        },
+        {
             .test_name = "inkeys_default_empty",
             .success = true,
             .params_str = "",

@@ -28,11 +28,6 @@ bool UsePreFiltering(size_t estimated_num_of_keys,
   if (parameters.hybrid_policy == HybridPolicy::kBatches) {
     return false;
   }
-  // RediSearch lets an explicit policy override the default INKEYS plan. With
-  // AUTO, retain exact pre-filtering over the caller's restricted key set.
-  if (parameters.inkeys.has_value()) {
-    return true;
-  }
   if (vector_index->GetIndexerType() == indexes::IndexerType::kFlat) {
     /* With a flat index, the search needs to go through all the vectors,
     taking O(N*log(k)). With pre-filtering, we can do the same search on the

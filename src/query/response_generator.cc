@@ -306,7 +306,13 @@ absl::StatusOr<RecordsMap> GetContent(
                          attribute_data_type.FetchAllAttributes(
                              ctx, vector_identifier, key_obj.get(),
                              neighbor.external_id->Str(), identifiers));
-  if (!parameters.filter_parse_results.filter_identifiers.empty()) {
+  // Match-all has no filter identifiers, but an INKEYS candidate still needs
+  // its relevance score computed. Only for INKEYS: other callers without a
+  // predicate (FT.HYBRID's fused rows, say) carry a score that is not a
+  // match-all relevance.
+  if (!parameters.filter_parse_results.filter_identifiers.empty() ||
+      (parameters.filter_parse_results.root_predicate == nullptr &&
+       parameters.inkeys.has_value() && parameters.ScoreIsRelevance())) {
     auto verification = VerifyFilter(parameters, content, neighbor, query_ctx);
     if (!verification.matches) {
       return absl::NotFoundError("Verify filter failed");
@@ -464,6 +470,13 @@ void ProcessNeighborsForReply(
   // recomputed document.
   std::unique_ptr<query::QueryContext> query_ctx;
   for (auto &neighbor : neighbors) {
+    // An INKEYS query fetches every listed key here, on the main thread; stop
+    // once it has timed out. The neighbors left without content are erased
+    // below.
+    if (parameters.inkeys.has_value() &&
+        parameters.cancellation_token->IsCancelled()) {
+      break;
+    }
     // Remote neighbors (from fanout) always have attribute_contents populated,
     // so they skip this entire block. Only local neighbors without content
     // reach the slot ownership check below.
@@ -507,20 +520,37 @@ void ProcessNeighborsForReply(
         auto bytes = CurrentVectorBytes(
             ctx, attribute_data_type, parameters, neighbor.external_id->Str(),
             *vector_identifier, content.value(), scratch);
-        if (bytes.has_value()) {
-          auto distance =
-              vector_index->RecomputeDistance(*bytes, parameters.query);
-          if (distance.ok()) {
-            neighbor.distance = *distance;
-            // For a query ranked on the distance the two are the same number;
-            // where they are not, Neighbor.score is a relevance the distance
-            // must not overwrite.
-            if (ranks_on_distance) {
-              neighbor.score = *distance;
-            }
-            any_distance_recomputed = true;
-          }
+        // JSON hands the vector over as text; convert it to the index's
+        // binary form the way ingestion does (ProcessKeyspaceNotification).
+        vmsdk::UniqueValkeyString normalized;
+        if (bytes.has_value() &&
+            attribute_data_type.AttributesProvidedAsString()) {
+          normalized = vector_index->NormalizeStringAttribute(
+              vmsdk::MakeUniqueValkeyString(*bytes));
+          bytes = normalized
+                      ? std::optional(vmsdk::ToStringView(normalized.get()))
+                      : std::nullopt;
         }
+        auto distance = bytes.has_value() ? vector_index->RecomputeDistance(
+                                                *bytes, parameters.query)
+                                          : absl::NotFoundError("No vector");
+        if (!distance.ok()) {
+          // The document no longer holds a vector the index could use
+          // (missing, unparsable, or the wrong size), so it has no distance
+          // and is not a nearest neighbor. Keeping it would rank it on a
+          // stale distance -- or, for an INKEYS candidate, on the placeholder
+          // 0, ahead of every real match. Left without content, it is erased
+          // below.
+          continue;
+        }
+        neighbor.distance = *distance;
+        // For a query ranked on the distance the two are the same number;
+        // where they are not, Neighbor.score is a relevance the distance
+        // must not overwrite.
+        if (ranks_on_distance) {
+          neighbor.score = *distance;
+        }
+        any_distance_recomputed = true;
       }
     }
 

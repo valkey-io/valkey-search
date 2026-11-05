@@ -113,6 +113,9 @@ config::Number &GetThreadPoolWaitTimeSamples();
 /// suffix, fuzzy)
 config::Number &GetMaxTermExpansions();
 
+/// Return the maximum number of keys FT.SEARCH INKEYS accepts.
+config::Number &GetMaxInkeys();
+
 /// Return the largest COUNT accepted by WITHCURSOR and FT.CURSOR READ
 config::Number &GetCursorMaxCount();
 

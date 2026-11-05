@@ -1663,6 +1663,30 @@ SerializationRange SearchResult::GetSerializationRange(
   return {start_index, end_index};
 }
 
+// Drop results from slots this node doesn't own. Runs before total_count and
+// the LIMIT window are fixed so every completion mode (NOCONTENT included) is
+// correct while a migration target has the slot's keys indexed but not owned.
+template <typename T>
+void DropUnownedSlots(std::vector<T> &results) {
+  if (!ValkeySearch::Instance().IsCluster()) {
+    return;
+  }
+  auto cluster_map = ValkeySearch::Instance().GetClusterMap();
+  if (cluster_map == nullptr) {
+    return;
+  }
+  std::erase_if(results, [&](const T &n) {
+    absl::string_view key;
+    if constexpr (std::is_same_v<T, indexes::BorrowedNeighbor>) {
+      key = n.key.Str();
+    } else {
+      key = n.external_id->Str();
+    }
+    auto key_str = vmsdk::MakeUniqueValkeyString(key);
+    return !cluster_map->IOwnSlot(ValkeyModule_ClusterKeySlot(key_str.get()));
+  });
+}
+
 absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
   // Reject already-cancelled queries before acquiring the time-slice mutex.
   // Without this, expired queries that sat in the queue still acquire a reader
@@ -1706,11 +1730,13 @@ absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
       // The VR leaf scores 0 (ScoreNode), a plain VR query scores 0, a
       // compound one takes its other leaves' relevance, as Redis reports.
       ApplyRelevanceScore(parameters, neighbors, query_ctx);
+      DropUnownedSlots(neighbors);
       size_t total_count = neighbors.size();
       parameters.search_result =
           SearchResult(total_count, std::move(neighbors), parameters);
     } else {
       VMSDK_ASSIGN_OR_RETURN(auto borrowed, DoSearchNonVector(parameters));
+      DropUnownedSlots(borrowed);
       size_t total_count = borrowed.size();
       parameters.search_result =
           SearchResult(total_count, std::move(borrowed), parameters);
@@ -1718,6 +1744,7 @@ absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
   } else {
     VMSDK_ASSIGN_OR_RETURN(auto neighbors,
                            DoSearchVector(parameters, search_mode, lock));
+    DropUnownedSlots(neighbors);
     VMSDK_ASSIGN_OR_RETURN(
         auto result, MaybeAddIndexedContent(std::move(neighbors), parameters));
     size_t total_count = result.size();

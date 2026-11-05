@@ -1112,8 +1112,9 @@ void ValkeySearch::OnServerCronCallback(ValkeyModuleCtx *ctx,
           absl::Seconds(options::GetMaxWorkerSuspensionSecs().GetValue())) {
     ResumeWriterThreadPool(ctx, /*is_expired=*/true);
   }
-  // refresh cluster map in cluster mode
-  if (IsCluster() && UsingCoordinator()) {
+  // Refresh the cluster map in cluster mode. The reader-thread slot ownership
+  // check can only read it, so this is what keeps it current.
+  if (IsCluster()) {
     GetOrRefreshClusterMap(ctx);
   }
 }

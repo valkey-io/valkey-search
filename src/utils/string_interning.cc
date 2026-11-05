@@ -8,7 +8,6 @@
 #include "src/utils/string_interning.h"
 
 #include <cstring>
-#include <utility>
 
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
@@ -227,7 +226,9 @@ InternedStringPtr StringInternStore::InternImpl(absl::string_view str,
   InternedStringPtr* ptr_ptr = MakeShadowInternPtrPtr(&fake, storage);
 
   absl::MutexLock lock(&mutex_);
-  auto it = str_to_interned_.find(*ptr_ptr);
+  // Hash the string once, for both the lookup and the insert.
+  auto key = str_to_interned_.Prehash(*ptr_ptr);
+  auto it = str_to_interned_.find(key);
   if (it != str_to_interned_.end()) {
     return *it;  // will bump the refcount automatically.
   }
@@ -235,7 +236,7 @@ InternedStringPtr StringInternStore::InternImpl(absl::string_view str,
   // Create a new interned string. Without bumping the refcount....
   //
   InternedString* new_ptr = InternedString::Constructor(str, allocator);
-  str_to_interned_.insert(std::move(InternedStringPtr(new_ptr)));
+  str_to_interned_.insert(key, InternedStringPtr(new_ptr));
   return {new_ptr};
 }
 

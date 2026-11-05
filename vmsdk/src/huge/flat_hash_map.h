@@ -296,6 +296,17 @@ class HugeHashTable {
     return Find(Prehash<LookupKey<Q>>(key));
   }
 
+  // For several operations on one key that should hash it only once:
+  // Prehash(key) hashes it, and find() and insert() take the result without
+  // hashing again. The result refers to `key`, which must outlive it.
+  using prehashed_key = internal::Prehashed<key_type>;
+  template <typename Q>
+  internal::Prehashed<Q> Prehash(const Q &key) const {
+    return {key, fg_.hash_function()(key)};
+  }
+  iterator find(const prehashed_key &key) { return Find(key); }
+  const_iterator find(const prehashed_key &key) const { return Find(key); }
+
   template <typename Q = key_type>
   bool contains(const Q &key) const {
     return find(key) != end();
@@ -321,11 +332,6 @@ class HugeHashTable {
   }
 
  protected:
-  template <typename Q>
-  internal::Prehashed<Q> Prehash(const Q &key) const {
-    return {key, fg_.hash_function()(key)};
-  }
-
   // Inserts the entry for `key` into fg_ unless it is already present,
   // calling construct(ctor) to build it in place, where ctor is absl's
   // lazy_emplace constructor.
@@ -613,6 +619,13 @@ class HugeFlatHashSet
   }
   std::pair<iterator, bool> insert(T &&value) {
     return this->Emplace(this->Prehash(value),
+                         [&](const auto &ctor) { ctor(std::move(value)); });
+  }
+  // Inserts `value`, equal to the key `key` was made from, without hashing.
+  std::pair<iterator, bool> insert(const typename Base::prehashed_key &key,
+                                   T &&value) {
+    DCHECK(this->fg_.key_eq()(key.key, value));
+    return this->Emplace(key,
                          [&](const auto &ctor) { ctor(std::move(value)); });
   }
 };

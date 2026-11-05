@@ -599,6 +599,18 @@ TEST_F(FlatHashMapTest, HashesInputOncePerOperation) {
   EXPECT_TRUE(Peer::Fg(s).contains(k));
   k = next++;
   EXPECT_EQ(HashesOf(k, [&] { EXPECT_TRUE(s.insert(k).second); }), 1);
+
+  // A prehashed key is hashed once for a find that misses and the insert.
+  int64_t fresh = next;
+  EXPECT_EQ(HashesOf(fresh,
+                     [&] {
+                       auto key = s.Prehash(fresh);
+                       EXPECT_EQ(s.find(key), s.end());
+                       EXPECT_TRUE(s.insert(key, int64_t{fresh}).second);
+                       EXPECT_EQ(s.find(key), s.find(fresh));
+                     }),
+            2);  // Prehash, and the plain find(fresh).
+  EXPECT_TRUE(s.contains(fresh));
   k = *Peer::Bg(s).begin();
   EXPECT_EQ(HashesOf(k, [&] { EXPECT_EQ(s.erase(k), 1); }), 1);
   ASSERT_FALSE(Peer::Bg(s).empty());
@@ -612,6 +624,49 @@ TEST_F(FlatHashMapTest, EveryInsertHashesOnce) {
     ASSERT_EQ(HashesOf(k, [&] { m[k] = k; }), 1) << k;
   }
   EXPECT_GT(Peer::Cycles(m), 5);
+}
+
+// A cycle start hashes nothing beyond the inserted key, and draining hashes
+// each migrated entry once, for its slot in the new table.
+TEST_F(FlatHashMapTest, MigrationHashesEachEntryOnce) {
+  SetBatch(8);
+  HashCountedMap m;
+  int64_t next = 0;
+  for (; next < 1000; ++next) {
+    m[next] = next;
+  }
+  // The insert that starts a cycle: its own key, plus the first batch.
+  size_t cycles = Peer::Cycles(m);
+  while (true) {
+    size_t before = m.size();
+    g_hashes.clear();
+    m[next] = next;
+    ++next;
+    if (Peer::Cycles(m) != cycles) {
+      ASSERT_EQ(m.size(), before + 1);
+      break;
+    }
+  }
+  ASSERT_FALSE(Peer::Bg(m).empty());
+  EXPECT_EQ(g_hashes.size(), 1 + 8);
+  for (const auto &[key, n] : g_hashes) {
+    EXPECT_EQ(n, 1) << key;
+  }
+  // The rest of the drain.
+  size_t migrated = Peer::Bg(m).size();
+  g_hashes.clear();
+  size_t inserts = 0;
+  while (!Peer::Bg(m).empty()) {
+    m[next] = next;
+    ++next;
+    ++inserts;
+  }
+  size_t total = 0;
+  for (const auto &[key, n] : g_hashes) {
+    EXPECT_EQ(n, 1) << key;
+    total += n;
+  }
+  EXPECT_EQ(total, inserts + migrated);
 }
 
 TEST_F(FlatHashMapTest, SetBasicOperations) {

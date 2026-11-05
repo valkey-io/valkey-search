@@ -244,12 +244,18 @@ bool CheckSlotOwnership(ValkeyModuleCtx *ctx, absl::string_view key) {
   return cluster_map->IOwnSlot(static_cast<uint16_t>(slot));
 }
 
+struct SortByContent {
+  std::string identifier;
+  vmsdk::UniqueValkeyString value;
+};
+
 absl::StatusOr<RecordsMap> GetContent(
     ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
     const query::SearchParameters &parameters,
     const indexes::Neighbor &neighbor,
     const std::optional<std::string> &vector_identifier,
     std::unique_ptr<query::QueryContext> &query_ctx,
+    std::optional<SortByContent> &out_sortby_content,
     std::optional<float> *out_recomputed_score = nullptr) {
   auto key = neighbor.external_id->Str();
   const bool is_json = attribute_data_type.ToProto() ==
@@ -315,11 +321,7 @@ absl::StatusOr<RecordsMap> GetContent(
       *out_recomputed_score = verification.recomputed_score;
     }
   }
-  // Every other fetch is projected below, filter or not. `content` cannot be
-  // handed back as it is: a JSON fetch keys it by views of the identifiers it
-  // was asked for, and `sortby_identifier` dies with this function. The
-  // projection also re-keys the sortby field under its alias, where sorting
-  // looks for it.
+  // Every other fetch is projected below, filter or not.
   if (fetch_whole_hash) {
     // The whole hash was fetched, and the whole hash is what was asked for.
     return content;
@@ -359,20 +361,45 @@ absl::StatusOr<RecordsMap> GetContent(
             vmsdk::RetainUniqueValkeyString(itr->second.value.get())));
   }
 
-  // Add sortby field to return_content for sorting, even when return_attributes
-  // is not empty. Use the alias (sortby_parameter->field) as the key.
   if (parameters.sortby_parameter.has_value()) {
     auto itr = content.find(sortby_identifier);
     if (itr != content.end()) {
-      return_content.emplace(
-          parameters.sortby_parameter->field,
-          RecordsMapValue(
-              vmsdk::MakeUniqueValkeyString(parameters.sortby_parameter->field),
-              vmsdk::RetainUniqueValkeyString(itr->second.value.get())));
+      if (parameters.all_content) {
+        // A whole record is printed entry by entry, and RediSearch shows the
+        // sort field in it under its alias, so here the copy is returned
+        // content and counts toward the response limits.
+        return_content.emplace(
+            parameters.sortby_parameter->field,
+            RecordsMapValue(
+                vmsdk::MakeUniqueValkeyString(
+                    parameters.sortby_parameter->field),
+                vmsdk::RetainUniqueValkeyString(itr->second.value.get())));
+      } else {
+        out_sortby_content.emplace(SortByContent{
+            .identifier = std::move(sortby_identifier),
+            .value = vmsdk::RetainUniqueValkeyString(itr->second.value.get())});
+      }
     }
   }
 
   return return_content;
+}
+
+// The legacy lookup, on this node below 1.3.0 or on an older coordinator,
+// reads the sort value by alias.
+void FileSortByContent(RecordsMap &content, SortByContent sortby_content,
+                       absl::string_view alias) {
+  auto owned_identifier =
+      vmsdk::MakeUniqueValkeyString(sortby_content.identifier);
+  auto identifier_view = vmsdk::ToStringView(owned_identifier.get());
+  content.emplace(identifier_view,
+                  RecordsMapValue(std::move(owned_identifier),
+                                  vmsdk::RetainUniqueValkeyString(
+                                      sortby_content.value.get())));
+  auto owned_alias = vmsdk::MakeUniqueValkeyString(alias);
+  auto alias_view = vmsdk::ToStringView(owned_alias.get());
+  content.emplace(alias_view, RecordsMapValue(std::move(owned_alias),
+                                              std::move(sortby_content.value)));
 }
 
 // The vector bytes this document holds now, or nullopt if they cannot be read.
@@ -477,8 +504,10 @@ void ProcessNeighborsForReply(
       continue;
     }
     std::optional<float> recomputed_score;
+    std::optional<SortByContent> sortby_content;
     auto content = GetContent(ctx, attribute_data_type, parameters, neighbor,
-                              vector_identifier, query_ctx, &recomputed_score);
+                              vector_identifier, query_ctx, sortby_content,
+                              &recomputed_score);
     if (!content.ok()) {
       continue;
     }
@@ -553,6 +582,12 @@ void ProcessNeighborsForReply(
 
     // Only assign content if it's within size limit
     if (!size_exceeded) {
+      // The limits above must not count the sort entries: the client never
+      // receives them.
+      if (sortby_content.has_value()) {
+        FileSortByContent(content.value(), *std::move(sortby_content),
+                          parameters.sortby_parameter->field);
+      }
       neighbor.attribute_contents = std::move(content.value());
     }
   }

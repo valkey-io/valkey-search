@@ -66,6 +66,10 @@ QUERIES = [
     ("search_knn",
      lambda p: ["FT.SEARCH", INDEX, "*=>[KNN $k @vec $q]", *p, "NOCONTENT"],
      _keys),
+    ("search_range",
+     lambda p: ["FT.SEARCH", INDEX, "@vec:[VECTOR_RANGE $r $q]", *p,
+                "NOCONTENT"],
+     _keys),
 ]
 
 PARAMS = ["PARAMS", "6", "q", _blob(QUERY), "k", "2", "r", "3"]

@@ -2281,15 +2281,16 @@ absl::Status PostParseVectorRangeParameters(
           vr_pred->SetRadius(radius);
         }
 
-        // Resolve the vector blob parameter from PARAMS.
+        // Resolve the vector blob parameter from PARAMS or JPARAMS.
         auto blob_param_key = absl::StrCat("$", vr_pred->GetVectorParamName());
         VMSDK_ASSIGN_OR_RETURN(
-            auto resolved_blob, SubstituteParam(parameters, blob_param_key),
+            auto index, parameters.index_schema->GetIndex(vr_pred->GetAlias()));
+        VMSDK_ASSIGN_OR_RETURN(
+            auto resolved_blob,
+            SubstituteVectorParam(parameters, blob_param_key, *index),
             _.SetPrepend() << "Error resolving vector range blob parameter: ");
 
         // Validate vector blob dimensions match the index.
-        VMSDK_ASSIGN_OR_RETURN(
-            auto index, parameters.index_schema->GetIndex(vr_pred->GetAlias()));
         auto *vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
         if (static_cast<int>(resolved_blob.size()) !=
             vector_index->GetVectorDataSize()) {
@@ -2299,7 +2300,7 @@ absl::Status PostParseVectorRangeParameters(
                            vector_index->GetVectorDataSize(), ")"));
         }
 
-        vr_pred->SetQueryVector(std::string(resolved_blob));
+        vr_pred->SetQueryVector(std::move(resolved_blob));
         return absl::OkStatus();
       });
 }

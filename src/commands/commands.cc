@@ -94,6 +94,18 @@ void Free([[maybe_unused]] ValkeyModuleCtx *ctx, void *privdata) {
 CONTROLLED_BOOLEAN(ForceReplicasOnly, false);
 DEV_INTEGER_COUNTER(stats, single_slot_queries);
 
+// prefer_local only ever selects a local replica, so it has no effect on a
+// primary coordinator.
+vmsdk::cluster_map::FanoutTargetMode ComputeSearchTargetMode(
+    ValkeyModuleCtx *ctx) {
+  if (ForceReplicasOnly.GetValue()) {
+    return vmsdk::cluster_map::FanoutTargetMode::kOneReplicaPerShard;
+  }
+  return vmsdk::IsReadOnly(ctx)
+             ? vmsdk::cluster_map::FanoutTargetMode::kReplicaPreferred
+             : vmsdk::cluster_map::FanoutTargetMode::kPrimary;
+}
+
 // Duck-typed over Cmd: only requires an `index_schema` member. Used by
 // ExecuteCommand<Cmd>; declared before that template so its body is visible
 // at the template's point of instantiation.
@@ -120,9 +132,7 @@ bool IsSingleSlotQueryRoutedToLocalNode(ValkeyModuleCtx *ctx,
 template <typename Cmd>
 std::vector<vmsdk::cluster_map::NodeInfo> ComputeSearchTargetsT(
     ValkeyModuleCtx *ctx, const Cmd &parameters) {
-  auto mode = ForceReplicasOnly.GetValue()
-                  ? vmsdk::cluster_map::FanoutTargetMode::kOneReplicaPerShard
-                  : vmsdk::cluster_map::FanoutTargetMode::kRandom;
+  auto mode = ComputeSearchTargetMode(ctx);
   auto cluster_map = ValkeySearch::Instance().GetOrRefreshClusterMap(ctx);
   const auto &single_slot_number =
       parameters.index_schema->GetSingleSlotNumber();

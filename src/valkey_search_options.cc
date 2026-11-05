@@ -337,8 +337,8 @@ static auto ft_info_rpc_timeout_ms =
         .Build();
 
 /// Register the "--local-fanout-queue-wait-threshold" flag. Controls the queue
-/// wait time threshold (in milliseconds) below which local node is preferred in
-/// fanout operations
+/// wait time threshold (in milliseconds) below which the local replica is
+/// preferred in READONLY fanout operations
 constexpr absl::string_view kLocalFanoutQueueWaitThresholdConfig{
     "local-fanout-queue-wait-threshold"};
 constexpr uint32_t kDefaultLocalFanoutQueueWaitThreshold{

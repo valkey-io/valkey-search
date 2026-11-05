@@ -1174,6 +1174,7 @@ class IndexSchemaRDBTest : public ValkeySearchTest {
   // TODO: Will be fixed to work with RDB version 2
   void SetUp() override {
     ValkeySearchTest::SetUp();
+    SetDebugMode(true);
     auto &write_v2 =
         const_cast<vmsdk::config::Boolean &>(options::GetRdbWriteV2());
     auto &read_v2 =
@@ -1189,6 +1190,7 @@ class IndexSchemaRDBTest : public ValkeySearchTest {
         const_cast<vmsdk::config::Boolean &>(options::GetRdbReadV2());
     VMSDK_EXPECT_OK(write_v2.SetValue(true));
     VMSDK_EXPECT_OK(read_v2.SetValue(true));
+    SetDebugMode(false);
     ValkeySearchTest::TearDown();
   }
 };
@@ -2398,6 +2400,42 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
   // Cleanup
   VMSDK_EXPECT_OK(options::GetSkipIndexLoadMutable().SetValue(false));
   LOG(INFO) << "=== Comprehensive Skip Load Test Completed ===";
+}
+
+// A multi/exec key whose mutation record has already been consumed (in the
+// deque, absent from the map) is skipped by SaveIndexExtension, not fatal.
+TEST_F(IndexSchemaFriendTest, OrphanMultiKeySkippedOnSave)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  auto k = StringInternStore::Intern("prefix1_orphan");
+  index_schema->SetDbMutationSequenceNumber(k, 1);
+  index_schema->EnqueueMultiMutation(k);  // deque=[K]
+  auto vectors = DeterministicallyGenerateVectors(1, dimensions, 2);
+  absl::string_view data_ptr((char *)&vectors[0][0],
+                             dimensions * sizeof(float));
+  {
+    auto a = CreateMutatedAttributes(attribute_identifier, data_ptr);
+    index_schema->TrackMutatedRecord(nullptr, k, std::move(a), 1, false, false,
+                                     /*from_multi=*/true);  // map={K}
+  }
+  // Drive the real consumer (the writer-pool task body) to index and erase the
+  // mutation record, leaving K referenced only by the deque.
+  index_schema->ProcessSingleMutationAsync(&fake_ctx, /*from_backfill=*/false,
+                                           k,
+                                           /*delay_capturer=*/nullptr);
+
+  // Confirm the state under test: K is in the deque but not the map.
+  {
+    absl::MutexLock lock(&index_schema->mutated_records_mutex_);
+    ASSERT_EQ(index_schema->multi_mutations_keys_.Get().size(), 1u);
+    EXPECT_EQ(index_schema->multi_mutations_keys_.Get().front()->Str(),
+              "prefix1_orphan");
+    EXPECT_EQ(index_schema->tracked_mutated_records_.find(k),
+              index_schema->tracked_mutated_records_.end());
+  }
+
+  FakeSafeRDB rdb;
+  EXPECT_TRUE(
+      index_schema->SaveIndexExtension(RDBChunkOutputStream(&rdb)).ok());
 }
 
 }  // namespace valkey_search

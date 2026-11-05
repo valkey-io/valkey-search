@@ -95,6 +95,7 @@ constexpr uint32_t kDialect{2};
 
 // Parser keywords
 constexpr absl::string_view kParamsParam{"PARAMS"};
+constexpr absl::string_view kJParamsParam{"JPARAMS"};
 constexpr absl::string_view kDialectParam{"DIALECT"};
 constexpr absl::string_view kLimitParam{"LIMIT"};
 constexpr absl::string_view kNoContentParam{"NOCONTENT"};
@@ -322,6 +323,10 @@ struct SearchParameters {
     mutable absl::flat_hash_map<absl::string_view,
                                 std::pair<int, absl::string_view>>
         params;
+    // Same as params, for JPARAMS. Values are JSON text.
+    mutable absl::flat_hash_map<absl::string_view,
+                                std::pair<int, absl::string_view>>
+        jparams;
     void ClearAtEndOfParse() {
       query_string = absl::string_view();
       filter_expression = absl::string_view();
@@ -331,6 +336,7 @@ struct SearchParameters {
       ef_string = absl::string_view();
       hybrid_policy_string = absl::string_view();
       params.clear();
+      jparams.clear();
     }
   } parse_vars;
   // Set for a VSIM arm carrying a FILTER: the filter decides which documents

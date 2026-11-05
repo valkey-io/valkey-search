@@ -126,7 +126,7 @@ The fused score is emitted under `__score` unless `COMBINE ... YIELD_SCORE_AS` n
 
 ## Reply
 
-The reply has the same structure as the [`FT.AGGREGATE` reply](ft.aggregate.md#reply), with and without `WITHCURSOR`; see that page for details. The first element is N, the number of records returned. It is not the total number of matches.
+The reply has the same structure as the [`FT.AGGREGATE` reply](ft.aggregate.md#reply), with and without `WITHCURSOR`; see that page for details. As there, N is the number of records returned, not the total number of matches.
 
 Without a `LOAD` clause every record carries `__key` and the fused score, under `__score` or under the alias given by `COMBINE ... YIELD_SCORE_AS`. A `LOAD` clause replaces those two implicit columns with the fields it names: load `@__key` to keep the key, and name the fused score with `COMBINE ... YIELD_SCORE_AS` to keep it. Per-arm scores appear under their own `YIELD_SCORE_AS` aliases either way.
 

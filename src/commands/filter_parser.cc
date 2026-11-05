@@ -32,6 +32,7 @@
 #include "src/query/predicate.h"
 #include "src/utils/scanner.h"
 #include "src/valkey_search_options.h"
+#include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
 
 namespace valkey_search {
@@ -692,6 +693,13 @@ absl::StatusOr<FilterParseResults> FilterParser::Parse() {
   return results;
 }
 
+void LogWordPositionsIgnored(const IndexSchema& index_schema) {
+  VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 60)
+      << "Index " << vmsdk::config::RedactIfNeeded(index_schema.GetName())
+      << " has no word offsets: a phrase, INORDER or SLOP matches its words "
+         "in any order and at any distance";
+}
+
 inline std::unique_ptr<query::Predicate> MayNegatePredicate(
     std::unique_ptr<query::Predicate> predicate, bool& negate,
     QueryOperations& query_operations) {
@@ -712,12 +720,6 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::WrapPredicate(
       MayNegatePredicate(std::move(predicate), negate, query_operations_);
   if (!prev_predicate) {
     return new_predicate;
-  }
-  // If INORDER OR SLOP, but the index schema does not support offsets, we
-  // reject the query.
-  if ((options_.inorder || options_.slop.has_value()) &&
-      !index_schema_.HasTextOffsets()) {
-    return absl::InvalidArgumentError("Index does not support offsets");
   }
   // Check if we can extend existing ComposedPredicate of the same type
   // Only extend AND nodes when we're adding with AND operator
@@ -1193,20 +1195,21 @@ FilterParser::ParseTextTokens(
   }
   std::unique_ptr<query::Predicate> pred;
   if (terms.size() > 1) {
-    // Exact phrase requires adjacent terms in order: slop=0, inorder=true
-    uint32_t slop = 0;
-    bool inorder = true;
-    // If index schema does not support offsets, we cannot support exact phrase,
-    // so reject the query.
-    if (!index_schema_.HasTextOffsets()) {
-      return absl::InvalidArgumentError("Index does not support offsets");
+    // Without offsets Redisearch matches a phrase as a plain AND of its words.
+    std::optional<uint32_t> slop;
+    bool inorder = false;
+    if (index_schema_.HasTextOffsets()) {
+      slop = 0;
+      inorder = true;
+      query_operations_ |= QueryOperations::kContainsProximity;
+    } else {
+      LogWordPositionsIgnored(index_schema_);
     }
     std::vector<std::unique_ptr<query::Predicate>> children;
     children.reserve(terms.size());
     for (auto& term : terms) {
       children.push_back(std::move(term));
     }
-    query_operations_ |= QueryOperations::kContainsProximity;
     query_operations_ |= QueryOperations::kContainsAnd;
     query_operations_ |= QueryOperations::kContainsText;
     pred = std::make_unique<query::ComposedPredicate>(

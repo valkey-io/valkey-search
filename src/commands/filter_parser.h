@@ -189,6 +189,10 @@ class FilterParser {
   absl::Status MaybeConsumeQMABlock(query::Predicate& predicate);
 };
 
+// Logs that a query's word order and distance were dropped because the index
+// stores no word positions; at most once a minute across all indexes.
+void LogWordPositionsIgnored(const IndexSchema& index_schema);
+
 // Helper function to print predicate tree structure using DFS
 std::string PrintPredicateTree(const query::Predicate* predicate,
                                int indent = 0);

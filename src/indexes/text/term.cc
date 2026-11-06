@@ -155,11 +155,7 @@ const InternedStringPtr& TermIterator::CurrentKey() const {
 // iterators for the new key.
 void TermIterator::InsertValidKeyIterator(size_t idx) {
   auto& key_iter = key_iterators_[idx];
-  // Use query_field_mask for the original word (idx 0) or if no stem mask is
-  // provided.
-  const auto field_mask = ((idx == 0 && has_original_) || stem_field_mask_ == 0)
-                              ? query_field_mask_
-                              : stem_field_mask_;
+  const auto field_mask = WordFieldMask(idx);
   // Advance the iterator until it matches the required fields.
   while (key_iter.IsValid() && (!key_iter.ContainsFields(field_mask))) {
     key_iter.NextKey();
@@ -199,7 +195,7 @@ bool TermIterator::FindMinimumValidKey() {
   if (require_positions_) {
     positions_.Reset(*current_key_, [this](auto&& fn) {
       for (size_t idx : current_key_indices_) {
-        fn(key_iterators_[idx].GetPositionMap());
+        fn(key_iterators_[idx].GetPositionMap(), WordFieldMask(idx));
       }
     });
   }
@@ -246,9 +242,9 @@ SingleKeyTermIterator::SingleKeyTermIterator(
 // valid iterators for the new position.
 void SingleKeyTermIterator::InsertValidPositionIterator(size_t idx) {
   auto& pos_iter = pos_iterators_[idx];
-  // Skip positions that don't match the query field mask.
-  while (pos_iter.IsValid() &&
-         (!(pos_iter.GetFieldMask() & query_field_mask_))) {
+  // Skip positions that don't match both the query and admitted field masks.
+  const FieldMaskPredicate mask = query_field_mask_ & admitted_masks_[idx];
+  while (pos_iter.IsValid() && !(pos_iter.GetFieldMask() & mask)) {
     pos_iter.NextPosition();
   }
   if (pos_iter.IsValid()) {
@@ -287,7 +283,8 @@ bool SingleKeyTermIterator::FindMinimumValidPosition() {
   while (!pos_set_.empty() && pos_set_.min().first == min_position) {
     size_t idx = pos_set_.min().second;
     current_pos_indices_.push_back(idx);
-    current_field_mask_ |= pos_iterators_[idx].GetFieldMask();
+    current_field_mask_ |=
+        pos_iterators_[idx].GetFieldMask() & admitted_masks_[idx];
     pos_set_.pop_min();  // O(log K)
   }
   current_position_ = PositionRange{min_position, min_position};
@@ -339,6 +336,7 @@ void TermIterator::ClearKeyState() {
 
 void SingleKeyTermIterator::ClearPositionState() {
   pos_iterators_.clear();
+  admitted_masks_.clear();
   pos_set_.clear();
   current_pos_indices_.clear();
   current_position_ = std::nullopt;

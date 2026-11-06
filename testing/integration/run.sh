@@ -6,6 +6,7 @@ TEST=all
 CLEAN="no"
 VALKEY_VERSION="8.1.1"
 VALKEY_JSON_VERSION="1.0"
+VALKEY_JSON_SERVER_VERSION="8.1" # valkey-json build.sh only accepts branch names
 MODULE_ROOT=$(readlink -f ${ROOT_DIR}/../..)
 DUMP_TEST_ERRORS_STDOUT="no"
 
@@ -154,7 +155,7 @@ function configure() {
         git clone --branch ${VALKEY_JSON_VERSION} --single-branch https://github.com/valkey-io/valkey-json.git ${VALKEY_JSON_DIR}
         cd ${VALKEY_JSON_DIR}
         set +e
-        SERVER_VERSION=$VALKEY_VERSION ./build.sh
+        SERVER_VERSION=${VALKEY_JSON_SERVER_VERSION} ./build.sh
         set -e
         cd ${ROOT_DIR}
     fi

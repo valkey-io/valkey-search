@@ -461,6 +461,42 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
         ]
         assert reads == [len(records)]
 
+    def test_multi_exec_queue_applied_by_bgsave(self):
+        """A fork for a snapshot applies the multi/exec queue first (#1651),
+        unlike the foreground SAVE above, which persists it as queued entries.
+        The group stays under writer-threads (20) and no query runs, so nothing
+        else ends it; FT.INFO does not drain."""
+        index.create(self.client, True)
+        records = make_data()[:3]
+        expected_keys = [index.keyname(i).encode() for i in range(len(records))]
+
+        def num_records():
+            info = FTInfoParser(self.client.execute_command("ft.info", index.name))
+            return info.num_records
+
+        self.client.execute_command("MULTI")
+        for i in range(len(records)):
+            index.write_data(self.client, i, records[i])
+        self.client.execute_command("EXEC")
+        # Still queued: nothing has ended the group on this node.
+        assert num_records() == 0
+
+        self.client.execute_command("bgsave")
+        waiters.wait_for_true(
+            lambda: self.client.info("persistence")["rdb_bgsave_in_progress"] == 0
+        )
+        # The pre-fork drain indexed the group in the parent.
+        assert num_records() == len(records) * len(index.fields)
+
+        # restart() stops the server with SHUTDOWN NOSAVE, so this reloads the
+        # RDB the BGSAVE child wrote: the group is there as indexed records, not
+        # as queued multi/exec entries, and is served before any query runs.
+        self.server.restart(remove_rdb=False)
+        self.client.execute_command("CONFIG SET search.info-developer-visible yes")
+        assert self.client.info("search")["search_rdb_load_multi_exec_entries"] == 0
+        assert num_records() == len(records) * len(index.fields)
+        verify_data(self.client, index, expected_keys)
+
     def test_multi_exec_orphan_key_skipped_still_searchable(self):
         self.client.execute_command("CONFIG SET search.info-developer-visible yes")
         index.create(self.client, True)

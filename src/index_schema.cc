@@ -15,6 +15,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -88,6 +89,8 @@ static auto config_rdb_read_v2 =
     vmsdk::config::BooleanBuilder("rdb-read-v2", true).Dev().Build();
 static auto config_rdb_validate_on_write =
     vmsdk::config::BooleanBuilder("rdb-validate-on-write", false).Dev().Build();
+static auto config_rdb_write_key_labels =
+    vmsdk::config::BooleanBuilder("rdb-write-key-labels", true).Dev().Build();
 
 namespace options {
 const vmsdk::config::Boolean &GetRdbWriteV2() {
@@ -105,6 +108,11 @@ static bool RDBReadV2() {
 
 static bool RDBWriteV2() {
   return dynamic_cast<vmsdk::config::Boolean &>(*config_rdb_write_v2)
+      .GetValue();
+}
+
+static bool RDBWriteKeyLabels() {
+  return dynamic_cast<vmsdk::config::Boolean &>(*config_rdb_write_key_labels)
       .GetValue();
 }
 
@@ -159,17 +167,23 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> CreateVectorIndex(
     ValkeyModuleCtx *ctx, IndexSchema *index_schema,
     const data_model::Attribute &attribute,
     const data_model::VectorIndex &vector_index_proto,
-    std::optional<SupplementalContentChunkIter> &iter) {
-  VMSDK_ASSIGN_OR_RETURN(
-      auto index,
-      iter.has_value()
-          ? AlgoT<T>::LoadFromRDB(ctx, &index_schema->GetAttributeDataType(),
-                                  vector_index_proto, attribute.identifier(),
-                                  std::move(*iter), index_schema->GetDBNum())
-          : AlgoT<T>::Create(vector_index_proto, attribute.identifier(),
-                             index_schema->GetAttributeDataType().ToProto(),
-                             index_schema->GetDBNum()));
-  return index;
+    std::optional<SupplementalContentChunkIter> &iter,
+    indexes::TrackedKeys *key_labels) {
+  if (!iter.has_value()) {
+    return AlgoT<T>::Create(vector_index_proto, attribute.identifier(),
+                            index_schema->GetAttributeDataType().ToProto(),
+                            index_schema->GetDBNum());
+  }
+  if constexpr (std::is_same_v<AlgoT<T>, indexes::VectorHNSW<T>>) {
+    return AlgoT<T>::LoadFromRDB(ctx, &index_schema->GetAttributeDataType(),
+                                 vector_index_proto, attribute.identifier(),
+                                 std::move(*iter), index_schema->GetDBNum(),
+                                 key_labels);
+  } else {
+    return AlgoT<T>::LoadFromRDB(ctx, &index_schema->GetAttributeDataType(),
+                                 vector_index_proto, attribute.identifier(),
+                                 std::move(*iter), index_schema->GetDBNum());
+  }
 }
 
 // Selects the storage type for `AlgoT` from the schema's declared data type.
@@ -180,18 +194,19 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> CreateVectorIndexForType(
     ValkeyModuleCtx *ctx, IndexSchema *index_schema,
     const data_model::Attribute &attribute,
     const data_model::VectorIndex &vector_index_proto,
-    std::optional<SupplementalContentChunkIter> &iter) {
+    std::optional<SupplementalContentChunkIter> &iter,
+    indexes::TrackedKeys *key_labels) {
   switch (vector_index_proto.vector_data_type()) {
     case data_model::VECTOR_DATA_TYPE_FLOAT32:
-      return CreateVectorIndex<AlgoT, float>(ctx, index_schema, attribute,
-                                             vector_index_proto, iter);
+      return CreateVectorIndex<AlgoT, float>(
+          ctx, index_schema, attribute, vector_index_proto, iter, key_labels);
     case data_model::VECTOR_DATA_TYPE_FLOAT16:
-      return CreateVectorIndex<AlgoT, float16>(ctx, index_schema, attribute,
-                                               vector_index_proto, iter);
+      return CreateVectorIndex<AlgoT, float16>(
+          ctx, index_schema, attribute, vector_index_proto, iter, key_labels);
     case data_model::VECTOR_DATA_TYPE_BFLOAT16:
       VMSDK_RETURN_IF_ERROR(indexes::CheckSimsimdBf16Capability());
-      return CreateVectorIndex<AlgoT, bfloat16>(ctx, index_schema, attribute,
-                                                vector_index_proto, iter);
+      return CreateVectorIndex<AlgoT, bfloat16>(
+          ctx, index_schema, attribute, vector_index_proto, iter, key_labels);
     default:
       return absl::InvalidArgumentError("Unsupported vector data type.");
   }
@@ -202,7 +217,8 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> CreateVectorIndexForType(
 absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
     ValkeyModuleCtx *ctx, IndexSchema *index_schema,
     const data_model::Attribute &attribute,
-    std::optional<SupplementalContentChunkIter> iter) {
+    std::optional<SupplementalContentChunkIter> iter,
+    indexes::TrackedKeys *key_labels = nullptr) {
   const auto &index = attribute.index();
   switch (index.index_type_case()) {
     case data_model::Index::IndexTypeCase::kTagIndex: {
@@ -226,10 +242,12 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
       switch (vector_index_proto.algorithm_case()) {
         case data_model::VectorIndex::kHnswAlgorithm:
           return CreateVectorIndexForType<indexes::VectorHNSW>(
-              ctx, index_schema, attribute, vector_index_proto, iter);
+              ctx, index_schema, attribute, vector_index_proto, iter,
+              key_labels);
         case data_model::VectorIndex::kFlatAlgorithm:
           return CreateVectorIndexForType<indexes::VectorFlat>(
-              ctx, index_schema, attribute, vector_index_proto, iter);
+              ctx, index_schema, attribute, vector_index_proto, iter,
+              key_labels);
         default:
           return absl::InvalidArgumentError("Unsupported algorithm.");
       }
@@ -1507,6 +1525,13 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
           attributes_.begin(), attributes_.end(), [](const auto &attribute) {
             return indexes::IsVectorIndex(attribute.second.GetIndex());
           });
+  if (RDBWriteKeyLabels()) {
+    supplemental_count += std::count_if(
+        attributes_.begin(), attributes_.end(), [](const auto &attribute) {
+          return attribute.second.GetIndex()->GetIndexerType() ==
+                 indexes::IndexerType::kHNSW;
+        });
+  }
   if (RDBWriteV2()) {
     supplemental_count += 1;  // For Index Extension
   }
@@ -1530,6 +1555,18 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
     // serialized index schema proto above. We store here again to avoid any
     // dependencies on the ordering of multiple attributes.
     // We could remove the duplication in the future.
+    if (RDBWriteKeyLabels() && attribute.second.GetIndex()->GetIndexerType() ==
+                                   indexes::IndexerType::kHNSW) {
+      VMSDK_RETURN_IF_ERROR(SaveSupplementalSection(
+          rdb, data_model::SUPPLEMENTAL_CONTENT_KEY_LABELS,
+          [&](auto &header) {
+            header.mutable_key_labels_header()->set_allocated_attribute(
+                attribute.second.ToProto().release());
+          },
+          std::bind_front(&indexes::VectorBase::SaveTrackedKeys,
+                          dynamic_cast<const indexes::VectorBase *>(
+                              attribute.second.GetIndex().get()))));
+    }
     VMSDK_RETURN_IF_ERROR(SaveSupplementalSection(
         rdb, data_model::SUPPLEMENTAL_CONTENT_INDEX_CONTENT,
         [&](auto &header) {
@@ -1869,6 +1906,8 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
     index_schema->MarkAsDestructing();
   };
 
+  // A vector attribute's key labels precede its index content.
+  absl::flat_hash_map<std::string, indexes::TrackedKeys> key_labels_by_alias;
   // Supplemental content will include indices and any content for them
   while (supplemental_iter.HasNext()) {
     rdb_load_sections.Increment();
@@ -1885,13 +1924,24 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
           VMSDK_LOG(DEBUG, nullptr)
               << "Loading Index Content for attribute: "
               << vmsdk::config::RedactIfNeeded(attribute.alias());
+          auto key_labels = key_labels_by_alias.extract(attribute.alias());
           VMSDK_ASSIGN_OR_RETURN(
               std::shared_ptr<indexes::IndexBase> index,
               IndexFactory(ctx, index_schema.get(), attribute,
-                           supplemental_iter.IterateChunks()));
+                           supplemental_iter.IterateChunks(),
+                           key_labels ? &key_labels.mapped() : nullptr));
           VMSDK_RETURN_IF_ERROR(index_schema->AddIndex(
               attribute.alias(), attribute.identifier(), index,
               {.sortable = attribute.sortable(), .unf = attribute.unf()}));
+          break;
+        }
+        case data_model::SupplementalContentType::
+            SUPPLEMENTAL_CONTENT_KEY_LABELS: {
+          const auto &attribute =
+              supplemental_content->key_labels_header().attribute();
+          VMSDK_ASSIGN_OR_RETURN(key_labels_by_alias[attribute.alias()],
+                                 indexes::VectorBase::LoadKeyLabels(
+                                     supplemental_iter.IterateChunks()));
           break;
         }
         case data_model::SupplementalContentType::

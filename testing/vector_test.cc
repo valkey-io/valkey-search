@@ -2767,18 +2767,26 @@ TEST_F(VectorIndexTest, SaveAndLoadFlatNewKeyGetsUnusedLabel) {
 // expired before the load, or a delete or update was still queued when the RDB
 // was saved. LoadTrackedKeys must keep the vector from the index content, so
 // searches stay safe and the graph edges still match the stored vector until
-// post-load reconciliation removes or re-indexes the key.
+// post-load reconciliation removes or re-indexes the key. With key labels, HNSW
+// makes that decision while loading each node instead of in LoadTrackedKeys.
 TEST_F(VectorIndexTest, LoadTrackedKeysWithoutKeyspaceVector) {
   constexpr size_t kLoaded = 10;
   constexpr size_t kMissingKey = 1;
   constexpr size_t kInvalidVector = 2;
   constexpr size_t kChangedVector = 3;
+  struct Mode {
+    bool hnsw;
+    bool key_labels;
+  };
   for (auto &distance_metric :
        {data_model::DISTANCE_METRIC_COSINE, data_model::DISTANCE_METRIC_L2}) {
-    for (bool hnsw : {false, true}) {
-      SCOPED_TRACE(testing::Message() << "distance_metric: " << distance_metric
-                                      << ", hnsw: " << hnsw);
+    for (auto [hnsw, key_labels] :
+         {Mode{false, false}, Mode{true, false}, Mode{true, true}}) {
+      SCOPED_TRACE(testing::Message()
+                   << "distance_metric: " << distance_metric
+                   << ", hnsw: " << hnsw << ", key_labels: " << key_labels);
       FakeSafeRDB rdb;
+      FakeSafeRDB labels_rdb;
       // Scaled basis vectors: every vector's nearest neighbor is itself, under
       // both metrics.
       std::vector<std::vector<float>> vectors(kLoaded,
@@ -2807,6 +2815,8 @@ TEST_F(VectorIndexTest, LoadTrackedKeysWithoutKeyspaceVector) {
         }
         VMSDK_EXPECT_OK((*index)->SaveIndex(RDBChunkOutputStream(&rdb)));
         VMSDK_EXPECT_OK((*index)->SaveTrackedKeys(RDBChunkOutputStream(&rdb)));
+        VMSDK_EXPECT_OK(
+            (*index)->SaveTrackedKeys(RDBChunkOutputStream(&labels_rdb)));
         proto = (*index)->ToProto()->vector_index();
       }
       // An update queued at save time: the opposite direction, so the key is
@@ -2831,12 +2841,15 @@ TEST_F(VectorIndexTest, LoadTrackedKeysWithoutKeyspaceVector) {
             }
             return TestValkeyModule_OpenKeyDefaultImpl(ctx, key, flags);
           });
+      size_t keyspace_reads = 0;
       EXPECT_CALL(*kMockValkeyModule,
                   HashGet(testing::_, VALKEYMODULE_HASH_CFIELDS, testing::_,
                           testing::An<ValkeyModuleString **>(),
                           testing::TypedEq<void *>(nullptr)))
-          .WillRepeatedly([&records](ValkeyModuleKey *key, int, const char *,
-                                     ValkeyModuleString **value_out, void *) {
+          .WillRepeatedly([&records, &keyspace_reads](
+                              ValkeyModuleKey *key, int, const char *,
+                              ValkeyModuleString **value_out, void *) {
+            ++keyspace_reads;
             auto key_str = absl::string_view(key->key);
             CHECK(absl::ConsumeSuffix(&key_str, "_key"));
             int index;
@@ -2847,9 +2860,16 @@ TEST_F(VectorIndexTest, LoadTrackedKeysWithoutKeyspaceVector) {
           });
       std::shared_ptr<VectorBase> index;
       if (hnsw) {
+        absl::StatusOr<TrackedKeys> labels;
+        if (key_labels) {
+          labels = VectorBase::LoadKeyLabels(
+              SupplementalContentChunkIter(&labels_rdb));
+          VMSDK_EXPECT_OK(labels);
+        }
         auto loaded = VectorHNSW<float>::LoadFromRDB(
             &fake_ctx_, &hash_attribute_data_type_, proto,
-            "attribute_identifier_2", SupplementalContentChunkIter(&rdb), 0);
+            "attribute_identifier_2", SupplementalContentChunkIter(&rdb), 0,
+            key_labels ? &*labels : nullptr);
         VMSDK_EXPECT_OK(loaded);
         index = std::move(loaded.value());
       } else {
@@ -2859,9 +2879,15 @@ TEST_F(VectorIndexTest, LoadTrackedKeysWithoutKeyspaceVector) {
         VMSDK_EXPECT_OK(loaded);
         index = std::move(loaded.value());
       }
+      // With key labels every present key is read while its node is loaded,
+      // so unchanged nodes never hold a saved copy of their vector, and the
+      // key maps come from the labels rather than the later KEY_TO_ID_MAP.
+      EXPECT_EQ(keyspace_reads, key_labels ? kLoaded - 1 : 0);
+      EXPECT_EQ(index->GetTrackedKeyCount(), key_labels ? kLoaded : 0);
       VMSDK_EXPECT_OK(
           index->LoadTrackedKeys(&fake_ctx_, &hash_attribute_data_type_,
                                  SupplementalContentChunkIter(&rdb)));
+      EXPECT_EQ(keyspace_reads, kLoaded - 1);
       EXPECT_EQ(index->GetTrackedKeyCount(), kLoaded);
 
       auto keys_of = [](const std::vector<Neighbor> &neighbors) {
@@ -3018,7 +3044,8 @@ TEST_F(VectorIndexTest, LoadRecomputesAlignedOffsetForOldSnapshot) {
 
   VectorHNSW<float>::HNSWIndex algo;
   SingleChunkInputStream input(serialized);
-  auto generator = [](absl::string_view vector_data, bool is_marked_deleted) {
+  auto generator = [](absl::string_view vector_data, bool is_marked_deleted,
+                      hnswlib::labeltype) {
     float reciprocal_magnitude = CalcReciprocalMagnitude(
         reinterpret_cast<const float *>(vector_data.data()),
         vector_data.size() / sizeof(float));
@@ -3122,7 +3149,8 @@ absl::Status LoadGolden(ChunkStream &golden, size_t max_elements,
   golden.Rewind();
   hnswlib::L2Space space{kDimensions};
   VectorHNSW<float>::HNSWIndex algo;
-  auto generator = [](absl::string_view vector_data, bool is_marked_deleted) {
+  auto generator = [](absl::string_view vector_data, bool is_marked_deleted,
+                      hnswlib::labeltype) {
     float reciprocal_magnitude = CalcReciprocalMagnitude(
         reinterpret_cast<const float *>(vector_data.data()),
         vector_data.size() / sizeof(float));
@@ -3241,8 +3269,8 @@ TEST_F(VectorIndexTest, LoadDuplicateLabelRebuildsLiveMapping) {
     VectorHNSW<float>::HNSWIndex algo;
     algo.allow_replace_deleted_ = true;
     auto generator = [allocator = vector_allocator.get()](
-                         absl::string_view vector_data,
-                         bool is_marked_deleted) {
+                         absl::string_view vector_data, bool is_marked_deleted,
+                         hnswlib::labeltype) {
       return VectorRecord::Construct(
           vector_data, kDefaultMagnitude,
           static_cast<FixedSizeAllocator *>(allocator));
@@ -3889,7 +3917,8 @@ TEST_F(VectorIndexTest, LoadValidatesMultiLayerRoundTripIdentity) {
   auto golden = MultiLayerGolden();
   hnswlib::L2Space space{kDimensions};
   VectorHNSW<float>::HNSWIndex algo;
-  auto generator = [](absl::string_view vector_data, bool is_marked_deleted) {
+  auto generator = [](absl::string_view vector_data, bool is_marked_deleted,
+                      hnswlib::labeltype) {
     float reciprocal_magnitude = CalcReciprocalMagnitude(
         reinterpret_cast<const float *>(vector_data.data()),
         vector_data.size() / sizeof(float));

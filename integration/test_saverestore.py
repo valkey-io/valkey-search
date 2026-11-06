@@ -195,8 +195,8 @@ class TestSaveRestore_v1_v1(ValkeySearchTestCaseDebugMode):
         args["search.rdb_read_v2"] = "no"
         return args
     @pytest.mark.parametrize("parameters", [
-        [index, [4, 0, 0], [4, 0, 0, 0]],
-        [vector_only_index, [2, 0, 0], [2, 0, 0, 0]],
+        [index, [5, 0, 0], [5, 0, 0, 0]],
+        [vector_only_index, [3, 0, 0], [3, 0, 0, 0]],
         [non_vector_index, [2, 0, 0], [2, 0, 0, 0]],
         ])
     def test_saverestore_v1_v1(self, parameters):
@@ -210,8 +210,8 @@ class TestSaveRestore_v1_v2(ValkeySearchTestCaseDebugMode):
         return args
 
     @pytest.mark.parametrize("parameters", [
-        [index, [4, 0, 0], [4, 0, 0, 0]],
-        [vector_only_index, [2, 0, 0], [2, 0, 0, 0]],
+        [index, [5, 0, 0], [5, 0, 0, 0]],
+        [vector_only_index, [3, 0, 0], [3, 0, 0, 0]],
         [non_vector_index, [2, 0, 0], [2, 0, 0, 0]],
         ])
     def test_saverestore_v1_v2(self, parameters):
@@ -225,8 +225,8 @@ class TestSaveRestore_v2_v1(ValkeySearchTestCaseDebugMode):
         return args
 
     @pytest.mark.parametrize("parameters", [
-        [index, [5, KEY_COUNT, 0], [5, 1, 0, 0]],
-        [vector_only_index, [3, KEY_COUNT, 0], [3, 1, 0, 0]],
+        [index, [6, KEY_COUNT, 0], [6, 1, 0, 0]],
+        [vector_only_index, [4, KEY_COUNT, 0], [4, 1, 0, 0]],
         [non_vector_index, [3, KEY_COUNT, 0], [3, 1, 0, 0]],
         ])
     def test_saverestore_v2_v1(self, parameters):
@@ -240,8 +240,8 @@ class TestSaveRestore_v2_v2(ValkeySearchTestCaseDebugMode):
         return args
 
     @pytest.mark.parametrize("parameters", [
-        [index, [5, KEY_COUNT, 0], [5, 0, KEY_COUNT, 0]],
-        [vector_only_index, [3, KEY_COUNT, 0], [3, 0, KEY_COUNT, 0]],
+        [index, [6, KEY_COUNT, 0], [6, 0, KEY_COUNT, 0]],
+        [vector_only_index, [4, KEY_COUNT, 0], [4, 0, KEY_COUNT, 0]],
         [non_vector_index, [3, KEY_COUNT, 0], [3, 0, KEY_COUNT, 0]],
         ])
     def test_saverestore_v2_v2(self, parameters):
@@ -394,13 +394,17 @@ class TestLoadTrackedKeyMissingFromKeyspace(ValkeySearchTestCaseDebugMode):
                 f"k:{i}", mapping={"v": float_to_bytes([float(i), 1.0])})
         waiters.wait_for_true(self.index_idle)
 
-    def use_rdb_v2(self, enabled: str):
+    def use_rdb_format(self, rdb_v2: str, key_labels: str):
         # V2 removes the key by replaying the saved key list; V1 by the
-        # stale-entry scan and the backfill that follow the load.
+        # stale-entry scan and the backfill that follow the load. Without key
+        # labels, as in RDBs from older versions, HNSW checks the keyspace in
+        # LoadTrackedKeys instead of while loading each node.
         self.client.execute_command(
-            "CONFIG", "SET", "search.rdb-write-v2", enabled)
+            "CONFIG", "SET", "search.rdb-write-v2", rdb_v2)
         self.client.execute_command(
-            "CONFIG", "SET", "search.rdb-read-v2", enabled)
+            "CONFIG", "SET", "search.rdb-read-v2", rdb_v2)
+        self.client.execute_command(
+            "CONFIG", "SET", "search.rdb-write-key-labels", key_labels)
 
     def reload_and_check(self, expected: set):
         # NOSAVE loads the RDB written by the test instead of saving the
@@ -419,8 +423,9 @@ class TestLoadTrackedKeyMissingFromKeyspace(ValkeySearchTestCaseDebugMode):
     @pytest.mark.parametrize("algo", ["FLAT", "HNSW"])
     @pytest.mark.parametrize("metric", ["L2", "COSINE"])
     @pytest.mark.parametrize("rdb_v2", ["yes", "no"])
-    def test_key_expired_before_load(self, algo, metric, rdb_v2):
-        self.use_rdb_v2(rdb_v2)
+    @pytest.mark.parametrize("key_labels", ["yes", "no"])
+    def test_key_expired_before_load(self, algo, metric, rdb_v2, key_labels):
+        self.use_rdb_format(rdb_v2, key_labels)
         self.create_and_fill(algo, metric)
         self.client.pexpire("k:1", 500)
         self.client.execute_command("SAVE")
@@ -431,8 +436,9 @@ class TestLoadTrackedKeyMissingFromKeyspace(ValkeySearchTestCaseDebugMode):
     @pytest.mark.parametrize("algo", ["FLAT", "HNSW"])
     @pytest.mark.parametrize("metric", ["L2", "COSINE"])
     @pytest.mark.parametrize("rdb_v2", ["yes", "no"])
-    def test_delete_queued_at_save(self, algo, metric, rdb_v2):
-        self.use_rdb_v2(rdb_v2)
+    @pytest.mark.parametrize("key_labels", ["yes", "no"])
+    def test_delete_queued_at_save(self, algo, metric, rdb_v2, key_labels):
+        self.use_rdb_format(rdb_v2, key_labels)
         self.create_and_fill(algo, metric)
         self.client.execute_command(
             "FT._DEBUG", "PAUSEPOINT", "SET", "block_mutation_queue")
@@ -453,11 +459,13 @@ class TestLoadTrackedKeyMissingFromKeyspace(ValkeySearchTestCaseDebugMode):
     @pytest.mark.parametrize("algo", ["FLAT", "HNSW"])
     @pytest.mark.parametrize("change", ["hdel", "wrong_size", "update"])
     @pytest.mark.parametrize("rdb_v2", ["yes", "no"])
-    def test_vector_changed_queued_at_save(self, algo, change, rdb_v2):
+    @pytest.mark.parametrize("key_labels", ["yes", "no"])
+    def test_vector_changed_queued_at_save(
+            self, algo, change, rdb_v2, key_labels):
         # The key still exists at load, but its vector is gone, has the wrong
         # size or was updated, so V1 relies on the backfill rather than the
         # stale-entry scan.
-        self.use_rdb_v2(rdb_v2)
+        self.use_rdb_format(rdb_v2, key_labels)
         self.client.execute_command(
             "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "k:",
             "SCHEMA", "t", "TAG",
@@ -501,6 +509,61 @@ class TestLoadTrackedKeyMissingFromKeyspace(ValkeySearchTestCaseDebugMode):
         )
         distances = {res[i]: float(res[i + 1][1]) for i in range(1, len(res), 2)}
         assert distances[b"k:1"] == 36.0
+
+
+class TestHNSWLoadMemory(ValkeySearchTestCaseDebugMode):
+    """
+    With key labels in the RDB, an HNSW load points each node at the
+    keyspace's copy of its vector while the node is built. Without them, it
+    first restores a saved copy of every vector, so memory briefly holds two.
+    """
+
+    DIM = 256
+    COUNT = 8000
+
+    def append_startup_args(self, args):
+        args = super().append_startup_args(args)
+        # While loading, used_memory_peak is sampled at most every 1000/hz ms
+        # and every loading-process-events-interval-bytes; sample densely.
+        args["hz"] = "500"
+        args["loading-process-events-interval-bytes"] = "1024"
+        return args
+
+    def index_idle(self) -> bool:
+        info = FTInfoParser(self.client.execute_command("FT.INFO", "idx"))
+        return (info.is_backfill_complete() and info.mutation_queue_size == 0
+                and info.num_docs == self.COUNT)
+
+    def load_peak(self, key_labels: str) -> int:
+        # A restart, unlike DEBUG RELOAD, starts without the old index's
+        # vectors, and its used_memory_peak covers only this load.
+        self.client.execute_command(
+            "CONFIG", "SET", "search.rdb-write-key-labels", key_labels)
+        self.client.execute_command("SAVE")
+        self.server.restart(remove_rdb=False)
+        waiters.wait_for_true(self.index_idle)
+        return self.client.info("memory")["used_memory_peak"]
+
+    def test_key_labels_avoid_second_copy_of_vectors(self):
+        self.client.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "k:",
+            "SCHEMA", "v", "VECTOR", "HNSW", "10", "TYPE", "FLOAT32",
+            "DIM", str(self.DIM), "DISTANCE_METRIC", "L2",
+            "M", "4", "EF_CONSTRUCTION", "10",
+        )
+        pipe = self.client.pipeline(transaction=False)
+        for i in range(self.COUNT):
+            pipe.hset(f"k:{i}", "v", float_to_bytes(
+                [float((i * 31 + d) % 97) for d in range(self.DIM)]))
+        pipe.execute()
+        waiters.wait_for_true(self.index_idle)
+
+        without_labels = self.load_peak("no")
+        with_labels = self.load_peak("yes")
+        vector_bytes = self.COUNT * self.DIM * 4
+        print(f"load peak without labels {without_labels}, with labels "
+              f"{with_labels}, vector bytes {vector_bytes}")
+        assert without_labels - with_labels > vector_bytes // 2
 
 
 class TestMutationQueue(ValkeySearchTestCaseDebugMode):

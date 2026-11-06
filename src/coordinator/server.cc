@@ -152,6 +152,24 @@ class RemoteResponderSearch : public query::SearchParameters {
       std::unique_ptr<SearchParameters> self) override {
     CHECK(vmsdk::IsMainThread());
     CHECK(!NoProcessingRequired());
+    if (reader_thread_pool != nullptr &&
+        options::GetBackgroundShardReply().GetValue()) {
+      // Holder lets a refused Schedule hand self back instead of dropping it.
+      auto holder =
+          std::make_shared<std::unique_ptr<SearchParameters>>(std::move(self));
+      if (reader_thread_pool->Schedule(
+              [holder]() {
+                auto self = std::move(*holder);
+                static_cast<RemoteResponderSearch *>(self.get())
+                    ->QueryCompleteImpl();
+                // Free on main: module strings and IndexSchema aren't safe here.
+                vmsdk::RunByMain([self = std::move(self)]() {});
+              },
+              vmsdk::ThreadPool::Priority::kHigh)) {
+        return;
+      }
+      self = std::move(*holder);
+    }
     QueryCompleteImpl();
   }
 
@@ -170,23 +188,6 @@ class RemoteResponderSearch : public query::SearchParameters {
     }
     SerializeNeighbors(response, search_result.neighbors);
     response->set_total_count(search_result.total_count);
-    // The reply is fully serialized, so a reader thread can send it. This
-    // object, and the module strings its neighbors hold, is still freed on the
-    // main thread.
-    if (vmsdk::IsMainThread() && reader_thread_pool != nullptr &&
-        options::GetBackgroundShardReply().GetValue()) {
-      auto send = [on_done = on_done,
-                   latency_sample = std::move(latency_sample)]() mutable {
-        (*on_done)(grpc::Status::OK);
-        RecordSearchMetrics(false, std::move(latency_sample));
-      };
-      if (reader_thread_pool->Schedule(std::move(send),
-                                       vmsdk::ThreadPool::Priority::kHigh)) {
-        return;
-      }
-      // The pool is stopping and dropped the task, latency sample included,
-      // so reply here; the moved-from sample is null and is not recorded.
-    }
     (*on_done)(grpc::Status::OK);
     RecordSearchMetrics(false, std::move(latency_sample));
   }

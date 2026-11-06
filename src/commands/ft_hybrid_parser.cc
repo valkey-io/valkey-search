@@ -1143,8 +1143,10 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
   // share the params map with each arm so $name resolves identically. Also
   // run the per-arm pre/post-parse so an arm carrying a query string gets its
   // k/ef/query-blob populated.
+  size_t sparse_query_bytes_left = indexes::Sparse::kMaxQueryBytes;
   for (size_t arm_index = 0; arm_index < env.arms.size(); ++arm_index) {
     auto &arm = env.arms[arm_index];
+    arm->parse_vars.sparse_query_bytes_left = sparse_query_bytes_left;
     arm->parse_vars.params = env.agg->parse_vars.params;
     arm->timeout_ms = env.timeout_ms;
     arm->cancellation_token = env.cancellation_token;
@@ -1179,7 +1181,7 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
             absl::StrCat("Parameter ", param_name, " not found."));
       }
       it->second.first++;  // bump usage refcount
-      arm->query = std::string(it->second.second);
+      auto query_blob = it->second.second;
       // A query string arm reaches this check inside PostParseQueryString ->
       // PostParseVectorParameters; a pure VSIM arm skips both, so it has to
       // ask here. Routing this branch through PostParseVectorParameters is
@@ -1193,22 +1195,22 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
       // enable-partial-results turns an error into a silently empty arm.
       auto *vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
       if (index->GetIndexerType() == indexes::IndexerType::kSparse) {
-        VMSDK_ASSIGN_OR_RETURN(
-            auto entries,
-            indexes::Sparse::Decode(arm->query, arm->cancellation_token.get()));
+        VMSDK_RETURN_IF_ERROR(indexes::Sparse::CheckQuerySize(
+            query_blob, arm->parse_vars.sparse_query_bytes_left));
         if (arm->ef.has_value() || arm->hybrid_policy != HybridPolicy::kAuto) {
           return absl::InvalidArgumentError(
               "SPARSE does not support EF_RUNTIME or POLICY");
         }
       } else if (vector_index != nullptr &&
-                 arm->query.size() !=
+                 query_blob.size() !=
                      static_cast<size_t>(vector_index->GetVectorDataSize())) {
         return absl::InvalidArgumentError(absl::StrCat(
             "Error parsing vector similarity parameters: query vector blob "
             "size (",
-            arm->query.size(), ") does not match index's expected size (",
+            query_blob.size(), ") does not match index's expected size (",
             vector_index->GetVectorDataSize(), ")."));
       }
+      arm->query = query_blob;
       // Default score_as if the user didn't YIELD_SCORE_AS.
       if (!arm->score_as) {
         auto schema_default =
@@ -1233,6 +1235,7 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
             "A vector query is not supported in the SEARCH clause; use VSIM");
       }
     }
+    sparse_query_bytes_left = arm->parse_vars.sparse_query_bytes_left;
     // Record now whether this arm's score is a raw distance: `arms` is emptied
     // at dispatch (each shim is moved into SearchAsync), so fusion cannot ask
     // the arm later. Neighbor::score is a KNN distance only for a vector arm;

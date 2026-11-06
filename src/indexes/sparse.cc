@@ -57,16 +57,32 @@ absl::StatusOr<std::optional<double>> Dot(
 }
 }  // namespace
 
+absl::Status Sparse::CheckQuerySize(absl::string_view blob, size_t &remaining) {
+  if (blob.size() > remaining) {
+    return absl::InvalidArgumentError(
+        "SPARSE query exceeds the 64 KiB command limit");
+  }
+  if (blob.size() % 8 != 0) {
+    return absl::InvalidArgumentError("SPARSE requires uint32/FLOAT32 pairs");
+  }
+  remaining -= blob.size();
+  return absl::OkStatus();
+}
+
 absl::StatusOr<std::vector<Sparse::Entry>> Sparse::Decode(
     absl::string_view blob, cancel::Base *cancel) {
   if (blob.size() % 8 != 0) {
     return absl::InvalidArgumentError("SPARSE requires uint32/FLOAT32 pairs");
   }
+  if (cancel && cancel->IsCancelled()) {
+    return absl::DeadlineExceededError("Sparse decode cancelled");
+  }
   std::vector<Entry> entries;
   entries.reserve(blob.size() / 8);
   uint32_t previous = 0;
   for (size_t offset = 0; offset < blob.size(); offset += 8) {
-    if ((offset / 8 % 256) == 0 && cancel && cancel->IsCancelled()) {
+    if (offset != 0 && (offset / 8 % 256) == 0 && cancel &&
+        cancel->IsCancelled()) {
       return absl::DeadlineExceededError("Sparse decode cancelled");
     }
     uint32_t dimension = ReadLE32(blob.data() + offset);
@@ -86,11 +102,10 @@ absl::StatusOr<std::vector<Sparse::Entry>> Sparse::Decode(
   return entries;
 }
 
-absl::StatusOr<float> Sparse::RecomputeDistance(absl::string_view record,
-                                                absl::string_view query) {
+absl::StatusOr<float> Sparse::RecomputeDistance(
+    absl::string_view record, const std::vector<Entry> &query) {
   VMSDK_ASSIGN_OR_RETURN(auto a, Decode(record));
-  VMSDK_ASSIGN_OR_RETURN(auto b, Decode(query));
-  VMSDK_ASSIGN_OR_RETURN(auto score, Dot(a, b, nullptr));
+  VMSDK_ASSIGN_OR_RETURN(auto score, Dot(a, query, nullptr));
   if (!score) {
     return absl::NotFoundError("No sparse overlap");
   }
@@ -196,9 +211,8 @@ absl::StatusOr<bool> Sparse::RemoveRecord(const InternedStringPtr &key,
 }
 
 absl::StatusOr<bool> Sparse::PreferPrefilter(
-    absl::string_view query, size_t candidate_count,
+    const std::vector<Entry> &entries, size_t candidate_count,
     cancel::Base *cancel) const ABSL_NO_THREAD_SAFETY_ANALYSIS {
-  VMSDK_ASSIGN_OR_RETURN(auto entries, Decode(query, cancel));
   size_t inspected = 0;
   double posting_work = 0;
   for (const auto &entry : entries) {
@@ -216,11 +230,11 @@ absl::StatusOr<bool> Sparse::PreferPrefilter(
 }
 
 absl::StatusOr<std::vector<Neighbor>> Sparse::Search(
-    absl::string_view query, size_t count, cancel::Token &cancellation,
+    const std::vector<Entry> &entries, size_t count,
+    cancel::Token &cancellation,
     absl::AnyInvocable<bool(const InternedStringPtr &)> filter,
     const std::vector<InternedStringPtr> *candidates,
     bool partial) const ABSL_NO_THREAD_SAFETY_ANALYSIS {
-  VMSDK_ASSIGN_OR_RETURN(auto entries, Decode(query, cancellation.get()));
   struct Hit {
     DocId id;
     float distance;

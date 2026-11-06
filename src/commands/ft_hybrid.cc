@@ -483,8 +483,9 @@ void RevalidateArmsBeforeFusion(MultiSearchParameters &params) {
         }
         auto bytes = vmsdk::ToStringView(record->second.value.get());
         auto distance =
-            sparse ? indexes::Sparse::RecomputeDistance(bytes, arm->query)
-                   : vector_index->RecomputeDistance(bytes, arm->query);
+            sparse
+                ? indexes::Sparse::RecomputeDistance(bytes, arm->sparse_query)
+                : vector_index->RecomputeDistance(bytes, arm->query);
         if (!distance.ok()) {
           // The field is there but cannot be turned into a distance -- the
           // mutation wrote a vector of the wrong length, so it no longer

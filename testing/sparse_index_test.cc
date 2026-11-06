@@ -43,7 +43,11 @@ class SparseIndexTest : public vmsdk::ValkeyTest {
   }
   absl::StatusOr<std::vector<Neighbor>> Search(absl::string_view query,
                                                size_t k = 10) {
-    return index.Search(query, k, token, [](const auto &) { return true; });
+    auto entries = Sparse::Decode(query, token.get());
+    if (!entries.ok()) {
+      return entries.status();
+    }
+    return index.Search(*entries, k, token, [](const auto &) { return true; });
   }
 };
 
@@ -73,8 +77,9 @@ TEST_F(SparseIndexTest, SignedDotProductsTiesFilterAndUpdates) {
   EXPECT_EQ((*result)[0].external_id->Str(), "b");
   EXPECT_EQ((*result)[1].external_id->Str(), "c");
   EXPECT_EQ((*result)[0].distance, -2);
-  auto filtered = index.Search(
-      query, 1, token, [](const auto &key) { return key->Str() == "a"; });
+  auto filtered =
+      index.Search(*Sparse::Decode(query), 1, token,
+                   [](const auto &key) { return key->Str() == "a"; });
   ASSERT_EQ(filtered->size(), 1);
   EXPECT_EQ((*filtered)[0].distance, 2);
   auto b = StringInternStore::Intern("b");
@@ -103,11 +108,10 @@ TEST_F(SparseIndexTest, DenseBitmapPreservesBoundaryIdsZeroSumsAndTies) {
   for (uint32_t id = 0; id <= 128; ++id) {
     ASSERT_TRUE(Add(std::to_string(id), Encode({{1, 1}, {2, -1}})).ok());
   }
-  auto hits =
-      index.Search(Encode({{1, 1}, {2, 1}}), 3, token, [](const auto &key) {
-        auto name = key->Str();
-        return name == "63" || name == "64" || name == "127" || name == "128";
-      });
+  auto hits = index.Search({{1, 1}, {2, 1}}, 3, token, [](const auto &key) {
+    auto name = key->Str();
+    return name == "63" || name == "64" || name == "127" || name == "128";
+  });
   ASSERT_TRUE(hits.ok());
   ASSERT_EQ(hits->size(), 3);
   EXPECT_EQ((*hits)[0].external_id->Str(), "127");
@@ -123,8 +127,9 @@ TEST_F(SparseIndexTest, ScoreCutoffPreservesFilteredOverflow) {
   ASSERT_TRUE(Add("finite", Encode({{1, 1}})).ok());
   ASSERT_TRUE(Add("overflow", Encode({{2, -huge}})).ok());
   const auto q = Encode({{1, 1}, {2, huge}});
-  auto hits = index.Search(
-      q, 1, token, [](const auto &key) { return key->Str() == "finite"; });
+  auto hits = index.Search(*Sparse::Decode(q), 1, token, [](const auto &key) {
+    return key->Str() == "finite";
+  });
   ASSERT_TRUE(hits.ok());
   ASSERT_EQ(hits->size(), 1);
   EXPECT_EQ(hits->front().external_id->Str(), "finite");
@@ -156,7 +161,7 @@ TEST_F(SparseIndexTest, CancellationKeepsOnlyFullyScoredCandidates) {
   auto run = [&](bool partial) {
     token = std::make_shared<Token>();
     return index.Search(
-        Encode({{1, 2}}), 1, token,
+        {{1, 2}}, 1, token,
         [&](const auto &) {
           token->Cancel();
           return true;
@@ -181,19 +186,21 @@ TEST_F(SparseIndexTest, PollsLongDecodesAndEstimatesWithAbsentDimensions) {
   for (uint32_t i = 0; i < 1024; ++i) {
     query += Encode({{i, 1}});
   }
-  Budget decode(2), estimate(6);
+  Budget decode(2), estimate(2);
   EXPECT_EQ(Sparse::Decode(query, &decode).status().code(),
             absl::StatusCode::kDeadlineExceeded);
-  EXPECT_EQ(index.PreferPrefilter(query, 1, &estimate).status().code(),
+  EXPECT_EQ(index.PreferPrefilter(*Sparse::Decode(query), 1, &estimate)
+                .status()
+                .code(),
             absl::StatusCode::kDeadlineExceeded);
   token = std::make_shared<Budget>(6);
   EXPECT_EQ(Search(query).status().code(), absl::StatusCode::kDeadlineExceeded);
   ASSERT_TRUE(Add("long", query).ok());
   std::vector<InternedStringPtr> candidates{StringInternStore::Intern("long")};
-  token = std::make_shared<Budget>(3);
+  token = std::make_shared<Budget>(2);
   bool reached_filter = false;
   auto hits = index.Search(
-      Encode({{1023, 1}}), 1, token,
+      {{1023, 1}}, 1, token,
       [&](const auto &) {
         reached_filter = true;
         return true;
@@ -206,10 +213,9 @@ TEST_F(SparseIndexTest, PollsLongDecodesAndEstimatesWithAbsentDimensions) {
 TEST_F(SparseIndexTest, PlanEstimateTracksReplacementAndRemoval) {
   ASSERT_TRUE(Add("a", Encode({{1, 2}, {2, 1}})).ok());
   ASSERT_TRUE(Add("b", Encode({{1, 3}, {2, 1}})).ok());
-  const auto query = Encode({{1, 1}});
+  const std::vector<Sparse::Entry> query{{1, 1}};
   EXPECT_TRUE(*index.PreferPrefilter(query, 0));
   EXPECT_FALSE(*index.PreferPrefilter(query, 2));
-  EXPECT_FALSE(index.PreferPrefilter("invalid", 0).ok());
   auto a = StringInternStore::Intern("a");
   ASSERT_TRUE(index
                   .ModifyRecord(a, AttributeData(vmsdk::MakeUniqueValkeyString(
@@ -232,8 +238,8 @@ TEST_F(SparseIndexTest, PlanEstimateTracksReplacementAndRemoval) {
 
 TEST_F(SparseIndexTest, RescoringAndOverflow) {
   auto record = Encode({{1, -2}, {3, 4}});
-  EXPECT_EQ(*Sparse::RecomputeDistance(record, Encode({{1, 2}, {3, 3}})), -8);
-  EXPECT_FALSE(Sparse::RecomputeDistance(record, Encode({{5, 2}})).ok());
+  EXPECT_EQ(*Sparse::RecomputeDistance(record, {{1, 2}, {3, 3}}), -8);
+  EXPECT_FALSE(Sparse::RecomputeDistance(record, {{5, 2}}).ok());
   auto huge = Encode({{1, std::numeric_limits<float>::max()}});
   ASSERT_TRUE(Add("a", huge).ok());
   EXPECT_FALSE(Search(huge).ok());

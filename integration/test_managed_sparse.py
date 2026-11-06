@@ -26,6 +26,25 @@ def search(client, query, k=10, predicate="*", field="s"):
             for i in range(1, len(result), 2)]
 
 
+def check_malformed_queries(client):
+    """A malformed final pair fails even on an empty shard or beside a valid arm."""
+    prefix = sparse((i, 1) for i in range(1024))
+    bad = prefix + sparse([(1023, 1)])
+    term = "strictly increasing dimensions"
+    with pytest.raises(ResponseError, match=term):
+        search(client, bad)
+    with pytest.raises(ResponseError, match=term):
+        client.execute_command("FT.SEARCH", "idx", "*=>[KNN 1 @s $q]", "INKEYS", 0,
+                               "PARAMS", 2, "q", bad)
+    for clause in ([], ["FILTER", 1, "@region:{one}"]):
+        with pytest.raises(ResponseError, match=term):
+            client.execute_command(
+                "FT.HYBRID", "idx", "VSIM", "@v", "$v", "KNN", 2, "K", 1,
+                "VSIM", "@s", "$q", "KNN", 2, "K", 1, *clause, "COMBINE", "RRF", 0,
+                "PARAMS", 4, "q", bad, "v", struct.pack("<2f", 1, 0),
+            )
+
+
 class TestManagedSparse(ValkeySearchTestCaseBase):
     """Exercise the managed index through public commands on a real server."""
 
@@ -65,7 +84,7 @@ class TestManagedSparse(ValkeySearchTestCaseBase):
         waiters.wait_for_true(lambda: search(client, q) == [], timeout=10)
 
     def test_validation_and_invalid_update(self):
-        """Malformed query values fail before dispatch and invalid updates disappear."""
+        """Malformed query values fail and invalid updates disappear."""
         client = self.server.get_new_client()
         self.setup_index(client)
         for blob in [b"x", sparse([(2, 1), (1, 2)]), sparse([(1, math.inf)]),
@@ -82,6 +101,43 @@ class TestManagedSparse(ValkeySearchTestCaseBase):
         with pytest.raises(ResponseError):
             search(client, b"")
         assert search(client, sparse([(1, 0)])) == []
+
+    @pytest.mark.parametrize("partial", ["yes", "no"])
+    def test_malformed_sparse_request(self, partial):
+        """Local readers return validation errors in either partial-results mode."""
+        client = self.server.get_new_client()
+        self.setup_index(client)
+        client.config_set("search.enable-partial-results", partial)
+        check_malformed_queries(client)
+        # MULTI forces FT.SEARCH down the synchronous execution path.
+        with client.pipeline(transaction=True) as pipe:
+            pipe.execute_command("FT.SEARCH", "idx", "*=>[KNN 1 @s $q]", "PARAMS",
+                                 2, "q", sparse([(1, 1), (2, math.nan)]))
+            with pytest.raises(ResponseError, match="finite weights"):
+                pipe.execute()
+
+    def test_sparse_query_budget(self):
+        """Sparse arms share a byte budget, including repeated and filtered inputs."""
+        client = self.server.get_new_client()
+        self.setup_index(client)
+        half = sparse((i, 1) for i in range(4096))
+        full = half + sparse((i, 1) for i in range(4096, 8192))
+        extra = sparse([(8192, 1)])
+        assert search(client, full) == []
+        with pytest.raises(ResponseError, match="64 KiB"):
+            search(client, full + extra)
+        arm = ["VSIM", "@s", "$q", "KNN", 2, "K", 1]
+        for clause in ([], ["FILTER", 1, "@region:{one}"]):
+            args = ["FT.HYBRID", "idx", *arm, *arm, *clause, "COMBINE", "RRF", 0,
+                    "PARAMS", 2, "q"]
+            assert client.execute_command(*args, half) == [0]
+            with pytest.raises(ResponseError, match="64 KiB"):
+                client.execute_command(*args, half + extra)
+            with pytest.raises(ResponseError, match="uint32/FLOAT32 pairs"):
+                client.execute_command(*args, half[:-1])
+
+        client.hset("doc:long", "s", full + extra)
+        waiters.wait_for_true(lambda: search(client, extra) == [(b"doc:long", -1)])
 
     def test_random_dot_products_and_dense_sparse_rrf(self):
         """Compare both retrieval and fusion with an independent exhaustive oracle."""
@@ -166,6 +222,17 @@ class TestManagedSparse(ValkeySearchTestCaseBase):
 
 
 class TestManagedSparseCluster(ValkeySearchClusterTestCase):
+    def test_malformed_sparse_fanout(self):
+        """Remote responders must report bad input even when partials are allowed."""
+        client = self.client_for_primary(0)
+        client.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH", "SCHEMA", "s", "SPARSE", "region", "TAG",
+            "v", "VECTOR", "FLAT", 6, "TYPE", "FLOAT32", "DIM", 2, "DISTANCE_METRIC", "L2",
+        )
+        for partial in ("yes", "no"):
+            client.config_set("search.enable-partial-results", partial)
+            check_malformed_queries(client)
+
     def test_filtered_global_topk_after_updates(self):
         """All three coordinators return the same filtered top-K after HASH mutations."""
         client = self.new_cluster_client()

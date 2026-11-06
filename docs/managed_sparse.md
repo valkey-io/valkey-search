@@ -14,6 +14,9 @@ pairs, without a header. Dimensions must be strictly increasing; weights must
 be finite. Signed weights are supported, zero entries are ignored. An empty
 document vector is treated as a missing field. A query may use a zero-weight
 entry to represent an empty vector; FT.SEARCH rejects an empty PARAMS value.
+A command accepts up to 64 KiB (8,192 encoded pairs) of sparse query data in
+total. Each sparse arm counts separately, even when arms reuse a parameter.
+Document vectors and dimension IDs are independent of this query limit.
 
 The index subscribes to the normal HASH mutation lifecycle. HSET replaces the
 old vector, HDEL removes the field, DEL/expiry removes its postings. Invalid

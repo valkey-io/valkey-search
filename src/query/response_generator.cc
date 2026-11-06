@@ -512,10 +512,10 @@ void ProcessNeighborsForReply(
             ctx, attribute_data_type, parameters, neighbor.external_id->Str(),
             *vector_identifier, content.value(), scratch);
         if (bytes.has_value()) {
-          auto distance =
-              sparse_index
-                  ? indexes::Sparse::RecomputeDistance(*bytes, parameters.query)
-                  : vector_index->RecomputeDistance(*bytes, parameters.query);
+          auto distance = sparse_index ? indexes::Sparse::RecomputeDistance(
+                                             *bytes, parameters.sparse_query)
+                                       : vector_index->RecomputeDistance(
+                                             *bytes, parameters.query);
           if (sparse_index && !distance.ok()) {
             continue;
           }

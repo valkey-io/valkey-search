@@ -1,15 +1,6 @@
-# Experimental managed sparse vectors
+# Managed sparse vectors
 
-This branch combines numeric document IDs with an adaptive sparse search plan;
-see [optimization scope](sparse_ablation.md).
-
-This fork explores the managed-index alternative to #1568 / #1587 and the
-dense+sparse RRF use case discussed in #1601. It is a prototype, not a release
-or a supported migration path for existing deployments.
-
-This upstream base requires Valkey **9.1.0 or newer** (tested with 9.1.2).
-It cannot replace the standalone C module on a Valkey 9.0.x deployment without
-upgrading the server and qualifying the full Search module.
+Use a SPARSE field to index variable-length weighted features in HASH documents. FT.SEARCH returns the top overlapping documents by dot product. A sparse field can share a schema with existing filter and dense vector fields.
 
 ```text
 FT.CREATE items ON HASH PREFIX 1 item: SCHEMA embedding SPARSE region TAG
@@ -44,9 +35,9 @@ contract; it is not WAND, ANN or a quantized/pruned search algorithm.
 Queries use the existing reader thread pool and cancellation token. Index
 mutations and queries share the schema's reader/writer phase synchronization;
 the sparse index owns its data instead of borrowing Valkey STRING buffers.
-This ablation uses recycled numeric document IDs, contiguous posting arrays
+The index uses recycled numeric document IDs, contiguous posting arrays
 and forward vectors with deletion back-references. Query-local score arrays
-avoid per-candidate string-key hashing. It has no compressed posting blocks or approximate pruning.
+avoid per-candidate string-key hashing and scale with the highest allocated ID. It has no compressed posting blocks or approximate pruning.
 
 ## Dense + sparse RRF
 
@@ -67,18 +58,9 @@ result projection and per-arm dispatch are reused. Sparse arm scores exposed
 by YIELD_SCORE_AS are dot products. RRF depends on ranks, not score calibration.
 WINDOW limits contributions per arm, not necessarily the underlying scan work.
 
-## Scope and differences from the QP pilot
+## Compatibility
 
-The prototype supports HASH input and dot-product KNN. JSON input, sparse range
-queries, SORTABLE sparse fields, EF_RUNTIME and sparse search policy hints are
-not supported. Single-node behavior is tested; distributed correctness, mixed
-versions, AOF and replica failover still need dedicated qualification before
-production use. Sparse schema metadata is experimental: do not roll it back to
-a release which does not know this field type.
-
-QP's four-token intersection + location + full cell count is a different API.
-It can be represented using TAG membership filters plus sparse scoring, but a
-separate count query is required. The current QP command's FP64 scores and
-item-ID-descending ties also differ from this pipeline's FLOAT32 distances and
-key-ascending ties. Benchmark those differences explicitly; a faster generic
-sparse query is not evidence of a faster equivalent QP implementation.
+This implementation targets Valkey 9.1 or later. Sparse fields support HASH
+input and KNN queries. The stored schema uses a new protobuf field type;
+restore it only on nodes running a module that supports SPARSE. Qualify
+upgrades, AOF replay and replica failover before deploying it on a cluster.

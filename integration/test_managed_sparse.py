@@ -6,7 +6,8 @@ import struct
 
 import pytest
 from valkey.exceptions import ResponseError
-from valkey_search_test_case import ValkeySearchTestCaseBase
+from valkey_search_test_case import ValkeySearchClusterTestCase, ValkeySearchTestCaseBase
+from valkeytestframework.conftest import resource_port_tracker
 from valkeytestframework.util import waiters
 
 
@@ -122,3 +123,31 @@ class TestManagedSparse(ValkeySearchTestCaseBase):
         )
         rows = [dict(zip(row[::2], row[1::2])) for row in response[1:]]
         assert [row[b"__key"] for row in rows] == expected_keys
+
+class TestManagedSparseCluster(ValkeySearchClusterTestCase):
+    def test_filtered_global_topk_after_updates(self):
+        """All three coordinators return the same filtered top-K after HASH mutations."""
+        client = self.new_cluster_client()
+        client.execute_command("FT.CREATE", "idx", "ON", "HASH", "PREFIX", 1, "doc:",
+                               "SCHEMA", "s", "SPARSE", "region", "TAG")
+        weights = {}
+        for i in range(96):
+            key = f"doc:{i:03d}".encode()
+            weight = i % 9 - 4
+            client.hset(key, mapping={"s": sparse([(1, weight), (7, 1)]),
+                                      "region": str(i % 2)})
+            if i % 2:
+                weights[key] = weight
+        nodes = [self.client_for_primary(i) for i in range(self.CLUSTER_SIZE)]
+        assert all(node.dbsize() > 0 for node in nodes)
+        query = sparse([(1, 1), (7, 2)])
+        def correct():
+            expected = sorted(((key, -(w + 2)) for key, w in weights.items()),
+                              key=lambda hit: (hit[1], hit[0]))[:10]
+            return all(search(node, query, 10, "@region:{1}") == expected for node in nodes)
+        waiters.wait_for_true(correct, timeout=15)
+        client.hset(b"doc:001", "s", sparse([(1, 100), (7, 1)]))
+        weights[b"doc:001"] = 100
+        client.delete(b"doc:017")
+        del weights[b"doc:017"]
+        waiters.wait_for_true(correct, timeout=15)

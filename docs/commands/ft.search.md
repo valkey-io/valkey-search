@@ -27,7 +27,7 @@ FT.SEARCH <index> <query>
 - `CONSISTENT` (Optional): If specified, the command is terminated with an error if the cluster is in an inconsistent state. This is the default when `search.enable-consistent-results` is `yes`; otherwise `INCONSISTENT` is the default.
 - `DIALECT <dialect>` (optional): Specifies your dialect. The only supported dialect is 2.
 - `INCONSISTENT` (Optional): If specified, the command will generate a best-effort reply if the cluster remains inconsistent within the timeout interval.
-- `INKEYS <count> <key> [<key> ...]` (optional): Restricts results to the specified set of document keys. `<count>` is the number of keys that follow and must be a non-negative integer. Duplicate keys are deduplicated. If `<count>` is 0, no results are returned. The filter is applied as a post-filter after the search, so `total_count` in the response reflects only the keys that matched both the query and the INKEYS set.
+- `INKEYS <count> <key> [<key> ...]` (optional): Restricts results to the specified set of document keys. `<count>` is the number of keys that follow and must be a non-negative integer. Duplicate keys are deduplicated. If `<count>` is 0, no results are returned. The response count reflects only keys that match both the query and the INKEYS set.
 - `LIMIT <offset> <count>` (optional): Lets you choose a portion of the result. The first `<offset>` keys are skipped and only a maximum of `<count>` keys are included. The default is LIMIT 0 10, which returns at most 10 keys.
 - `NOCONTENT` (optional): When present, only the resulting key names are returned, no key values are included.
 - `PARAMS <count> <name> <value> [<name> <value> ...]` (optional): `count` is of the number of arguments, i.e., twice the number of value/name pairs. [Search - query language](../topics/search-query.md) for details.
@@ -61,7 +61,7 @@ The remainder of the response array is two entries per returned key. The first e
 the second entry is an array of name/value pairs. The array of name/value pairs is driven by the `RETURN` clause.
 Each of the named fields in the `RETURN` clause is returned along with the value of that field for this particular key. If the named field isn't present in this key then it won't be included.
 In addition, if this is a vector search, then one additional name/value pair will be included which is the computed vector distance for this returned key -- see [Search - query language](../topics/search-query.md) for details on how to control the name of that field.
-For a vector range query, the distance is included only if the query names it with `$YIELD_DISTANCE_AS` and the `RETURN` clause lists that name.
+For a vector range query, the distance is included only if the query names it with `AS <name>` or `$YIELD_DISTANCE_AS: <name>`, and the `RETURN` clause lists that name.
 
 ### Neither `NOCONTENT` nor `RETURN` was specified.
 
@@ -69,7 +69,7 @@ If the index is on `HASH` keys, then the result is the same as if a `RETURN` cla
 
 If the index is on `JSON` keys, then one name/value pair is inserted with name `$` and the value being the entire JSON key as a string.
 In addition, if this is a vector search, then one additional name/value pair will be included which is the computed vector distance for this returned key -- see [Search - query language](../topics/search-query.md) for details on how to control the name of that field.
-For a vector range query, the distance is included only if the query names it with `$YIELD_DISTANCE_AS`.
+For a vector range query, the distance is included only if the query names it with `AS <name>` or `$YIELD_DISTANCE_AS: <name>`.
 
 ### `WITHCURSOR` was specified.
 

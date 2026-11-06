@@ -259,3 +259,8 @@ finalize_test_flags(scoring_test)
 
 # 9. Expr Test Suite
 add_subdirectory(expr)
+
+add_executable(sparse_search_test ${CMAKE_CURRENT_LIST_DIR}/query/sparse_search_test.cc)
+target_link_libraries(sparse_search_test PRIVATE sparse_search)
+finalize_test_flags(sparse_search_test)
+target_compile_options(sparse_search_test PRIVATE -fno-fast-math -ffp-contract=off)

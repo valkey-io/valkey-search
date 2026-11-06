@@ -82,6 +82,30 @@ vmsdk::module::Options options = {
                 .cmd_func = &vmsdk::CreateCommand<valkey_search::FTSearchCmd>,
             },
             {
+                .cmd_name = valkey_search::kSparseSearchCommand,
+                .permissions = ACLPermissionFormatter(
+                    valkey_search::kSearchCmdPermissions),
+                .flags = {vmsdk::module::kReadOnlyFlag,
+                          vmsdk::module::kDenyOOMFlag},
+                .cmd_func =
+                    &vmsdk::CreateCommand<valkey_search::FTSparseSearchCmd>,
+                .first_key = 3,
+                .last_key = -1,
+                .key_step = 2,
+            },
+            {
+                .cmd_name = valkey_search::kSparseSearchBinCommand,
+                .permissions = ACLPermissionFormatter(
+                    valkey_search::kSearchCmdPermissions),
+                .flags = {vmsdk::module::kReadOnlyFlag,
+                          vmsdk::module::kDenyOOMFlag},
+                .cmd_func =
+                    &vmsdk::CreateCommand<valkey_search::FTSparseSearchBinCmd>,
+                .first_key = 3,
+                .last_key = -1,
+                .key_step = 2,
+            },
+            {
                 .cmd_name = valkey_search::kDebugCommand,
                 .permissions =
                     ACLPermissionFormatter(valkey_search::kDebugCmdPermissions),

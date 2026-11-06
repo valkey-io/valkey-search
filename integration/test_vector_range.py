@@ -167,11 +167,14 @@ def range_distances(client, index, field, query, radius, epsilon=None,
 
 
 def knn_radii(client, flat_index, field, query, sizes=RANGE_SIZES):
-    """[(n, radius holding the n nearest keys)] from a FLAT KNN query.
+    """[(n, radius holding the n nearest keys)] for a FLAT range query.
 
-    The index compares float32 distances with a float32 radius, so a size is
-    skipped when no float32 radius separates its nth and (n+1)th distances: a
-    near-tie there cannot form a ball of exactly n keys.
+    The radii come from the range query's own distances, not KNN's: the two
+    paths round COSINE differently (by ~1e-7 near a distance of 0.03), so a
+    midpoint between KNN distances can put a near-tied key on the wrong side.
+    KNN only bounds a range query that holds the k nearest keys. The index
+    compares float32 distances with a float32 radius, so a size is skipped
+    when no float32 radius separates its nth and (n+1)th distances.
     """
     k = max(sizes) + 1
     result = client.execute_command(
@@ -179,9 +182,16 @@ def knn_radii(client, flat_index, field, query, sizes=RANGE_SIZES):
         "PARAMS", "2", "BLOB", query.astype("<f4").tobytes(),
         "RETURN", "1", "d", "LIMIT", "0", str(k), "DIALECT", "2",
     )
-    dists = sorted(float(fields["d"])
-                   for fields in parse_result_with_fields(result).values())
-    assert len(dists) == k
+    knn_dists = [float(fields["d"])
+                 for fields in parse_result_with_fields(result).values()]
+    assert len(knn_dists) == k
+    # Far wider than the KNN/range rounding gap, so the range query holds at
+    # least the k nearest keys.
+    bound = max(knn_dists)
+    bound += max(abs(bound) * 1e-3, 1e-5)
+    dists = sorted(range_distances(client, flat_index, field, query,
+                                   bound).values())
+    assert len(dists) >= k, (len(dists), k)
     radii = []
     for n in sizes:
         inner, outer = np.float32(dists[n - 1]), np.float32(dists[n])

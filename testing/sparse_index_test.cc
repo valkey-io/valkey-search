@@ -146,7 +146,9 @@ TEST_F(SparseIndexTest, PollsLongDecodesAndEstimatesWithAbsentDimensions) {
     void Cancel() override { remaining = 0; }
   };
   std::string query;
-  for (uint32_t i = 0; i < 1024; ++i) query += Encode({{i, 1}});
+  for (uint32_t i = 0; i < 1024; ++i) {
+    query += Encode({{i, 1}});
+  }
   Budget decode(2), estimate(6);
   EXPECT_EQ(Sparse::Decode(query, &decode).status().code(),
             absl::StatusCode::kDeadlineExceeded);

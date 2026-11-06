@@ -234,9 +234,21 @@ absl::StatusOr<std::vector<Neighbor>> Sparse::Search(
   std::priority_queue<Hit, std::vector<Hit>, decltype(better)> heap(better);
   auto add = [&](DocId id, double score)
                  ABSL_NO_THREAD_SAFETY_ANALYSIS -> absl::Status {
-    if (count == 0 || !filter(records_[id].key)) return absl::OkStatus();
-    VMSDK_ASSIGN_OR_RETURN(auto distance, Distance(score));
-    Hit hit{id, distance};
+    if (count == 0) {
+      return absl::OkStatus();
+    }
+    auto distance = Distance(score);
+    // A strictly worse candidate cannot enter a full heap even if it passes
+    // the filter. Ties still need the key; overflow still needs the filter.
+    if (distance.ok() && heap.size() == count &&
+        *distance > heap.top().distance) {
+      return absl::OkStatus();
+    }
+    if (!filter(records_[id].key)) {
+      return absl::OkStatus();
+    }
+    VMSDK_RETURN_IF_ERROR(distance.status());
+    Hit hit{id, *distance};
     if (heap.size() < count)
       heap.push(hit);
     else if (better(hit, heap.top())) {
@@ -292,32 +304,37 @@ absl::StatusOr<std::vector<Neighbor>> Sparse::Search(
         if (posting == postings_.end()) {
           continue;
         }
-        for (const auto &[id, weight] : posting->second) {
-          // No posting sum is final until all dimensions have been read.
-          if (expired()) {
+        const auto &list = posting->second;
+        for (size_t begin = 0; begin < list.size(); begin += 256) {
+          if (cancellation->IsCancelled()) {
             return absl::DeadlineExceededError("Sparse search cancelled");
           }
-          update(id, double(weight) * double(entry.weight));
+          const size_t end = std::min(begin + 256, list.size());
+          for (size_t pos = begin; pos < end; ++pos) {
+            const auto &[id, weight] = list[pos];
+            update(id, double(weight) * entry.weight);
+          }
         }
       }
       return absl::OkStatus();
     };
     if (dense) {
       std::vector<double> scores(records_.size(), 0);
-      std::vector<uint8_t> seen(records_.size(), 0);
-      std::vector<DocId> touched;
+      // A set bit also preserves matches whose signed contributions cancel.
+      std::vector<uint64_t> seen((records_.size() + 63) / 64, 0);
       VMSDK_RETURN_IF_ERROR(accumulate([&](DocId id, double term) {
-        if (!seen[id]) {
-          seen[id] = 1;
-          touched.push_back(id);
-        }
+        seen[id / 64] |= uint64_t{1} << (id % 64);
         scores[id] += term;
       }));
-      for (DocId id : touched) {
-        if (expired()) {
+      for (size_t word = 0; word < seen.size(); ++word) {
+        if (word % 4 == 0 && cancellation->IsCancelled()) {
           break;
         }
-        VMSDK_RETURN_IF_ERROR(add(id, scores[id]));
+        for (auto mask = seen[word]; mask; mask &= mask - 1) {
+          const auto id =
+              static_cast<DocId>(word * 64 + std::countr_zero(mask));
+          VMSDK_RETURN_IF_ERROR(add(id, scores[id]));
+        }
       }
     } else {
       absl::flat_hash_map<DocId, double> scores;

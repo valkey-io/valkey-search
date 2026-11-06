@@ -99,6 +99,38 @@ TEST_F(SparseIndexTest, SignedDotProductsTiesFilterAndUpdates) {
   EXPECT_EQ(Search(query).status().code(), absl::StatusCode::kDeadlineExceeded);
 }
 
+TEST_F(SparseIndexTest, DenseBitmapPreservesBoundaryIdsZeroSumsAndTies) {
+  for (uint32_t id = 0; id <= 128; ++id) {
+    ASSERT_TRUE(Add(std::to_string(id), Encode({{1, 1}, {2, -1}})).ok());
+  }
+  auto hits =
+      index.Search(Encode({{1, 1}, {2, 1}}), 3, token, [](const auto &key) {
+        auto name = key->Str();
+        return name == "63" || name == "64" || name == "127" || name == "128";
+      });
+  ASSERT_TRUE(hits.ok());
+  ASSERT_EQ(hits->size(), 3);
+  EXPECT_EQ((*hits)[0].external_id->Str(), "127");
+  EXPECT_EQ((*hits)[1].external_id->Str(), "128");
+  EXPECT_EQ((*hits)[2].external_id->Str(), "63");
+  for (const auto &hit : *hits) {
+    EXPECT_EQ(hit.distance, 0);
+  }
+}
+
+TEST_F(SparseIndexTest, ScoreCutoffPreservesFilteredOverflow) {
+  const auto huge = std::numeric_limits<float>::max();
+  ASSERT_TRUE(Add("finite", Encode({{1, 1}})).ok());
+  ASSERT_TRUE(Add("overflow", Encode({{2, -huge}})).ok());
+  const auto q = Encode({{1, 1}, {2, huge}});
+  auto hits = index.Search(
+      q, 1, token, [](const auto &key) { return key->Str() == "finite"; });
+  ASSERT_TRUE(hits.ok());
+  ASSERT_EQ(hits->size(), 1);
+  EXPECT_EQ(hits->front().external_id->Str(), "finite");
+  EXPECT_FALSE(Search(q, 1).ok());
+}
+
 TEST_F(SparseIndexTest, RareDimensionsRetainZeroSumAfterChurn) {
   for (int i = 0; i < 64; ++i) {
     ASSERT_TRUE(Add(std::to_string(i), Encode({{100, 1}})).ok());

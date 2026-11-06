@@ -6,6 +6,7 @@
 
 #include "src/expr/value.h"
 
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -1362,7 +1363,10 @@ TEST_F(ValueTest, FormatDoubleIntegralUsesFixedNotation) {
 
   // Non-integral, zero and the infinities keep to_chars' rendering.
   EXPECT_EQ(FormatDouble(1.5), "1.5");
-  EXPECT_EQ(FormatDouble(-0.0), "-0");
+  // -ffast-math lets GCC on aarch64 materialize a constant -0.0 as +0.0, so
+  // read the bit pattern through a volatile to keep it a runtime value.
+  volatile uint64_t neg_zero_bits = 0x8000000000000000ull;
+  EXPECT_EQ(FormatDouble(std::bit_cast<double>(uint64_t{neg_zero_bits})), "-0");
   EXPECT_EQ(FormatDouble(std::numeric_limits<double>::infinity()), "inf");
   EXPECT_EQ(FormatDouble(-std::numeric_limits<double>::infinity()), "-inf");
 }

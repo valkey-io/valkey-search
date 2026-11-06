@@ -136,9 +136,9 @@ absl::Status FTDropIndexCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     op->StartOperation(ctx);
   } else {
     if (is_loading || inside_multi_exec) {
-      VMSDK_LOG(NOTICE, nullptr) << "The server is loading AOF or inside "
-                                    "multi/exec or lua script, skip "
-                                    "fanout operation";
+      VMSDK_LOG(NOTICE) << "The server is loading AOF or inside "
+                           "multi/exec or lua script, skip "
+                           "fanout operation";
     }
     ValkeyModule_ReplyWithSimpleString(ctx, "OK");
   }

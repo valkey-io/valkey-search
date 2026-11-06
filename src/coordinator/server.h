@@ -92,7 +92,7 @@ class Service final : public Coordinator::CallbackService {
 
   void EnqueueSearchRequest(
       std::unique_ptr<RemoteResponderSearch> vector_search_parameters,
-      vmsdk::ThreadPool* reader_thread_pool, ValkeyModuleCtx* detached_ctx,
+      vmsdk::ThreadPool* reader_thread_pool,
       SearchIndexPartitionResponse* response,
       std::unique_ptr<vmsdk::StopWatch> latency_sample,
       ArmCompletionCallback on_done);

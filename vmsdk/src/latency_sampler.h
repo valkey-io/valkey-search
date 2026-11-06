@@ -56,7 +56,7 @@ class LatencySampler {
     absl::MutexLock lock(&histogram_lock_);
     if (!initialized_) {
       if (hdr_init(min_value_, max_value_, precision_, &histogram_) != 0) {
-        VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 60)
+        VMSDK_LOG_EVERY_N_SEC(WARNING, 60)
             << "Failed to initialize latency histogram, dropping sample";
         return;
       }

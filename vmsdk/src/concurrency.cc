@@ -109,10 +109,10 @@ size_t ParseLscpuOutput(const std::string& lscpu_output) {
   }
 
   if (sockets_count < 0 || cores_per_socket < 0) {
-    VMSDK_LOG(NOTICE, nullptr) << "Error while parsing 'lscpu' output:\n"
-                               << lscpu_output << "\n"
-                               << ". Returning value from "
-                                  "std::thread::hardware_concurrency()";
+    VMSDK_LOG(NOTICE) << "Error while parsing 'lscpu' output:\n"
+                      << lscpu_output << "\n"
+                      << ". Returning value from "
+                         "std::thread::hardware_concurrency()";
     return std::thread::hardware_concurrency();
   }
   return sockets_count * cores_per_socket;
@@ -126,9 +126,9 @@ size_t GetPhysicalCPUCoresCount() {
 #if defined(__linux__) && defined(__aarch64__)
   auto res = helper::ExecuteCommand("/usr/bin/lscpu");
   if (!res.ok()) {
-    VMSDK_LOG(WARNING, nullptr) << res.status().message()
-                                << ". Returning value from "
-                                   "std::thread::hardware_concurrency()";
+    VMSDK_LOG(WARNING) << res.status().message()
+                       << ". Returning value from "
+                          "std::thread::hardware_concurrency()";
   } else {
     const auto& lscpu_output = res.value();
     cpu_cores = helper::ParseLscpuOutput(lscpu_output);
@@ -136,14 +136,13 @@ size_t GetPhysicalCPUCoresCount() {
 #elif defined(__linux__)
   std::ifstream cpuinfo("/proc/cpuinfo");
   if (!cpuinfo.is_open()) {
-    VMSDK_LOG(NOTICE, nullptr)
-        << "Could not read /proc/cpuinfo. Returning value from "
-           "std::thread::hardware_concurrency()";
+    VMSDK_LOG(NOTICE) << "Could not read /proc/cpuinfo. Returning value from "
+                         "std::thread::hardware_concurrency()";
   } else {
     cpu_cores = helper::ParseCPUInfo(cpuinfo);
   }
 #endif
-  VMSDK_LOG(DEBUG, nullptr) << "Cores count is set to:" << cpu_cores;
+  VMSDK_LOG(DEBUG) << "Cores count is set to:" << cpu_cores;
   return cpu_cores;
 }
 

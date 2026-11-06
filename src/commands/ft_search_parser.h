@@ -37,6 +37,7 @@ struct SearchCommand : public QueryCommand {
   bool RequiresCompleteResults() const override {
     return sortby_parameter.has_value() || inkeys.has_value();
   }
+  bool CanGenerateReplyInBackground() const override;
 
   query::SerializationRange GetSerializationRange() const;
 

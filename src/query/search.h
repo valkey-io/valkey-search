@@ -337,6 +337,11 @@ struct SearchParameters {
            !sortby_parameter.has_value();
   }
 
+  // True when this command can serialize its complete client response from a
+  // background thread. The default keeps commands on the existing unblock /
+  // main-thread reply path.
+  virtual bool CanGenerateReplyInBackground() const { return false; }
+
   virtual absl::Status PreParseQueryString();
   // Parses filter_expression into filter_parse_results; may run again once a
   // command has read VERBATIM / INORDER / SLOP.

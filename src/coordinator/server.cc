@@ -138,6 +138,9 @@ class RemoteResponderSearch : public query::SearchParameters {
   // would be wrong with no error anywhere to say so. So partial-results
   // tolerance, which is about losing a whole shard, does not apply per arm.
   bool multi_arm{false};
+  // Pool the search ran on; with background-shard-reply, a main-thread
+  // completion hands the gRPC reply to it.
+  vmsdk::ThreadPool *reader_thread_pool{nullptr};
   void QueryCompleteBackground(
       std::unique_ptr<SearchParameters> self) override {
     CHECK(!vmsdk::IsMainThread());
@@ -149,6 +152,25 @@ class RemoteResponderSearch : public query::SearchParameters {
       std::unique_ptr<SearchParameters> self) override {
     CHECK(vmsdk::IsMainThread());
     CHECK(!NoProcessingRequired());
+    if (reader_thread_pool != nullptr &&
+        options::GetBackgroundShardReply().GetValue()) {
+      // Holder lets a refused Schedule hand self back instead of dropping it.
+      auto holder =
+          std::make_shared<std::unique_ptr<SearchParameters>>(std::move(self));
+      if (reader_thread_pool->Schedule(
+              [holder]() {
+                auto self = std::move(*holder);
+                static_cast<RemoteResponderSearch *>(self.get())
+                    ->QueryCompleteImpl();
+                // Free on main: module strings and IndexSchema aren't safe
+                // here.
+                vmsdk::RunByMain([self = std::move(self)]() {});
+              },
+              vmsdk::ThreadPool::Priority::kHigh)) {
+        return;
+      }
+      self = std::move(*holder);
+    }
     QueryCompleteImpl();
   }
 
@@ -207,6 +229,7 @@ void Service::EnqueueSearchRequest(
     ArmCompletionCallback on_done) {
   search_operation->response = response;
   search_operation->latency_sample = std::move(latency_sample);
+  search_operation->reader_thread_pool = reader_thread_pool;
   // Keep a handle on the (move-only) completion callback. The operation is
   // about to be moved into SearchAsync, so on failure it is gone and cannot be
   // asked for its callback back; sharing it is what lets this frame finish the

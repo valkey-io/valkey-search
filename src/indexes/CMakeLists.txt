@@ -81,6 +81,11 @@ target_link_libraries(numeric PUBLIC numeric_btree)
 target_link_libraries(numeric PUBLIC string_interning)
 target_link_libraries(numeric PUBLIC valkey_module)
 
+valkey_search_add_static_library(sparse "${CMAKE_CURRENT_LIST_DIR}/sparse.cc;${CMAKE_CURRENT_LIST_DIR}/sparse.h")
+target_link_libraries(sparse PUBLIC index_base vector_base string_interning valkey_module vmsdklib)
+# Keep dimension-ordered double accumulation reproducible in release builds.
+target_compile_options(sparse PRIVATE -fno-fast-math -ffp-contract=off)
+
 set(SRCS_UNIVERSAL_SET_FETCHER ${CMAKE_CURRENT_LIST_DIR}/universal_set_fetcher.cc
                                ${CMAKE_CURRENT_LIST_DIR}/universal_set_fetcher.h)
 

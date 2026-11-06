@@ -29,6 +29,7 @@
 #include "src/index_schema.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/scoring/scorer.h"
+#include "src/indexes/sparse.h"
 #include "src/indexes/vector_base.h"
 #include "src/query/predicate.h"
 #include "src/query/query_context.h"
@@ -229,6 +230,10 @@ struct SearchParameters {
   std::string attribute_alias;
   vmsdk::UniqueValkeyString score_as;
   std::string query;
+  // The executing shard retains the decoded query for planning, scoring and
+  // rescoring documents mutated before reply.
+  std::vector<indexes::Sparse::Entry> sparse_query;
+  bool sparse_query_validation_failed{false};
   uint32_t dialect{kDialect};
   uint32_t db_num_{0};
   bool local_only{false};
@@ -285,6 +290,7 @@ struct SearchParameters {
     absl::string_view filter_expression;
     absl::string_view score_as_string;
     absl::string_view query_vector_string;
+    size_t sparse_query_bytes_left{indexes::Sparse::kMaxQueryBytes};
     absl::string_view k_string;
     absl::string_view ef_string;
     absl::string_view hybrid_policy_string;

@@ -6,6 +6,7 @@
  */
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -27,6 +28,7 @@
 #include "src/commands/ft_search_parser.h"
 #include "src/expr/expr.h"
 #include "src/indexes/scoring/scorer.h"
+#include "src/indexes/sparse.h"
 #include "src/query/multi_search.h"
 #include "src/query/search.h"
 #include "src/valkey_search_options.h"
@@ -787,19 +789,49 @@ absl::Status ParseCombineClause(MultiSearchParameters &env,
 absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
                                   vmsdk::ArgsIterator &itr) {
   bool vsim_uses_range = false;
-  // The VSIM arm's pre-filter and the query string synthesized from it. Held
-  // here because the arm keeps a string_view into the latter and both have to
-  // outlive the parse.
-  std::string vsim_filter;
-  std::string vsim_query_string;
-  // 1. SEARCH (mandatory, must come first)
-  VMSDK_RETURN_IF_ERROR(ParseSearchClause(env, itr));
-  // 2. VSIM (mandatory, must follow)
-  VMSDK_RETURN_IF_ERROR(ParseVsimClause(env, itr, &vsim_uses_range,
-                                        &vsim_filter, &vsim_query_string));
+  // Stable backing storage for each arm's string_views until parsing finishes.
+  constexpr size_t kMaxArms = 5;
+  std::array<std::string, kMaxArms> vsim_filters, vsim_queries;
+  std::vector<bool> search_arms;
+  while (true) {
+    auto next = itr.GetStringView();
+    if (!next.ok()) {
+      break;
+    }
+    bool is_search = absl::EqualsIgnoreCase(*next, kSearchKw);
+    if (!is_search && !absl::EqualsIgnoreCase(*next, kVsimKw)) {
+      break;
+    }
+    const size_t arm = env.arms.size();
+    if (arm == kMaxArms) {
+      return absl::InvalidArgumentError("FT.HYBRID supports at most 5 arms");
+    }
+    search_arms.push_back(is_search);
+    if (is_search) {
+      VMSDK_RETURN_IF_ERROR(ParseSearchClause(env, itr));
+    } else {
+      bool uses_range = false;
+      VMSDK_RETURN_IF_ERROR(ParseVsimClause(
+          env, itr, &uses_range, &vsim_filters[arm], &vsim_queries[arm]));
+      vsim_uses_range |= uses_range;
+    }
+  }
+  if (env.arms.size() < 2) {
+    return absl::InvalidArgumentError("FT.HYBRID requires at least 2 arms");
+  }
+  if (std::all_of(search_arms.begin(), search_arms.end(),
+                  [](bool search) { return search; })) {
+    return absl::InvalidArgumentError(
+        "FT.HYBRID currently requires a VSIM arm");
+  }
   // 3. Optional COMBINE
   if (itr.PopIfNextIgnoreCase(kCombineKw)) {
     VMSDK_RETURN_IF_ERROR(ParseCombineClause(env, itr));
+  }
+  if (env.fusion.method != FusionConfig::Method::kRRF &&
+      (search_arms.size() != 2 || !search_arms[0] || search_arms[1])) {
+    return absl::InvalidArgumentError(
+        "Multiple SEARCH/VSIM arms currently require COMBINE RRF");
   }
   // 4. Walk remaining tokens. POLICY belongs inside the VSIM FILTER block;
   //    everything else is forwarded to the aggregate-suffix parser via the
@@ -819,8 +851,11 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
     // whether attribute_alias is non-empty). Reuse the VSIM arm's vector
     // field; the aggregate code calls index_schema->GetIdentifier on it, so
     // it must name a real vector index in the schema.
-    if (env.arms.size() > 1 && !env.arms[1]->attribute_alias.empty()) {
-      env.agg->attribute_alias = env.arms[1]->attribute_alias;
+    for (const auto &arm : env.arms) {
+      if (!arm->attribute_alias.empty()) {
+        env.agg->attribute_alias = arm->attribute_alias;
+        break;
+      }
     }
     // Set the score_as on the aggregate the same way ft_aggregate.cc:91 does
     // for plain FT.AGGREGATE — so the post-fusion aggregate pipeline routes
@@ -1108,8 +1143,10 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
   // share the params map with each arm so $name resolves identically. Also
   // run the per-arm pre/post-parse so an arm carrying a query string gets its
   // k/ef/query-blob populated.
+  size_t sparse_query_bytes_left = indexes::Sparse::kMaxQueryBytes;
   for (size_t arm_index = 0; arm_index < env.arms.size(); ++arm_index) {
     auto &arm = env.arms[arm_index];
+    arm->parse_vars.sparse_query_bytes_left = sparse_query_bytes_left;
     arm->parse_vars.params = env.agg->parse_vars.params;
     arm->timeout_ms = env.timeout_ms;
     arm->cancellation_token = env.cancellation_token;
@@ -1126,6 +1163,7 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
       VMSDK_ASSIGN_OR_RETURN(auto index,
                              arm->index_schema->GetIndex(arm->attribute_alias));
       if (index->GetIndexerType() != indexes::IndexerType::kHNSW &&
+          index->GetIndexerType() != indexes::IndexerType::kSparse &&
           index->GetIndexerType() != indexes::IndexerType::kFlat) {
         return absl::InvalidArgumentError(absl::StrCat(
             "Index field `", arm->attribute_alias, "` is not a Vector index"));
@@ -1143,7 +1181,7 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
             absl::StrCat("Parameter ", param_name, " not found."));
       }
       it->second.first++;  // bump usage refcount
-      arm->query = std::string(it->second.second);
+      auto query_blob = it->second.second;
       // A query string arm reaches this check inside PostParseQueryString ->
       // PostParseVectorParameters; a pure VSIM arm skips both, so it has to
       // ask here. Routing this branch through PostParseVectorParameters is
@@ -1156,15 +1194,23 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
       // caught by VectorHNSW/VectorFlat::Search at execution, where
       // enable-partial-results turns an error into a silently empty arm.
       auto *vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
-      CHECK(vector_index != nullptr);
-      if (arm->query.size() !=
-          static_cast<size_t>(vector_index->GetVectorDataSize())) {
+      if (index->GetIndexerType() == indexes::IndexerType::kSparse) {
+        VMSDK_RETURN_IF_ERROR(indexes::Sparse::CheckQuerySize(
+            query_blob, arm->parse_vars.sparse_query_bytes_left));
+        if (arm->ef.has_value() || arm->hybrid_policy != HybridPolicy::kAuto) {
+          return absl::InvalidArgumentError(
+              "SPARSE does not support EF_RUNTIME or POLICY");
+        }
+      } else if (vector_index != nullptr &&
+                 query_blob.size() !=
+                     static_cast<size_t>(vector_index->GetVectorDataSize())) {
         return absl::InvalidArgumentError(absl::StrCat(
             "Error parsing vector similarity parameters: query vector blob "
             "size (",
-            arm->query.size(), ") does not match index's expected size (",
+            query_blob.size(), ") does not match index's expected size (",
             vector_index->GetVectorDataSize(), ")."));
       }
+      arm->query = query_blob;
       // Default score_as if the user didn't YIELD_SCORE_AS.
       if (!arm->score_as) {
         auto schema_default =
@@ -1184,11 +1230,12 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
       // at which it can be asked. Only the SEARCH arm is checked: the VSIM arm
       // reaches here too when a FILTER rewrote it into a query string, and
       // that one is a vector query by construction.
-      if (arm_index == 0 && arm->IsVectorQuery()) {
+      if (search_arms[arm_index] && arm->IsVectorQuery()) {
         return absl::InvalidArgumentError(
             "A vector query is not supported in the SEARCH clause; use VSIM");
       }
     }
+    sparse_query_bytes_left = arm->parse_vars.sparse_query_bytes_left;
     // Record now whether this arm's score is a raw distance: `arms` is emptied
     // at dispatch (each shim is moved into SearchAsync), so fusion cannot ask
     // the arm later. Neighbor::score is a KNN distance only for a vector arm;
@@ -1202,9 +1249,11 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
     // And which metric produced it: the similarity a distance maps to differs
     // by metric, and `arms` is emptied at dispatch.
     auto metric = data_model::DISTANCE_METRIC_UNSPECIFIED;
+    bool sparse = false;
     if (arm->IsVectorQuery() && env.index_schema != nullptr) {
       auto index = env.index_schema->GetIndex(arm->attribute_alias);
       if (index.ok()) {
+        sparse = (*index)->GetIndexerType() == indexes::IndexerType::kSparse;
         auto *vector_index =
             dynamic_cast<const indexes::VectorBase *>(index->get());
         if (vector_index != nullptr) {
@@ -1213,6 +1262,7 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
       }
     }
     env.per_arm_distance_metric.push_back(metric);
+    env.per_arm_sparse.push_back(sparse);
   }
 
   // Clear the now-stale stack-local index_interface_ pointer.
@@ -1273,6 +1323,14 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
             "YIELD_SCORE_AS `", *alias,
             "` collides with the fused score's column; rename one of them"));
       }
+    }
+  }
+
+  absl::flat_hash_set<absl::string_view> score_aliases;
+  for (const auto &alias : env.per_arm_score_alias) {
+    if (alias && !score_aliases.insert(*alias).second) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Duplicate per-arm YIELD_SCORE_AS alias: ", *alias));
     }
   }
 

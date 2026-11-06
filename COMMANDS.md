@@ -42,6 +42,8 @@ FT.CREATE <index-name>
 
 ### Field types
 
+**SPARSE** stores weighted features on HASH keys. KNN ranks overlapping documents by negative dot product and can use TAG or NUMERIC filters. See [sparse vectors](docs/managed_sparse.md) for the binary format, ordering and dense+sparse RRF examples.
+
 **TAG**: A tag field is a string that contains one or more tag values.
 
 - **SEPARATOR \<sep\>** (optional): One of these characters `,.<>{}[]"':;!@#$%^&*()-+=~` used to delimit individual tags. If omitted the default value is `,`.
@@ -67,7 +69,7 @@ FT.CREATE <index-name>
 
 ### Field options
 
-**SORTABLE**: This parameter is currently ignored as all field types are considered to be sortable
+**SORTABLE**: SPARSE fields reject this option. Other field types accept it for compatibility and ignore it.
 
 **RESPONSE** OK or error.
 

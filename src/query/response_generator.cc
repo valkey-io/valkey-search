@@ -19,6 +19,7 @@
 #include "absl/strings/string_view.h"
 #include "src/attribute_data_type.h"
 #include "src/indexes/scoring/scorer.h"
+#include "src/indexes/sparse.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text/text_index.h"
 #include "src/indexes/vector_base.h"
@@ -452,11 +453,14 @@ void ProcessNeighborsForReply(
   // per_arm_score_is_distance in ft_hybrid_parser.cc.
   const bool ranks_on_distance = !parameters.ScoreIsRelevance();
   indexes::VectorBase *vector_index = nullptr;
+  bool sparse_index = false;
   if (!parameters.IsNonVectorQuery() && vector_identifier.has_value() &&
       parameters.index_schema != nullptr) {
     auto index = parameters.index_schema->GetIndex(parameters.attribute_alias);
     if (index.ok()) {
       vector_index = dynamic_cast<indexes::VectorBase *>(index->get());
+      sparse_index =
+          (*index)->GetIndexerType() == indexes::IndexerType::kSparse;
     }
   }
   // Lazily built by VerifyFilter on the first mutated document and reused for
@@ -491,7 +495,7 @@ void ProcessNeighborsForReply(
     // A vector query's distance is stale for the same reason and is refreshed
     // the same way, against the vector the document holds now rather than the
     // one the index was carrying when the search ran.
-    if (vector_index != nullptr) {
+    if (vector_index != nullptr || sparse_index) {
       auto db_seq = parameters.index_schema->TryGetDbMutationSequenceNumber(
           neighbor.external_id);
       if (!db_seq.has_value()) {
@@ -508,8 +512,13 @@ void ProcessNeighborsForReply(
             ctx, attribute_data_type, parameters, neighbor.external_id->Str(),
             *vector_identifier, content.value(), scratch);
         if (bytes.has_value()) {
-          auto distance =
-              vector_index->RecomputeDistance(*bytes, parameters.query);
+          auto distance = sparse_index ? indexes::Sparse::RecomputeDistance(
+                                             *bytes, parameters.sparse_query)
+                                       : vector_index->RecomputeDistance(
+                                             *bytes, parameters.query);
+          if (sparse_index && !distance.ok()) {
+            continue;
+          }
           if (distance.ok()) {
             neighbor.distance = *distance;
             // For a query ranked on the distance the two are the same number;

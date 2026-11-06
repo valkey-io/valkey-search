@@ -38,6 +38,7 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/scoring/scorer.h"
+#include "src/indexes/sparse.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
 #include "src/indexes/text/rax_wrapper.h"
@@ -543,6 +544,23 @@ std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
   }
 
   return index_schema;
+}
+
+TEST_F(ValkeySearchTest, CancelledSparseDecodePrecedesEmptyInkeys) {
+  auto schema = CreateIndexSchema(kIndexSchemaName).value();
+  VMSDK_EXPECT_OK(
+      schema->AddIndex("s", "s", std::make_shared<indexes::Sparse>()));
+  for (const bool partial : {false, true}) {
+    UnitTestSearchParameters params;
+    params.index_schema = schema;
+    params.attribute_alias = "s";
+    params.query.resize(8);
+    params.inkeys.emplace();
+    params.enable_partial_results = partial;
+    params.cancellation_token->Cancel();
+    EXPECT_EQ(query::Search(params, query::SearchMode::kLocal).code(),
+              absl::StatusCode::kDeadlineExceeded);
+  }
 }
 
 struct LocalSearchTestCase {

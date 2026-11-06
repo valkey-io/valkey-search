@@ -239,3 +239,32 @@ class TestStaleMatchAllScore(_ParkedMutation, ValkeySearchTestCaseDebugMode):
             assert parked_s[key] == before_s[key], (
                 f"unmutated {key!r} was rescored: parked {parked_s[key]} vs "
                 f"before {before_s[key]}")
+
+
+class TestSparseArmAfterMutation(_ParkedMutation, ValkeySearchTestCaseDebugMode):
+    INDEX = "parked_sparse"
+
+    @pytest.mark.parametrize("mutation,expected", [
+        (struct.pack("<If", 1, 9), 9),
+        (struct.pack("<If", 7, 1), None),
+        (b"invalid", None),
+    ])
+    def test_changed_sparse_rank(self, mutation, expected):
+        """A parked sparse arm reports the same scores and ranks as a fresh query."""
+        client = self.server.get_new_client()
+        client.execute_command("FT.CREATE", self.INDEX, "ON", "HASH", "PREFIX", 1, "p:",
+                               "SCHEMA", "s", "SPARSE")
+        for key, w in (("p:a", 3), ("p:b", 6)):
+            client.hset(key, "s", struct.pack("<If", 1, w))
+        IndexingTestHelper.wait_for_indexing_complete_on_node(client, self.INDEX)
+        def query():
+            return self.server.get_new_client().execute_command(
+                "FT.HYBRID", self.INDEX, "SEARCH", "*", "VSIM", "@s", "$q",
+                "KNN", 2, "K", 2, "YIELD_SCORE_AS", "individual",
+                "COMBINE", "RRF", 0, "PARAMS", 2, "q", struct.pack("<If", 1, 1))
+        parked, fresh = self._run_across_mutation(
+            client, query, ("HSET", "p:a", "s", mutation))
+        assert parked == fresh
+        rows = [dict(zip(row[::2], row[1::2])) for row in fresh[1:]]
+        scores = {row[b"__key"]: float(row[b"individual"]) for row in rows if b"individual" in row}
+        assert scores.get(b"p:a") == expected

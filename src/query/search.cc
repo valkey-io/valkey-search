@@ -38,6 +38,7 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/scoring/scorer.h"
+#include "src/indexes/sparse.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
 #include "src/indexes/text/fuzzy.h"
@@ -743,6 +744,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
           }
           break;
         }
+        case indexes::IndexerType::kSparse:
         case indexes::IndexerType::kText: {
           // Text indexes don't store retrievable raw values
           any_value_missing = true;
@@ -1281,8 +1283,8 @@ std::optional<float> RecomputeDocumentScore(const Predicate *root_predicate,
 }
 
 absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
-    const SearchParameters &parameters) {
-  const IndexSchema &index_schema = *parameters.index_schema;
+    const SearchParameters &parameters, IndexSchema &index_schema)
+    ABSL_SHARED_LOCKS_REQUIRED(index_schema.GetTimeSlicedMutex()) {
   const auto text_index_schema = index_schema.GetTextIndexSchema();
 
   const auto *scorer = indexes::scoring::GetScorer(parameters.scorer);
@@ -1444,11 +1446,73 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
 }
 
 absl::StatusOr<std::vector<indexes::Neighbor>> DoSearchVector(
-    const SearchParameters &parameters, SearchMode search_mode,
+    const SearchParameters &parameters, indexes::IndexBase *index,
     vmsdk::ReaderMutexLock &lock) {
-  VMSDK_ASSIGN_OR_RETURN(auto index, parameters.index_schema->GetIndex(
-                                         parameters.attribute_alias));
-  auto *vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
+  if (auto *sparse = dynamic_cast<indexes::Sparse *>(index)) {
+    QueryContext query_ctx(*parameters.index_schema,
+                           indexes::scoring::GetScorer(parameters.scorer));
+    indexes::PrefilterEvaluator evaluator(
+        query_ctx, parameters.filter_parse_results.query_operations,
+        *parameters.index_schema);
+    auto filter = [&](const InternedStringPtr &key) {
+      if (parameters.inkeys && !parameters.inkeys->contains(key->Str())) {
+        return false;
+      }
+      auto *predicate = parameters.filter_parse_results.root_predicate.get();
+      return !predicate || evaluator.Evaluate(*predicate, key);
+    };
+    auto cancellation = parameters.cancellation_token;
+    std::vector<InternedStringPtr> candidates;
+    bool use_prefilter = false;
+    auto *predicate = parameters.filter_parse_results.root_predicate.get();
+    const auto operations = parameters.filter_parse_results.query_operations;
+    // Negated TAG fetchers enumerate the tag dictionary while being created;
+    // vector-range fetchers may run a search. Avoid paying that cost merely to
+    // estimate a plan that could be rejected. The posting path handles both.
+    const bool cheap_estimate =
+        !(operations & QueryOperations::kContainsNegate) &&
+        !(operations & QueryOperations::kContainsVectorRange);
+    if (predicate && cheap_estimate) {
+      std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> fetchers;
+      auto estimate =
+          EvaluateFilterAsPrimary(parameters, predicate, fetchers, false);
+      VMSDK_ASSIGN_OR_RETURN(
+          use_prefilter, sparse->PreferPrefilter(parameters.sparse_query,
+                                                 estimate, cancellation.get()));
+      if (use_prefilter) {
+        EvaluatePrefilteredKeys(
+            parameters, fetchers,
+            [&](const InternedStringPtr &key, auto &) {
+              candidates.push_back(key);
+              return true;
+            },
+            estimate, false, query_ctx);
+      }
+    } else if (!predicate && parameters.inkeys) {
+      VMSDK_ASSIGN_OR_RETURN(use_prefilter,
+                             sparse->PreferPrefilter(parameters.sparse_query,
+                                                     parameters.inkeys->size(),
+                                                     cancellation.get()));
+      if (use_prefilter) {
+        for (const auto &key : *parameters.inkeys) {
+          candidates.push_back(StringInternStore::Intern(key));
+        }
+      }
+    }
+    if (cancellation->IsCancelled()) {
+      return absl::DeadlineExceededError("Sparse prefilter cancelled");
+    }
+    if (use_prefilter) {
+      // The enumerator has already applied the complete predicate and INKEYS.
+      return sparse->Search(
+          parameters.sparse_query, parameters.k, cancellation,
+          [](const auto &) { return true; }, &candidates,
+          parameters.enable_partial_results);
+    }
+    return sparse->Search(parameters.sparse_query, parameters.k, cancellation,
+                          filter, nullptr, parameters.enable_partial_results);
+  }
+  auto *vector_index = dynamic_cast<indexes::VectorBase *>(index);
   if (index->GetIndexerType() != indexes::IndexerType::kHNSW &&
       index->GetIndexerType() != indexes::IndexerType::kFlat) {
     return absl::InvalidArgumentError(
@@ -1664,6 +1728,22 @@ SerializationRange SearchResult::GetSerializationRange(
 }
 
 absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
+  std::shared_ptr<indexes::IndexBase> vector_index;
+  if (parameters.IsVectorQuery()) {
+    VMSDK_ASSIGN_OR_RETURN(vector_index, parameters.index_schema->GetIndex(
+                                             parameters.attribute_alias));
+    if (vector_index->GetIndexerType() == indexes::IndexerType::kSparse) {
+      // Validate even when INKEYS is empty. No shard can turn malformed
+      // command input into a successful (possibly partial) result.
+      auto decoded = indexes::Sparse::Decode(
+          parameters.query, parameters.cancellation_token.get());
+      if (!decoded.ok()) {
+        parameters.sparse_query_validation_failed = true;
+        return decoded.status();
+      }
+      parameters.sparse_query = std::move(*decoded);
+    }
+  }
   // Reject already-cancelled queries before acquiring the time-slice mutex.
   // Without this, expired queries that sat in the queue still acquire a reader
   // slot and waste mutex time before discovering they're cancelled deep in the
@@ -1672,6 +1752,11 @@ absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
   // coordinator tracker counts this as a "successful" node with 0 results —
   // enabling partial results from other shards that did complete.
   if (parameters.cancellation_token->IsCancelled()) {
+    if (vector_index &&
+        vector_index->GetIndexerType() == indexes::IndexerType::kSparse) {
+      // The deadline can expire in the final block between decoder polls.
+      return absl::DeadlineExceededError(kTimeoutMsg);
+    }
     return absl::OkStatus();
   }
   // INKEYS with an empty set means no keys can match.
@@ -1681,8 +1766,8 @@ absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
         SearchResult(0, std::vector<indexes::Neighbor>{}, parameters);
     return absl::OkStatus();
   }
-  auto &time_sliced_mutex = parameters.index_schema->GetTimeSlicedMutex();
-  vmsdk::ReaderMutexLock lock(&time_sliced_mutex);
+  auto &index_schema = *parameters.index_schema;
+  vmsdk::ReaderMutexLock lock(&index_schema.GetTimeSlicedMutex());
   ++Metrics::GetStats().time_slice_queries;
   // Handle OOM for search requests, defends against request
   // coming from the coordinator
@@ -1710,21 +1795,22 @@ absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
       parameters.search_result =
           SearchResult(total_count, std::move(neighbors), parameters);
     } else {
-      VMSDK_ASSIGN_OR_RETURN(auto borrowed, DoSearchNonVector(parameters));
+      VMSDK_ASSIGN_OR_RETURN(auto borrowed,
+                             DoSearchNonVector(parameters, index_schema));
       size_t total_count = borrowed.size();
       parameters.search_result =
           SearchResult(total_count, std::move(borrowed), parameters);
     }
   } else {
-    VMSDK_ASSIGN_OR_RETURN(auto neighbors,
-                           DoSearchVector(parameters, search_mode, lock));
+    VMSDK_ASSIGN_OR_RETURN(
+        auto neighbors, DoSearchVector(parameters, vector_index.get(), lock));
     VMSDK_ASSIGN_OR_RETURN(
         auto result, MaybeAddIndexedContent(std::move(neighbors), parameters));
     size_t total_count = result.size();
     parameters.search_result =
         SearchResult(total_count, std::move(result), parameters);
   }
-  parameters.index_schema->PopulateIndexMutationSequenceNumbers(
+  index_schema.PopulateIndexMutationSequenceNumbers(
       parameters.search_result.neighbors);
   return absl::OkStatus();
 }
@@ -2112,6 +2198,7 @@ absl::Status query::SearchParameters::PreParseQueryString() {
     // Validate the index exists and is a vector index.
     VMSDK_ASSIGN_OR_RETURN(auto index, index_schema->GetIndex(attribute_alias));
     if (index->GetIndexerType() != indexes::IndexerType::kHNSW &&
+        index->GetIndexerType() != indexes::IndexerType::kSparse &&
         index->GetIndexerType() != indexes::IndexerType::kFlat) {
       return absl::InvalidArgumentError(absl::StrCat(
           "Index field `", attribute_alias, "` is not a Vector index "));
@@ -2181,21 +2268,41 @@ absl::Status PostParseVectorParameters(query::SearchParameters &parameters) {
   VMSDK_ASSIGN_OR_RETURN(parameters.k, vmsdk::To<unsigned>(k_string));
 
   VMSDK_ASSIGN_OR_RETURN(
-      parameters.query,
+      auto query_blob,
       SubstituteParam(parameters, parameters.parse_vars.query_vector_string));
 
   VMSDK_ASSIGN_OR_RETURN(auto index, parameters.index_schema->GetIndex(
                                          parameters.attribute_alias));
+  if (index->GetIndexerType() == indexes::IndexerType::kSparse) {
+    parameters.vector_score_only = true;
+    VMSDK_RETURN_IF_ERROR(indexes::Sparse::CheckQuerySize(
+        query_blob, parameters.parse_vars.sparse_query_bytes_left));
+    parameters.query = query_blob;
+    if (!parameters.parse_vars.ef_string.empty() ||
+        parameters.hybrid_policy != HybridPolicy::kAuto ||
+        !parameters.parse_vars.hybrid_policy_string.empty()) {
+      return absl::InvalidArgumentError(
+          "SPARSE does not support EF_RUNTIME or HYBRID_POLICY");
+    }
+    if (!parameters.parse_vars.score_as_string.empty()) {
+      VMSDK_ASSIGN_OR_RETURN(
+          auto alias,
+          SubstituteParam(parameters, parameters.parse_vars.score_as_string));
+      parameters.score_as = vmsdk::MakeUniqueValkeyString(alias);
+    }
+    return absl::OkStatus();
+  }
   auto *vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
   CHECK(vector_index != nullptr);
-  if (parameters.query.size() !=
+  if (query_blob.size() !=
       static_cast<size_t>(vector_index->GetVectorDataSize())) {
     return absl::InvalidArgumentError(
-        absl::StrCat("query vector blob size (", parameters.query.size(),
+        absl::StrCat("query vector blob size (", query_blob.size(),
                      ") does not match index's expected size (",
                      vector_index->GetVectorDataSize(), ")."));
   }
 
+  parameters.query = query_blob;
   if (!parameters.parse_vars.ef_string.empty()) {
     VMSDK_ASSIGN_OR_RETURN(
         auto ef_string,

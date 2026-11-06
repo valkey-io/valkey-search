@@ -82,10 +82,14 @@ message Index {
     NumericIndex numeric_index = 2;
     TagIndex tag_index = 3;
     TextIndex text_index = 4;
+    SparseIndex sparse_index = 5;
   }
 }
 
 message NumericIndex {}
+
+// Sparse HASH fields contain sorted uint32/FLOAT32 little-endian pairs.
+message SparseIndex {}
 
 message TagIndex {
   string separator = 1;

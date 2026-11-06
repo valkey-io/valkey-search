@@ -21,14 +21,15 @@ endif()
 
 # Check for compiler compatibility
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-  # We require GCC v12 and later
+  # We require GCC v13 and later: src/indexes/fp16.h uses _Float16, which GCC 12
+  # does not accept in C++ on AArch64.
   string(REGEX MATCH "^([0-9]+)\\.([0-9]+)\\.([0-9]+)" GCC_VERSION_MATCH
                ${CMAKE_CXX_COMPILER_VERSION})
   set(GCC_MAJOR_VERSION ${CMAKE_MATCH_1})
-  if(GCC_MAJOR_VERSION LESS 12)
+  if(GCC_MAJOR_VERSION LESS 13)
     message(
       FATAL_ERROR
-        "Minimum GCC required is 12 and later. Your GCC version is ${CMAKE_CXX_COMPILER_VERSION}"
+        "Minimum GCC required is 13 and later. Your GCC version is ${CMAKE_CXX_COMPILER_VERSION}"
     )
   endif()
 elseif(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")

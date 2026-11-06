@@ -50,7 +50,7 @@ FT.CREATE <index-name>
 
 - `MINSTEMSIZE <min_stem_size>` (optional): For text fields with stemming enabled. This controls the minimum length of a word, in characters (Unicode code points), required for it to be subjected to stemming. The default value is 4. On English indexes with `search.emulate-release` below 1.3.0, the length is counted in bytes (see COMPATIBILITY.md).
 
-- `WITHOFFSETS | NOOFFSETS` (optional): Enables/Disables the retention of per-word offsets within a text field. Offsets are required to perform exact phrase matching and slop-based proximity matching. Thus if offsets are disabled, those query operations will be rejected with an error. The default is `WITHOFFSETS`.
+- `WITHOFFSETS | NOOFFSETS` (optional): Enables/Disables the retention of per-word offsets within a text field. Offsets are required to perform exact phrase matching and slop-based proximity matching. If offsets are disabled, a quoted phrase matches documents that contain all its words in any order and at any distance, and `INORDER` and `SLOP` are ignored. The default is `WITHOFFSETS`.
 
 - `NOHL` (optional): This parameter is accepted for compatibility, but has no effect.
 

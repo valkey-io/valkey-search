@@ -15,6 +15,7 @@
 #include "absl/status/statusor.h"
 #include "ft_search_parser.h"
 #include "src/commands/commands.h"
+#include "src/commands/filter_parser.h"
 #include "src/commands/ft_aggregate_exec.h"
 #include "src/index_schema.h"
 #include "src/indexes/index_base.h"
@@ -224,7 +225,8 @@ absl::Status AggregateParameters::ParseCommand(vmsdk::ArgsIterator &itr) {
   }
 
   // Redisearch ignores these on an index without offsets.
-  if (!index_schema->HasTextOffsets()) {
+  if (!index_schema->HasTextOffsets() && (inorder || slop.has_value())) {
+    LogWordPositionsIgnored(*index_schema);
     inorder = false;
     slop.reset();
   }

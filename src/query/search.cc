@@ -2310,8 +2310,11 @@ absl::StatusOr<size_t> FindCloseSquareBracket(absl::string_view input) {
 }
 
 absl::Status query::SearchParameters::ParseFilter() {
-  if ((inorder || slop.has_value()) && !index_schema->HasTextOffsets()) {
-    return absl::InvalidArgumentError("Index does not support offsets");
+  // Redisearch ignores these on an index without offsets.
+  if (!index_schema->HasTextOffsets() && (inorder || slop.has_value())) {
+    LogWordPositionsIgnored(*index_schema);
+    inorder = false;
+    slop.reset();
   }
   TextParsingOptions options{
       .verbatim = verbatim, .inorder = inorder, .slop = slop};

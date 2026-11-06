@@ -5,6 +5,7 @@
  *
  */
 #include <atomic>
+#include <cstdlib>
 #include <thread>
 
 #include "benchmark/benchmark.h"
@@ -36,6 +37,26 @@ static void BM_StandardAtomic_GetTotal(benchmark::State& state) {
     benchmark::DoNotOptimize(global_std_atomic.GetTotal());
   }
 }
+
+static void* BenchmarkAlloc(size_t size) { return std::malloc(size); }
+static void BenchmarkFree(void* ptr) { std::free(ptr); }
+static void* BenchmarkRealloc(void* ptr, size_t size) {
+  return std::realloc(ptr, size);
+}
+static void* BenchmarkCalloc(size_t nmemb, size_t size) {
+  return std::calloc(nmemb, size);
+}
+
+struct BenchmarkAllocatorInstaller {
+  BenchmarkAllocatorInstaller() {
+    ValkeyModule_Alloc = &BenchmarkAlloc;
+    ValkeyModule_Free = &BenchmarkFree;
+    ValkeyModule_Realloc = &BenchmarkRealloc;
+    ValkeyModule_Calloc = &BenchmarkCalloc;
+  }
+};
+
+static BenchmarkAllocatorInstaller benchmark_allocator_installer;
 
 static vmsdk::ShardedAtomic<int64_t> global_sharded_atomic;
 

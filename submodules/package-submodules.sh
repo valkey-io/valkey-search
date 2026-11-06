@@ -95,8 +95,8 @@ if [ ! -f "${INSTALL_DIR}/include/highwayhash/highwayhash.h" ]; then
     cp -fr ${SRC_DIR}/highwayhash/highwayhash ${INSTALL_DIR}/include
 fi
 
-# Normal builds require Google Benchmark during CMake configuration. Sanitizer
-# builds skip benchmark targets and do not need this dependency.
+# Non-sanitizer bundles include Google Benchmark for explicit BUILD_BENCHMARKS=ON
+# builds. Sanitizer builds skip benchmark targets and do not need this dependency.
 if [[ "${SAN_BUILD}" == "no" &&
       ( ! -f "${INSTALL_DIR}/include/benchmark/benchmark.h" ||
         ! -f "${INSTALL_DIR}/lib/cmake/benchmark/benchmarkConfig.cmake" ) ]]; then

@@ -11,12 +11,15 @@
 
 #include <cerrno>
 #include <climits>
+#include <cstdint>
 #include <cstdlib>
 #include <iomanip>
 #include <memory>
 #include <string>
 
 #include "absl/synchronization/blocking_counter.h"
+#include "absl/time/clock.h"
+#include "absl/time/time.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "vmsdk/src/testing_infra/module.h"
@@ -362,6 +365,22 @@ TEST_F(UtilsTest, DestructByMainThreadDrainedAtShutdown) {
   EXPECT_FALSE(deleted);
   DrainPendingMainCallbacks();
   EXPECT_TRUE(deleted);
+}
+
+TEST_F(UtilsTest, StopWatchMonotonicAndStartTime) {
+  StopWatch sw;
+  const auto start_tp = sw.StartTime();
+  const int64_t start_us = sw.StartMonotonicUs();
+  const int64_t start_ms = sw.StartMonotonicMs();
+  EXPECT_GT(start_us, 0);
+  EXPECT_EQ(start_ms, start_us / 1000LL);
+
+  absl::SleepFor(absl::Milliseconds(5));
+  EXPECT_GE(sw.Duration(), absl::Milliseconds(1));
+
+  sw.Reset();
+  EXPECT_GE(sw.StartTime(), start_tp);
+  EXPECT_GE(sw.StartMonotonicUs(), start_us);
 }
 
 }  // namespace vmsdk

@@ -31,7 +31,10 @@ class ConfigTest : public vmsdk::ValkeyTest {
  protected:
   ValkeyModuleCtx fake_ctx;
   void SetUp() override { vmsdk::ValkeyTest::SetUp(); }
-  void TearDown() override { vmsdk::ValkeyTest::TearDown(); }
+  void TearDown() override {
+    ModuleConfigManager::Instance().SetValidationCallback(nullptr);
+    vmsdk::ValkeyTest::TearDown();
+  }
 };
 
 TEST_F(ConfigTest, registration) {
@@ -590,6 +593,56 @@ TEST_F(ConfigTest, CheckVersion) {
   EXPECT_TRUE(absl::IsOutOfRange(bad));
   EXPECT_EQ(cfg->GetValue(), vmsdk::ValkeyVersion(1, 2, 3));
   EXPECT_EQ(cfg->GetDefaultValue(), vmsdk::ValkeyVersion(1, 2, 3));
+}
+
+TEST_F(ConfigTest, CheckLogLevelBuilder) {
+  auto log_level = config::LogLevelBuilder().Build();
+  EXPECT_EQ(log_level->GetName(), config::kLogLevel);
+  EXPECT_EQ(log_level->GetValue(), static_cast<int>(LogLevel::kNotice));
+  EXPECT_EQ(log_level->GetDefaultValue(), static_cast<int>(LogLevel::kNotice));
+
+  EXPECT_TRUE(log_level->SetValue(static_cast<int>(LogLevel::kDebug)).ok());
+  EXPECT_EQ(log_level->GetValue(), static_cast<int>(LogLevel::kDebug));
+
+  EXPECT_TRUE(absl::IsOutOfRange(log_level->SetValue(99)));
+  EXPECT_EQ(log_level->GetValue(), static_cast<int>(LogLevel::kDebug));
+
+  auto args = vmsdk::ToValkeyStringVector("--log-level verbose");
+  ASSERT_TRUE(ModuleConfigManager::Instance().Init(&fake_ctx).ok());
+  EXPECT_TRUE(ModuleConfigManager::Instance()
+                  .ParseAndLoadArgv(&fake_ctx, args.data(), args.size())
+                  .ok());
+  EXPECT_EQ(log_level->GetValue(), static_cast<int>(LogLevel::kVerbose));
+  EXPECT_EQ(log_level->GetDefaultValue(), static_cast<int>(LogLevel::kVerbose));
+  FreeValkeyArgs(args);
+}
+
+TEST_F(ConfigTest, CrossOptionValidationCallback) {
+  auto min_cfg = config::NumberBuilder("min-val", 10, 0, 100).Build();
+  auto max_cfg = config::NumberBuilder("max-val", 50, 0, 100).Build();
+
+  ModuleConfigManager::Instance().SetValidationCallback([&]() -> absl::Status {
+    if (min_cfg->GetValue() > max_cfg->GetValue()) {
+      return absl::InvalidArgumentError("min-val must be <= max-val");
+    }
+    return absl::OkStatus();
+  });
+
+  ASSERT_TRUE(ModuleConfigManager::Instance().Init(&fake_ctx).ok());
+
+  // Valid regardless of argument order.
+  auto ok_args = vmsdk::ToValkeyStringVector("--max-val 80 --min-val 60");
+  EXPECT_TRUE(ModuleConfigManager::Instance()
+                  .ParseAndLoadArgv(&fake_ctx, ok_args.data(), ok_args.size())
+                  .ok());
+  FreeValkeyArgs(ok_args);
+
+  // Invalid combination rejected after all arguments are parsed.
+  auto bad_args = vmsdk::ToValkeyStringVector("--min-val 90 --max-val 20");
+  auto status = ModuleConfigManager::Instance().ParseAndLoadArgv(
+      &fake_ctx, bad_args.data(), bad_args.size());
+  EXPECT_TRUE(absl::IsInvalidArgument(status));
+  FreeValkeyArgs(bad_args);
 }
 
 }  // namespace

@@ -66,9 +66,10 @@
   }                                                                         \
   int ValkeyModule_OnUnload(ValkeyModuleCtx *ctx) {                         \
     if (options.on_unload.has_value()) {                                    \
-      options.on_unload.value()(ctx, options);                              \
+      return vmsdk::module::OnUnloadDone(                                   \
+          options.on_unload.value()(ctx, options), ctx, options);           \
     }                                                                       \
-    return VALKEYMODULE_OK;                                                 \
+    return vmsdk::module::OnUnloadDone(absl::OkStatus(), ctx, options);     \
   }                                                                         \
   }                                                                         \
   }
@@ -108,7 +109,7 @@ struct Options {
       ValkeyModuleCtx *, ValkeyModuleString **, int, const Options &)>>;
 
   using OnUnload = std::optional<
-      absl::AnyInvocable<void(ValkeyModuleCtx *, const Options &)>>;
+      absl::AnyInvocable<absl::Status(ValkeyModuleCtx *, const Options &)>>;
   OnLoad on_load;
   OnUnload on_unload;
 };
@@ -118,6 +119,8 @@ int OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc,
            vmsdk::ValkeyVersion module_version);
 int OnLoadDone(absl::Status status, ValkeyModuleCtx *ctx,
                const Options &options);
+int OnUnloadDone(absl::Status status, ValkeyModuleCtx *ctx,
+                 const Options &options);
 absl::Status RegisterInfo(ValkeyModuleCtx *ctx, ValkeyModuleInfoFunc info);
 
 }  // namespace module

@@ -59,16 +59,16 @@ class ABSL_LOCKABLE TimeSlicedMRMWMutex {
     kLockRead,
     kLockWrite,
   };
-  void ReaderLock(bool& may_prolong, bool ignore_time_quota)
+  StopWatch ReaderLock(bool& may_prolong, bool ignore_time_quota)
       ABSL_SHARED_LOCK_FUNCTION() ABSL_LOCKS_EXCLUDED(mutex_);
-  void WriterLock(bool& may_prolong, bool ignore_time_quota)
+  StopWatch WriterLock(bool& may_prolong, bool ignore_time_quota)
       ABSL_SHARED_LOCK_FUNCTION() ABSL_LOCKS_EXCLUDED(mutex_);
 
   void Unlock(bool may_prolong, bool ignore_time_quota) ABSL_UNLOCK_FUNCTION();
   void IncMayProlongCount() ABSL_LOCKS_EXCLUDED(mutex_);
 
  private:
-  void Lock(Mode target_mode, bool& may_prolong, bool ignore_time_quota)
+  StopWatch Lock(Mode target_mode, bool& may_prolong, bool ignore_time_quota)
       ABSL_LOCKS_EXCLUDED(mutex_);
   inline uint32_t& GetWaiters(Mode target_mode)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_) {
@@ -142,10 +142,9 @@ class ABSL_SCOPED_LOCKABLE ReaderMutexLock {
       ABSL_SHARED_LOCK_FUNCTION(mutex)
       : mutex_(mutex),
         may_prolong_(may_prolong),
-        ignore_time_quota_(ignore_time_quota) {
+        ignore_time_quota_(ignore_time_quota),
+        timer_(mutex->ReaderLock(may_prolong_, ignore_time_quota)) {
     ++global_stats.read_periods;
-    timer_.Reset();
-    mutex->ReaderLock(may_prolong_, ignore_time_quota);
   }
 
   ReaderMutexLock(const ReaderMutexLock&) = delete;
@@ -173,10 +172,9 @@ class ABSL_SCOPED_LOCKABLE WriterMutexLock {
       ABSL_SHARED_LOCK_FUNCTION(mutex)
       : mutex_(mutex),
         may_prolong_(may_prolong),
-        ignore_time_quota_(ignore_time_quota) {
+        ignore_time_quota_(ignore_time_quota),
+        timer_(mutex->WriterLock(may_prolong_, ignore_time_quota)) {
     ++global_stats.write_periods;
-    timer_.Reset();
-    mutex->WriterLock(may_prolong_, ignore_time_quota);
   }
 
   WriterMutexLock(const WriterMutexLock&) = delete;

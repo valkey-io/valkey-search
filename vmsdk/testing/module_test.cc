@@ -100,6 +100,25 @@ TEST_F(ModuleTest, ModuleNotLoaded) {
   EXPECT_FALSE(vmsdk::IsModuleLoaded(&fake_ctx, "json11"));
 }
 
+TEST_F(ModuleTest, OnUnloadDoneSuccess) {
+  module::Options opts{
+      .name = "test", .version = 1, .minimum_valkey_server_version = 1};
+  EXPECT_EQ(module::OnUnloadDone(absl::OkStatus(), &fake_ctx, opts),
+            VALKEYMODULE_OK);
+}
+
+TEST_F(ModuleTest, OnUnloadDoneFailureRefusesUnload) {
+  module::Options opts{
+      .name = "test", .version = 1, .minimum_valkey_server_version = 1};
+  EXPECT_CALL(*kMockValkeyModule,
+              Log(&fake_ctx, testing::StrEq(VALKEYMODULE_LOGLEVEL_WARNING),
+                  testing::HasSubstr("busy")))
+      .Times(1);
+  EXPECT_EQ(module::OnUnloadDone(absl::FailedPreconditionError("module busy"),
+                                 &fake_ctx, opts),
+            VALKEYMODULE_ERR);
+}
+
 }  // namespace
 
 }  // namespace vmsdk

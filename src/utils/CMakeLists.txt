@@ -55,3 +55,11 @@ set(SRCS_SCANNER ${CMAKE_CURRENT_LIST_DIR}/scanner.h)
 add_library(scanner INTERFACE ${SRCS_SCANNER})
 target_include_directories(scanner INTERFACE ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(scanner INTERFACE absl::strings)
+
+set(SRCS_REGEX_UTIL ${CMAKE_CURRENT_LIST_DIR}/regex_util.cc
+                    ${CMAKE_CURRENT_LIST_DIR}/regex_util.h)
+
+valkey_search_add_static_library(regex_util "${SRCS_REGEX_UTIL}")
+target_include_directories(regex_util PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(regex_util PUBLIC absl::status absl::statusor absl::strings)
+target_link_libraries(regex_util PRIVATE re2::re2)

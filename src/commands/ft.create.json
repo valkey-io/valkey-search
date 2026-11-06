@@ -290,7 +290,7 @@
                       {
                         "name": "vector-params",
                         "type": "block",
-                        "description": "Vector algorithm parameters (DIM, TYPE, DISTANCE_METRIC, INITIAL_CAP, M, EF_CONSTRUCTION, EF_RUNTIME)",
+                        "description": "Vector algorithm parameters (DIM, TYPE, DISTANCE_METRIC, INITIAL_CAP, BLOCK_SIZE, M, EF_CONSTRUCTION, EF_RUNTIME)",
                         "arguments": [
                           {
                             "name": "type",
@@ -344,6 +344,12 @@
                           {
                             "name": "initial_cap",
                             "token": "INITIAL_CAP",
+                            "type": "integer",
+                            "optional": true
+                          },
+                          {
+                            "name": "block_size",
+                            "token": "BLOCK_SIZE",
                             "type": "integer",
                             "optional": true
                           },

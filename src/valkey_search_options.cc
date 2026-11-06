@@ -168,6 +168,13 @@ static auto use_coordinator = config::BooleanBuilder(kUseCoordinator, false)
                                   .Hidden()  // can only be set during start-up
                                   .Build();
 
+/// Secure the coordinator channel with mutual TLS, using the server's own TLS
+/// configuration. Off by default so existing deployments are unaffected.
+constexpr absl::string_view kCoordinatorTls{"coordinator-tls"};
+static auto coordinator_tls = config::BooleanBuilder(kCoordinatorTls, false)
+                                  .Hidden()  // can only be set during start-up
+                                  .Build();
+
 // Enable vector sharing
 constexpr absl::string_view kEnableVectorSharing{"enable-vector-sharing"};
 static auto enable_vector_sharing =
@@ -650,6 +657,10 @@ const vmsdk::config::Boolean &GetUseCoordinator() {
   return dynamic_cast<const vmsdk::config::Boolean &>(*use_coordinator);
 }
 
+const vmsdk::config::Boolean &GetCoordinatorTls() {
+  return dynamic_cast<const vmsdk::config::Boolean &>(*coordinator_tls);
+}
+
 const vmsdk::config::Boolean &GetEnableVectorSharing() {
   return dynamic_cast<const vmsdk::config::Boolean &>(*enable_vector_sharing);
 }
@@ -689,6 +700,7 @@ config::Boolean &GetHNSWValidationEnableMutable() {
 
 absl::Status Reset() {
   VMSDK_RETURN_IF_ERROR(use_coordinator->SetValue(false));
+  VMSDK_RETURN_IF_ERROR(coordinator_tls->SetValue(false));
   VMSDK_RETURN_IF_ERROR(rdb_load_skip_index->SetValue(false));
   VMSDK_RETURN_IF_ERROR(enable_vector_sharing->SetValue(true));
   VMSDK_RETURN_IF_ERROR(

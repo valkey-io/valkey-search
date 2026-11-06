@@ -115,9 +115,10 @@ For `SVS_VAMANA`, `capacity` is the field's `INITIAL_CAP` (10240 unless `FT.CREA
 - `construction_window_size` (integer) The number of candidates examined when inserting a vector.
 - `search_window_size` (integer) The number of candidates examined during a query, unless the query sets `EF_RUNTIME`.
 - `alpha` (double) The pruning parameter the graph is built with: the `ALPHA` given to `FT.CREATE`, or the default for the distance metric (1.2 for `L2`, 0.95 for `IP` and `COSINE`).
-- `compression` (string) How SVS stores the vectors: `SVS_COMPRESSION_NONE`, `SVS_COMPRESSION_FP16` or `SVS_COMPRESSION_SQ8`.
+- `compression` (string) How SVS stores the vectors: `SVS_COMPRESSION_NONE`, `SVS_COMPRESSION_FP16` or `SVS_COMPRESSION_SQ8`; for a compression this build doesn't know, its number.
+- `unavailable` (string) Why this build can't create the field's storage. Only present for such a field, which tracks its keys and fails the searches that need its storage (see the SVS_VAMANA notes in [FT.CREATE](ft.create.md#svs_vamana-notes)).
 - `training_threshold` (integer) The number of vectors the index holds uncompressed before it converts to `SQ8`. Only present for `SVS_COMPRESSION_SQ8`.
-- `compression_pending` (integer) `1` while the index is still uncompressed, `0` once it has converted. Only present for `SVS_COMPRESSION_SQ8`.
+- `compression_pending` (integer) `1` while the index is still uncompressed, `0` once it has converted, and for a field whose storage is unavailable. Only present for `SVS_COMPRESSION_SQ8`.
 - `memory_bytes` (integer) Bytes SVS holds for this field's graph, vector data and metadata. `0` before the first vector is added. SVS allocates in blocks sized by `INITIAL_CAP`, so the value grows in steps.
 
 ### Response when the PRIMARY option is specified.

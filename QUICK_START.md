@@ -42,7 +42,7 @@ FT.CREATE myIndex SCHEMA embedding VECTOR HNSW 6 TYPE FLOAT32 DIM 3 DISTANCE_MET
 ```
 
 - `embedding` is the field name for storing vectors.
-- `VECTOR HNSW` uses the Hierarchical Navigable Small World algorithm for approximate nearest neighbor search. The other option is `VECTOR FLAT` for exact brute-force search.
+- `VECTOR HNSW` uses the Hierarchical Navigable Small World algorithm for approximate nearest neighbor search. The other options are `VECTOR FLAT` for exact brute-force search and `VECTOR SVS_VAMANA`, a graph index from Intel's Scalable Vector Search that can store the vectors compressed (see [FT.CREATE](docs/commands/ft.create.md)).
 - `DIM 3` sets the vector dimensionality to 3.
 - `DISTANCE_METRIC COSINE` sets the distance metric to cosine similarity. Other options are `L2` and `IP`.
 

@@ -139,7 +139,7 @@ LOCAL: An array of key value pairs.
         - **m** (integer) The count of maximum permitted outgoing edges for each node in the graph in each layer. The maximum number of outgoing edges is 2\*M for layer 0\. The Default is 16\. The maximum is 512\.
         - **ef_construction** (integer) The count of vectors in the index. The default is 200, and the max is 4096\. Higher values increase the time needed to create indexes, but improve the recall ratio.
         - **ef_runtime** (integer) The count of vectors to be examined during a query operation. The default is 10, and the max is 4096\.
-        - For SVS_VAMANA, **graph_max_degree**, **construction_window_size**, **search_window_size**, **alpha** (the effective value, including the per-metric default) and **compression** (`SVS_COMPRESSION_NONE`, `SVS_COMPRESSION_FP16` or `SVS_COMPRESSION_SQ8`), plus **training_threshold** and **compression_pending** (1 until the index converts) for SQ8, and **memory_bytes** (bytes SVS holds for the field), instead. See [FT.INFO](docs/commands/ft.info.md).
+        - For SVS_VAMANA, **graph_max_degree**, **construction_window_size**, **search_window_size**, **alpha** (the effective value, including the per-metric default) and **compression** (`SVS_COMPRESSION_NONE`, `SVS_COMPRESSION_FP16` or `SVS_COMPRESSION_SQ8`), plus **training_threshold** and **compression_pending** (1 until the index converts) for SQ8, **unavailable** (the reason) when this build can't create the field's storage, and **memory_bytes** (bytes SVS holds for the field), instead. See [FT.INFO](docs/commands/ft.info.md).
 
 ## FT.\_LIST
 
@@ -220,7 +220,7 @@ Where:
 - **\<K\>** The number of nearest neighbor vectors to return.
 - **\<vector_parameter_name\>** A PARAM name whose corresponding value provides the query vector for the KNN algorithm. Note that this parameter must be encoded in little-endian byte order using the element type declared by the index (`TYPE FLOAT32`, `FLOAT16` or `BFLOAT16`), so its length must be `DIM * 4` bytes for FLOAT32 and `DIM * 2` bytes for the 16-bit types.
 - **\<query-modifiers\>** (Optional) A list of keyword/value pairs that modify this particular KNN search. Currently three keywords are supported:
-  - **EF_RUNTIME** This keyword is accompanied by an integer value which overrides the default value of **EF_RUNTIME** specified when the index was created. It is rejected when `HYBRID_POLICY ADHOC_BF` is selected because that exact filter-first path does not use the HNSW runtime candidate limit.
+  - **EF_RUNTIME** This keyword is accompanied by an integer value which overrides the default value of **EF_RUNTIME** specified when the index was created. It is rejected when `HYBRID_POLICY ADHOC_BF` is selected because that exact filter-first path does not use the runtime candidate limit (`EF_RUNTIME` for HNSW, `SEARCH_WINDOW_SIZE` for SVS_VAMANA).
   - **HYBRID_POLICY** For a filtered KNN query, `ADHOC_BF` forces exact filter-first execution and `BATCHES` forces vector-search-first execution with inline filtering. An explicit policy takes precedence when `INKEYS` is also supplied: `BATCHES` keeps the named keys in the inline filter, while `ADHOC_BF` uses filter-first execution. With no explicit policy, `INKEYS` uses filter-first execution. This keyword requires either a filter expression or `INKEYS`; it is rejected on an unrestricted `*=>[KNN ...]` query.
   - **AS** This keyword is accompanied by a string value which becomes the name of the score field in the result, overriding the default score field name generation algorithm.
 

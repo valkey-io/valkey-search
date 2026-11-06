@@ -297,7 +297,8 @@ static config::Boolean search_result_background_cleanup(
 /// If set to true, a shard sends its fanout reply from a reader thread once the
 /// main thread has fetched the content, instead of from the main thread.
 constexpr absl::string_view kBackgroundShardReply{"background-shard-reply"};
-static config::Boolean background_shard_reply(kBackgroundShardReply, false);
+// TEMP(benchmark only): default on. Revert before merge.
+static config::Boolean background_shard_reply(kBackgroundShardReply, true);
 
 /// Configure the weight for high priority tasks in thread pools (0-100)
 /// Low priority weight = 100 - high_priority_weight
@@ -559,7 +560,8 @@ static auto fanout_uniformity_min_index_size =
 /// for async fanout operations (minimum number of targets to use async)
 constexpr absl::string_view kAsyncFanoutThresholdConfig{
     "async-fanout-threshold"};
-constexpr uint32_t kDefaultAsyncFanoutThreshold{30};     // 30 targets
+// TEMP(benchmark only): default 1. Revert before merge (was 30).
+constexpr uint32_t kDefaultAsyncFanoutThreshold{1};      // 1 target
 constexpr uint32_t kMinimumAsyncFanoutThreshold{1};      // At least 1 target
 constexpr uint32_t kMaximumAsyncFanoutThreshold{10000};  // Max 10k targets
 static auto async_fanout_threshold =

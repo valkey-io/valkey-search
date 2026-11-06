@@ -162,7 +162,8 @@ class RemoteResponderSearch : public query::SearchParameters {
                 auto self = std::move(*holder);
                 static_cast<RemoteResponderSearch *>(self.get())
                     ->QueryCompleteImpl();
-                // Free on main: module strings and IndexSchema aren't safe here.
+                // Free on main: module strings and IndexSchema aren't safe
+                // here.
                 vmsdk::RunByMain([self = std::move(self)]() {});
               },
               vmsdk::ThreadPool::Priority::kHigh)) {

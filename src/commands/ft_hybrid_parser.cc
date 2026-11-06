@@ -1193,8 +1193,9 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
       // enable-partial-results turns an error into a silently empty arm.
       auto *vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
       if (index->GetIndexerType() == indexes::IndexerType::kSparse) {
-        VMSDK_ASSIGN_OR_RETURN(auto entries,
-                               indexes::Sparse::Decode(arm->query));
+        VMSDK_ASSIGN_OR_RETURN(
+            auto entries,
+            indexes::Sparse::Decode(arm->query, arm->cancellation_token.get()));
         if (arm->ef.has_value() || arm->hybrid_policy != HybridPolicy::kAuto) {
           return absl::InvalidArgumentError(
               "SPARSE does not support EF_RUNTIME or POLICY");
@@ -1319,6 +1320,14 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
             "YIELD_SCORE_AS `", *alias,
             "` collides with the fused score's column; rename one of them"));
       }
+    }
+  }
+
+  absl::flat_hash_set<absl::string_view> score_aliases;
+  for (const auto &alias : env.per_arm_score_alias) {
+    if (alias && !score_aliases.insert(*alias).second) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Duplicate per-arm YIELD_SCORE_AS alias: ", *alias));
     }
   }
 

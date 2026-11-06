@@ -23,8 +23,9 @@ postings are rebuilt from the HASH values during RDB loading, like TAG/NUMERIC.
 Filtered searches choose between scoring matching forward vectors and
 accumulating the union of query posting lists. The planner compares the
 filter cardinality estimate times the mean document/query vector lengths
-with the number of query postings. Negated and vector-range filters retain
-the posting path because even estimating their candidates can be expensive.
+with the number of query postings. Negated filters retain the posting path
+because estimating their candidates can be expensive. KNN filters reject
+`VECTOR_RANGE` predicates during parsing.
 Unfiltered searches also use postings. Both select top-K with a bounded heap
 and return only documents with nonzero-weight overlap. Accumulation uses double precision in increasing dimension order;
 the existing query pipeline represents the final distance as FLOAT32. Distance
@@ -36,8 +37,8 @@ Queries use the existing reader thread pool and cancellation token. Index
 mutations and queries share the schema's reader/writer phase synchronization;
 the sparse index owns its data instead of borrowing Valkey STRING buffers.
 The index uses recycled numeric document IDs, contiguous posting arrays
-and forward vectors with deletion back-references. Query-local score arrays
-avoid per-candidate string-key hashing and scale with the highest allocated ID. It has no compressed posting blocks or approximate pruning.
+and forward vectors with deletion back-references. Rare posting lists accumulate scores by matched ID. Direct score arrays are
+used only when a posting list already covers at least one in sixteen slots.
 
 ## Dense + sparse RRF
 

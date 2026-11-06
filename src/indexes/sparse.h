@@ -29,7 +29,8 @@ class Sparse : public IndexBase {
   Sparse() : IndexBase(IndexerType::kSparse) {}
 
   // Rejects non-finite values, duplicate/out-of-order IDs and truncated pairs.
-  static absl::StatusOr<std::vector<Entry>> Decode(absl::string_view blob);
+  static absl::StatusOr<std::vector<Entry>> Decode(
+      absl::string_view blob, cancel::Base *cancel = nullptr);
   // Re-scores a HASH value after a concurrent mutation, without reading index
   // state. A document with no overlap is no longer a sparse search candidate.
   static absl::StatusOr<float> RecomputeDistance(absl::string_view record,
@@ -67,12 +68,14 @@ class Sparse : public IndexBase {
   absl::StatusOr<std::vector<Neighbor>> Search(
       absl::string_view query, size_t count, cancel::Token &cancellation,
       absl::AnyInvocable<bool(const InternedStringPtr &)> filter,
-      const std::vector<InternedStringPtr> *candidates = nullptr) const;
+      const std::vector<InternedStringPtr> *candidates = nullptr,
+      bool partial = false) const;
 
   // Reader-phase cost estimate; chooses a traversal without changing results.
   // Forward work includes both sorted vectors, posting work their list sizes.
   absl::StatusOr<bool> PreferPrefilter(absl::string_view query,
-                                       size_t candidate_count) const;
+                                       size_t candidate_count,
+                                       cancel::Base *cancel = nullptr) const;
 
  private:
   using DocId = uint32_t;

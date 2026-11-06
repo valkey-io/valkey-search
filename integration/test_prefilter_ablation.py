@@ -51,3 +51,7 @@ class TestSparsePrefilter(ValkeySearchTestCaseBase):
                                      'doc:004', 'doc:005', 'doc:099', 'missing',
                                      'RETURN', 1, 'd', 'LIMIT', 0, 100)
         assert set(response[1::2]) == {b'doc:005', b'doc:099'}
+        response = c.execute_command('FT.SEARCH', 'idx', '*=>[KNN 1 @s $q AS d]',
+                                     'PARAMS', 2, 'q', q, 'INKEYS', 1, 'doc:005',
+                                     'RETURN', 1, 'd')
+        assert response[1::2] == [b'doc:005']

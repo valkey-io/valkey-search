@@ -53,7 +53,9 @@ class TestManagedSparse(ValkeySearchTestCaseBase):
         assert search(client, q) == [(b"doc:a", -4), (b"doc:b", -4), (b"doc:c", 4)]
         assert search(client, q, 1, "@region:{one}") == [(b"doc:a", -4)]
         client.hset("doc:a", "s", sparse([(9, 10)]))
+        waiters.wait_for_true(lambda: b"doc:a" not in dict(search(client, q)), timeout=10)
         client.delete("doc:b")
+        assert b"doc:b" not in dict(search(client, q))
         waiters.wait_for_true(lambda: search(client, q) == [(b"doc:c", 4)], timeout=10)
         client.execute_command("SAVE")
         self.server.restart(remove_rdb=False)
@@ -123,6 +125,45 @@ class TestManagedSparse(ValkeySearchTestCaseBase):
         )
         rows = [dict(zip(row[::2], row[1::2])) for row in response[1:]]
         assert [row[b"__key"] for row in rows] == expected_keys
+        sparse_scores = {key: -distance for distance, key in oracle[:20]}
+        for row in rows:
+            if row[b"__key"] in sparse_scores:
+                assert float(row[b"sparse_score"]) == sparse_scores[row[b"__key"]]
+
+    def test_sparse_arm_options(self):
+        c = self.server.get_new_client()
+        self.setup_index(c)
+        arm = ["VSIM", "@s", "$q", "KNN", 2, "K", 1]
+        params = ["PARAMS", 2, "q", sparse([(1, 1)])]
+        with pytest.raises(ResponseError, match="Duplicate per-arm"):
+            c.execute_command("FT.HYBRID", "idx", *(arm + ["YIELD_SCORE_AS", "same"])*2,
+                              "COMBINE", "RRF", 0, *params)
+        for policy in ("ADHOC", "BATCHES"):
+            with pytest.raises(ResponseError, match="SPARSE does not support"):
+                c.execute_command("FT.HYBRID", "idx", *arm, *arm, "FILTER", 3,
+                                  "@region:{one}", "POLICY", policy, "COMBINE", "RRF", 0, *params)
+
+    @pytest.mark.parametrize("n", [3, 5, 6])
+    def test_multiple_sparse_arms(self, n):
+        c = self.server.get_new_client()
+        self.setup_index(c)
+        for i in range(n):
+            c.hset(f"doc:{i}", "s", sparse([(i, 1)]))
+        waiters.wait_for_true(lambda: c.execute_command("FT.SEARCH", "idx", "*", "LIMIT", 0, 0)[0] == n)
+        arms, params = [], []
+        for i in range(n):
+            arms.extend(["VSIM", "@s", f"$q{i}", "KNN", 2, "K", 1])
+            params.extend([f"q{i}", sparse([(i, 1)])])
+        args = ["FT.HYBRID", "idx", *arms, "COMBINE", "RRF", 0, "LOAD", 1, "@__key",
+                "LIMIT", 0, n, "PARAMS", len(params), *params]
+        if n == 6:
+            with pytest.raises(ResponseError, match="at most 5"):
+                c.execute_command(*args)
+        else:
+            rows = c.execute_command(*args)[1:]
+            assert {dict(zip(row[::2], row[1::2]))[b"__key"] for row in rows} == {
+                f"doc:{i}".encode() for i in range(n)}
+
 
 class TestManagedSparseCluster(ValkeySearchClusterTestCase):
     def test_filtered_global_topk_after_updates(self):
@@ -148,6 +189,8 @@ class TestManagedSparseCluster(ValkeySearchClusterTestCase):
         waiters.wait_for_true(correct, timeout=15)
         client.hset(b"doc:001", "s", sparse([(1, 100), (7, 1)]))
         weights[b"doc:001"] = 100
+        waiters.wait_for_true(correct, timeout=15)
         client.delete(b"doc:017")
+        assert all(b"doc:017" not in dict(search(node, query, 10, "@region:{1}")) for node in nodes)
         del weights[b"doc:017"]
         waiters.wait_for_true(correct, timeout=15)

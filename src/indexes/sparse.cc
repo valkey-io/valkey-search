@@ -33,12 +33,17 @@ absl::StatusOr<float> Distance(double dot) {
 
 // Both inputs are ordered by dimension; preserve the unfiltered summation
 // order.
-std::optional<double> Dot(const std::vector<Sparse::Entry> &record,
-                          const std::vector<Sparse::Entry> &query) {
+absl::StatusOr<std::optional<double>> Dot(
+    const std::vector<Sparse::Entry> &record,
+    const std::vector<Sparse::Entry> &query, cancel::Base *cancel) {
+  size_t steps = 0;
   size_t i = 0, j = 0;
   double sum = 0;
   bool overlap = false;
   while (i < record.size() && j < query.size()) {
+    if ((++steps & 255) == 0 && cancel && cancel->IsCancelled()) {
+      return absl::DeadlineExceededError("Sparse search cancelled");
+    }
     if (record[i].dimension < query[j].dimension) {
       ++i;
     } else if (record[i].dimension > query[j].dimension) {
@@ -53,7 +58,7 @@ std::optional<double> Dot(const std::vector<Sparse::Entry> &record,
 }  // namespace
 
 absl::StatusOr<std::vector<Sparse::Entry>> Sparse::Decode(
-    absl::string_view blob) {
+    absl::string_view blob, cancel::Base *cancel) {
   if (blob.size() % 8 != 0) {
     return absl::InvalidArgumentError("SPARSE requires uint32/FLOAT32 pairs");
   }
@@ -61,6 +66,9 @@ absl::StatusOr<std::vector<Sparse::Entry>> Sparse::Decode(
   entries.reserve(blob.size() / 8);
   uint32_t previous = 0;
   for (size_t offset = 0; offset < blob.size(); offset += 8) {
+    if ((offset / 8 % 256) == 0 && cancel && cancel->IsCancelled()) {
+      return absl::DeadlineExceededError("Sparse decode cancelled");
+    }
     uint32_t dimension = ReadLE32(blob.data() + offset);
     uint32_t bits = ReadLE32(blob.data() + offset + 4);
     // Bit validation remains correct when the module uses -ffast-math.
@@ -82,23 +90,11 @@ absl::StatusOr<float> Sparse::RecomputeDistance(absl::string_view record,
                                                 absl::string_view query) {
   VMSDK_ASSIGN_OR_RETURN(auto a, Decode(record));
   VMSDK_ASSIGN_OR_RETURN(auto b, Decode(query));
-  size_t i = 0, j = 0;
-  double dot = 0;
-  bool overlap = false;
-  while (i < a.size() && j < b.size()) {
-    if (a[i].dimension < b[j].dimension) {
-      ++i;
-    } else if (b[j].dimension < a[i].dimension) {
-      ++j;
-    } else {
-      dot += double(a[i++].weight) * double(b[j++].weight);
-      overlap = true;
-    }
-  }
-  if (!overlap) {
+  VMSDK_ASSIGN_OR_RETURN(auto score, Dot(a, b, nullptr));
+  if (!score) {
     return absl::NotFoundError("No sparse overlap");
   }
-  return Distance(dot);
+  return Distance(*score);
 }
 
 absl::StatusOr<RecordResult> Sparse::AddRecord(const InternedStringPtr &key,
@@ -199,12 +195,16 @@ absl::StatusOr<bool> Sparse::RemoveRecord(const InternedStringPtr &key,
   return true;
 }
 
-absl::StatusOr<bool> Sparse::PreferPrefilter(absl::string_view query,
-                                             size_t candidate_count) const
-    ABSL_NO_THREAD_SAFETY_ANALYSIS {
-  VMSDK_ASSIGN_OR_RETURN(auto entries, Decode(query));
+absl::StatusOr<bool> Sparse::PreferPrefilter(
+    absl::string_view query, size_t candidate_count,
+    cancel::Base *cancel) const ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  VMSDK_ASSIGN_OR_RETURN(auto entries, Decode(query, cancel));
+  size_t inspected = 0;
   double posting_work = 0;
   for (const auto &entry : entries) {
+    if ((inspected++ & 255) == 0 && cancel && cancel->IsCancelled()) {
+      return absl::DeadlineExceededError("Sparse planning cancelled");
+    }
     auto it = postings_.find(entry.dimension);
     if (it != postings_.end()) {
       posting_work += it->second.size();
@@ -218,9 +218,9 @@ absl::StatusOr<bool> Sparse::PreferPrefilter(absl::string_view query,
 absl::StatusOr<std::vector<Neighbor>> Sparse::Search(
     absl::string_view query, size_t count, cancel::Token &cancellation,
     absl::AnyInvocable<bool(const InternedStringPtr &)> filter,
-    const std::vector<InternedStringPtr> *candidates) const
-    ABSL_NO_THREAD_SAFETY_ANALYSIS {
-  VMSDK_ASSIGN_OR_RETURN(auto entries, Decode(query));
+    const std::vector<InternedStringPtr> *candidates,
+    bool partial) const ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  VMSDK_ASSIGN_OR_RETURN(auto entries, Decode(query, cancellation.get()));
   struct Hit {
     DocId id;
     float distance;
@@ -246,42 +246,93 @@ absl::StatusOr<std::vector<Neighbor>> Sparse::Search(
     return absl::OkStatus();
   };
   size_t visited = 0;
+  auto expired = [&] {
+    return (visited++ & 255) == 0 && cancellation->IsCancelled();
+  };
   if (candidates) {
     for (const auto &key : *candidates) {
-      if ((visited++ & 255) == 0 && cancellation->IsCancelled()) {
-        return absl::DeadlineExceededError("Sparse search cancelled");
+      if (expired()) {
+        break;
       }
       auto it = ids_.find(key);
       if (it == ids_.end()) continue;
-      auto score = Dot(records_[it->second].entries, entries);
-      if (score) VMSDK_RETURN_IF_ERROR(add(it->second, *score));
+      auto score =
+          Dot(records_[it->second].entries, entries, cancellation.get());
+      if (!score.ok()) {
+        break;  // Dot was interrupted; this candidate is incomplete.
+      }
+      if (*score) {
+        VMSDK_RETURN_IF_ERROR(add(it->second, **score));
+      }
     }
   } else {
-    // Query-local arrays: independent concurrent readers, no shared scratch or
-    // retained state. Marks preserve overlapping documents whose sum is zero.
-    std::vector<double> scores(records_.size(), 0);
-    std::vector<uint8_t> seen(records_.size(), 0);
-    std::vector<DocId> touched;
+    // A single posting list is a lower bound on the number of matching IDs.
+    // Only use direct indexing when its size is bounded by the matches. One
+    // score slot per possible ID, at most 16 slots per known match.
+    const size_t dense_threshold = (records_.size() + 15) / 16;
+    bool dense = false;
     for (const auto &entry : entries) {
-      auto posting = postings_.find(entry.dimension);
-      if (posting == postings_.end()) continue;
-      for (const auto &[id, weight] : posting->second) {
-        if ((visited++ & 255) == 0 && cancellation->IsCancelled()) {
+      if (expired()) {
+        return absl::DeadlineExceededError("Sparse search cancelled");
+      }
+      auto it = postings_.find(entry.dimension);
+      if (it != postings_.end() && it->second.size() >= dense_threshold) {
+        dense = true;
+        break;
+      }
+    }
+    // Keep the direct-index loop free of hash probes on common dimensions.
+    auto accumulate = [&](auto update)
+                          ABSL_NO_THREAD_SAFETY_ANALYSIS -> absl::Status {
+      for (const auto &entry : entries) {
+        if (expired()) {
           return absl::DeadlineExceededError("Sparse search cancelled");
         }
+        auto posting = postings_.find(entry.dimension);
+        if (posting == postings_.end()) {
+          continue;
+        }
+        for (const auto &[id, weight] : posting->second) {
+          // No posting sum is final until all dimensions have been read.
+          if (expired()) {
+            return absl::DeadlineExceededError("Sparse search cancelled");
+          }
+          update(id, double(weight) * double(entry.weight));
+        }
+      }
+      return absl::OkStatus();
+    };
+    if (dense) {
+      std::vector<double> scores(records_.size(), 0);
+      std::vector<uint8_t> seen(records_.size(), 0);
+      std::vector<DocId> touched;
+      VMSDK_RETURN_IF_ERROR(accumulate([&](DocId id, double term) {
         if (!seen[id]) {
           seen[id] = 1;
           touched.push_back(id);
         }
-        scores[id] += double(weight) * double(entry.weight);
+        scores[id] += term;
+      }));
+      for (DocId id : touched) {
+        if (expired()) {
+          break;
+        }
+        VMSDK_RETURN_IF_ERROR(add(id, scores[id]));
+      }
+    } else {
+      absl::flat_hash_map<DocId, double> scores;
+      VMSDK_RETURN_IF_ERROR(
+          accumulate([&](DocId id, double term) { scores[id] += term; }));
+      for (const auto &[id, score] : scores) {
+        if (expired()) {
+          break;
+        }
+        VMSDK_RETURN_IF_ERROR(add(id, score));
       }
     }
-    for (DocId id : touched) {
-      if ((visited++ & 255) == 0 && cancellation->IsCancelled()) {
-        return absl::DeadlineExceededError("Sparse search cancelled");
-      }
-      VMSDK_RETURN_IF_ERROR(add(id, scores[id]));
-    }
+  }
+  if (cancellation->IsCancelled() && (!partial || heap.empty())) {
+    return absl::DeadlineExceededError("Sparse search cancelled");
   }
   std::vector<Neighbor> result;
   result.reserve(heap.size());

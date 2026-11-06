@@ -69,7 +69,7 @@ FT.CREATE <index-name>
 
 ### Field options
 
-**SORTABLE**: This parameter is currently ignored as all field types are considered to be sortable
+**SORTABLE**: SPARSE fields reject this option. Other field types accept it for compatibility and ignore it.
 
 **RESPONSE** OK or error.
 

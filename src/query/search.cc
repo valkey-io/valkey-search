@@ -1478,8 +1478,9 @@ absl::StatusOr<std::vector<indexes::Neighbor>> DoSearchVector(
       std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> fetchers;
       auto estimate =
           EvaluateFilterAsPrimary(parameters, predicate, fetchers, false);
-      VMSDK_ASSIGN_OR_RETURN(
-          use_prefilter, sparse->PreferPrefilter(parameters.query, estimate));
+      VMSDK_ASSIGN_OR_RETURN(use_prefilter,
+                             sparse->PreferPrefilter(parameters.query, estimate,
+                                                     cancellation.get()));
       if (use_prefilter) {
         EvaluatePrefilteredKeys(
             parameters, fetchers,
@@ -1492,7 +1493,8 @@ absl::StatusOr<std::vector<indexes::Neighbor>> DoSearchVector(
     } else if (!predicate && parameters.inkeys) {
       VMSDK_ASSIGN_OR_RETURN(
           use_prefilter,
-          sparse->PreferPrefilter(parameters.query, parameters.inkeys->size()));
+          sparse->PreferPrefilter(parameters.query, parameters.inkeys->size(),
+                                  cancellation.get()));
       if (use_prefilter) {
         for (const auto &key : *parameters.inkeys) {
           candidates.push_back(StringInternStore::Intern(key));
@@ -1506,9 +1508,11 @@ absl::StatusOr<std::vector<indexes::Neighbor>> DoSearchVector(
       // The enumerator has already applied the complete predicate and INKEYS.
       return sparse->Search(
           parameters.query, parameters.k, cancellation,
-          [](const auto &) { return true; }, &candidates);
+          [](const auto &) { return true; }, &candidates,
+          parameters.enable_partial_results);
     }
-    return sparse->Search(parameters.query, parameters.k, cancellation, filter);
+    return sparse->Search(parameters.query, parameters.k, cancellation, filter,
+                          nullptr, parameters.enable_partial_results);
   }
   auto *vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
   if (index->GetIndexerType() != indexes::IndexerType::kHNSW &&
@@ -2251,9 +2255,12 @@ absl::Status PostParseVectorParameters(query::SearchParameters &parameters) {
                                          parameters.attribute_alias));
   if (index->GetIndexerType() == indexes::IndexerType::kSparse) {
     parameters.vector_score_only = true;
-    VMSDK_ASSIGN_OR_RETURN(auto entries,
-                           indexes::Sparse::Decode(parameters.query));
+    VMSDK_ASSIGN_OR_RETURN(
+        auto entries,
+        indexes::Sparse::Decode(parameters.query,
+                                parameters.cancellation_token.get()));
     if (!parameters.parse_vars.ef_string.empty() ||
+        parameters.hybrid_policy != HybridPolicy::kAuto ||
         !parameters.parse_vars.hybrid_policy_string.empty()) {
       return absl::InvalidArgumentError(
           "SPARSE does not support EF_RUNTIME or HYBRID_POLICY");

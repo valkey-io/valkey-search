@@ -99,6 +99,76 @@ TEST_F(SparseIndexTest, SignedDotProductsTiesFilterAndUpdates) {
   EXPECT_EQ(Search(query).status().code(), absl::StatusCode::kDeadlineExceeded);
 }
 
+TEST_F(SparseIndexTest, RareDimensionsRetainZeroSumAfterChurn) {
+  for (int i = 0; i < 64; ++i) {
+    ASSERT_TRUE(Add(std::to_string(i), Encode({{100, 1}})).ok());
+  }
+  for (int i = 0; i < 64; ++i) {
+    ASSERT_TRUE(index
+                    .RemoveRecord(StringInternStore::Intern(std::to_string(i)),
+                                  DeletionType::kRecord)
+                    .ok());
+  }
+  ASSERT_TRUE(Add("only", Encode({{1, 1}, {2, -1}})).ok());
+  auto hits = Search(Encode({{1, 1}, {2, 1}, {3, 2}}));
+  ASSERT_TRUE(hits.ok());
+  ASSERT_EQ(hits->size(), 1);
+  EXPECT_EQ(hits->front().external_id->Str(), "only");
+  EXPECT_EQ(hits->front().distance, 0);
+}
+
+TEST_F(SparseIndexTest, CancellationKeepsOnlyFullyScoredCandidates) {
+  const auto key = StringInternStore::Intern("a");
+  ASSERT_TRUE(Add("a", Encode({{1, 4}})).ok());
+  std::vector<InternedStringPtr> candidates{key};
+  auto run = [&](bool partial) {
+    token = std::make_shared<Token>();
+    return index.Search(
+        Encode({{1, 2}}), 1, token,
+        [&](const auto &) {
+          token->Cancel();
+          return true;
+        },
+        &candidates, partial);
+  };
+  EXPECT_EQ(run(false).status().code(), absl::StatusCode::kDeadlineExceeded);
+  auto hits = run(true);
+  ASSERT_TRUE(hits.ok());
+  ASSERT_EQ(hits->size(), 1);
+  EXPECT_EQ(hits->front().distance, -8);
+}
+
+TEST_F(SparseIndexTest, PollsLongDecodesAndEstimatesWithAbsentDimensions) {
+  struct Budget : cancel::Base {
+    int remaining;
+    explicit Budget(int polls) : remaining(polls) {}
+    bool IsCancelled() override { return --remaining <= 0; }
+    void Cancel() override { remaining = 0; }
+  };
+  std::string query;
+  for (uint32_t i = 0; i < 1024; ++i) query += Encode({{i, 1}});
+  Budget decode(2), estimate(6);
+  EXPECT_EQ(Sparse::Decode(query, &decode).status().code(),
+            absl::StatusCode::kDeadlineExceeded);
+  EXPECT_EQ(index.PreferPrefilter(query, 1, &estimate).status().code(),
+            absl::StatusCode::kDeadlineExceeded);
+  token = std::make_shared<Budget>(6);
+  EXPECT_EQ(Search(query).status().code(), absl::StatusCode::kDeadlineExceeded);
+  ASSERT_TRUE(Add("long", query).ok());
+  std::vector<InternedStringPtr> candidates{StringInternStore::Intern("long")};
+  token = std::make_shared<Budget>(3);
+  bool reached_filter = false;
+  auto hits = index.Search(
+      Encode({{1023, 1}}), 1, token,
+      [&](const auto &) {
+        reached_filter = true;
+        return true;
+      },
+      &candidates);
+  EXPECT_EQ(hits.status().code(), absl::StatusCode::kDeadlineExceeded);
+  EXPECT_FALSE(reached_filter);
+}
+
 TEST_F(SparseIndexTest, PlanEstimateTracksReplacementAndRemoval) {
   ASSERT_TRUE(Add("a", Encode({{1, 2}, {2, 1}})).ok());
   ASSERT_TRUE(Add("b", Encode({{1, 3}, {2, 1}})).ok());

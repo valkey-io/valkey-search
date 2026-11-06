@@ -78,6 +78,10 @@ class MockValkeyModule {
   MOCK_METHOD(int, SubscribeToKeyspaceEvents,
               (ValkeyModuleCtx * ctx, int types,
                ValkeyModuleNotificationFunc cb));
+  MOCK_METHOD(int, AddPostNotificationJob,
+              (ValkeyModuleCtx * ctx,
+               ValkeyModulePostNotificationJobFunc callback, void *data,
+               void (*free_data)(void *)));
   MOCK_METHOD(int, KeyExists, (ValkeyModuleCtx * ctx, ValkeyModuleString *key));
   MOCK_METHOD(ValkeyModuleKey *, OpenKey,
               (ValkeyModuleCtx * ctx, ValkeyModuleString *key, int flags));
@@ -667,6 +671,13 @@ inline int TestValkeyModule_GetClientInfoById(void *ci, uint64_t id) {
 inline int TestValkeyModule_SubscribeToKeyspaceEvents(
     ValkeyModuleCtx *ctx, int types, ValkeyModuleNotificationFunc cb) {
   return kMockValkeyModule->SubscribeToKeyspaceEvents(ctx, types, cb);
+}
+
+inline int TestValkeyModule_AddPostNotificationJob(
+    ValkeyModuleCtx *ctx, ValkeyModulePostNotificationJobFunc callback,
+    void *data, void (*free_data)(void *)) {
+  return kMockValkeyModule->AddPostNotificationJob(ctx, callback, data,
+                                                   free_data);
 }
 
 inline int TestValkeyModule_KeyExistsDefaultImpl(ValkeyModuleCtx *ctx,
@@ -1625,6 +1636,8 @@ inline void TestValkeyModule_Init() {
   ValkeyModule_SetModuleOptions = &TestValkeyModule_SetModuleOptions;
   ValkeyModule_GetClientId = &TestValkeyModule_GetClientId;
   ValkeyModule_GetClientInfoById = &TestValkeyModule_GetClientInfoById;
+  ValkeyModule_AddPostNotificationJob =
+      &TestValkeyModule_AddPostNotificationJob;
   ValkeyModule_SubscribeToKeyspaceEvents =
       &TestValkeyModule_SubscribeToKeyspaceEvents;
   ValkeyModule_KeyExists = &TestValkeyModule_KeyExists;

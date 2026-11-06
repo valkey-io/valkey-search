@@ -154,7 +154,7 @@ static vmsdk::info_field::Integer backfill_hash_keys(
 static vmsdk::info_field::Integer ingest_hash_blocked(
     "global_ingestion", "ingest_hash_blocked",
     vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
-      return vmsdk::BlockedClientTracker::GetInstance().GetClientCount(
+      return vmsdk::BlockedClient::GetActiveClientCount(
           vmsdk::BlockedClientCategory::kHash);
     }));
 
@@ -173,7 +173,7 @@ static vmsdk::info_field::Integer backfill_json_keys(
 static vmsdk::info_field::Integer ingest_json_blocked(
     "global_ingestion", "ingest_json_blocked",
     vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
-      return vmsdk::BlockedClientTracker::GetInstance().GetClientCount(
+      return vmsdk::BlockedClient::GetActiveClientCount(
           vmsdk::BlockedClientCategory::kJson);
     }));
 

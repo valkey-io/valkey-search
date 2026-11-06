@@ -75,7 +75,7 @@ function findup() {
 PYTHON_PATH="${PYTHON_PATH:=}"
 _WORKSPACE_HOME=$(findup QUICK_START.md)
 export MODULE_ROOT=${_WORKSPACE_HOME}
-_THIRD_PARTY_COMPONENTS_BUILD_DIR=${_WORKSPACE_HOME}/.build-release
+_THIRD_PARTY_COMPONENTS_BUILD_DIR=${_WORKSPACE_HOME}/.build-release${BUILD_DIR_SUFFIX:-}
 
 if [[ "${SAN_BUILD}" != "no" ]]; then
   if [[ "$(uname -s)" == "Darwin" ]]; then
@@ -173,10 +173,10 @@ function install_test_framework() {
 
   # Remove valkey-test-framework tests
   rm -fr ${_WORKSPACE_HOME}/integration/valkeytestframework.git/tests
-  ln -sf ${_WORKSPACE_HOME}/integration/valkeytestframework.git/src ${_WORKSPACE_HOME}/integration/valkeytestframework
+  ln -sfn ${_WORKSPACE_HOME}/integration/valkeytestframework.git/src ${_WORKSPACE_HOME}/integration/valkeytestframework
   LOG_INFO "Using valkeytestframework => ${_WORKSPACE_HOME}/integration/valkeytestframework"
   print_environment_var "PYTHONPATH" "${PYTHONPATH}"
-  export PYTHONPATH=${_WORKSPACE_HOME}/integration/valkeytestframework
+  export PYTHONPATH=${_WORKSPACE_HOME}/integration:${_WORKSPACE_HOME}/integration/valkeytestframework:${PYTHONPATH:-}
 }
 
 function setup_valkey_server() {

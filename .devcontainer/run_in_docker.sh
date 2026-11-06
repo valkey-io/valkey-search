@@ -1,10 +1,10 @@
 #!/bin/bash
 
-# Find the workspace root (parent of .devcontainer)
+# Find the workspace root (parent of .devcontainer). The container mounts it at
+# the same absolute path as on the host, so paths recorded by the build (e.g.
+# compile_commands.json) are valid for host tools such as clangd.
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 WORKSPACE_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
-WORKSPACE_BASENAME=$(basename "$WORKSPACE_DIR")
-CONTAINER_WORKSPACE="/workspaces/$WORKSPACE_BASENAME"
 
 # Get the current user's UID and GID to avoid permission mismatch issues
 USER_UID=$(id -u)
@@ -27,39 +27,8 @@ fi
 CREATED_CONTAINER=false
 
 cleanup() {
-  HOST_DEPS_DIR="/tmp/valkey-search-deps"
-  if [ -n "$CONTAINER_ID" ]; then
-    mkdir -p "$HOST_DEPS_DIR"
-    docker cp "$CONTAINER_ID:/opt/valkey-search-deps/." "$HOST_DEPS_DIR" 2>/dev/null || true
-  fi
-  local current_link=""
-  if [ -L "$WORKSPACE_DIR/compile_commands.json" ]; then
-    current_link=$(readlink "$WORKSPACE_DIR/compile_commands.json")
-  fi
-
-  local comp_db=""
-  if [ -n "$current_link" ] && [[ "$current_link" =~ -container ]] && [ -f "$WORKSPACE_DIR/$current_link" ]; then
-    comp_db="$WORKSPACE_DIR/$current_link"
-  elif [ -z "$current_link" ] || [[ "$current_link" =~ -container ]]; then
-    comp_db=$(ls -t "$WORKSPACE_DIR"/.build-*-container*/compile_commands.json 2>/dev/null | head -n 1)
-  fi
-
-  if [ -n "$comp_db" ] && [ -f "$comp_db" ] && [ -s "$comp_db" ]; then
-    python3 -c '
-import sys
-with open(sys.argv[1], "r") as f:
-    content = f.read()
-content = content.replace(sys.argv[2], sys.argv[3])
-if len(sys.argv) > 5 and sys.argv[4] and sys.argv[5]:
-    content = content.replace(sys.argv[4], sys.argv[5])
-with open(sys.argv[1], "w") as f:
-    f.write(content)
-' "$comp_db" "/workspaces/$WORKSPACE_BASENAME" "$WORKSPACE_DIR" "/opt/valkey-search-deps" "$HOST_DEPS_DIR" 2>/dev/null || true
-    local rel_path="${comp_db#$WORKSPACE_DIR/}"
-    ln -sfn "$rel_path" "$WORKSPACE_DIR/compile_commands.json" 2>/dev/null || true
-  fi
   if [ "$CREATED_CONTAINER" = "true" ] && [ -n "$CONTAINER_ID" ]; then
-    docker rm -f "$CONTAINER_ID" 2>/dev/null || true
+    docker rm -f "$CONTAINER_ID" >/dev/null 2>&1 || true
   fi
 }
 # Register cleanup trap
@@ -68,7 +37,7 @@ trap cleanup EXIT
 # Search for a running devcontainer for this workspace
 CONTAINER_ID=$(docker ps --filter "label=devcontainer.local_folder=$WORKSPACE_DIR" -q | head -n 1)
 
-if [ -n "$CONTAINER_ID" ]; then
+if [ -n "$CONTAINER_ID" ] && docker exec "$CONTAINER_ID" test -d "$WORKSPACE_DIR" 2>/dev/null; then
   # Running container found! 
   
   # Copy .gitconfig from host if it exists to ensure git settings are available inside
@@ -93,7 +62,7 @@ if [ -n "$CONTAINER_ID" ]; then
   # Execute inside the container
   ENV_FLAGS=("-e" "TERM=$TERM" "-e" "BUILD_DIR_SUFFIX=-container")
 
-  docker exec $INTERACTIVE_FLAGS "${ENV_FLAGS[@]}" -u "$USER_NAME" -w "$CONTAINER_WORKSPACE" "$CONTAINER_ID" "${COMMAND[@]}"
+  docker exec $INTERACTIVE_FLAGS "${ENV_FLAGS[@]}" -u "$USER_NAME" -w "$WORKSPACE_DIR" "$CONTAINER_ID" "${COMMAND[@]}"
 else
   # Fallback: Build and run a new container
   IMAGE_NAME="valkey-search-dev"
@@ -105,7 +74,7 @@ else
     --build-arg USER_GID="$USER_GID" \
     --build-arg USER_GNAME="$USER_GNAME" \
     -f "$WORKSPACE_DIR/.devcontainer/Dockerfile" \
-    "$WORKSPACE_DIR/.devcontainer"; then
+    "$WORKSPACE_DIR/.devcontainer" >/dev/null; then
     echo "Error: Failed to build Docker image '$IMAGE_NAME'." >&2
     exit 1
   fi
@@ -138,8 +107,8 @@ else
 
   docker run $INTERACTIVE_FLAGS \
     --name "$CONTAINER_ID" \
-    -v "$WORKSPACE_DIR":"$CONTAINER_WORKSPACE" \
-    -w "$CONTAINER_WORKSPACE" \
+    -v "$WORKSPACE_DIR":"$WORKSPACE_DIR" \
+    -w "$WORKSPACE_DIR" \
     -u "$USER_UID:$USER_GID" \
     "${GITCONFIG_MOUNT[@]}" \
     "${SSH_MOUNTS[@]}" \

@@ -22,6 +22,7 @@ FT.CREATE <index-name>
     ON HASH
     [PREFIX <count> <prefix> [<prefix>...]]
     [SKIPINITIALSCAN]
+    [QUERY_TIMEOUT <timeout>]
     SCHEMA
         (
             <field-identifier> [AS <field-alias>]
@@ -39,6 +40,8 @@ FT.CREATE <index-name>
 - **PREFIX \<prefix-count\> \<prefix\>** (optional): If this clause is specified, then only keys that begin with the same bytes as one or more of the specified prefixes will be included into this index. If this clause is omitted, all keys of the correct type will be included. A zero-length prefix would also match all keys of the correct type.
 
 - **SKIPINITIALSCAN** (optional): If this clause is specified, then no backfill operation is performed. This means that pre-existing keys which match the prefix clause will not be loaded into the index.
+
+- **QUERY_TIMEOUT \<timeout\>** (optional): The default timeout, in milliseconds, for `FT.SEARCH`, `FT.AGGREGATE` and `FT.HYBRID` on this index. It must be between 1 and 60000. A query's own `TIMEOUT` clause takes precedence. If this option is omitted, `search.default-timeout-ms` is used.
 
 ### Field types
 
@@ -177,7 +180,7 @@ Performs a search of the specified index. The keys which match the query express
 - **\<index\>** (required): This index name you want to query.
 - **\<query\>** (required): The query string, see below for details.
 - **NOCONTENT** (optional): When present, only the resulting key names are returned, no key values are included.
-- **TIMEOUT \<timeout\>** (optional): Lets you set a timeout value for the search command. This must be an integer in milliseconds.
+- **TIMEOUT \<timeout\>** (optional): Lets you set a timeout value for the search command. This must be an integer in milliseconds. If omitted, the index's `QUERY_TIMEOUT` is used, or `search.default-timeout-ms` if the index does not set one.
 - **PARAMS \<count\> \<name1\> \<value1\> \<name2\> \<value2\> ...** (optional): `count` is of the number of arguments, i.e., twice the number of value name pairs. See the query string for usage details.
 - **RETURN \<count\> \<field1\> \<field2\> ...** (options): `count` is the number of fields to return. Specifies the fields you want to retrieve from your documents, along with any aliases for the returned values. By default, all fields are returned unless the NOCONTENT option is set, in which case no fields are returned. If num is set to 0, it behaves the same as NOCONTENT.
 - **LIMIT \<offset\> \<count\>** (optional): Lets you choose a portion of the result. The first `<offset>` keys are skipped and only a maximum of `<count>` keys are included. The default is LIMIT 0 10, which returns at most 10 keys.  

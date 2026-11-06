@@ -53,6 +53,7 @@ message IndexSchema {
   bool skip_initial_scan = 13;
   optional string score_field = 14;
   optional string filter = 15;
+  optional uint32 query_timeout_ms = 16;
 }
 
 
@@ -136,4 +137,3 @@ message HNSWAlgorithm {
 message FlatAlgorithm {
   uint32 block_size = 1;
 }
-

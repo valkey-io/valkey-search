@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <iostream>
 #include <iterator>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -69,6 +70,7 @@ struct FTCreateParameters {
   absl::string_view payload_field;
   bool skip_initial_scan{false};
   std::string filter;
+  std::optional<uint32_t> query_timeout_ms;
   std::vector<AttributeParameters> attributes;
   ExpectedPerIndexTextParameters per_index_text_params;
 };
@@ -154,6 +156,12 @@ TEST_P(FTCreateParserTest, ParseParams) {
       EXPECT_EQ(index_schema_proto->filter(), test_case.expected.filter);
     } else {
       EXPECT_FALSE(index_schema_proto->has_filter());
+    }
+    EXPECT_EQ(index_schema_proto->has_query_timeout_ms(),
+              test_case.expected.query_timeout_ms.has_value());
+    if (test_case.expected.query_timeout_ms.has_value()) {
+      EXPECT_EQ(index_schema_proto->query_timeout_ms(),
+                *test_case.expected.query_timeout_ms);
     }
 
     // Verify schema-level text parameters if we have text fields
@@ -350,6 +358,38 @@ INSTANTIATE_TEST_SUITE_P(
                               .attribute_alias = "hash_field11",
                               .indexer_type = indexes::IndexerType::kFlat,
                           }}},
+         },
+         {
+             .test_name = "happy_path_query_timeout",
+             .success = true,
+             .command_str = "idx1 on HASH QUERY_TIMEOUT 1234 SCHEMA "
+                            "hash_field1 numeric ",
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .query_timeout_ms = 1234,
+                          .attributes = {{
+                              .identifier = "hash_field1",
+                              .attribute_alias = "hash_field1",
+                              .indexer_type = indexes::IndexerType::kNumeric,
+                          }}},
+         },
+         {
+             .test_name = "query_timeout_zero",
+             .success = false,
+             .command_str = "idx1 on HASH QUERY_TIMEOUT 0 SCHEMA "
+                            "hash_field1 numeric ",
+             .expected_error_message =
+                 "QUERY_TIMEOUT must be a positive integer greater than 0 and "
+                 "cannot exceed 60000.",
+         },
+         {
+             .test_name = "query_timeout_too_large",
+             .success = false,
+             .command_str = "idx1 on HASH QUERY_TIMEOUT 60001 SCHEMA "
+                            "hash_field1 numeric ",
+             .expected_error_message =
+                 "QUERY_TIMEOUT must be a positive integer greater than 0 and "
+                 "cannot exceed 60000.",
          },
          {
              .test_name = "happy_path_hnsw_and_numeric",

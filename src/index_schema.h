@@ -238,6 +238,9 @@ class IndexSchema : public KeyspaceEventSubscription,
   }
   inline uint64_t GetFingerprint() const { return fingerprint_; }
   inline uint32_t GetVersion() const { return version_; }
+  inline const std::optional<uint32_t> &GetQueryTimeoutMs() const {
+    return query_timeout_ms_;
+  }
 
   inline void SetFingerprint(uint64_t fingerprint) {
     fingerprint_ = fingerprint;
@@ -517,6 +520,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   uint64_t fingerprint_{0};
   uint32_t version_{0};
   bool skip_initial_scan_{false};
+  std::optional<uint32_t> query_timeout_ms_;
 
   std::string filter_expression_str_;
   std::unique_ptr<expr::Expression> compiled_filter_;

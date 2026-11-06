@@ -40,7 +40,7 @@ Where:
 - `field` (required): The name of a vector field within the specified index.
 - `parameter` (required): A `PARAM` name whose corresponding value provides the query vector for the KNN algorithm.
   Note that this parameter must be encoded in little-endian byte order using the element type declared by the index (`TYPE FLOAT32`, `FLOAT16` or `BFLOAT16`); see [Supported Data Types](search-data-formats.md#supported-data-types). Its length must therefore be `DIM * 4` bytes for `FLOAT32` and `DIM * 2` bytes for the 16-bit types.
-- `EF_RUNTIME <ef-value>` (optional): Overrides the default value of `EF_RUNTIME` specified when the index was created. `EF_RUNTIME` is valid with the automatic policy and `HYBRID_POLICY BATCHES`. It is rejected with `HYBRID_POLICY ADHOC_BF`, which performs an exact search over the filtered candidates and does not use the HNSW runtime candidate limit.
+- `EF_RUNTIME <ef-value>` (optional): Overrides the default value of `EF_RUNTIME` (`SEARCH_WINDOW_SIZE` for `SVS_VAMANA`) specified when the index was created. `EF_RUNTIME` is valid with the automatic policy and `HYBRID_POLICY BATCHES`. It is rejected with `HYBRID_POLICY ADHOC_BF`, which performs an exact search over the filtered candidates and does not use the runtime candidate limit.
 - `HYBRID_POLICY <policy>` (optional; requires a filter expression or `INKEYS`): Overrides the automatic choice between the two filtered-vector execution paths:
   - `ADHOC_BF` evaluates the filter first, then computes exact distances for the matching vectors.
   - `BATCHES` searches the vector index first and applies the filter while traversing vector candidates. An explicit `BATCHES` also takes precedence when `INKEYS` is supplied; the named keys remain part of the inline candidate filter. With the automatic policy, `INKEYS` uses filter-first execution.
@@ -181,7 +181,7 @@ It can be combined with other matchers using AND, OR and negation.
 - `parameter` (required): A `PARAMS` name whose value is the query vector, encoded as for a KNN query (see above).
 - `EF_RUNTIME <ef>` (optional): Parsed and ignored.
 - `AS <name>` or `$YIELD_DISTANCE_AS: <name>` (optional): Returns the distance of each key within the radius under `<name>`. Without it, no distance is returned. When `RETURN` is used, the distance is returned only if `RETURN` lists `<name>`. `<name>` can be used by `SORTBY`, and as `@<name>` by the stages of `FT.AGGREGATE`. `FT.SEARCH` rejects a name that is an attribute of the index; `FT.AGGREGATE` accepts it, and `@<name>` then refers to the distance, not the attribute.
-- `$EPSILON: <epsilon>` (optional): Currently accepted on `HNSW` fields and ignored. It must be greater than 0. It is an error on `FLAT` fields.
+- `$EPSILON: <epsilon>` (optional): Currently accepted on `HNSW` and `SVS_VAMANA` fields and ignored. It must be greater than 0. It is an error on `FLAT` fields.
 
 The keyword and the attribute names are case-insensitive.
 
@@ -196,7 +196,7 @@ To get the closest keys first, yield the distance and sort on it, for example `S
 
 Non-finite distances: a NaN or `+inf` distance, from a NaN or infinite vector component, is within no radius, not even `inf`; a `-inf` distance, which only `IP` can produce, is within every radius.
 
-`HNSW` fields: the search examines at most `search.max-nonvector-search-results-fetched` (default 100000) candidates, so the result is approximate, as for a KNN query, and can miss keys within the radius; a query that matches at least that many keys is answered by scanning the whole index. `FLAT` fields are always searched exhaustively. In a cluster, each shard applies the setting to its own keys.
+`HNSW` and `SVS_VAMANA` fields: the search examines at most `search.max-nonvector-search-results-fetched` (default 100000) candidates, so the result is approximate, as for a KNN query, and can miss keys within the radius; a query that matches at least that many keys is answered by scanning the whole index. `FLAT` fields are always searched exhaustively. In a cluster, each shard applies the setting to its own keys.
 
 OR: when a key matches through another branch of a `|` (OR), its distance is still computed. It is returned under `<name>` only if the key is within the radius.
 

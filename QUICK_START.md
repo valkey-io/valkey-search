@@ -5,6 +5,8 @@ Follow these steps to set up, build, and run the Valkey server with the valkey-s
 ## Step 1: Install Valkey and valkey-search
 
 1. Follow the [instructions to build Valkey from source](https://github.com/valkey-io/valkey?tab=readme-ov-file#building-valkey-using-makefile). Make sure to use Valkey version 9.1.0 or later.
+
+   For `SVS_VAMANA` vector indexes, use Valkey 9.2.0-rc1 or later for huge-page allocation and external-memory reporting (`used_memory_module_external`). On 9.1, SVS memory is still counted in `used_memory` and enforced by `maxmemory`, but huge pages aren't used. See [SVS_VAMANA notes](docs/commands/ft.create.md#svs_vamana-notes).
 2. Follow the [instructions to build the valkey-search module from source](https://github.com/valkey-io/valkey-search/tree/main?tab=readme-ov-file#build-instructions).
 
 Alternatively, you can get started quickly using the [pre-built Docker bundle](https://github.com/valkey-io/valkey-search#docker), which includes both Valkey and valkey-search ready to run.

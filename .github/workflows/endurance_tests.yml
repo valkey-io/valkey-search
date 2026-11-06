@@ -74,6 +74,9 @@ jobs:
     # Checkout the code from the repository
     - name: Checkout Code
       uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        persist-credentials: false
 
     # Set up Docker to build and run the container
     - name: Set up Docker

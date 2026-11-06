@@ -38,6 +38,7 @@
 #include "src/rdb_serialization.h"
 #include "src/schema_manager.h"
 #include "src/server_events.h"
+#include "src/utils/cancel.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
 #include "src/vector_registry.h"
@@ -398,6 +399,23 @@ data_model::VectorIndex CreateFlatVectorIndexProto(
     int dimensions, data_model::DistanceMetric distance_metric, int initial_cap,
     uint32_t block_size);
 
+// Deliberately far below the production defaults in
+// src/commands/ft_create_parser.h, to keep unit-test index builds cheap.
+constexpr uint32_t kTestSVSGraphMaxDegree = 16;
+constexpr uint32_t kTestSVSConstructionWindowSize = 32;
+constexpr uint32_t kTestSVSSearchWindowSize = 10;
+
+data_model::VectorIndex CreateSVSVectorIndexProto(
+    int dimensions, data_model::DistanceMetric distance_metric,
+    data_model::SVSCompressionType compression,
+    uint32_t graph_max_degree = kTestSVSGraphMaxDegree,
+    uint32_t construction_window_size = kTestSVSConstructionWindowSize,
+    uint32_t search_window_size = kTestSVSSearchWindowSize);
+
+float CalcRecall(indexes::VectorBase *ground_truth_index,
+                 indexes::VectorBase *query_index, uint64_t k, int dimensions,
+                 std::optional<size_t> ef_runtime);
+
 data_model::NumericIndex CreateNumericIndexProto();
 
 data_model::TagIndex CreateTagIndexProto(const std::string &separator = ",",
@@ -698,6 +716,11 @@ RespReply ParseRespReply(absl::string_view input);
 inline auto VectorToStr = [](const std::vector<float> &v) {
   return absl::string_view((char *)v.data(), v.size() * sizeof(float));
 };
+
+inline cancel::Token &CancelNever() {
+  static cancel::Token cancel_never = cancel::Make(1000000, nullptr);
+  return cancel_never;
+}
 
 class UnitTestSearchParameters : public query::SearchParameters {
  public:

@@ -3,7 +3,7 @@ Save+restore parity matrix across the full vector data-type cartesian product.
 
 Covers
     data_type ∈ {FLOAT32, FLOAT16, BFLOAT16}
-    algorithm ∈ {HNSW, FLAT}
+    algorithm ∈ {HNSW, FLAT, SVS_VAMANA}
     key_kind  ∈ {HASH, JSON}
 
 on the RDB v2/v2 (current default) read/write combination. The existing
@@ -48,7 +48,13 @@ from util import waiters
 
 
 DATA_TYPES = ["FLOAT32", "FLOAT16", "BFLOAT16"]
-ALGORITHMS = ["HNSW", "FLAT"]
+ALGORITHMS = ["HNSW", "FLAT", "SVS_VAMANA"]
+
+
+def _skip_unsupported(algorithm: str, data_type: str):
+    """SVS_VAMANA rejects BFLOAT16 input at FT.CREATE."""
+    if algorithm == "SVS_VAMANA" and data_type == "BFLOAT16":
+        pytest.skip("SVS_VAMANA doesn't accept BFLOAT16 input")
 KEY_KINDS = [KeyDataType.HASH, KeyDataType.JSON]
 
 DIM = 4
@@ -146,7 +152,8 @@ def _build_index(name: str, algorithm: str, data_type: str,
         vec = Vector("v", DIM, type="HNSW", distance="L2", m=4, efc=40,
                      data_type=data_type)
     else:
-        vec = Vector("v", DIM, type="FLAT", distance="L2", data_type=data_type)
+        vec = Vector("v", DIM, type=algorithm, distance="L2",
+                     data_type=data_type)
     return Index(name, [vec], type=key_kind)
 
 
@@ -202,4 +209,5 @@ class TestVectorSaveRestoreMatrix(ValkeySearchTestCaseDebugMode):
     @pytest.mark.parametrize("algorithm", ALGORITHMS)
     @pytest.mark.parametrize("data_type", DATA_TYPES)
     def test_saverestore(self, data_type, algorithm, key_kind):
+        _skip_unsupported(algorithm, data_type)
         _do_save_restore(self, data_type, algorithm, key_kind)

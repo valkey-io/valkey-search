@@ -114,6 +114,19 @@ if(UNIX AND NOT APPLE AND NOT SAN_BUILD)
     COMMENT "Verifying static-init deferral and allocator usage")
 endif()
 
+# SVS is built on x86_64 Linux only (src/indexes/CMakeLists.txt); gate its
+# linkage there under the same condition. Sanitizer builds are skipped: they
+# don't link with --exclude-libs (above), so archive symbols, svs_* included,
+# are exported there by design.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT SAN_BUILD
+   AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+  add_custom_command(
+    TARGET libsearch
+    POST_BUILD
+    COMMAND ${CMAKE_SOURCE_DIR}/ci/check_svs_link.sh $<TARGET_FILE:libsearch>
+    COMMENT "Verifying SVS linkage")
+endif()
+
 target_link_libraries(libsearch PUBLIC keyspace_event_manager)
 target_link_libraries(libsearch PUBLIC valkey_search)
 target_link_libraries(libsearch PUBLIC commands)
@@ -223,6 +236,7 @@ target_link_libraries(index_schema PUBLIC text)
 target_link_libraries(index_schema PUBLIC vector_base)
 target_link_libraries(index_schema PUBLIC vector_flat)
 target_link_libraries(index_schema PUBLIC vector_hnsw)
+target_link_libraries(index_schema PUBLIC vector_svs)
 target_link_libraries(index_schema PUBLIC string_interning)
 target_link_libraries(index_schema PUBLIC valkey_module)
 target_link_libraries(index_schema PUBLIC expr)

@@ -112,6 +112,9 @@ constexpr vmsdk::ValkeyVersion kRelease12(1, 2, 0);
 // Index schemas that use either type stamp this
 // minimum version so older modules refuse to load them rather than
 // misinterpret 2-byte vector data as FLOAT32.
+// SVS_VAMANA indexes also stamp this version for now. They should move to the
+// constant for the release that first ships SVS_VAMANA once the module version
+// is bumped for it, so that 1.3.x modules refuse them too.
 //
 constexpr vmsdk::ValkeyVersion kRelease13(1, 3, 0);
 

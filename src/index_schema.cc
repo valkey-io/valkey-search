@@ -44,6 +44,7 @@
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
+#include "src/indexes/vector_svs.h"
 #include "src/keyspace_event_manager.h"
 #include "src/metrics.h"
 #include "src/query/search.h"
@@ -229,6 +230,9 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
               ctx, index_schema, attribute, vector_index_proto, iter);
         case data_model::VectorIndex::kFlatAlgorithm:
           return CreateVectorIndexForType<indexes::VectorFlat>(
+              ctx, index_schema, attribute, vector_index_proto, iter);
+        case data_model::VectorIndex::kSvsVamanaAlgorithm:
+          return CreateVectorIndexForType<indexes::VectorSVS>(
               ctx, index_schema, attribute, vector_index_proto, iter);
         default:
           return absl::InvalidArgumentError("Unsupported algorithm.");
@@ -858,11 +862,6 @@ bool IndexSchema::ProcessAttributeMutation(ValkeyModuleCtx *ctx,
       ++Metrics::GetStats().time_slice_upserts;
       // Track field type counters
       switch (index->GetIndexerType()) {
-        case indexes::IndexerType::kVector:
-        case indexes::IndexerType::kHNSW:
-        case indexes::IndexerType::kFlat:
-          Metrics::GetStats().ingest_field_vector++;
-          break;
         case indexes::IndexerType::kNumeric:
           Metrics::GetStats().ingest_field_numeric++;
           break;
@@ -873,6 +872,9 @@ bool IndexSchema::ProcessAttributeMutation(ValkeyModuleCtx *ctx,
           Metrics::GetStats().ingest_field_text++;
           break;
         default:
+          if (indexes::IsVectorIndex(index)) {
+            Metrics::GetStats().ingest_field_vector++;
+          }
           break;
       }
     }
@@ -1253,10 +1255,7 @@ int IndexSchema::GetNumericAttributeCount() const {
 int IndexSchema::GetVectorAttributeCount() const {
   return std::count_if(attributes_.begin(), attributes_.end(),
                        [](const auto &attr) {
-                         auto type = attr.second.GetIndex()->GetIndexerType();
-                         return type == indexes::IndexerType::kVector ||
-                                type == indexes::IndexerType::kHNSW ||
-                                type == indexes::IndexerType::kFlat;
+                         return indexes::IsVectorIndex(attr.second.GetIndex());
                        });
 }
 
@@ -2433,15 +2432,20 @@ absl::StatusOr<vmsdk::ValkeyVersion> IndexSchema::GetMinVersion(
   }
   bool has_text_index = false;
   bool has_low_precision_vector = false;
+  bool has_svs_vamana = false;
   for (const auto &attr : unpacked->attributes()) {
     if (attr.index().has_text_index()) {
       has_text_index = true;
     }
     if (attr.index().has_vector_index()) {
-      const auto dt = attr.index().vector_index().vector_data_type();
+      const auto &vector_index = attr.index().vector_index();
+      const auto dt = vector_index.vector_data_type();
       if (dt == data_model::VECTOR_DATA_TYPE_FLOAT16 ||
           dt == data_model::VECTOR_DATA_TYPE_BFLOAT16) {
         has_low_precision_vector = true;
+      }
+      if (vector_index.has_svs_vamana_algorithm()) {
+        has_svs_vamana = true;
       }
     }
   }
@@ -2449,7 +2453,10 @@ absl::StatusOr<vmsdk::ValkeyVersion> IndexSchema::GetMinVersion(
   // proto field, so it would load the index, silently ignore the filter, and
   // index every key the filter exists to exclude -- a wrong index rather than
   // a failed load. Recording 1.3.0 makes that RDB refuse to load instead.
-  if (has_low_precision_vector || unpacked->has_filter()) {
+  // An SVS_VAMANA index can't be created by a module without SVS. Stamping it
+  // makes older modules refuse it cleanly instead of dropping the index on
+  // metadata sync or failing the whole RDB load.
+  if (has_low_precision_vector || unpacked->has_filter() || has_svs_vamana) {
     return kRelease13;
   }
   if (has_text_index) {

@@ -10,7 +10,7 @@ support for hybrid / pure non vector workloads including Numeric, Tag, and Full-
 
 Valkey-Search allows users to create indexes and perform searches, incorporating complex filters.
 Users can index data using either **[Valkey Hash](hashes.md)** or **[Valkey-JSON](valkey-json.md)** data types.
-The vector queries support Approximate Nearest Neighbor (ANN) search with HNSW and exact matching using K-Nearest Neighbors (KNN).
+The vector queries support Approximate Nearest Neighbor (ANN) search with HNSW and SVS_VAMANA, and exact matching using K-Nearest Neighbors (KNN).
 
 ## Use-Cases Where **Valkey-Search** Shines
 

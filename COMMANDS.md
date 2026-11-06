@@ -27,7 +27,7 @@ FT.CREATE <index-name>
             <field-identifier> [AS <field-alias>]
                   NUMERIC
                 | TAG [SEPARATOR <sep>] [CASESENSITIVE]
-                | VECTOR [HNSW | FLAT] <attr_count> [<attribute_name> <attribute_value>]+
+                | VECTOR [HNSW | FLAT | SVS_VAMANA] <attr_count> [<attribute_name> <attribute_value>]+
             [SORTABLE]
         )+
 ```
@@ -49,7 +49,7 @@ FT.CREATE <index-name>
 
 **NUMERIC**: A numeric field contains a number.
 
-**VECTOR**: A vector field contains a vector. Two vector indexing algorithms are currently supported: HNSW (Hierarchical Navigable Small World) and FLAT (brute force). Each algorithm has a set of additional attributes, some required and other optional.
+**VECTOR**: A vector field contains a vector. Three vector indexing algorithms are currently supported: HNSW (Hierarchical Navigable Small World), FLAT (brute force) and SVS_VAMANA (a Vamana graph index from Intel's Scalable Vector Search library). Each algorithm has a set of additional attributes, some required and other optional.
 
 - **FLAT:** The Flat algorithm provides exact answers, but has runtime proportional to the number of indexed vectors and thus may not be appropriate for large data sets.
   - **DIM \<number\>** (required): Specifies the number of dimensions in a vector.
@@ -64,6 +64,17 @@ FT.CREATE <index-name>
   - **M \<number\>** (optional): Number of maximum allowed outgoing edges for each node in the graph in each layer. on layer zero the maximal number of outgoing edges will be 2\*M. Default is 16, the maximum is 512\.
   - **EF_CONSTRUCTION \<number\>** (optional): controls the number of vectors examined during index construction. Higher values for this parameter will improve recall ratio at the expense of longer index creation times. The default value is 200\. Maximum value is 4096\.
   - **EF_RUNTIME \<number\>** (optional): controls the number of vectors to be examined during a query operation. The default is 10, and the max is 4096\. You can set this parameter value for each query you run. Higher values increase query times, but improve query recall.
+- **SVS_VAMANA:** A graph index from Intel's Scalable Vector Search (SVS) library. Like HNSW it provides approximate answers, and it can also store the vectors compressed. It requires an x86_64 Linux build and module version 1.3.0 or later. See [FT.CREATE](docs/commands/ft.create.md#svs_vamana-notes) for its behavior in detail.
+  - **DIM \<number\>** (required): Specifies the number of dimensions in a vector.
+  - **TYPE [FLOAT32 | FLOAT16]** (required): Element data type. BFLOAT16 is not supported.
+  - **DISTANCE_METRIC \[L2 | IP | COSINE\]** (required): Specifies the distance algorithm
+  - **INITIAL_CAP \<size\>** (optional): Expected number of vectors, 10240 by default; sizes SVS's allocation blocks, from 64 KiB up to 16 MiB.
+  - **GRAPH_MAX_DEGREE \<number\>** (optional): Maximum number of outgoing edges for each node in the graph. The default is 64, the minimum 2, and the maximum is set by `search.max-vector-m`.
+  - **CONSTRUCTION_WINDOW_SIZE \<number\>** (optional): Number of candidates examined when inserting a vector. The default is 128; it must be at least GRAPH_MAX_DEGREE, and the maximum is set by `search.max-vector-ef-construction`.
+  - **SEARCH_WINDOW_SIZE \<number\>** (optional): Number of candidates examined during a query. The default is 10, and the maximum is set by `search.max-vector-ef-runtime`. A query can override it with EF_RUNTIME.
+  - **ALPHA \<number\>** (optional): Graph pruning parameter. At least 1.0 for L2 and in (0, 1.0] for IP and COSINE; the defaults are 1.2 and 0.95.
+  - **COMPRESSION [NONE | FP16 | SQ8]** (optional): NONE (the default) stores vectors in the declared TYPE; FP16 stores FLOAT32 vectors as 16-bit floats, halving their memory, with scores that differ slightly from the exact ones; SQ8 stores 8-bit integers, with one range for the index set from the vectors it is built from.
+  - **TRAINING_THRESHOLD \<number\>** (optional): Only for COMPRESSION SQ8. The number of vectors the index holds uncompressed before it converts to SQ8, keeping its graph. The minimum is 64, the default 1024 and the maximum 1000000. Later elements outside the range those vectors set are clamped.
 
 ### Field options
 
@@ -124,10 +135,11 @@ LOCAL: An array of key value pairs.
       - **distance_metric** (string) Possible values are L2, IP or Cosine
       - **data_type** (string) Element data type of the vector. Possible values are FLOAT32, FLOAT16 or BFLOAT16
       - **algorithm** (array) Information about the algorithm for this field.
-        - **name** (string) HNSW or FLAT
+        - **name** (string) HNSW, FLAT or SVS_VAMANA
         - **m** (integer) The count of maximum permitted outgoing edges for each node in the graph in each layer. The maximum number of outgoing edges is 2\*M for layer 0\. The Default is 16\. The maximum is 512\.
         - **ef_construction** (integer) The count of vectors in the index. The default is 200, and the max is 4096\. Higher values increase the time needed to create indexes, but improve the recall ratio.
         - **ef_runtime** (integer) The count of vectors to be examined during a query operation. The default is 10, and the max is 4096\.
+        - For SVS_VAMANA, **graph_max_degree**, **construction_window_size**, **search_window_size**, **alpha** (the effective value, including the per-metric default) and **compression** (`SVS_COMPRESSION_NONE`, `SVS_COMPRESSION_FP16` or `SVS_COMPRESSION_SQ8`), plus **training_threshold** and **compression_pending** (1 until the index converts) for SQ8, and **memory_bytes** (bytes SVS holds for the field), instead. See [FT.INFO](docs/commands/ft.info.md).
 
 ## FT.\_LIST
 

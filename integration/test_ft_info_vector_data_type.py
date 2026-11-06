@@ -5,7 +5,7 @@ FLOAT16 and BFLOAT16 share a byte width (2), so an info-reporting bug that
 collapses them by size — rather than dispatching on the type enum — would
 silently mislabel BF16 indexes as FP16 (or vice versa) without any other
 visible symptom. This test pins the contract for all three supported
-storage types across both HNSW and FLAT.
+storage types across HNSW, FLAT and SVS_VAMANA (which rejects BFLOAT16).
 """
 
 import pytest
@@ -27,9 +27,11 @@ def _make_index(name: str, algo: str, data_type: str) -> Index:
 
 class TestFTInfoVectorDataType(ValkeySearchTestCaseBase):
 
-    @pytest.mark.parametrize("algo", ["HNSW", "FLAT"])
+    @pytest.mark.parametrize("algo", ["HNSW", "FLAT", "SVS_VAMANA"])
     @pytest.mark.parametrize("data_type", ["FLOAT32", "FLOAT16", "BFLOAT16"])
     def test_ft_info_reports_data_type(self, algo: str, data_type: str):
+        if algo == "SVS_VAMANA" and data_type == "BFLOAT16":
+            pytest.skip("SVS_VAMANA doesn't accept BFLOAT16 input")
         client: Valkey = self.server.get_new_client()
         index_name = f"idx_{algo}_{data_type}".lower()
 

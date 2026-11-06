@@ -149,7 +149,7 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
     # (The consequence of a client rewriting an already-backfilled key with
     # unchanged data is FM-4, pinned once below.)
 
-    @pytest.mark.parametrize("algo", ["HNSW", "FLAT"])
+    @pytest.mark.parametrize("algo", ["HNSW", "FLAT", "SVS_VAMANA"])
     @pytest.mark.parametrize("mixed", [False, True], ids=["vector_only", "mixed"])
     def test_backfill_hash(self, algo: str, mixed: bool):
         """Backfill of a HASH index over all three vector-field states.
@@ -169,7 +169,7 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
             assert self.search_count(index, "@num:[5 20]") == 3
             assert self.search_count(index, "@tag:{a}") == 3
 
-    @pytest.mark.parametrize("algo", ["HNSW", "FLAT"])
+    @pytest.mark.parametrize("algo", ["HNSW", "FLAT", "SVS_VAMANA"])
     @pytest.mark.parametrize("mixed", [False, True], ids=["vector_only", "mixed"])
     def test_backfill_json(self, algo: str, mixed: bool):
         """Backfill of a JSON index over all three vector-field states.
@@ -524,7 +524,7 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         self.client.flushall()
         waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0)
 
-    @pytest.mark.parametrize("algo", ["HNSW", "FLAT"])
+    @pytest.mark.parametrize("algo", ["HNSW", "FLAT", "SVS_VAMANA"])
     def test_swapdb_moves_keys_out_from_under_the_index(self, algo: str):
         """SWAPDB exchanges two keyspaces without touching any key."""
         index = self.build_index(algo=algo)
@@ -1782,7 +1782,7 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         finally:
             r.execute_command("CONFIG", "SET", "search.vector-unshare-batch-size", "10240")
 
-    @pytest.mark.parametrize("algo", ["HNSW", "FLAT"])
+    @pytest.mark.parametrize("algo", ["HNSW", "FLAT", "SVS_VAMANA"])
     def test_swapdb_full_index_and_registry_lifecycle(self, algo: str):
         """Verifies that SWAPDB correctly transfers VectorRegistry tracked entries,
         index schema db numbers, search query execution, and post-swap drop lifecycle."""

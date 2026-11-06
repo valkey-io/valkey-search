@@ -5,6 +5,7 @@ ignore-hidden = true
 extend-exclude = [
     "third_party/snowball/**",
     "third_party/icu/**",
+    "third_party/svs/**",
     "src/indexes/text/rax/**",
     "src/indexes/text/languages/**",
     "testing/snowball_language_test.cc",
@@ -37,6 +38,7 @@ Clangd = "Clangd"
 mak = "mak" # Turkish suffix *mak in compatibility exclusion comments
 mis = "mis"     # "mis-strides", "mis-decode" in the SIMD kernel tests
 SHLL = "SHLL"   # AArch64 shift-left-long instruction
+thr = "thr"     # "thread" index name / key prefix in test_svs_threads.py
 
 [type.cpp]
 extend-ignore-re = [

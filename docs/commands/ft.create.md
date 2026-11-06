@@ -27,7 +27,7 @@ FT.CREATE <index-name>
                   NUMERIC
                 | TAG [SEPARATOR <sep>] [CASESENSITIVE]
                 | TEXT [NOSTEM] [WITHSUFFIXTRIE | NOSUFFIXTRIE] [WEIGHT <weight>]
-                | VECTOR [HNSW | FLAT] <attr_count> [<attribute_name> <attribute_value>]+
+                | VECTOR [HNSW | FLAT | SVS_VAMANA] <attr_count> [<attribute_name> <attribute_value>]+
             [SORTABLE [UNF]]
         )+
 ```
@@ -85,7 +85,7 @@ See [Text Field Format](../topics/search-data-formats.md#text-fields) for more d
 
 See [Numeric Field Format](../topics/search-data-formats.md#numeric-fields) for details and examples.
 
-`VECTOR`: A vector field contains a vector. Two vector indexing algorithms are currently supported: HNSW (Hierarchical Navigable Small World) and FLAT (brute force). Each algorithm has a set of additional attributes, some required and other optional.
+`VECTOR`: A vector field contains a vector. Three vector indexing algorithms are currently supported: HNSW (Hierarchical Navigable Small World), FLAT (brute force) and SVS_VAMANA (a Vamana graph index from Intel's Scalable Vector Search library). Each algorithm has a set of additional attributes, some required and other optional.
 
 - `FLAT:` This algorithm provides exact answers, but has runtime proportional to the number of indexed vectors and thus may not be appropriate for large data sets.
   - `DIM <number>` (required): Specifies the number of dimensions in a vector.
@@ -100,6 +100,28 @@ See [Numeric Field Format](../topics/search-data-formats.md#numeric-fields) for 
   - `EF_CONSTRUCTION <number>` (optional): controls the number of vectors examined during index construction. Higher values for this parameter will improve recall ratio at the expense of longer index creation times. The default value is 200\. Maximum value is 4096\.
   - `EF_RUNTIME <number>` (optional): controls the number of vectors to be examined during a query operation. The default is 10, and the max is 4096\. You can set this parameter value for each query you run. Higher values increase query times, but improve query recall.
   - `DISTANCE_METRIC [L2 | IP | COSINE]` (required): Specifies the distance algorithm.
+- `SVS_VAMANA:` A graph index from Intel's [Scalable Vector Search](https://github.com/intel/ScalableVectorSearch) (SVS) library. Like `HNSW` it provides approximate answers, and it can also store the vectors compressed. It requires an x86_64 Linux build; on other platforms `FT.CREATE` with `SVS_VAMANA` returns an error.
+  - `DIM <number>` (required): Specifies the number of dimensions in a vector.
+  - `TYPE [FLOAT32 | FLOAT16]` (required): Element data type. `BFLOAT16` is not supported.
+  - `DISTANCE_METRIC [L2 | IP | COSINE]` (required): Specifies the distance algorithm.
+  - `INITIAL_CAP <size>` (optional): Expected number of vectors; the default is 10240. It sizes the blocks SVS allocates its data and graph in: the next power of two at or above `INITIAL_CAP` × `DIM` × the stored element size, from 64 KiB up to 16 MiB, so a small index doesn't reserve a large block. The index grows past this size as needed.
+  - `GRAPH_MAX_DEGREE <number>` (optional): Maximum number of outgoing edges for each node in the graph. Higher values improve recall at the cost of memory and indexing time. The default is 64 and the minimum is 2.
+  - `CONSTRUCTION_WINDOW_SIZE <number>` (optional): Number of candidates examined when inserting a vector. Higher values improve recall at the cost of indexing time. The default is 128. It must be at least `GRAPH_MAX_DEGREE`.
+  - `SEARCH_WINDOW_SIZE <number>` (optional): Number of candidates examined during a query. The default is 10. A query can override it with `EF_RUNTIME`. Higher values increase query times, but improve query recall.
+  - `ALPHA <number>` (optional): Pruning parameter that decides which edges are kept when the graph is built. It must be at least 1.0 for `L2` and in (0, 1.0] for `IP` and `COSINE`; the defaults are 1.2 and 0.95. Moving it away from 1.0 keeps more long-range edges, which can improve recall at the cost of memory.
+  - `COMPRESSION [NONE | FP16 | SQ8]` (optional): How SVS stores the vectors. The default is `NONE`, which stores them in the declared `TYPE`. `FP16` stores `FLOAT32` vectors as 16-bit floats, halving their memory; scores then differ slightly from the exact ones, on the order of 1e-3 for normalized vectors. `SQ8` stores each element as an 8-bit integer, using one scale and offset for the whole index, set from the smallest and largest element of the vectors the index is built from (see `TRAINING_THRESHOLD`). Each element is then off by at most half a step, where a step is that range divided by 255, so scores differ slightly from the exact ones.
+  - `TRAINING_THRESHOLD <number>` (optional): Only for `COMPRESSION SQ8`; rejected with the other compressions. The number of vectors the index holds uncompressed before it converts to `SQ8`, so `SQ8` can set its range from all of them. The minimum is 64, the default 1024 and the maximum 1000000. The conversion keeps the graph and pauses writes and searches on the index while it runs: about 0.4 seconds for 1000000 vectors of 128 dimensions. Elements of vectors added after the conversion that fall outside the range are clamped to it, so the first vectors should be representative of the data.
+
+  The upper bounds of `GRAPH_MAX_DEGREE`, `CONSTRUCTION_WINDOW_SIZE` and `SEARCH_WINDOW_SIZE` are set by the configs `search.max-vector-m`, `search.max-vector-ef-construction` and `search.max-vector-ef-runtime`, which also bound `HNSW`'s `M`, `EF_CONSTRUCTION` and `EF_RUNTIME`.
+
+  Element storage for each `TYPE` and `COMPRESSION`:
+
+  | `TYPE`    | `COMPRESSION NONE` | `COMPRESSION FP16` | `COMPRESSION SQ8` |
+  | :-------- | :----------------- | :----------------- | :---------------- |
+  | `FLOAT32` | 4 bytes            | 2 bytes            | 1 byte            |
+  | `FLOAT16` | 2 bytes            | 2 bytes            | 1 byte            |
+
+See [SVS_VAMANA notes](#svs_vamana-notes) for behavior specific to this algorithm.
 
 See [Vector Field Format](../topics/search-data-formats.md#vector-fields) for more details and examples.
 
@@ -113,6 +135,15 @@ This table shows the actual computation that Search uses when computing the dist
 |   Euclidean    |                 L2                 |         sqrt(sum((x[i]-y[i])^2))          | sum((x[i]-y[i])^2)                              |
 |     Cosine     |               COSINE               | dot(x,y) / (magnitude(X) \* magnitude(Y)) | 1 - (dot(X,Y) / (magnitude(X) \* magnitude(Y))) |
 
+### SVS_VAMANA notes
+
+- **Version:** `SVS_VAMANA` requires 1.3.0 or later. A module older than that refuses to load an RDB file with an `SVS_VAMANA` index.
+- **Memory:** SVS allocations count toward `used_memory` and `maxmemory`. On Valkey 9.2 or later they are reported as `used_memory_module_external` in `INFO debug`, and allocations of 2 MiB or more try huge pages first. On earlier Valkey versions they are still counted, but huge pages aren't used.
+- **Building:** the index is built when the first vector is added, so an empty `SVS_VAMANA` field allocates no SVS memory. With `COMPRESSION SQ8` it starts uncompressed and converts to `SQ8` once it holds `TRAINING_THRESHOLD` vectors. An index saved before its conversion loads uncompressed and converts later.
+- **Filtered queries:** SVS applies a filter to batches of candidates after each graph traversal, rather than at every node it visits. A query with a filter can therefore return fewer than `K` results when few vectors match. For very selective filters the query planner evaluates the filter first and computes exact distances instead (see `HYBRID_POLICY` in [Search - query language](../topics/search-query.md)).
+- **Persistence:** the index is saved in the RDB file. If the file was written by a different version of the SVS library, the index is rebuilt from the keyspace when it loads.
+- **Logging:** SVS's own messages go to the Valkey log as `SVS[<field>] <message>`: SVS trace and debug messages at `debug`, info at `verbose`, and warnings and errors at `warning`, so at the default `notice` level only SVS warnings appear. An index loaded from RDB logs as `SVS[global]`, because SVS's RDB load doesn't take a per-index logger; an SQ8 index gets its tag back when it converts. Each load from RDB also logs `SVS index loaded: attribute=<field>, num_elements=<n>, compression=<kind>, load_ms=<t>` at `notice`.
+
 ### Field options
 
 `SORTABLE` (optional): This parameter is not required. Any field may be used with `SORTBY` whether or not it is declared `SORTABLE`. It is recorded on the attribute and reported by [`FT.INFO`](ft.info.md), but does not otherwise affect indexing or query behavior.
@@ -125,6 +156,18 @@ This table shows the actual computation that Search uses when computing the dist
 
 ```
 FT.CREATE my_index_name SCHEMA my_hash_field_key VECTOR HNSW 10 TYPE FLOAT32 DIM 20 DISTANCE_METRIC COSINE M 4 EF_CONSTRUCTION 100
+```
+
+Result:
+
+```
+OK
+```
+
+### SVS_VAMANA example:
+
+```
+FT.CREATE my_index_name SCHEMA my_hash_field_key VECTOR SVS_VAMANA 10 TYPE FLOAT32 DIM 20 DISTANCE_METRIC COSINE GRAPH_MAX_DEGREE 32 COMPRESSION FP16
 ```
 
 Result:

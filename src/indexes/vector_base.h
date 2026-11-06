@@ -348,6 +348,8 @@ const absl::NoDestructor<absl::flat_hash_map<
     kVectorAlgoByStr({
         {"HNSW", data_model::VectorIndex::AlgorithmCase::kHnswAlgorithm},
         {"FLAT", data_model::VectorIndex::AlgorithmCase::kFlatAlgorithm},
+        {"SVS_VAMANA",
+         data_model::VectorIndex::AlgorithmCase::kSvsVamanaAlgorithm},
     });
 
 const absl::NoDestructor<
@@ -496,6 +498,10 @@ class VectorBase : public IndexBase {
   }
   bool IsVectorIndex() const override { return true; }
   virtual uint64_t GetMaxLoadedLabel() const { return 0; }
+  // Called at the end of LoadTrackedKeys, once every tracked key's vector has
+  // been read back from the keyspace. Lets an index that skipped its saved
+  // payload rebuild from those vectors.
+  virtual absl::Status OnTrackedKeysLoaded() { return absl::OkStatus(); }
   virtual size_t GetLabelCount() const { return 0; }
   FixedSizeAllocator *GetVectorAllocator() const {
     return vector_allocator_.get();
@@ -529,6 +535,11 @@ class VectorBase : public IndexBase {
   }
   bool IsValidSizeVector(absl::string_view record) const {
     return IsValidSizeVector(record.size());
+  }
+  // Lets an index reject vector contents it can't store, such as non-finite
+  // components. Rejected input is treated like a wrong-size vector.
+  virtual bool IsValidVectorData(absl::string_view /*record*/) const {
+    return true;
   }
   // Distance between `query` and the vector in `record`, where `record` is the
   // raw bytes just read back from the database rather than anything the index
@@ -659,6 +670,13 @@ class VectorBase : public IndexBase {
       RDBChunkOutputStream chunked_out) const = 0;
 
   virtual VectorRecord &GetVectorLockFree(uint64_t internal_id) const = 0;
+
+  // During LoadTrackedKeys, allow an index implementation to create missing
+  // labels instead of crashing on the CHECK in GetVectorLockFree.
+  virtual VectorRecord &GetOrCreateVectorLockFree(uint64_t internal_id) {
+    return GetVectorLockFree(internal_id);
+  }
+
   virtual VectorRecord &GetVector(uint64_t internal_id) const = 0;
 
   int db_num_;

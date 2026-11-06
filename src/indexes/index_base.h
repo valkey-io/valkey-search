@@ -33,11 +33,20 @@ class TextIterator;
 }  // namespace valkey_search::indexes::text
 
 namespace valkey_search::indexes {
-enum class IndexerType { kHNSW, kFlat, kNumeric, kTag, kVector, kNone, kText };
+enum class IndexerType {
+  kHNSW,
+  kFlat,
+  kNumeric,
+  kTag,
+  kVector,
+  kNone,
+  kText,
+  kSVS,
+};
 
 inline bool IsVectorIndex(IndexerType type) {
   return type == IndexerType::kVector || type == IndexerType::kHNSW ||
-         type == IndexerType::kFlat;
+         type == IndexerType::kFlat || type == IndexerType::kSVS;
 }
 
 inline void AssertValidIndexerType(IndexerType type) {

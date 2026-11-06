@@ -1728,6 +1728,10 @@ VALKEYMODULE_API int (*ValkeyModule_ExitFromChild)(int retcode)
 VALKEYMODULE_API int (*ValkeyModule_KillForkChild)(int child_pid)
     VALKEYMODULE_ATTR;
 VALKEYMODULE_API float (*ValkeyModule_GetUsedMemoryRatio)() VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_IncrExternalMemory)(size_t bytes)
+    VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_DecrExternalMemory)(size_t bytes)
+    VALKEYMODULE_ATTR;
 VALKEYMODULE_API size_t (*ValkeyModule_MallocSize)(void *ptr) VALKEYMODULE_ATTR;
 VALKEYMODULE_API size_t (*ValkeyModule_MallocUsableSize)(void *ptr)
     VALKEYMODULE_ATTR;
@@ -2183,6 +2187,8 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver,
   VALKEYMODULE_GET_API(ExitFromChild);
   VALKEYMODULE_GET_API(KillForkChild);
   VALKEYMODULE_GET_API(GetUsedMemoryRatio);
+  VALKEYMODULE_GET_API(IncrExternalMemory);
+  VALKEYMODULE_GET_API(DecrExternalMemory);
   VALKEYMODULE_GET_API(MallocSize);
   VALKEYMODULE_GET_API(MallocUsableSize);
   VALKEYMODULE_GET_API(MallocSizeString);

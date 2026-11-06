@@ -55,18 +55,19 @@ class ValkeySearch {
   }
 
   // Stop and join all owned thread pools so no worker threads remain alive.
-  // Intended for use during module shutdown before global destructors run,
-  // to avoid worker threads racing with destruction of global state.
-  void JoinAllThreadPools() {
+  // Returns false if any worker was still running at the deadline.
+  bool JoinAllThreadPools() {
+    bool all_joined = true;
     if (reader_thread_pool_) {
-      reader_thread_pool_->JoinWorkers();
+      all_joined &= reader_thread_pool_->JoinWorkers();
     }
     if (writer_thread_pool_) {
-      writer_thread_pool_->JoinWorkers();
+      all_joined &= writer_thread_pool_->JoinWorkers();
     }
     if (utility_thread_pool_) {
-      utility_thread_pool_->JoinWorkers();
+      all_joined &= utility_thread_pool_->JoinWorkers();
     }
+    return all_joined;
   }
 
   std::shared_ptr<vmsdk::ThreadGroupCPUMonitor> GetCoordinatorThreadsMonitor()

@@ -1263,6 +1263,12 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
 
   // Clear the now-stale stack-local index_interface_ pointer.
   env.agg->parse_vars_.index_interface_ = nullptr;
+  // parse_vars views argv (and a stack local for a filtered VSIM arm); a
+  // parked cursor outlives both.
+  env.agg->parse_vars.ClearAtEndOfParse();
+  for (auto &arm : env.arms) {
+    arm->parse_vars.ClearAtEndOfParse();
+  }
 
   // A score alias naming a column the LOAD clause explicitly emits is
   // rejected rather than silently resolved. Both would land in the same reply

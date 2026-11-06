@@ -2906,9 +2906,11 @@ TEST_F(VectorIndexTest, LoadTrackedKeysWithoutKeyspaceVector) {
         auto knn = index->Search(query, 1, CancelNever());
         ASSERT_TRUE(knn.ok()) << knn.status();
         EXPECT_EQ(keys_of(*knn), self) << "KNN, vector " << i;
-        auto range = index->SearchRange(query, kSelfRadius, CancelNever());
+        auto range =
+            index->SearchRange(query, {.radius = kSelfRadius}, CancelNever());
         ASSERT_TRUE(range.ok()) << range.status();
-        EXPECT_EQ(keys_of(*range), self) << "SearchRange, vector " << i;
+        EXPECT_EQ(keys_of(range->neighbors), self)
+            << "SearchRange, vector " << i;
       };
       // The kept vectors stay searchable, including the changed key's saved
       // one. On HNSW a null vector in a live node would crash the graph

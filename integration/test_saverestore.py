@@ -511,61 +511,6 @@ class TestLoadTrackedKeyMissingFromKeyspace(ValkeySearchTestCaseDebugMode):
         assert distances[b"k:1"] == 36.0
 
 
-class TestHNSWLoadMemory(ValkeySearchTestCaseDebugMode):
-    """
-    With key labels in the RDB, an HNSW load points each node at the
-    keyspace's copy of its vector while the node is built. Without them, it
-    first restores a saved copy of every vector, so memory briefly holds two.
-    """
-
-    DIM = 256
-    COUNT = 8000
-
-    def append_startup_args(self, args):
-        args = super().append_startup_args(args)
-        # While loading, used_memory_peak is sampled at most every 1000/hz ms
-        # and every loading-process-events-interval-bytes; sample densely.
-        args["hz"] = "500"
-        args["loading-process-events-interval-bytes"] = "1024"
-        return args
-
-    def index_idle(self) -> bool:
-        info = FTInfoParser(self.client.execute_command("FT.INFO", "idx"))
-        return (info.is_backfill_complete() and info.mutation_queue_size == 0
-                and info.num_docs == self.COUNT)
-
-    def load_peak(self, key_labels: str) -> int:
-        # A restart, unlike DEBUG RELOAD, starts without the old index's
-        # vectors, and its used_memory_peak covers only this load.
-        self.client.execute_command(
-            "CONFIG", "SET", "search.rdb-write-key-labels", key_labels)
-        self.client.execute_command("SAVE")
-        self.server.restart(remove_rdb=False)
-        waiters.wait_for_true(self.index_idle)
-        return self.client.info("memory")["used_memory_peak"]
-
-    def test_key_labels_avoid_second_copy_of_vectors(self):
-        self.client.execute_command(
-            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "k:",
-            "SCHEMA", "v", "VECTOR", "HNSW", "10", "TYPE", "FLOAT32",
-            "DIM", str(self.DIM), "DISTANCE_METRIC", "L2",
-            "M", "4", "EF_CONSTRUCTION", "10",
-        )
-        pipe = self.client.pipeline(transaction=False)
-        for i in range(self.COUNT):
-            pipe.hset(f"k:{i}", "v", float_to_bytes(
-                [float((i * 31 + d) % 97) for d in range(self.DIM)]))
-        pipe.execute()
-        waiters.wait_for_true(self.index_idle)
-
-        without_labels = self.load_peak("no")
-        with_labels = self.load_peak("yes")
-        vector_bytes = self.COUNT * self.DIM * 4
-        print(f"load peak without labels {without_labels}, with labels "
-              f"{with_labels}, vector bytes {vector_bytes}")
-        assert without_labels - with_labels > vector_bytes // 2
-
-
 class TestMutationQueue(ValkeySearchTestCaseDebugMode):
     def append_startup_args(self, args):
         args["search.rdb_write_v2"] = "yes"

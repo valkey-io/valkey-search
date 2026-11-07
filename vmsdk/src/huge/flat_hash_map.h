@@ -43,19 +43,23 @@ extern size_t g_huge_map_start_jitter_percent;
 
 // Entries the advisory MigrateSome() callers move per call: on the ingest and
 // query paths, for an IndexSchema's db_key_info_ on those paths, in the writer
-// tasks that ingest and queries schedule, and (bulk) in server cron. Written by
+// tasks that ingest and queries schedule, and in server cron. Written by
 // the "huge-hash-map-advisory-migrate-batch",
 // "huge-hash-map-key-info-migrate-batch", "huge-hash-map-ingest-migrate-batch",
-// "huge-hash-map-query-migrate-batch" and "huge-hash-map-bulk-migrate-batch"
+// "huge-hash-map-query-migrate-batch" and "huge-hash-map-cron-migrate-batch"
 // configs; read without synchronization since they are only tuning knobs.
 extern size_t g_huge_map_advisory_migrate_batch;
 extern size_t g_huge_map_key_info_migrate_batch;
 extern size_t g_huge_map_ingest_migrate_batch;
 extern size_t g_huge_map_query_migrate_batch;
-extern size_t g_huge_map_bulk_migrate_batch;
+extern size_t g_huge_map_cron_migrate_batch;
 
 // Bumps the "huge_hash_map_rehashes" developer info field.
 void CountHugeMapRehash();
+// Tracks the "huge_hash_maps_migrating" developer info field: the number of
+// tables whose NeedsMigration() is true.
+void CountHugeMapMigrating(bool started);
+long long GetHugeMapsMigrating();
 long long GetHugeMapRehashCount();
 
 // absl's load-factor rules, used to predict when absl would rehash on its own.
@@ -81,7 +85,7 @@ inline size_t HugeMapCapacityFor(size_t n) {
 config::Number &GetHugeFlatHashMapMigrateBatch();
 config::Number &GetHugeFlatHashMapStartJitterPercent();
 config::Number &GetHugeFlatHashMapAdvisoryMigrateBatch();
-config::Number &GetHugeFlatHashMapBulkMigrateBatch();
+config::Number &GetHugeFlatHashMapCronMigrateBatch();
 config::Number &GetHugeFlatHashMapKeyInfoMigrateBatch();
 config::Number &GetHugeFlatHashMapIngestMigrateBatch();
 config::Number &GetHugeFlatHashMapQueryMigrateBatch();
@@ -112,8 +116,8 @@ inline size_t HugeMapQueryMigrateBatch() {
 
 // The number of entries each server cron tick's advisory MigrateSome() call
 // should move.
-inline size_t HugeMapBulkMigrateBatch() {
-  return internal::g_huge_map_bulk_migrate_batch;
+inline size_t HugeMapCronMigrateBatch() {
+  return internal::g_huge_map_cron_migrate_batch;
 }
 
 struct HugeFlatHashMapTestPeer;
@@ -284,6 +288,11 @@ class HugeHashTable {
   using const_iterator = Iterator<true>;
 
   HugeHashTable() = default;
+  ~HugeHashTable() {
+    if (needs_migration_.load(std::memory_order_relaxed)) {
+      internal::CountHugeMapMigrating(false);
+    }
+  }
   HugeHashTable(const HugeHashTable &) = delete;
   HugeHashTable &operator=(const HugeHashTable &) = delete;
   // absl does not promise that iterators survive a move, so the migration
@@ -644,6 +653,7 @@ class HugeHashTable {
     bool needs = !bg_.empty() || bg_drained_ || shrink_pending_;
     if (needs != needs_migration_.load(std::memory_order_relaxed)) {
       needs_migration_.store(needs, std::memory_order_relaxed);
+      internal::CountHugeMapMigrating(needs);
     }
   }
 

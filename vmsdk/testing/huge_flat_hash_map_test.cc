@@ -868,23 +868,28 @@ TEST_F(FlatHashMapTest, LargeMapUsesHugePages) {
 
 TEST_F(FlatHashMapTest, NeedsMigrationLifecycle) {
   SetBatch(1);
+  const long long migrating = internal::GetHugeMapsMigrating();
   Map m;
   EXPECT_FALSE(m.NeedsMigration());
   int64_t next = FillPastSmallUntilBackground(m);
   EXPECT_TRUE(m.NeedsMigration());
+  EXPECT_EQ(internal::GetHugeMapsMigrating(), migrating + 1);
 
   Map moved(std::move(m));
   EXPECT_TRUE(moved.NeedsMigration());
   EXPECT_FALSE(m.NeedsMigration());  // NOLINT: moved-from is cleared.
+  EXPECT_EQ(internal::GetHugeMapsMigrating(), migrating + 1);
   Map other;
   other[-1] = -1;
   swap(moved, other);
   EXPECT_FALSE(moved.NeedsMigration());
   EXPECT_TRUE(other.NeedsMigration());
+  EXPECT_EQ(internal::GetHugeMapsMigrating(), migrating + 1);
 
   size_t size = other.size();
   other.MigrateSome(SIZE_MAX);
   EXPECT_FALSE(other.NeedsMigration());
+  EXPECT_EQ(internal::GetHugeMapsMigrating(), migrating);
   EXPECT_TRUE(Peer::Bg(other).empty());
   EXPECT_EQ(other.size(), size);
   for (int64_t i = 0; i < next; ++i) {
@@ -895,6 +900,15 @@ TEST_F(FlatHashMapTest, NeedsMigrationLifecycle) {
   EXPECT_TRUE(other.NeedsMigration());
   other.clear();
   EXPECT_FALSE(other.NeedsMigration());
+  EXPECT_EQ(internal::GetHugeMapsMigrating(), migrating);
+
+  // A table destroyed mid-migration no longer counts.
+  {
+    Map doomed;
+    FillPastSmallUntilBackground(doomed);
+    EXPECT_EQ(internal::GetHugeMapsMigrating(), migrating + 1);
+  }
+  EXPECT_EQ(internal::GetHugeMapsMigrating(), migrating);
 }
 
 TEST_F(FlatHashMapTest, MigrateSomeMovesAndHashesEachEntryOnce) {

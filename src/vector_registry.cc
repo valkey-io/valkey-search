@@ -518,7 +518,7 @@ void VectorRegistry::OnServerCronCallback(ValkeyModuleCtx *ctx,
                                           uint64_t subevent, void *data) {
   vmsdk::VerifyMainThread();
   // Drain every db's tables, even when no query or ingest on this node would.
-  size_t n = vmsdk::HugeMapBulkMigrateBatch();
+  size_t n = vmsdk::HugeMapCronMigrateBatch();
   for (auto &[_, tracked] : tracked_vectors_) {
     if (tracked.NeedsMigration()) {
       tracked.MigrateSome(n);

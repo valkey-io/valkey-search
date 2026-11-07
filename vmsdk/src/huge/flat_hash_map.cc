@@ -21,7 +21,7 @@ namespace {
 constexpr long long kDefaultMigrateBatch = 8;
 constexpr long long kDefaultStartJitterPercent = 10;
 constexpr long long kDefaultAdvisoryMigrateBatch = 32;
-constexpr long long kDefaultBulkMigrateBatch = 4096;
+constexpr long long kDefaultCronMigrateBatch = 4096;
 constexpr long long kDefaultKeyInfoMigrateBatch = 512;
 constexpr long long kDefaultIngestMigrateBatch = 512;
 constexpr long long kDefaultQueryMigrateBatch = 4096;
@@ -66,16 +66,16 @@ auto advisory_migrate_batch =
         })
         .Build();
 
-/// Register the "huge-hash-map-bulk-migrate-batch" config: the number of
+/// Register the "huge-hash-map-cron-migrate-batch" config: the number of
 /// entries each server cron tick's advisory MigrateSome() call moves.
-auto bulk_migrate_batch =
-    config::NumberBuilder("huge-hash-map-bulk-migrate-batch",  // name
-                          kDefaultBulkMigrateBatch,            // default
+auto cron_migrate_batch =
+    config::NumberBuilder("huge-hash-map-cron-migrate-batch",  // name
+                          kDefaultCronMigrateBatch,            // default
                           1,                                   // min
                           1 << 20)                             // max
         .Dev()
         .WithModifyCallback([](long long value) {
-          internal::g_huge_map_bulk_migrate_batch = value;
+          internal::g_huge_map_cron_migrate_batch = value;
         })
         .Build();
 
@@ -96,7 +96,7 @@ auto key_info_migrate_batch =
 
 /// Register the "huge-hash-map-ingest-migrate-batch" config: the number of
 /// entries per map the writer task that ingest schedules moves. Smaller than
-/// the bulk batch a query's task moves: during heavy ingest such tasks run back
+/// the batch a query's task moves: during heavy ingest such tasks run back
 /// to back, holding the mutex the main thread takes for every mutation.
 auto ingest_migrate_batch =
     config::NumberBuilder("huge-hash-map-ingest-migrate-batch",  // name
@@ -126,6 +126,14 @@ DEV_INTEGER_COUNTER(huge, huge_hash_map_rehashes);
 
 std::atomic<uint64_t> start_sequence{0};
 
+std::atomic<long long> maps_migrating{0};
+
+vmsdk::info_field::Integer huge_hash_maps_migrating(
+    "huge", "huge_hash_maps_migrating",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return internal::GetHugeMapsMigrating();
+    }));
+
 }  // namespace
 
 namespace internal {
@@ -133,7 +141,7 @@ namespace internal {
 size_t g_huge_map_migrate_batch = kDefaultMigrateBatch;
 size_t g_huge_map_start_jitter_percent = kDefaultStartJitterPercent;
 size_t g_huge_map_advisory_migrate_batch = kDefaultAdvisoryMigrateBatch;
-size_t g_huge_map_bulk_migrate_batch = kDefaultBulkMigrateBatch;
+size_t g_huge_map_cron_migrate_batch = kDefaultCronMigrateBatch;
 size_t g_huge_map_key_info_migrate_batch = kDefaultKeyInfoMigrateBatch;
 size_t g_huge_map_ingest_migrate_batch = kDefaultIngestMigrateBatch;
 size_t g_huge_map_query_migrate_batch = kDefaultQueryMigrateBatch;
@@ -150,6 +158,14 @@ void CountHugeMapRehash() { huge_hash_map_rehashes.Increment(); }
 
 long long GetHugeMapRehashCount() { return huge_hash_map_rehashes.Get(); }
 
+void CountHugeMapMigrating(bool started) {
+  maps_migrating.fetch_add(started ? 1 : -1, std::memory_order_relaxed);
+}
+
+long long GetHugeMapsMigrating() {
+  return maps_migrating.load(std::memory_order_relaxed);
+}
+
 }  // namespace internal
 
 config::Number &GetHugeFlatHashMapMigrateBatch() {
@@ -164,8 +180,8 @@ config::Number &GetHugeFlatHashMapAdvisoryMigrateBatch() {
   return dynamic_cast<config::Number &>(*advisory_migrate_batch);
 }
 
-config::Number &GetHugeFlatHashMapBulkMigrateBatch() {
-  return dynamic_cast<config::Number &>(*bulk_migrate_batch);
+config::Number &GetHugeFlatHashMapCronMigrateBatch() {
+  return dynamic_cast<config::Number &>(*cron_migrate_batch);
 }
 
 config::Number &GetHugeFlatHashMapKeyInfoMigrateBatch() {

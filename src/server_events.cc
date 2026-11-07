@@ -64,7 +64,7 @@ void OnServerCronCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
   }
   VectorRegistry::Instance().OnServerCronCallback(ctx, eid, subevent, data);
   // Drain the intern store's hash-table background without any traffic.
-  StringInternStore::MigrateSome(vmsdk::HugeMapBulkMigrateBatch());
+  StringInternStore::MigrateSome(vmsdk::HugeMapCronMigrateBatch());
   if (CursorTable::HasInstance()) {
     CursorTable::Instance().ExpireIdle(absl::Now());
   }

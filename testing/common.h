@@ -551,7 +551,7 @@ class MinimalHugeMapMigration {
             &vmsdk::GetHugeFlatHashMapKeyInfoMigrateBatch(),
             &vmsdk::GetHugeFlatHashMapIngestMigrateBatch(),
             &vmsdk::GetHugeFlatHashMapQueryMigrateBatch(),
-            &vmsdk::GetHugeFlatHashMapBulkMigrateBatch()};
+            &vmsdk::GetHugeFlatHashMapCronMigrateBatch()};
   }
 };
 

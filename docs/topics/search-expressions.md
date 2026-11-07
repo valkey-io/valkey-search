@@ -163,3 +163,27 @@ The exists function returns 0 if the input argument is Nil else 1. This can be u
 |    Syntax     | Operation                      |
 | :-----------: | :----------------------------- |
 | exists(value) | 0 if the value is Nil, else 1. |
+
+## Conditional Function
+
+`case` returns `if_true` when the condition is true, and `if_false` otherwise.
+Only the returned expression is evaluated, so the other one may refer to a
+field that the record does not have.
+
+|               Syntax               | Operation                                                 |
+| :--------------------------------: | :-------------------------------------------------------- |
+| case(condition, if_true, if_false) | `if_true` when `condition` is true, otherwise `if_false`. |
+
+The condition is false when it is 0, an empty string, or Nil, and true
+otherwise. When it refers to a missing field or fails with an error:
+
+- In `FT.AGGREGATE` with `search.emulate-release` below `1.3.0` (the default),
+  a missing field is Nil, so the condition is false.
+- Otherwise, the missing field or the error becomes the result of `case`, and
+  neither expression is evaluated.
+
+For example, the following gives records without `foo` the value `no foo`:
+
+```
+case(exists(@foo), @foo, "no foo")
+```

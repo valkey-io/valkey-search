@@ -646,11 +646,13 @@ void AppendMutatedAttribute(
 
 void IndexSchema::MigrateMainThreadMaps() {
   vmsdk::VerifyMainThread();
-  size_t n = vmsdk::HugeMapAdvisoryMigrateBatch();
+  // Only the ingest and query paths drain db_key_info_, so it gets a bigger
+  // batch than the maps server cron also drains.
   auto &db_key_info = db_key_info_.Get();
   if (db_key_info.NeedsMigration()) {
-    db_key_info.MigrateSome(n);
+    db_key_info.MigrateSome(vmsdk::HugeMapKeyInfoMigrateBatch());
   }
+  size_t n = vmsdk::HugeMapAdvisoryMigrateBatch();
   VectorRegistry::Instance().MigrateSome(db_num_, n);
   StringInternStore::MigrateSome(n);
 }

@@ -37,8 +37,7 @@ class VectorRegistryTest : public ValkeySearchTest {
   }
   bool TrackedNeedsMigration(VectorRegistry &registry, int db_num) {
     auto it = registry.tracked_vectors_.find(db_num);
-    return it != registry.tracked_vectors_.end() &&
-           it->second.NeedsMigration();
+    return it != registry.tracked_vectors_.end() && it->second.NeedsMigration();
   }
 };
 

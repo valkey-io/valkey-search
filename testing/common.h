@@ -533,21 +533,23 @@ class MinimalHugeMapMigration {
  public:
   MinimalHugeMapMigration() {
     SetDebugMode(true);
-    Set(1, 1, 1);
+    for (auto *config : Configs()) {
+      VMSDK_EXPECT_OK(config->SetValue(1));
+    }
   }
   ~MinimalHugeMapMigration() {
-    Set(vmsdk::GetHugeFlatHashMapMigrateBatch().GetDefaultValue(),
-        vmsdk::GetHugeFlatHashMapAdvisoryMigrateBatch().GetDefaultValue(),
-        vmsdk::GetHugeFlatHashMapBulkMigrateBatch().GetDefaultValue());
+    for (auto *config : Configs()) {
+      VMSDK_EXPECT_OK(config->SetValue(config->GetDefaultValue()));
+    }
     SetDebugMode(false);
   }
 
  private:
-  static void Set(long long batch, long long advisory, long long bulk) {
-    VMSDK_EXPECT_OK(vmsdk::GetHugeFlatHashMapMigrateBatch().SetValue(batch));
-    VMSDK_EXPECT_OK(
-        vmsdk::GetHugeFlatHashMapAdvisoryMigrateBatch().SetValue(advisory));
-    VMSDK_EXPECT_OK(vmsdk::GetHugeFlatHashMapBulkMigrateBatch().SetValue(bulk));
+  static std::vector<vmsdk::config::Number *> Configs() {
+    return {&vmsdk::GetHugeFlatHashMapMigrateBatch(),
+            &vmsdk::GetHugeFlatHashMapAdvisoryMigrateBatch(),
+            &vmsdk::GetHugeFlatHashMapKeyInfoMigrateBatch(),
+            &vmsdk::GetHugeFlatHashMapBulkMigrateBatch()};
   }
 };
 

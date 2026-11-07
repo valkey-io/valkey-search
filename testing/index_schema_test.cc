@@ -1871,7 +1871,8 @@ class IndexSchemaFriendTest : public ValkeySearchTest {
   InternedStringPtr key = StringInternStore::Intern("my_key_");
 
   void MutateKey(const std::vector<float> &vector) { MutateKey(key, vector); }
-  void MutateKey(const InternedStringPtr &key, const std::vector<float> &vector) {
+  void MutateKey(const InternedStringPtr &key,
+                 const std::vector<float> &vector) {
     IndexSchema::MutatedAttributes mutated;
     mutated[attribute_identifier] = testing_infra::MakeAttributeData(
         *hnsw_index, key,

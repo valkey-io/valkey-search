@@ -18,15 +18,24 @@
 #include "absl/log/check.h"
 #include "vmsdk/src/huge/huge_page_slab.h"
 #include "vmsdk/src/log.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace vmsdk {
 
 // STL-compliant allocator for very large containers. Requests of at least
 // kHugeThreshold bytes get their own huge_page_slab region (one VMA each),
 // huge-page aligned and rounded up to the system page size; smaller requests
-// go to the normal heap. deallocate() repeats the same size
-// test, which the allocator contract makes reliable because it is always
-// passed the `n` given to allocate().
+// go to the normal heap.
+//
+// Huge regions are mapped outside the server's allocator, so they count toward
+// used_memory and maxmemory only through ValkeyModule_IncrExternalMemory /
+// DecrExternalMemory (Valkey 9.2 and later). On a server without those APIs,
+// every request goes to the normal heap instead, keeping memory accounting
+// exact at the cost of huge pages.
+//
+// deallocate() repeats the same tests, which is reliable: it is always passed
+// the `n` given to allocate(), and the APIs' presence is fixed once the module
+// has loaded, before any container allocates.
 template <typename T>
 class HugeAllocator {
  public:
@@ -44,12 +53,19 @@ class HugeAllocator {
     return std::numeric_limits<size_t>::max() / sizeof(T);
   }
 
+  // Whether a request of `bytes` gets a huge_page_slab region.
+  static bool UsesHugeRegion(size_t bytes) {
+    return bytes >= kHugeThreshold &&
+           ValkeyModule_IncrExternalMemory != nullptr &&
+           ValkeyModule_DecrExternalMemory != nullptr;
+  }
+
   T *allocate(size_t n) {
     if (n > max_size()) {
       throw std::bad_array_new_length();
     }
     size_t bytes = n * sizeof(T);
-    if (bytes < kHugeThreshold) {
+    if (!UsesHugeRegion(bytes)) {
       return std::allocator<T>().allocate(n);
     }
     size_t region = huge_page_slab::RoundUpToPage(bytes);
@@ -69,7 +85,7 @@ class HugeAllocator {
 
   void deallocate(T *p, size_t n) noexcept {
     size_t bytes = n * sizeof(T);
-    if (bytes < kHugeThreshold) {
+    if (!UsesHugeRegion(bytes)) {
       std::allocator<T>().deallocate(p, n);
       return;
     }

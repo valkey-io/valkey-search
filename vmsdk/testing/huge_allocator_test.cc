@@ -64,6 +64,32 @@ TEST_F(HugeAllocatorTest, LargeRequestsUseHugeRegions) {
   }
 }
 
+// Without Valkey 9.2's external-memory APIs, huge regions could not be counted
+// in used_memory, so every request uses the normal heap.
+TEST_F(HugeAllocatorTest, LargeRequestsUseHeapWithoutExternalMemoryApi) {
+  auto incr = ValkeyModule_IncrExternalMemory;
+  auto decr = ValkeyModule_DecrExternalMemory;
+  ValkeyModule_IncrExternalMemory = nullptr;
+  ValkeyModule_DecrExternalMemory = nullptr;
+  {
+    HugeAllocator<char> alloc;
+    EXPECT_FALSE(HugeAllocator<char>::UsesHugeRegion(5 * kHugePage));
+    for (size_t bytes : {kHugePage, 5 * kHugePage - 3}) {
+      char *p = alloc.allocate(bytes);
+      p[0] = 1;
+      p[bytes - 1] = 1;
+      alloc.deallocate(p, bytes);
+    }
+    std::vector<int, HugeAllocator<int>> v(2 * kHugePage / sizeof(int), 7);
+    EXPECT_EQ(v.back(), 7);
+  }
+  ValkeyModule_IncrExternalMemory = incr;
+  ValkeyModule_DecrExternalMemory = decr;
+  EXPECT_TRUE(HugeAllocator<char>::UsesHugeRegion(kHugePage));
+  EXPECT_FALSE(HugeAllocator<char>::UsesHugeRegion(kHugePage - 1));
+  EXPECT_EQ(external_, 0);
+}
+
 TEST_F(HugeAllocatorTest, VectorGrowsAcrossThreshold) {
   {
     std::vector<int, HugeAllocator<int>> v;

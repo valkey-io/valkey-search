@@ -690,20 +690,43 @@ void IndexSchema::MigrateIndexMaps(size_t n) {
   }
 }
 
-void IndexSchema::ScheduleIndexMapMigration() {
+void IndexSchema::ScheduleMigration(size_t index_map_batch) {
+  if (IndexMapsNeedMigration()) {
+    ScheduleIndexMapMigration(index_map_batch);
+  }
+  if (vmsdk::IsMainThread()) {
+    MigrateMainThreadMaps();
+    return;
+  }
+  // Reader thread: only the maps' atomic flags are read here.
+  if ((db_key_info_.GetFromAnyThread().NeedsMigration() ||
+       StringInternStore::NeedsMigration()) &&
+      !main_thread_migration_scheduled_.exchange(true)) {
+    vmsdk::RunByMain([weak_index_schema = GetWeakPtr()]() {
+      auto index_schema = weak_index_schema.lock();
+      if (!index_schema) {
+        return;
+      }
+      index_schema->main_thread_migration_scheduled_.store(false);
+      index_schema->MigrateMainThreadMaps();
+    });
+  }
+}
+
+void IndexSchema::ScheduleIndexMapMigration(size_t n) {
   if (mutations_thread_pool_ == nullptr ||
       index_migration_scheduled_.exchange(true)) {
     return;
   }
   bool scheduled = mutations_thread_pool_->Schedule(
-      [weak_index_schema = GetWeakPtr()]() {
+      [weak_index_schema = GetWeakPtr(), n]() {
         auto index_schema = weak_index_schema.lock();
         if (!index_schema) {
           return;
         }
         {
           vmsdk::WriterMutexLock lock(&index_schema->time_sliced_mutex_);
-          index_schema->MigrateIndexMaps(vmsdk::HugeMapBulkMigrateBatch());
+          index_schema->MigrateIndexMaps(n);
         }
         index_schema->index_migration_scheduled_.store(false);
       },
@@ -719,7 +742,7 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
   if (ABSL_PREDICT_FALSE(key == nullptr) || is_destructing_) {
     return;
   }
-  MigrateMainThreadMaps();
+  ScheduleMigration(vmsdk::HugeMapIngestMigrateBatch());
   auto key_cstr = vmsdk::ToStringView(key);
   auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
       ctx, key, VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
@@ -1178,9 +1201,6 @@ void IndexSchema::ProcessSingleMutationAsync(ValkeyModuleCtx *ctx,
   PAUSEPOINT("mutation_processing");
   {
     vmsdk::WriterMutexLock lock(&time_sliced_mutex_);
-    if (IndexMapsNeedMigration()) {
-      MigrateIndexMaps(vmsdk::HugeMapAdvisoryMigrateBatch());
-    }
     bool first_time = true;
     do {
       auto mutation_record = ConsumeTrackedMutatedAttribute(key, first_time);

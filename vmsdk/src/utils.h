@@ -93,6 +93,9 @@ class MainThreadAccessGuard {
     VerifyMainThread();
     return var_;
   }
+  // Unchecked access, only for members of T that are safe to read from any
+  // thread (atomics).
+  const T &GetFromAnyThread() const { return var_; }
 
  private:
   T var_;

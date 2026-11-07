@@ -1895,6 +1895,10 @@ class IndexSchemaFriendTest : public ValkeySearchTest {
   bool IndexMigrationScheduled() const {
     return index_schema->index_migration_scheduled_.load();
   }
+  bool DbKeyInfoNeedsMigration() const {
+    return index_schema->db_key_info_.Get().NeedsMigration();
+  }
+  void QueriesDrainBackgrounds(bool reader_thread);
   void ExpectWriterQueueDrained() {
     WaitWorkerTasksAreCompleted(mutations_thread_pool);
     EXPECT_EQ(mutations_thread_pool.QueueSize(), 0);
@@ -3920,16 +3924,19 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
       index_schema->SaveIndexExtension(RDBChunkOutputStream(&rdb)).ok());
 }
 
-// After ingest leaves the per-index maps' backgrounds behind, queries alone
-// drain them: each query that finds work schedules one writer task, whose dedup
-// flag is clear again once it has run, and no new growth cycle starts.
-TEST_F(IndexSchemaFriendTest, QueriesDrainIndexMapBackgrounds) {
+// After ingest leaves backgrounds behind, queries alone drain them: each query
+// that finds work schedules one writer task for the per-index maps, whose dedup
+// flag is clear again once it has run, and migrates db_key_info_ -- inline when
+// the query runs on the main thread, through one RunByMain task at a time when
+// it runs on a reader thread. No new growth cycle starts.
+void IndexSchemaFriendTest::QueriesDrainBackgrounds(bool reader_thread) {
   MinimalHugeMapMigration minimal_migration;
   std::vector<float> vector(dimensions, 1.0f);
   absl::string_view vector_bytes(reinterpret_cast<const char *>(vector.data()),
                                  dimensions * sizeof(float));
   int keys = 0;
-  while (keys < 64 || !index_schema->IndexMapsNeedMigration()) {
+  while (keys < 64 || !index_schema->IndexMapsNeedMigration() ||
+         !DbKeyInfoNeedsMigration()) {
     ASSERT_LT(keys, 100000);
     vector[0] = keys;
     MutateKey(StringInternStore::Intern(absl::StrCat("prefix1:", keys++)),
@@ -3938,6 +3945,13 @@ TEST_F(IndexSchemaFriendTest, QueriesDrainIndexMapBackgrounds) {
   }
   const auto rehashes = vmsdk::internal::GetHugeMapRehashCount();
 
+  std::vector<std::pair<ValkeyModuleEventLoopOneShotFunc, void *>> oneshots;
+  EXPECT_CALL(*kMockValkeyModule, EventLoopAddOneShot(testing::_, testing::_))
+      .WillRepeatedly(
+          [&](ValkeyModuleEventLoopOneShotFunc fn, void *data) -> int {
+            oneshots.push_back({fn, data});
+            return 0;
+          });
   UnitTestSearchParameters params;
   params.index_schema_name = index_schema_name_str;
   params.index_schema = index_schema;
@@ -3948,16 +3962,41 @@ TEST_F(IndexSchemaFriendTest, QueriesDrainIndexMapBackgrounds) {
   params.ef = ef_runtime;
   params.query = vector_bytes;
   int queries = 0;
-  while (index_schema->IndexMapsNeedMigration()) {
+  while (index_schema->IndexMapsNeedMigration() || DbKeyInfoNeedsMigration()) {
     ASSERT_LT(queries++, 100000);
-    VMSDK_EXPECT_OK(query::Search(params, query::SearchMode::kLocal));
+    auto search = [&]() {
+      VMSDK_EXPECT_OK(query::Search(params, query::SearchMode::kLocal));
+    };
+    if (reader_thread) {
+      // Two queries before the main thread runs: the second finds the first's
+      // task still queued and posts no other.
+      std::thread([&]() {
+        search();
+        search();
+      }).join();
+      ASSERT_LE(oneshots.size(), 1u);
+    } else {
+      search();
+      ASSERT_TRUE(oneshots.empty());
+    }
+    for (auto [fn, data] : std::exchange(oneshots, {})) {
+      fn(data);
+    }
     WaitWorkerTasksAreCompleted(mutations_thread_pool);
     ASSERT_FALSE(IndexMigrationScheduled());
   }
-  // With a batch of 1, draining took many tasks, so the flag was reset and
+  // With a batch of 1, draining took many tasks, so the flags were reset and
   // set again between them.
   EXPECT_GT(queries, 1);
   EXPECT_EQ(vmsdk::internal::GetHugeMapRehashCount(), rehashes);
+}
+
+TEST_F(IndexSchemaFriendTest, MainThreadQueriesDrainBackgrounds) {
+  QueriesDrainBackgrounds(false);
+}
+
+TEST_F(IndexSchemaFriendTest, ReaderThreadQueriesDrainBackgrounds) {
+  QueriesDrainBackgrounds(true);
 }
 
 // A migration task still queued when its index is dropped finds the index gone
@@ -3976,7 +4015,7 @@ TEST_F(ValkeySearchTest, IndexMapMigrationAfterDropIsNoOp) {
   mutations_thread_pool.Schedule(
       [&release_writer]() { release_writer.WaitForNotification(); },
       vmsdk::ThreadPool::Priority::kHigh);
-  index_schema->ScheduleIndexMapMigration();
+  index_schema->ScheduleIndexMapMigration(vmsdk::HugeMapQueryMigrateBatch());
   std::weak_ptr<IndexSchema> weak_index_schema = index_schema;
   index_schema.reset();
   EXPECT_TRUE(weak_index_schema.expired());

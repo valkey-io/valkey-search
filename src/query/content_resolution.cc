@@ -35,11 +35,6 @@ void ResolveContent(std::unique_ptr<SearchParameters> params) {
     return;
   }
 
-  // The checks and the fetch below look keys up in db_key_info_. Queries from
-  // other shards reach the main thread only here, so drain its background
-  // here too.
-  params->index_schema->MigrateMainThreadMaps();
-
   // 3. If kContentionCheckRequired, check for in-flight mutations
   if (params->GetContentProcessing() == kContentionCheckRequired) {
     if (params->index_schema->PerformKeyContentionCheck(

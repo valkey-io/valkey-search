@@ -42,13 +42,16 @@ extern size_t g_huge_map_migrate_batch;
 extern size_t g_huge_map_start_jitter_percent;
 
 // Entries the advisory MigrateSome() callers move per call: on the ingest and
-// query paths, for an IndexSchema's db_key_info_ on those paths, and (bulk) in
-// the writer task a query schedules or server cron. Written by the
-// "huge-hash-map-advisory-migrate-batch",
-// "huge-hash-map-key-info-migrate-batch" and "huge-hash-map-bulk-migrate-batch"
+// query paths, for an IndexSchema's db_key_info_ on those paths, in the writer
+// tasks that ingest and queries schedule, and (bulk) in server cron. Written by
+// the "huge-hash-map-advisory-migrate-batch",
+// "huge-hash-map-key-info-migrate-batch", "huge-hash-map-ingest-migrate-batch",
+// "huge-hash-map-query-migrate-batch" and "huge-hash-map-bulk-migrate-batch"
 // configs; read without synchronization since they are only tuning knobs.
 extern size_t g_huge_map_advisory_migrate_batch;
 extern size_t g_huge_map_key_info_migrate_batch;
+extern size_t g_huge_map_ingest_migrate_batch;
+extern size_t g_huge_map_query_migrate_batch;
 extern size_t g_huge_map_bulk_migrate_batch;
 
 // Bumps the "huge_hash_map_rehashes" developer info field.
@@ -80,6 +83,8 @@ config::Number &GetHugeFlatHashMapStartJitterPercent();
 config::Number &GetHugeFlatHashMapAdvisoryMigrateBatch();
 config::Number &GetHugeFlatHashMapBulkMigrateBatch();
 config::Number &GetHugeFlatHashMapKeyInfoMigrateBatch();
+config::Number &GetHugeFlatHashMapIngestMigrateBatch();
+config::Number &GetHugeFlatHashMapQueryMigrateBatch();
 
 // The number of entries an advisory MigrateSome() call on the ingest or query
 // path should move.
@@ -93,8 +98,20 @@ inline size_t HugeMapKeyInfoMigrateBatch() {
   return internal::g_huge_map_key_info_migrate_batch;
 }
 
-// The number of entries an advisory MigrateSome() call should move where a
-// bigger batch is cheap: the writer task a query schedules, or server cron.
+// The number of entries per map the writer task that ingest schedules should
+// move.
+inline size_t HugeMapIngestMigrateBatch() {
+  return internal::g_huge_map_ingest_migrate_batch;
+}
+
+// The number of entries per map the writer task that a query schedules should
+// move.
+inline size_t HugeMapQueryMigrateBatch() {
+  return internal::g_huge_map_query_migrate_batch;
+}
+
+// The number of entries each server cron tick's advisory MigrateSome() call
+// should move.
 inline size_t HugeMapBulkMigrateBatch() {
   return internal::g_huge_map_bulk_migrate_batch;
 }

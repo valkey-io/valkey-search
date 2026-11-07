@@ -23,6 +23,8 @@ constexpr long long kDefaultStartJitterPercent = 10;
 constexpr long long kDefaultAdvisoryMigrateBatch = 32;
 constexpr long long kDefaultBulkMigrateBatch = 4096;
 constexpr long long kDefaultKeyInfoMigrateBatch = 512;
+constexpr long long kDefaultIngestMigrateBatch = 512;
+constexpr long long kDefaultQueryMigrateBatch = 4096;
 
 /// Register the "huge-hash-map-migrate-batch" config: the minimum number of
 /// entries a vmsdk::HugeFlatHashMap migrates per insertion or erase.
@@ -65,8 +67,7 @@ auto advisory_migrate_batch =
         .Build();
 
 /// Register the "huge-hash-map-bulk-migrate-batch" config: the number of
-/// entries each advisory MigrateSome() call moves where a bigger batch is
-/// cheap: the writer task a query schedules, and server cron.
+/// entries each server cron tick's advisory MigrateSome() call moves.
 auto bulk_migrate_batch =
     config::NumberBuilder("huge-hash-map-bulk-migrate-batch",  // name
                           kDefaultBulkMigrateBatch,            // default
@@ -93,6 +94,34 @@ auto key_info_migrate_batch =
         })
         .Build();
 
+/// Register the "huge-hash-map-ingest-migrate-batch" config: the number of
+/// entries per map the writer task that ingest schedules moves. Smaller than
+/// the bulk batch a query's task moves: during heavy ingest such tasks run back
+/// to back, holding the mutex the main thread takes for every mutation.
+auto ingest_migrate_batch =
+    config::NumberBuilder("huge-hash-map-ingest-migrate-batch",  // name
+                          kDefaultIngestMigrateBatch,            // default
+                          1,                                     // min
+                          1 << 20)                               // max
+        .Dev()
+        .WithModifyCallback([](long long value) {
+          internal::g_huge_map_ingest_migrate_batch = value;
+        })
+        .Build();
+
+/// Register the "huge-hash-map-query-migrate-batch" config: the number of
+/// entries per map the writer task that a query schedules moves.
+auto query_migrate_batch =
+    config::NumberBuilder("huge-hash-map-query-migrate-batch",  // name
+                          kDefaultQueryMigrateBatch,            // default
+                          1,                                    // min
+                          1 << 20)                              // max
+        .Dev()
+        .WithModifyCallback([](long long value) {
+          internal::g_huge_map_query_migrate_batch = value;
+        })
+        .Build();
+
 DEV_INTEGER_COUNTER(huge, huge_hash_map_rehashes);
 
 std::atomic<uint64_t> start_sequence{0};
@@ -106,6 +135,8 @@ size_t g_huge_map_start_jitter_percent = kDefaultStartJitterPercent;
 size_t g_huge_map_advisory_migrate_batch = kDefaultAdvisoryMigrateBatch;
 size_t g_huge_map_bulk_migrate_batch = kDefaultBulkMigrateBatch;
 size_t g_huge_map_key_info_migrate_batch = kDefaultKeyInfoMigrateBatch;
+size_t g_huge_map_ingest_migrate_batch = kDefaultIngestMigrateBatch;
+size_t g_huge_map_query_migrate_batch = kDefaultQueryMigrateBatch;
 
 size_t HugeMapEarlyStart(size_t growth) {
   constexpr double kGoldenRatioFraction = 0.6180339887498949;
@@ -139,6 +170,14 @@ config::Number &GetHugeFlatHashMapBulkMigrateBatch() {
 
 config::Number &GetHugeFlatHashMapKeyInfoMigrateBatch() {
   return dynamic_cast<config::Number &>(*key_info_migrate_batch);
+}
+
+config::Number &GetHugeFlatHashMapIngestMigrateBatch() {
+  return dynamic_cast<config::Number &>(*ingest_migrate_batch);
+}
+
+config::Number &GetHugeFlatHashMapQueryMigrateBatch() {
+  return dynamic_cast<config::Number &>(*query_migrate_batch);
 }
 
 }  // namespace vmsdk

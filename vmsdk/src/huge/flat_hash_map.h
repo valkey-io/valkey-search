@@ -159,7 +159,7 @@ struct PrehashedEq : Eq {
 // absl itself never rehashes: its private growth_left is mirrored
 // conservatively (erases are treated as permanent tombstones) and the
 // background is always drained before that budget runs out. Every insert into
-// the foreground CHECKs that absl has room for it.
+// the foreground uses CHECK to verify that absl has room for it.
 //
 // Owners may drain a background sooner, for example while traffic is
 // read-only: NeedsMigration() is a lock-free test, safe from any thread, and

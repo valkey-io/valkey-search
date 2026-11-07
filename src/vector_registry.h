@@ -81,6 +81,11 @@ class VectorRegistry {
   // Returns the total number of keys pending unshare.
   size_t GetPendingUnsharesCount() const;
 
+  // Advisory HugeFlatHashMap/Set migration of db_num's tables: moves up to `n`
+  // entries in each that has a background (see vmsdk/src/huge/flat_hash_map.h).
+  // Main thread only.
+  void MigrateSome(int db_num, size_t n);
+
   void OnServerCronCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
                             uint64_t subevent, void *data);
 

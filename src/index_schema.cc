@@ -55,6 +55,7 @@
 #include "version.h"
 #include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/debug.h"
+#include "vmsdk/src/huge/flat_hash_map.h"
 #include "vmsdk/src/info.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -643,12 +644,102 @@ void AppendMutatedAttribute(
 
 }  // namespace
 
+void IndexSchema::MigrateMainThreadMaps() {
+  vmsdk::VerifyMainThread();
+  size_t n = vmsdk::HugeMapAdvisoryMigrateBatch();
+  auto &db_key_info = db_key_info_.Get();
+  if (db_key_info.NeedsMigration()) {
+    db_key_info.MigrateSome(n);
+  }
+  VectorRegistry::Instance().MigrateSome(db_num_, n);
+  StringInternStore::MigrateSome(n);
+}
+
+bool IndexSchema::MainThreadMapsNeedMigration() const {
+  return db_key_info_.GetFromAnyThread().NeedsMigration() ||
+         StringInternStore::NeedsMigration();
+}
+
+void IndexSchema::ScheduleMainThreadMapMigration() {
+  if (main_thread_migration_scheduled_.exchange(true)) {
+    return;
+  }
+  vmsdk::RunByMain(
+      [weak_index_schema = GetWeakPtr()]() {
+        auto index_schema = weak_index_schema.lock();
+        if (!index_schema) {
+          return;
+        }
+        index_schema->MigrateMainThreadMaps();
+        index_schema->main_thread_migration_scheduled_.store(false);
+      },
+      true);
+}
+
+bool IndexSchema::IndexMapsNeedMigration() const {
+  if (index_key_info_.NeedsMigration()) {
+    return true;
+  }
+  for (const auto &[_, attribute] : attributes_) {
+    auto index = attribute.GetIndex();
+    if (index && indexes::IsVectorIndex(index) &&
+        static_cast<const indexes::VectorBase *>(index.get())
+            ->HashMapsNeedMigration()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void IndexSchema::MigrateIndexMaps() {
+  size_t n = vmsdk::HugeMapAdvisoryMigrateBatch();
+  // The lock-free test keeps mutated_records_mutex_, which the main thread
+  // takes for every mutation, untouched unless there is work.
+  auto key_info_needs_migration = [this]() ABSL_NO_THREAD_SAFETY_ANALYSIS {
+    return index_key_info_.NeedsMigration();
+  };
+  if (key_info_needs_migration()) {
+    absl::MutexLock lock(&mutated_records_mutex_);
+    index_key_info_.MigrateSome(n);
+  }
+  for (const auto &[_, attribute] : attributes_) {
+    auto index = attribute.GetIndex();
+    if (index && indexes::IsVectorIndex(index)) {
+      static_cast<indexes::VectorBase *>(index.get())->MigrateHashMaps(n);
+    }
+  }
+}
+
+void IndexSchema::ScheduleIndexMapMigration() {
+  if (mutations_thread_pool_ == nullptr ||
+      index_migration_scheduled_.exchange(true)) {
+    return;
+  }
+  bool scheduled = mutations_thread_pool_->Schedule(
+      [weak_index_schema = GetWeakPtr()]() {
+        auto index_schema = weak_index_schema.lock();
+        if (!index_schema) {
+          return;
+        }
+        {
+          vmsdk::WriterMutexLock lock(&index_schema->time_sliced_mutex_);
+          index_schema->MigrateIndexMaps();
+        }
+        index_schema->index_migration_scheduled_.store(false);
+      },
+      vmsdk::ThreadPool::Priority::kLow);
+  if (!scheduled) {
+    index_migration_scheduled_.store(false);
+  }
+}
+
 void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
                                               ValkeyModuleString *key,
                                               bool from_backfill) {
   if (ABSL_PREDICT_FALSE(key == nullptr) || is_destructing_) {
     return;
   }
+  MigrateMainThreadMaps();
   auto key_cstr = vmsdk::ToStringView(key);
   auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
       ctx, key, VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
@@ -1107,6 +1198,9 @@ void IndexSchema::ProcessSingleMutationAsync(ValkeyModuleCtx *ctx,
   PAUSEPOINT("mutation_processing");
   {
     vmsdk::WriterMutexLock lock(&time_sliced_mutex_);
+    if (IndexMapsNeedMigration()) {
+      MigrateIndexMaps();
+    }
     bool first_time = true;
     do {
       auto mutation_record = ConsumeTrackedMutatedAttribute(key, first_time);

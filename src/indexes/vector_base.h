@@ -468,6 +468,13 @@ class VectorBase : public IndexBase {
 
   uint32_t GetMutationWeight() const override;
 
+  // Advisory HugeFlatHashMap migration (see vmsdk/src/huge/flat_hash_map.h).
+  // HashMapsNeedMigration() is lock-free; MigrateHashMaps() takes each map's
+  // own lock and runs on a writer, in the time-sliced write phase.
+  virtual bool HashMapsNeedMigration() const ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  virtual void MigrateHashMaps(size_t n)
+      ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
+
   size_t GetTrackedKeyCount() const override
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   size_t GetUnTrackedKeyCount() const override

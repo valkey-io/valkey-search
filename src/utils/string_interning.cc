@@ -240,6 +240,16 @@ InternedStringPtr StringInternStore::InternImpl(absl::string_view str,
   return {new_ptr};
 }
 
+void StringInternStore::MigrateSome(size_t n) {
+  if (!NeedsMigration()) {
+    return;
+  }
+  auto& store = Instance();
+  IsolatedMemoryScope scope{memory_pool_};
+  absl::MutexLock lock(&store.mutex_);
+  store.str_to_interned_.MigrateSome(n);
+}
+
 int64_t StringInternStore::GetMemoryUsage() { return memory_pool_.GetUsage(); }
 
 StringInternStore::Stats StringInternStore::GetStats() const {

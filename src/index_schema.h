@@ -312,6 +312,28 @@ class IndexSchema : public KeyspaceEventSubscription,
   void MarkAsDestructing();
   bool IsMarkedDestructing() const { return is_destructing_.load(); }
   void ProcessMultiQueue();
+
+  // Advisory HugeFlatHashMap/Set migration (see
+  // vmsdk/src/huge/flat_hash_map.h), so backgrounds drain even while traffic is
+  // read-only.
+  //
+  // Main-thread maps: db_key_info_, this db's VectorRegistry tables and the
+  // string intern store. Called at the start of every ingested key and query.
+  void MigrateMainThreadMaps();
+  // Lock-free, any thread: db_key_info_ or the intern store has a background.
+  // (VectorRegistry's tables can't be tested off the main thread; they grow
+  // with db_key_info_.)
+  bool MainThreadMapsNeedMigration() const;
+  // Posts MigrateMainThreadMaps() to the main thread, at most one at a time.
+  void ScheduleMainThreadMapMigration();
+  // Per-index maps: index_key_info_ and the vector indexes' maps. The test is
+  // lock-free and safe from any thread.
+  bool IndexMapsNeedMigration() const ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  // Runs on a writer, in the time-sliced write phase.
+  void MigrateIndexMaps() ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_)
+      ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
+  // Schedules MigrateIndexMaps() on the writer pool, at most one at a time.
+  void ScheduleIndexMapMigration();
   uint64_t GetBackfillScannedKeyCount() const;
   uint64_t GetBackfillDbSize() const;
   InfoIndexPartitionData GetInfoIndexPartitionData() const;
@@ -538,6 +560,11 @@ class IndexSchema : public KeyspaceEventSubscription,
   // the corresponding time slice mutex phases. Within the write phase,
   // exclusion is provided by mutated_records_mutex_.
   IndexKeyInfoMap index_key_info_ ABSL_GUARDED_BY(mutated_records_mutex_);
+
+  // A ScheduleMainThreadMapMigration() / ScheduleIndexMapMigration() task is
+  // queued and has not finished.
+  std::atomic<bool> main_thread_migration_scheduled_{false};
+  std::atomic<bool> index_migration_scheduled_{false};
 
   struct BackfillJob {
     BackfillJob() = delete;

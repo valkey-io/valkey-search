@@ -22,8 +22,9 @@
 namespace vmsdk {
 
 // STL-compliant allocator for very large containers. Requests of at least
-// kHugeThreshold bytes get their own huge_page_slab region (one VMA each);
-// smaller requests go to the normal heap. deallocate() repeats the same size
+// kHugeThreshold bytes get their own huge_page_slab region (one VMA each),
+// huge-page aligned and rounded up to the system page size; smaller requests
+// go to the normal heap. deallocate() repeats the same size
 // test, which the allocator contract makes reliable because it is always
 // passed the `n` given to allocate().
 template <typename T>
@@ -51,7 +52,7 @@ class HugeAllocator {
     if (bytes < kHugeThreshold) {
       return std::allocator<T>().allocate(n);
     }
-    size_t region = huge_page_slab::RoundUpToHugePage(bytes);
+    size_t region = huge_page_slab::RoundUpToPage(bytes);
     auto base = huge_page_slab::ReserveRegion(region);
     if (!base.ok()) {
       VMSDK_LOG(WARNING, nullptr) << base.status();
@@ -75,7 +76,7 @@ class HugeAllocator {
     // A misaligned pointer here means `n` differs from the allocate() call.
     CHECK_EQ(reinterpret_cast<uintptr_t>(p) % huge_page_slab::kHugePageBytes,
              0u);
-    size_t region = huge_page_slab::RoundUpToHugePage(bytes);
+    size_t region = huge_page_slab::RoundUpToPage(bytes);
     auto base = reinterpret_cast<char *>(p);
     huge_page_slab::Release(base, region);
     huge_page_slab::UnreserveRegion(base, region);

@@ -5,7 +5,9 @@
  *
  */
 
+#include <chrono>
 #include <cstdint>
+#include <iostream>
 #include <random>
 #include <stdexcept>
 #include <string>
@@ -14,6 +16,7 @@
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -41,6 +44,10 @@ struct HugeFlatHashMapTestPeer {
   template <typename M>
   static size_t Cycles(const M &m) {
     return m.cycles_;
+  }
+  template <typename M>
+  static size_t &FgErased(M &m) {
+    return m.fg_erased_;
   }
 };
 
@@ -94,11 +101,23 @@ class FlatHashMapTest : public ValkeyTest {
           external_ -= bytes;
           return VALKEYMODULE_OK;
         });
+    // The tuning configs are Dev() configs.
+    SetDebugMode(true);
   }
   void TearDown() override {
     SetBatch(GetHugeFlatHashMapMigrateBatch().GetDefaultValue());
     SetJitter(GetHugeFlatHashMapStartJitterPercent().GetDefaultValue());
+    SetDebugMode(false);
     ValkeyTest::TearDown();
+  }
+  static void SetDebugMode(bool enabled) {
+    auto args =
+        ToValkeyStringVector(enabled ? "--debug-mode yes" : "--debug-mode no");
+    VMSDK_EXPECT_OK(config::ModuleConfigManager::Instance().ParseAndLoadArgv(
+        nullptr, args.data(), args.size()));
+    for (auto *arg : args) {
+      TestValkeyModule_FreeString(nullptr, arg);
+    }
   }
   static void SetBatch(long long k) {
     VMSDK_EXPECT_OK(GetHugeFlatHashMapMigrateBatch().SetValue(k));
@@ -224,8 +243,9 @@ TEST_F(FlatHashMapTest, EraseMigrates) {
   size_t bg = Peer::Bg(m).size();
   EXPECT_EQ(m.erase(-1), 0);
   EXPECT_EQ(Peer::Bg(m).size(), bg - 1);
+  // erase(iterator) only erases, as absl's does.
   m.erase(m.find(Peer::Fg(m).begin()->first));
-  EXPECT_EQ(Peer::Bg(m).size(), bg - 2);
+  EXPECT_EQ(Peer::Bg(m).size(), bg - 1);
   EXPECT_EQ(m.size(), n - 1);
 }
 
@@ -844,6 +864,186 @@ TEST_F(FlatHashMapTest, LargeMapUsesHugePages) {
     EXPECT_GT(external_, 0);
   }
   EXPECT_EQ(external_, 0);
+}
+
+TEST_F(FlatHashMapTest, NeedsMigrationLifecycle) {
+  SetBatch(1);
+  Map m;
+  EXPECT_FALSE(m.NeedsMigration());
+  int64_t next = FillPastSmallUntilBackground(m);
+  EXPECT_TRUE(m.NeedsMigration());
+
+  Map moved(std::move(m));
+  EXPECT_TRUE(moved.NeedsMigration());
+  EXPECT_FALSE(m.NeedsMigration());  // NOLINT: moved-from is cleared.
+  Map other;
+  other[-1] = -1;
+  swap(moved, other);
+  EXPECT_FALSE(moved.NeedsMigration());
+  EXPECT_TRUE(other.NeedsMigration());
+
+  size_t size = other.size();
+  other.MigrateSome(SIZE_MAX);
+  EXPECT_FALSE(other.NeedsMigration());
+  EXPECT_TRUE(Peer::Bg(other).empty());
+  EXPECT_EQ(other.size(), size);
+  for (int64_t i = 0; i < next; ++i) {
+    ASSERT_TRUE(other.contains(i)) << i;
+  }
+
+  FillUntilBackground(other, next);
+  EXPECT_TRUE(other.NeedsMigration());
+  other.clear();
+  EXPECT_FALSE(other.NeedsMigration());
+}
+
+TEST_F(FlatHashMapTest, MigrateSomeMovesAndHashesEachEntryOnce) {
+  SetBatch(1);
+  HashCountedMap m;
+  FillPastSmallUntilBackground(m);
+  size_t bg = Peer::Bg(m).size();
+  ASSERT_GT(bg, 5);
+  g_hashes.clear();
+  m.MigrateSome(5);
+  EXPECT_EQ(Peer::Bg(m).size(), bg - 5);
+  EXPECT_EQ(g_hashes.size(), 5);
+  for (const auto &[key, n] : g_hashes) {
+    EXPECT_EQ(n, 1) << key;
+    EXPECT_TRUE(Peer::Fg(m).contains(key)) << key;
+  }
+  EXPECT_TRUE(m.NeedsMigration());
+  m.MigrateSome(bg);
+  EXPECT_TRUE(Peer::Bg(m).empty());
+  EXPECT_FALSE(m.NeedsMigration());
+}
+
+// erase(it++) must visit every element once and keep the rest intact, from
+// a table with no background, mid-drain, and across a shrink.
+TEST_F(FlatHashMapTest, EraseWhileIterating) {
+  enum class Start { kNoBackground, kMidDrain };
+  for (Start start : {Start::kNoBackground, Start::kMidDrain}) {
+    for (bool erase_all : {false, true}) {
+      SCOPED_TRACE(absl::StrCat("mid_drain=", start == Start::kMidDrain,
+                                " erase_all=", erase_all));
+      SetBatch(1);
+      Map m;
+      int64_t n = 0;
+      if (start == Start::kMidDrain) {
+        n = FillPastSmallUntilBackground(m);
+        ASSERT_FALSE(Peer::Bg(m).empty());
+      } else {
+        for (; n < 5000; ++n) {
+          m[n] = n;
+        }
+        m.MigrateSome(SIZE_MAX);
+        ASSERT_TRUE(Peer::Bg(m).empty());
+      }
+      size_t cycles = Peer::Cycles(m);
+      absl::flat_hash_map<int64_t, int> visits;
+      for (auto it = m.begin(); it != m.end();) {
+        int64_t key = it->first;
+        ++visits[key];
+        if (erase_all || key % 2 == 0) {
+          m.erase(it++);
+        } else {
+          ++it;
+        }
+      }
+      EXPECT_EQ(Peer::Cycles(m), cycles) << "erase(iterator) started a cycle";
+      ASSERT_EQ(visits.size(), n);
+      for (const auto &[key, count] : visits) {
+        ASSERT_EQ(count, 1) << key;
+      }
+      for (int64_t i = 0; i < n; ++i) {
+        ASSERT_EQ(m.contains(i), !erase_all && i % 2 != 0) << i;
+      }
+      EXPECT_EQ(m.size(), erase_all ? 0 : n / 2);
+      // Erasing everything leaves a shrink or a drained background pending.
+      if (erase_all) {
+        EXPECT_TRUE(m.NeedsMigration());
+      }
+      m.MigrateSome(SIZE_MAX);
+      if (erase_all) {
+        EXPECT_FALSE(m.NeedsMigration());
+        EXPECT_TRUE(Peer::Bg(m).empty());
+      }
+      for (int64_t i = 0; i < n; ++i) {
+        ASSERT_EQ(m.contains(i), !erase_all && i % 2 != 0) << i;
+      }
+    }
+  }
+}
+
+TEST_F(FlatHashMapTest, EraseIteratorDefersShrinkToMigrateSome) {
+  Map m;
+  for (int64_t i = 0; i < 50000; ++i) {
+    m[i] = i;
+  }
+  m.MigrateSome(SIZE_MAX);
+  size_t capacity = Peer::Fg(m).capacity();
+  size_t cycles = Peer::Cycles(m);
+  while (m.size() > 10) {
+    m.erase(m.begin());
+  }
+  EXPECT_EQ(Peer::Cycles(m), cycles);
+  EXPECT_EQ(Peer::Fg(m).capacity(), capacity);
+  EXPECT_TRUE(m.NeedsMigration());
+  m.MigrateSome(SIZE_MAX);
+  EXPECT_EQ(Peer::Cycles(m), cycles + 1);
+  EXPECT_LT(Peer::Fg(m).capacity(), capacity / 16);
+  m.MigrateSome(SIZE_MAX);
+  EXPECT_FALSE(m.NeedsMigration());
+  EXPECT_EQ(m.size(), 10);
+}
+
+// The direct check before every insert into fg_: a migration into a full
+// foreground fails, while re-inserting an existing key into it is fine.
+TEST_F(FlatHashMapTest, InsertIntoFullForegroundChecks) {
+  SetBatch(1);
+  Map m;
+  FillPastSmallUntilBackground(m);
+  ASSERT_FALSE(Peer::Bg(m).empty());
+  size_t growth = internal::HugeMapGrowth(Peer::Fg(m).capacity());
+  Peer::FgErased(m) = growth - Peer::Fg(m).size();
+  EXPECT_DEATH(m.MigrateSome(1), "insert would make absl rehash");
+
+  Map full;
+  for (int64_t i = 0; i < 1000; ++i) {
+    full[i] = i;
+  }
+  full.MigrateSome(SIZE_MAX);
+  ASSERT_TRUE(Peer::Bg(full).empty());
+  Peer::FgErased(full) = internal::HugeMapGrowth(Peer::Fg(full).capacity()) -
+                         Peer::Fg(full).size();
+  int64_t existing = Peer::Fg(full).begin()->first;
+  full[existing] = -existing;
+  EXPECT_EQ(full.at(existing), -existing);
+}
+
+// Not a correctness test: reports what an advisory MigrateSome() costs per
+// entry on a table well past the CPU caches.
+TEST_F(FlatHashMapTest, MigrateSomeCost) {
+  SetBatch(1);
+  Map m;
+  int64_t next = 0;
+  for (; next < (int64_t{1} << 23); ++next) {
+    m[next] = next;
+  }
+  FillUntilBackground(m, next);
+  size_t bg = Peer::Bg(m).size();
+  constexpr size_t kBatch = 32;
+  size_t calls = std::min<size_t>(bg / kBatch, 100000);
+  auto start = std::chrono::steady_clock::now();
+  for (size_t i = 0; i < calls; ++i) {
+    m.MigrateSome(kBatch);
+  }
+  double ns = std::chrono::duration<double, std::nano>(
+                  std::chrono::steady_clock::now() - start)
+                  .count();
+  std::cout << "MigrateSome(" << kBatch << ") on a " << m.size()
+            << "-entry map (bg " << bg << "): " << ns / calls
+            << " ns per call, " << ns / (calls * kBatch) << " ns per entry\n";
+  EXPECT_EQ(Peer::Bg(m).size(), bg - calls * kBatch);
 }
 
 }  // namespace

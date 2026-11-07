@@ -56,7 +56,7 @@ TEST_F(HugeAllocatorTest, LargeRequestsUseHugeRegions) {
   for (size_t bytes : {kHugePage, kHugePage + 1, 5 * kHugePage - 3}) {
     char *p = alloc.allocate(bytes);
     EXPECT_EQ(reinterpret_cast<uintptr_t>(p) % kHugePage, 0);
-    EXPECT_EQ(external_, huge_page_slab::RoundUpToHugePage(bytes));
+    EXPECT_EQ(external_, huge_page_slab::RoundUpToPage(bytes));
     p[0] = 1;
     p[bytes - 1] = 1;
     alloc.deallocate(p, bytes);

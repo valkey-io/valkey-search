@@ -8,11 +8,18 @@
 #include "vmsdk/src/huge/huge_page_slab.h"
 
 #include <sys/mman.h>
+#include <unistd.h>
 
 #include <atomic>
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
+#include <fstream>
+#include <mutex>
+#include <string>
+#ifdef __linux__
+#include <sys/prctl.h>
+#endif
 
 #include "absl/strings/str_cat.h"
 #include "vmsdk/src/log.h"
@@ -26,6 +33,38 @@ namespace {
 constexpr size_t kHugePage = kHugePageBytes;
 
 #ifdef __linux__
+// Kernels from 6.18 report this bit when madvised regions are exempt from a
+// process-wide THP disable.
+constexpr int kThpDisableExceptAdvised = 1 << 1;
+
+std::string ReadFirstLine(const char *path) {
+  std::ifstream in(path);
+  std::string line;
+  std::getline(in, line);
+  return line;
+}
+
+// Logs, once, a warning if this process's huge-page regions cannot get
+// transparent huge pages.
+void WarnIfHugePagesDisabled() {
+  std::string reason;
+  int disabled = prctl(PR_GET_THP_DISABLE, 0, 0, 0, 0);
+  if (disabled > 0 && (disabled & kThpDisableExceptAdvised) == 0) {
+    reason =
+        "THP is disabled for this process, as Valkey's disable-thp does when "
+        "transparent_hugepage/enabled=always";
+  } else if (ActiveThpMode(ReadFirstLine(
+                 "/sys/kernel/mm/transparent_hugepage/enabled")) == "never") {
+    reason = "transparent_hugepage/enabled=never";
+  }
+  if (!reason.empty()) {
+    VMSDK_LOG(WARNING, nullptr)
+        << "Huge pages are disabled for search's large hash tables (" << reason
+        << "); performance may improve with "
+           "/sys/kernel/mm/transparent_hugepage/enabled=madvise";
+  }
+}
+
 // Advises huge pages. Pages are placed by the kernel's default first-touch
 // policy. Best effort: a failure is logged once and ignored.
 void ApplyPlacementPolicy(char *base, size_t bytes) {
@@ -40,7 +79,25 @@ void ApplyPlacementPolicy(char *base, size_t bytes) {
 
 }  // namespace
 
+size_t PageBytes() {
+  static const size_t page = static_cast<size_t>(sysconf(_SC_PAGESIZE));
+  return page;
+}
+
+std::string ActiveThpMode(absl::string_view setting) {
+  size_t open = setting.find('[');
+  size_t close = setting.find(']', open);
+  if (open == absl::string_view::npos || close == absl::string_view::npos) {
+    return "";
+  }
+  return std::string(setting.substr(open + 1, close - open - 1));
+}
+
 absl::StatusOr<char *> ReserveRegion(size_t bytes) {
+#ifdef __linux__
+  static std::once_flag warned;
+  std::call_once(warned, WarnIfHugePagesDisabled);
+#endif
   // Over-reserve by one huge page so the base can be aligned to one.
   size_t map_bytes = bytes + kHugePage;
   void *map = mmap(nullptr, map_bytes, PROT_NONE,

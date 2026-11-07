@@ -9,9 +9,11 @@
 #define VMSDK_SRC_HUGE_FLAT_HASH_MAP_H_
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <iterator>
 #include <stdexcept>
+#include <string>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -19,6 +21,7 @@
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
+#include "absl/strings/str_cat.h"
 #include "vmsdk/src/huge/allocator.h"
 
 namespace vmsdk {
@@ -37,6 +40,11 @@ extern size_t g_huge_map_migrate_batch;
 // early. Written by the "huge-hash-map-start-jitter-percent" config; read
 // without synchronization since it is only a tuning knob.
 extern size_t g_huge_map_start_jitter_percent;
+
+// Entries the advisory MigrateSome() callers move per call. Written by the
+// "huge-hash-map-advisory-migrate-batch" config; read without synchronization
+// since it is only a tuning knob.
+extern size_t g_huge_map_advisory_migrate_batch;
 
 // Bumps the "huge_hash_map_rehashes" developer info field.
 void CountHugeMapRehash();
@@ -64,6 +72,12 @@ inline size_t HugeMapCapacityFor(size_t n) {
 
 config::Number &GetHugeFlatHashMapMigrateBatch();
 config::Number &GetHugeFlatHashMapStartJitterPercent();
+config::Number &GetHugeFlatHashMapAdvisoryMigrateBatch();
+
+// The number of entries an advisory MigrateSome() call should move.
+inline size_t HugeMapAdvisoryMigrateBatch() {
+  return internal::g_huge_map_advisory_migrate_batch;
+}
 
 struct HugeFlatHashMapTestPeer;
 
@@ -144,14 +158,19 @@ struct PrehashedEq : Eq {
 //
 // absl itself never rehashes: its private growth_left is mirrored
 // conservatively (erases are treated as permanent tombstones) and the
-// background is always drained before that budget runs out.
+// background is always drained before that budget runs out. Every insert into
+// the foreground CHECKs that absl has room for it.
+//
+// Owners may drain a background sooner, for example while traffic is
+// read-only: NeedsMigration() is a lock-free test, safe from any thread, and
+// MigrateSome(n) moves up to n entries.
 //
 // As with absl, lookups (find, contains, count, at) preserve iterators,
-// pointers and references. Unlike it, every insertion (including operator[]
-// on an existing key) and every erase may move elements and so invalidates
-// all of them. A background lingers until enough insertions or erases have
-// drained it. Moving the container also invalidates its iterators; it moves
-// no entries.
+// pointers and references, and erase(iterator) invalidates only the erased
+// element, so `m.erase(it++)` is safe. Unlike absl, every insertion
+// (including operator[] on an existing key), erase(key) and MigrateSome() may
+// move elements and so invalidate all of them. Moving the container also
+// invalidates its iterators; it moves no entries.
 //
 // Each operation hashes the caller's key once and probes both tables, and the
 // insert that follows, with that hash.
@@ -239,8 +258,11 @@ class HugeHashTable {
         bg_(std::move(other.bg_)),
         fg_erased_(other.fg_erased_),
         early_start_(other.early_start_),
-        cycles_(other.cycles_) {
+        cycles_(other.cycles_),
+        bg_drained_(other.bg_drained_),
+        shrink_pending_(other.shrink_pending_) {
     RestartCursor();
+    UpdateNeedsMigration();
     other.clear();
   }
   HugeHashTable &operator=(HugeHashTable &&other) noexcept(
@@ -251,7 +273,10 @@ class HugeHashTable {
       fg_erased_ = other.fg_erased_;
       early_start_ = other.early_start_;
       cycles_ = other.cycles_;
+      bg_drained_ = other.bg_drained_;
+      shrink_pending_ = other.shrink_pending_;
       RestartCursor();
+      UpdateNeedsMigration();
       other.clear();
     }
     return *this;
@@ -275,7 +300,21 @@ class HugeHashTable {
     fg_ = Table();
     fg_erased_ = 0;
     early_start_ = 0;
+    shrink_pending_ = false;
     ResetBackground();
+  }
+
+  // True while a background holds entries, or a drained background or a
+  // shrink is waiting for MigrateSome(). Lock-free: may be called from any
+  // thread while another thread mutates the container.
+  bool NeedsMigration() const {
+    return needs_migration_.load(std::memory_order_relaxed);
+  }
+  // Moves up to `n` background entries to the foreground, then frees a
+  // drained background or starts a pending shrink. Invalidates iterators.
+  void MigrateSome(size_t n) {
+    Migrate(n);
+    FinishDeferred();
   }
 
   iterator begin() { return iterator(this, false, fg_.begin()); }
@@ -319,16 +358,26 @@ class HugeHashTable {
   size_t erase(const key_type &key) {
     size_t erased = EraseKey(Prehash(key));
     Migrate(internal::g_huge_map_migrate_batch);
+    FinishDeferred();
     return erased;
   }
+  // Erases only the element at `pos`, as absl does: nothing migrates, no cycle
+  // starts and no table is freed, so other iterators stay valid. A shrink or a
+  // drained background this leaves behind waits for the next insert,
+  // erase(key) or MigrateSome().
   void erase(iterator pos) {
     if (pos.in_bg_) {
-      EraseFromBackground(pos.it_);
+      if (pos.it_ == bg_it_) {
+        ++bg_it_;
+      }
+      bg_.erase(pos.it_);
+      bg_drained_ = bg_.empty();
     } else {
       fg_.erase(pos.it_);
-      ErasedFromForeground();
+      ++fg_erased_;
+      shrink_pending_ = shrink_pending_ || ShouldShrink();
     }
-    Migrate(internal::g_huge_map_migrate_batch);
+    UpdateNeedsMigration();
   }
 
  protected:
@@ -339,6 +388,10 @@ class HugeHashTable {
   std::pair<iterator, bool> Emplace(const internal::Prehashed<key_type> &key,
                                     F &&construct) {
     PrepareInsert(key);
+    // A key already in fg_ adds nothing, so only a new key needs room.
+    if (!ForegroundHasRoom()) {
+      CHECK(fg_.contains(key)) << RoomReport();
+    }
     bool inserted = false;
     auto it = fg_.lazy_emplace(key, [&](const auto &ctor) {
       construct(ctor);
@@ -388,6 +441,9 @@ class HugeHashTable {
   // Called before an insertion of `key` into fg_.
   void PrepareInsert(const internal::Prehashed<key_type> &key) {
     if (bg_.empty()) {
+      if (bg_drained_) {
+        ResetBackground();
+      }
       if (Budget() > early_start_ || fg_.contains(key)) {
         return;
       }
@@ -442,6 +498,8 @@ class HugeHashTable {
     bg_ = std::move(fg_);
     fg_ = std::move(next);
     fg_erased_ = 0;
+    bg_drained_ = false;
+    shrink_pending_ = false;
     early_start_ =
         internal::HugeMapEarlyStart(internal::HugeMapGrowth(fg_.capacity()));
     ++cycles_;
@@ -450,6 +508,7 @@ class HugeHashTable {
       ResetBackground();
     } else {
       bg_it_ = bg_.begin();
+      UpdateNeedsMigration();
     }
   }
 
@@ -458,6 +517,7 @@ class HugeHashTable {
       return;
     }
     while (n-- > 0 && bg_it_ != bg_.end()) {
+      CHECK(ForegroundHasRoom()) << RoomReport();
       fg_.insert(bg_.extract(bg_it_++));
     }
     if (bg_it_ == bg_.end()) {
@@ -473,6 +533,7 @@ class HugeHashTable {
       ++bg_it_;
     }
     auto node = bg_.extract(it);
+    CHECK(ForegroundHasRoom()) << RoomReport();
     fg_.lazy_emplace(key, [&](const auto &ctor) {
       if constexpr (requires { node.mapped(); }) {
         ctor(std::move(node.key()), std::move(node.mapped()));
@@ -496,18 +557,57 @@ class HugeHashTable {
   }
 
   // Shrinks once the live entries would fit in a quarter-size table.
+  bool ShouldShrink() const {
+    return bg_.empty() && internal::HugeMapCapacityFor(
+                              std::max<size_t>(4 * size(), 1)) < fg_.capacity();
+  }
   void ErasedFromForeground() {
     ++fg_erased_;
-    if (bg_.empty() && internal::HugeMapCapacityFor(
-                           std::max<size_t>(4 * size(), 1)) < fg_.capacity()) {
+    if (ShouldShrink()) {
       StartCycle(std::max<size_t>(2 * size(), 1));
     }
+  }
+
+  // Completes what erase(iterator) deferred: frees a drained background, and
+  // starts a shrink if one is still due.
+  void FinishDeferred() {
+    if (bg_drained_) {
+      ResetBackground();
+    }
+    if (shrink_pending_ && bg_.empty()) {
+      shrink_pending_ = false;
+      if (ShouldShrink()) {
+        StartCycle(std::max<size_t>(2 * size(), 1));
+      }
+    }
+    UpdateNeedsMigration();
+  }
+
+  // Whether absl can add one more element to fg_ without rehashing. absl's
+  // growth_left is CapacityToGrowth(capacity) - size - deleted, and
+  // fg_erased_ is at least the number of deleted slots.
+  bool ForegroundHasRoom() const {
+    return fg_.size() + fg_erased_ < internal::HugeMapGrowth(fg_.capacity());
+  }
+  std::string RoomReport() const {
+    return absl::StrCat("insert would make absl rehash: size=", fg_.size(),
+                        " erased=", fg_erased_, " capacity=", fg_.capacity(),
+                        " bg=", bg_.size());
   }
 
   // Frees the drained background table.
   void ResetBackground() {
     bg_ = Table();
     bg_it_ = bg_.end();
+    bg_drained_ = false;
+    UpdateNeedsMigration();
+  }
+
+  void UpdateNeedsMigration() {
+    bool needs = !bg_.empty() || bg_drained_ || shrink_pending_;
+    if (needs != needs_migration_.load(std::memory_order_relaxed)) {
+      needs_migration_.store(needs, std::memory_order_relaxed);
+    }
   }
 
   void RestartCursor() { bg_it_ = bg_.empty() ? bg_.end() : bg_.begin(); }
@@ -518,6 +618,12 @@ class HugeHashTable {
   // Budget left unused when the next growth cycle starts.
   size_t early_start_ = 0;
   size_t cycles_ = 0;
+  // erase(iterator) emptied bg_ but left it allocated.
+  bool bg_drained_ = false;
+  // erase(iterator) made the table eligible to shrink.
+  bool shrink_pending_ = false;
+  // Mirrors !bg_.empty() || bg_drained_ || shrink_pending_ for other threads.
+  std::atomic<bool> needs_migration_{false};
 };
 
 }  // namespace internal

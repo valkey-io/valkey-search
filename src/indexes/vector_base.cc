@@ -378,6 +378,20 @@ void VectorBase::RemoveRecordDueToError(const InternedStringPtr &key,
   }
 }
 
+bool VectorBase::HashMapsNeedMigration() const {
+  return tracked_metadata_by_key_.NeedsMigration() ||
+         key_by_internal_id_.NeedsMigration();
+}
+
+void VectorBase::MigrateHashMaps(size_t n) {
+  if (!VectorBase::HashMapsNeedMigration()) {
+    return;
+  }
+  absl::WriterMutexLock lock(&key_to_metadata_mutex_);
+  tracked_metadata_by_key_.MigrateSome(n);
+  key_by_internal_id_.MigrateSome(n);
+}
+
 absl::StatusOr<std::optional<uint64_t>> VectorBase::UnTrackKey(
     const InternedStringPtr &key) {
   absl::WriterMutexLock lock(&key_to_metadata_mutex_);

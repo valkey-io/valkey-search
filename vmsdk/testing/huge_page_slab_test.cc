@@ -43,11 +43,22 @@ class HugePageSlabTest : public ValkeyTest {
   int64_t external_{0};
 };
 
-TEST_F(HugePageSlabTest, RoundUpToHugePage) {
-  EXPECT_EQ(RoundUpToHugePage(0), 0);
-  EXPECT_EQ(RoundUpToHugePage(1), kHugePage);
-  EXPECT_EQ(RoundUpToHugePage(kHugePage), kHugePage);
-  EXPECT_EQ(RoundUpToHugePage(kHugePage + 1), 2 * kHugePage);
+TEST_F(HugePageSlabTest, RoundUpToPage) {
+  const size_t page = PageBytes();
+  ASSERT_GT(page, 0);
+  EXPECT_EQ(kHugePage % page, 0);
+  EXPECT_EQ(RoundUpToPage(0), 0);
+  EXPECT_EQ(RoundUpToPage(1), page);
+  EXPECT_EQ(RoundUpToPage(page), page);
+  EXPECT_EQ(RoundUpToPage(kHugePage + 1), kHugePage + page);
+}
+
+TEST_F(HugePageSlabTest, ActiveThpMode) {
+  EXPECT_EQ(ActiveThpMode("always [madvise] never"), "madvise");
+  EXPECT_EQ(ActiveThpMode("[always] madvise never"), "always");
+  EXPECT_EQ(ActiveThpMode("always madvise [never]"), "never");
+  EXPECT_EQ(ActiveThpMode(""), "");
+  EXPECT_EQ(ActiveThpMode("always madvise never"), "");
 }
 
 TEST_F(HugePageSlabTest, ReserveIsAlignedAndReportsNothing) {
@@ -69,6 +80,21 @@ TEST_F(HugePageSlabTest, MaterializeAndReleaseReportExactly) {
   Release(*base, kBytes);
   EXPECT_EQ(external_, 0);
   UnreserveRegion(*base, kBytes);
+}
+
+// A region whose length is not a whole number of huge pages.
+TEST_F(HugePageSlabTest, PageRoundedRegion) {
+  const size_t bytes = 3 * kHugePage + PageBytes();
+  auto base = ReserveRegion(bytes);
+  ASSERT_TRUE(base.ok()) << base.status();
+  EXPECT_EQ(reinterpret_cast<uintptr_t>(*base) % kHugePage, 0);
+  VMSDK_EXPECT_OK(Materialize(*base, bytes));
+  EXPECT_EQ(external_, bytes);
+  std::memset(*base, 0x5a, bytes);
+  EXPECT_EQ((*base)[bytes - 1], 0x5a);
+  Release(*base, bytes);
+  EXPECT_EQ(external_, 0);
+  UnreserveRegion(*base, bytes);
 }
 
 TEST_F(HugePageSlabTest, ReleaseThenRematerialize) {

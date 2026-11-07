@@ -15,13 +15,18 @@
 #include <cstdint>
 #include <cstring>
 #include <fstream>
+#include <iterator>
 #include <mutex>
 #include <string>
 #ifdef __linux__
 #include <sys/prctl.h>
 #endif
 
+#include "absl/strings/ascii.h"
+#include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/strip.h"
+#include "vmsdk/src/info.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/memory_allocation.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -31,6 +36,30 @@ namespace vmsdk::huge_page_slab {
 namespace {
 
 constexpr size_t kHugePage = kHugePageBytes;
+
+std::atomic<int64_t> materialized_bytes{0};
+
+// The process's transparent-huge-page usage. The kernel computes it by walking
+// every mapping, holding the mmap lock for reading, so this is a dev field
+// meant for occasional diagnostics. Covers the whole process, not only these
+// regions.
+int64_t ReadAnonHugePages() {
+#ifdef __linux__
+  std::ifstream in("/proc/self/smaps_rollup");
+  std::string text((std::istreambuf_iterator<char>(in)),
+                   std::istreambuf_iterator<char>());
+  return ParseAnonHugePages(text);
+#else
+  return 0;
+#endif
+}
+
+vmsdk::info_field::Integer huge_page_region_bytes(
+    "huge", "huge_page_region_bytes",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed(MaterializedBytes));
+vmsdk::info_field::Integer anon_huge_pages_bytes(
+    "huge", "anon_huge_pages_bytes",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed(ReadAnonHugePages));
 
 #ifdef __linux__
 // Kernels from 6.18 report this bit when madvised regions are exempt from a
@@ -78,6 +107,34 @@ void ApplyPlacementPolicy(char *base, size_t bytes) {
 #endif
 
 }  // namespace
+
+int64_t MaterializedBytes() {
+  return materialized_bytes.load(std::memory_order_relaxed);
+}
+
+int64_t ParseAnonHugePages(absl::string_view smaps_rollup) {
+  constexpr absl::string_view kField = "AnonHugePages:";
+  size_t pos = 0;
+  while (pos < smaps_rollup.size()) {
+    size_t end = smaps_rollup.find('\n', pos);
+    if (end == absl::string_view::npos) {
+      end = smaps_rollup.size();
+    }
+    absl::string_view line = smaps_rollup.substr(pos, end - pos);
+    if (absl::ConsumePrefix(&line, kField)) {
+      // "AnonHugePages:     342016 kB"
+      line = absl::StripAsciiWhitespace(line);
+      absl::ConsumeSuffix(&line, "kB");
+      int64_t kb = 0;
+      if (absl::SimpleAtoi(absl::StripAsciiWhitespace(line), &kb)) {
+        return kb * 1024;
+      }
+      return 0;
+    }
+    pos = end + 1;
+  }
+  return 0;
+}
 
 size_t PageBytes() {
   static const size_t page = static_cast<size_t>(sysconf(_SC_PAGESIZE));
@@ -134,6 +191,7 @@ absl::Status Materialize(char *p, size_t len) {
     ValkeyModule_IncrExternalMemory(len);
   }
   ReportAllocMemorySize(len);
+  materialized_bytes.fetch_add(len, std::memory_order_relaxed);
   return absl::OkStatus();
 }
 
@@ -151,6 +209,7 @@ void Release(char *p, size_t len) {
     ValkeyModule_DecrExternalMemory(len);
   }
   ReportFreeMemorySize(len);
+  materialized_bytes.fetch_sub(len, std::memory_order_relaxed);
 }
 
 }  // namespace vmsdk::huge_page_slab

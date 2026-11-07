@@ -53,6 +53,29 @@ TEST_F(HugePageSlabTest, RoundUpToPage) {
   EXPECT_EQ(RoundUpToPage(kHugePage + 1), kHugePage + page);
 }
 
+TEST_F(HugePageSlabTest, ParseAnonHugePages) {
+  EXPECT_EQ(ParseAnonHugePages("Rss:              720896 kB\n"
+                               "AnonHugePages:     342016 kB\n"
+                               "ShmemPmdMapped:         0 kB\n"),
+            int64_t{342016} * 1024);
+  EXPECT_EQ(ParseAnonHugePages("AnonHugePages:          0 kB"), 0);
+  EXPECT_EQ(ParseAnonHugePages("Rss: 4 kB\n"), 0);
+  EXPECT_EQ(ParseAnonHugePages(""), 0);
+}
+
+TEST_F(HugePageSlabTest, MaterializedBytesTracksRegions) {
+  const int64_t before = MaterializedBytes();
+  const size_t bytes = 2 * kHugePage + PageBytes();
+  auto base = ReserveRegion(bytes);
+  ASSERT_TRUE(base.ok()) << base.status();
+  EXPECT_EQ(MaterializedBytes(), before);
+  VMSDK_EXPECT_OK(Materialize(*base, bytes));
+  EXPECT_EQ(MaterializedBytes(), before + static_cast<int64_t>(bytes));
+  Release(*base, bytes);
+  EXPECT_EQ(MaterializedBytes(), before);
+  UnreserveRegion(*base, bytes);
+}
+
 TEST_F(HugePageSlabTest, ActiveThpMode) {
   EXPECT_EQ(ActiveThpMode("always [madvise] never"), "madvise");
   EXPECT_EQ(ActiveThpMode("[always] madvise never"), "always");

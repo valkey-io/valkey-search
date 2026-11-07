@@ -9,6 +9,7 @@
 #define VMSDK_SRC_HUGE_HUGE_PAGE_SLAB_H_
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 
 #include "absl/status/status.h"
@@ -52,6 +53,15 @@ absl::Status Materialize(char *p, size_t len);
 // Drops the pages of a materialized [p, p + len) and makes it inaccessible.
 // The range keeps its placement policy for later re-materialization.
 void Release(char *p, size_t len);
+
+// Bytes currently materialized by all regions (the "huge_page_region_bytes"
+// dev info field).
+int64_t MaterializedBytes();
+
+// The AnonHugePages value, in bytes, of /proc/<pid>/smaps_rollup text, or 0
+// if absent. Exposed for testing; it backs the "anon_huge_pages_bytes" dev
+// info field.
+int64_t ParseAnonHugePages(absl::string_view smaps_rollup);
 
 // The bracketed (active) word of a sysfs THP setting such as
 // "always [madvise] never", or "" if there is none. Exposed for testing.

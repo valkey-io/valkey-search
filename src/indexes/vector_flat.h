@@ -124,6 +124,12 @@ class VectorFlat : public VectorType<T> {
       uint64_t internal_id) const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
   uint64_t GetMaxLoadedLabel() const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
+ public:
+  // Also covers the FLAT label map. algo_ is set only when the index is
+  // created or loaded, so reading it for the lock-free test is safe.
+  bool HashMapsNeedMigration() const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  void MigrateHashMaps(size_t n) override ABSL_LOCKS_EXCLUDED(resize_mutex_);
+
  private:
   VectorFlat(int dimensions, data_model::DistanceMetric distance_metric,
              uint32_t block_size, absl::string_view attribute_identifier,

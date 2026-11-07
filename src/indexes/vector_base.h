@@ -40,6 +40,7 @@
 #include "src/utils/cancel.h"
 #include "src/utils/string_interning.h"
 #include "third_party/hnswlib/hnswlib.h"
+#include "vmsdk/src/huge/flat_hash_map.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -467,6 +468,13 @@ class VectorBase : public IndexBase {
 
   uint32_t GetMutationWeight() const override;
 
+  // Advisory HugeFlatHashMap migration (see vmsdk/src/huge/flat_hash_map.h).
+  // HashMapsNeedMigration() is lock-free; MigrateHashMaps() takes each map's
+  // own lock and runs on a writer, in the time-sliced write phase.
+  virtual bool HashMapsNeedMigration() const ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  virtual void MigrateHashMaps(size_t n)
+      ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
+
   size_t GetTrackedKeyCount() const override
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   size_t GetUnTrackedKeyCount() const override
@@ -759,11 +767,12 @@ class VectorBase : public IndexBase {
   // races can occur during the search phase.
   absl::StatusOr<uint64_t> GetInternalIdDuringSearch(
       const InternedStringPtr &key) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
-  absl::flat_hash_map<uint64_t, InternedStringPtr> key_by_internal_id_
+  vmsdk::HugeFlatHashMap<uint64_t, InternedStringPtr> key_by_internal_id_
       ABSL_GUARDED_BY(key_to_metadata_mutex_);
 
-  InternedStringHashMap<TrackedKeyMetadata> tracked_metadata_by_key_
-      ABSL_GUARDED_BY(key_to_metadata_mutex_);
+  vmsdk::HugeFlatHashMap<InternedStringPtr, TrackedKeyMetadata,
+                         InternedStringPtrHash, InternedStringPtrEq>
+      tracked_metadata_by_key_ ABSL_GUARDED_BY(key_to_metadata_mutex_);
   uint64_t inc_id_ ABSL_GUARDED_BY(key_to_metadata_mutex_){0};
   mutable absl::Mutex key_to_metadata_mutex_;
   absl::StatusOr<std::pair<float, hnswlib::labeltype>>

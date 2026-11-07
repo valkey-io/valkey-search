@@ -1978,6 +1978,17 @@ absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
   auto &time_sliced_mutex = parameters.index_schema->GetTimeSlicedMutex();
   vmsdk::ReaderMutexLock lock(&time_sliced_mutex);
   ++Metrics::GetStats().time_slice_queries;
+  // Drain hash-table backgrounds even while traffic is read-only: the
+  // per-index maps on a writer, and, for a query from another shard (which
+  // never runs on this node's main thread), the main-thread maps. Both tests
+  // are lock-free.
+  if (parameters.index_schema->IndexMapsNeedMigration()) {
+    parameters.index_schema->ScheduleIndexMapMigration();
+  }
+  if (search_mode == SearchMode::kRemote &&
+      parameters.index_schema->MainThreadMapsNeedMigration()) {
+    parameters.index_schema->ScheduleMainThreadMapMigration();
+  }
   // Handle OOM for search requests, defends against request
   // coming from the coordinator
   if (search_mode == SearchMode::kRemote) {

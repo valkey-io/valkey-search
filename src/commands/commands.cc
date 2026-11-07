@@ -159,6 +159,9 @@ absl::Status ExecuteCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     VMSDK_ASSIGN_OR_RETURN(
         parameters->index_schema,
         schema_manager.GetIndexSchema(db_num, parameters->index_schema_name));
+    // Queries also drain hash-table backgrounds, so they finish even while
+    // traffic is read-only.
+    parameters->index_schema->MigrateMainThreadMaps();
     VMSDK_RETURN_IF_ERROR(Cmd::ParseAfterIndex(*parameters, itr));
     parameters->cancellation_token =
         cancel::Make(parameters->timeout_ms, nullptr);

@@ -517,6 +517,18 @@ void VectorRegistry::OnServerCronCallback(ValkeyModuleCtx *ctx,
                                           ValkeyModuleEvent eid,
                                           uint64_t subevent, void *data) {
   vmsdk::VerifyMainThread();
+  // Drain every db's tables, even when no query or ingest on this node would.
+  size_t n = vmsdk::HugeMapBulkMigrateBatch();
+  for (auto &[_, tracked] : tracked_vectors_) {
+    if (tracked.NeedsMigration()) {
+      tracked.MigrateSome(n);
+    }
+  }
+  for (auto &[_, pending] : pending_unshares_) {
+    if (pending.NeedsMigration()) {
+      pending.MigrateSome(n);
+    }
+  }
   if (pending_unshares_.empty()) {
     return;
   }

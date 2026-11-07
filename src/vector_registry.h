@@ -86,6 +86,7 @@ class VectorRegistry {
   // Main thread only.
   void MigrateSome(int db_num, size_t n);
 
+  // Also migrates every db's tables, so they drain without any traffic.
   void OnServerCronCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
                             uint64_t subevent, void *data);
 

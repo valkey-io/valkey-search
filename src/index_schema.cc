@@ -655,27 +655,6 @@ void IndexSchema::MigrateMainThreadMaps() {
   StringInternStore::MigrateSome(n);
 }
 
-bool IndexSchema::MainThreadMapsNeedMigration() const {
-  return db_key_info_.GetFromAnyThread().NeedsMigration() ||
-         StringInternStore::NeedsMigration();
-}
-
-void IndexSchema::ScheduleMainThreadMapMigration() {
-  if (main_thread_migration_scheduled_.exchange(true)) {
-    return;
-  }
-  vmsdk::RunByMain(
-      [weak_index_schema = GetWeakPtr()]() {
-        auto index_schema = weak_index_schema.lock();
-        if (!index_schema) {
-          return;
-        }
-        index_schema->MigrateMainThreadMaps();
-        index_schema->main_thread_migration_scheduled_.store(false);
-      },
-      true);
-}
-
 bool IndexSchema::IndexMapsNeedMigration() const {
   if (index_key_info_.NeedsMigration()) {
     return true;
@@ -691,8 +670,7 @@ bool IndexSchema::IndexMapsNeedMigration() const {
   return false;
 }
 
-void IndexSchema::MigrateIndexMaps() {
-  size_t n = vmsdk::HugeMapAdvisoryMigrateBatch();
+void IndexSchema::MigrateIndexMaps(size_t n) {
   // The lock-free test keeps mutated_records_mutex_, which the main thread
   // takes for every mutation, untouched unless there is work.
   auto key_info_needs_migration = [this]() ABSL_NO_THREAD_SAFETY_ANALYSIS {
@@ -723,7 +701,7 @@ void IndexSchema::ScheduleIndexMapMigration() {
         }
         {
           vmsdk::WriterMutexLock lock(&index_schema->time_sliced_mutex_);
-          index_schema->MigrateIndexMaps();
+          index_schema->MigrateIndexMaps(vmsdk::HugeMapBulkMigrateBatch());
         }
         index_schema->index_migration_scheduled_.store(false);
       },
@@ -1199,7 +1177,7 @@ void IndexSchema::ProcessSingleMutationAsync(ValkeyModuleCtx *ctx,
   {
     vmsdk::WriterMutexLock lock(&time_sliced_mutex_);
     if (IndexMapsNeedMigration()) {
-      MigrateIndexMaps();
+      MigrateIndexMaps(vmsdk::HugeMapAdvisoryMigrateBatch());
     }
     bool first_time = true;
     do {

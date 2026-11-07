@@ -21,6 +21,7 @@ namespace {
 constexpr long long kDefaultMigrateBatch = 8;
 constexpr long long kDefaultStartJitterPercent = 10;
 constexpr long long kDefaultAdvisoryMigrateBatch = 32;
+constexpr long long kDefaultBulkMigrateBatch = 4096;
 
 /// Register the "huge-hash-map-migrate-batch" config: the minimum number of
 /// entries a vmsdk::HugeFlatHashMap migrates per insertion or erase.
@@ -49,8 +50,8 @@ auto start_jitter_percent =
         .Build();
 
 /// Register the "huge-hash-map-advisory-migrate-batch" config: the number of
-/// entries each advisory MigrateSome() call (from the ingest, writer and query
-/// paths) moves.
+/// entries each advisory MigrateSome() call on the ingest and query paths moves:
+/// on the main thread, and at the start of each writer mutation task.
 auto advisory_migrate_batch =
     config::NumberBuilder("huge-hash-map-advisory-migrate-batch",  // name
                           kDefaultAdvisoryMigrateBatch,            // default
@@ -59,6 +60,20 @@ auto advisory_migrate_batch =
         .Dev()
         .WithModifyCallback([](long long value) {
           internal::g_huge_map_advisory_migrate_batch = value;
+        })
+        .Build();
+
+/// Register the "huge-hash-map-bulk-migrate-batch" config: the number of
+/// entries each advisory MigrateSome() call moves where a bigger batch is cheap:
+/// the writer task a query schedules, and server cron.
+auto bulk_migrate_batch =
+    config::NumberBuilder("huge-hash-map-bulk-migrate-batch",  // name
+                          kDefaultBulkMigrateBatch,            // default
+                          1,                                   // min
+                          1 << 20)                             // max
+        .Dev()
+        .WithModifyCallback([](long long value) {
+          internal::g_huge_map_bulk_migrate_batch = value;
         })
         .Build();
 
@@ -73,6 +88,7 @@ namespace internal {
 size_t g_huge_map_migrate_batch = kDefaultMigrateBatch;
 size_t g_huge_map_start_jitter_percent = kDefaultStartJitterPercent;
 size_t g_huge_map_advisory_migrate_batch = kDefaultAdvisoryMigrateBatch;
+size_t g_huge_map_bulk_migrate_batch = kDefaultBulkMigrateBatch;
 
 size_t HugeMapEarlyStart(size_t growth) {
   constexpr double kGoldenRatioFraction = 0.6180339887498949;
@@ -98,6 +114,10 @@ config::Number &GetHugeFlatHashMapStartJitterPercent() {
 
 config::Number &GetHugeFlatHashMapAdvisoryMigrateBatch() {
   return dynamic_cast<config::Number &>(*advisory_migrate_batch);
+}
+
+config::Number &GetHugeFlatHashMapBulkMigrateBatch() {
+  return dynamic_cast<config::Number &>(*bulk_migrate_batch);
 }
 
 }  // namespace vmsdk

@@ -13,9 +13,11 @@
 #include "src/coordinator/metadata_manager.h"
 #include "src/cursor.h"
 #include "src/schema_manager.h"
+#include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
 #include "src/vector_registry.h"
 #include "vmsdk/src/debug.h"
+#include "vmsdk/src/huge/flat_hash_map.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -61,6 +63,8 @@ void OnServerCronCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
         ctx, eid, subevent, data);
   }
   VectorRegistry::Instance().OnServerCronCallback(ctx, eid, subevent, data);
+  // Drain the intern store's hash-table background without any traffic.
+  StringInternStore::MigrateSome(vmsdk::HugeMapBulkMigrateBatch());
   if (CursorTable::HasInstance()) {
     CursorTable::Instance().ExpireIdle(absl::Now());
   }

@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include "absl/strings/str_cat.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "src/utils/string_interning.h"
@@ -33,6 +34,11 @@ class VectorRegistryTest : public ValkeySearchTest {
   }
   void InitRegistry(VectorRegistry &registry, ValkeyModuleCtx *ctx) {
     registry.Init(ctx);
+  }
+  bool TrackedNeedsMigration(VectorRegistry &registry, int db_num) {
+    auto it = registry.tracked_vectors_.find(db_num);
+    return it != registry.tracked_vectors_.end() &&
+           it->second.NeedsMigration();
   }
 };
 
@@ -1170,6 +1176,38 @@ TEST_F(VectorRegistryTest, RemoveIndexKeysOnServerCronCallback) {
   EXPECT_EQ(registry.GetStats().entry_cnt, 0);
 
   VMSDK_EXPECT_OK(options::GetVectorUnshareBatchSize().SetValue(1024));
+}
+
+// Server cron drains every db's tables, with no query or ingest on this node.
+TEST_F(VectorRegistryTest, ServerCronDrainsEveryDbsBackground) {
+  auto &registry = VectorRegistry::Instance();
+  MinimalHugeMapMigration minimal_migration;
+  auto attr = StringInternStore::Intern("vec");
+  std::vector<float> vec_data = {1.0f, 2.0f};
+  std::string vec_str(reinterpret_cast<const char *>(vec_data.data()),
+                      vec_data.size() * sizeof(float));
+  auto valkey_vec = vmsdk::MakeUniqueValkeyString(vec_str);
+  size_t entries = 0;
+  for (int db_num : {0, 1}) {
+    MockIndex index(2, attr->Str(), db_num);
+    for (int i = 0; i < 64 || !TrackedNeedsMigration(registry, db_num); ++i) {
+      ASSERT_LT(i, 100000);
+      registry.DedupOrConstruct(
+          StringInternStore::Intern(absl::StrCat("key", i)), valkey_vec.get(),
+          data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, db_num,
+          &index);
+      ++entries;
+    }
+  }
+  int ticks = 0;
+  while (TrackedNeedsMigration(registry, 0) ||
+         TrackedNeedsMigration(registry, 1)) {
+    ASSERT_LT(ticks++, 100000);
+    registry.OnServerCronCallback(nullptr, ValkeyModuleEvent_CronLoop, 0,
+                                  nullptr);
+  }
+  EXPECT_GT(ticks, 1);
+  EXPECT_EQ(registry.GetStats().entry_cnt, entries);
 }
 
 TEST_F(VectorRegistryTest, RemoveIndexKeysCancellationOnDedupOrConstruct) {

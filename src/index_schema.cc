@@ -691,6 +691,9 @@ void IndexSchema::MigrateIndexMaps(size_t n) {
 }
 
 void IndexSchema::ScheduleMigration(size_t index_map_batch) {
+  if (!vmsdk::HugeMapAdvisoryMigrationEnabled()) {
+    return;
+  }
   if (IndexMapsNeedMigration()) {
     ScheduleIndexMapMigration(index_map_batch);
   }

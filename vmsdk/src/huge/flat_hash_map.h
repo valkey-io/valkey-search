@@ -27,6 +27,7 @@
 namespace vmsdk {
 namespace config {
 class Number;
+class Boolean;
 }  // namespace config
 
 namespace internal {
@@ -52,6 +53,8 @@ extern size_t g_huge_map_advisory_migrate_batch;
 extern size_t g_huge_map_key_info_migrate_batch;
 extern size_t g_huge_map_ingest_migrate_batch;
 extern size_t g_huge_map_query_migrate_batch;
+// Written by the "huge-hash-map-advisory-migration" config.
+extern std::atomic<bool> g_huge_map_advisory_migration;
 extern size_t g_huge_map_cron_migrate_batch;
 
 // Bumps the "huge_hash_map_rehashes" developer info field.
@@ -89,6 +92,7 @@ config::Number &GetHugeFlatHashMapCronMigrateBatch();
 config::Number &GetHugeFlatHashMapKeyInfoMigrateBatch();
 config::Number &GetHugeFlatHashMapIngestMigrateBatch();
 config::Number &GetHugeFlatHashMapQueryMigrateBatch();
+config::Boolean &GetHugeFlatHashMapAdvisoryMigration();
 
 // The number of entries an advisory MigrateSome() call on the ingest or query
 // path should move.
@@ -106,6 +110,13 @@ inline size_t HugeMapKeyInfoMigrateBatch() {
 // move.
 inline size_t HugeMapIngestMigrateBatch() {
   return internal::g_huge_map_ingest_migrate_batch;
+}
+
+// Whether the advisory MigrateSome() callers (ingest, queries, server cron)
+// should run at all.
+inline bool HugeMapAdvisoryMigrationEnabled() {
+  return internal::g_huge_map_advisory_migration.load(
+      std::memory_order_relaxed);
 }
 
 // The number of entries per map the writer task that a query schedules should

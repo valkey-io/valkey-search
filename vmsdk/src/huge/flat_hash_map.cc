@@ -122,6 +122,20 @@ auto query_migrate_batch =
         })
         .Build();
 
+/// Register the "huge-hash-map-advisory-migration" config: when false, no
+/// advisory MigrateSome() runs (the ingest, query and server cron callers);
+/// each mutation's own migration still does. For tests that need backgrounds
+/// to stay put.
+auto advisory_migration =
+    config::BooleanBuilder("huge-hash-map-advisory-migration",  // name
+                           true)                                // default
+        .Dev()
+        .WithModifyCallback([](bool value) {
+          internal::g_huge_map_advisory_migration.store(
+              value, std::memory_order_relaxed);
+        })
+        .Build();
+
 DEV_INTEGER_COUNTER(huge, huge_hash_map_rehashes);
 
 std::atomic<uint64_t> start_sequence{0};
@@ -145,6 +159,7 @@ size_t g_huge_map_cron_migrate_batch = kDefaultCronMigrateBatch;
 size_t g_huge_map_key_info_migrate_batch = kDefaultKeyInfoMigrateBatch;
 size_t g_huge_map_ingest_migrate_batch = kDefaultIngestMigrateBatch;
 size_t g_huge_map_query_migrate_batch = kDefaultQueryMigrateBatch;
+std::atomic<bool> g_huge_map_advisory_migration{true};
 
 size_t HugeMapEarlyStart(size_t growth) {
   constexpr double kGoldenRatioFraction = 0.6180339887498949;
@@ -190,6 +205,10 @@ config::Number &GetHugeFlatHashMapKeyInfoMigrateBatch() {
 
 config::Number &GetHugeFlatHashMapIngestMigrateBatch() {
   return dynamic_cast<config::Number &>(*ingest_migrate_batch);
+}
+
+config::Boolean &GetHugeFlatHashMapAdvisoryMigration() {
+  return dynamic_cast<config::Boolean &>(*advisory_migration);
 }
 
 config::Number &GetHugeFlatHashMapQueryMigrateBatch() {

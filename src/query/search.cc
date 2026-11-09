@@ -280,7 +280,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
         parameters.filter_parse_results.root_predicate.get(), vector_index,
         query_ctx, parameters.filter_parse_results.query_operations,
         *parameters.index_schema, parameters.inkeys);
-    VMSDK_LOG(DEBUG, nullptr) << "Performing vector search with inline filter";
+    VMSDK_LOG(DEBUG) << "Performing vector search with inline filter";
   }
   // Search dispatches virtually on VectorBase, so neither the storage type
   // (float / float16 / bfloat16) nor the ANN algorithm appears here. Only the
@@ -997,7 +997,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
                 vmsdk::UniqueValkeyString(ValkeyModule_CreateString(
                     nullptr, vector->data(), vector->size()));
           } else {
-            VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
+            VMSDK_LOG_EVERY_N_SEC(WARNING, 1)
                 << "Failed to get vector value during fetching through index "
                    "contents: "
                 << vector.status();
@@ -1758,9 +1758,8 @@ absl::StatusOr<std::vector<indexes::Neighbor>> DoSearchVector(
   }
 
   if (UsePreFiltering(qualified_entries, vector_index, parameters)) {
-    VMSDK_LOG(DEBUG, nullptr)
-        << "Using pre-filter query execution, qualified entries="
-        << qualified_entries;
+    VMSDK_LOG(DEBUG) << "Using pre-filter query execution, qualified entries="
+                     << qualified_entries;
     // Do an exact nearest neighbour search on the reduced search space.
     ++Metrics::GetStats().query_prefiltering_requests_cnt;
     std::priority_queue<std::pair<float, hnswlib::labeltype>> results;
@@ -2375,9 +2374,9 @@ absl::Status query::SearchParameters::PreParseQueryString() {
                      options::GetQueryStringBytes(), " bytes."));
   }
   auto query_string = absl::string_view(parse_vars.query_string);
-  VMSDK_LOG(DEBUG, nullptr)
-      << "Query: '" << vmsdk::config::RedactIfNeeded(parse_vars.query_string)
-      << "'";
+  VMSDK_LOG(DEBUG) << "Query: '"
+                   << vmsdk::config::RedactIfNeeded(parse_vars.query_string)
+                   << "'";
   auto pos = FindVectorDelimiter(query_string);
   absl::string_view vector_filter;
   // If the delimiter is not found (ie - non vector query), treat the whole

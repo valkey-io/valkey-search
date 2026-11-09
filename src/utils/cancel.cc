@@ -43,16 +43,15 @@ struct TokenImpl : public Base {
         if (ValkeyModule_Milliseconds() >= deadline_ms_) {
           is_cancelled_ = true;  // Operation should be cancelled
           Timeouts.Increment(1);
-          VMSDK_LOG(DEBUG, nullptr)
-              << "CANCEL: Timeout reached, cancelling operation";
+          VMSDK_LOG(DEBUG) << "CANCEL: Timeout reached, cancelling operation";
         } else if (context_ && context_->IsCancelled()) {
           is_cancelled_ = true;  // Operation should be cancelled
           gRPCCancels.Increment(1);
-          VMSDK_LOG(DEBUG, nullptr) << "CANCEL: gRPC context cancelled";
+          VMSDK_LOG(DEBUG) << "CANCEL: gRPC context cancelled";
         } else if (ForceTimeout.GetValue()) {
           is_cancelled_ = true;  // Operation should be cancelled
           ForceCancels.Increment(1);
-          VMSDK_LOG(WARNING, nullptr) << "CANCEL: Timeout forced";
+          VMSDK_LOG(WARNING) << "CANCEL: Timeout forced";
         } else if (!vmsdk::IsMainThread()) {
           PAUSEPOINT("Cancel");
         }

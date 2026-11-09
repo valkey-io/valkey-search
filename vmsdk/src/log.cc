@@ -7,11 +7,13 @@
 
 #include "vmsdk/src/log.h"
 
+#include <atomic>
 #include <cerrno>
 #include <cstddef>
 #include <optional>
 #include <string>
 
+#include "absl/base/no_destructor.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/log/check.h"
 #include "absl/log/globals.h"
@@ -55,6 +57,11 @@ struct SinkOptions {
 };
 
 static SinkOptions sink_options;
+// Keep ownership alive after module unload: an asynchronous callback may have
+// already loaded the context pointer before logging is disabled.
+static absl::NoDestructor<UniqueValkeyDetachedThreadSafeContext>
+    logging_context;
+static std::atomic<ValkeyModuleCtx *> active_logging_context{nullptr};
 
 LogFormatterFunc GetSinkFormatter() { return sink_options.formatter; }
 void SetSinkFormatter(LogFormatterFunc formatter) {
@@ -105,15 +112,22 @@ absl::StatusOr<std::string> FetchEngineLogLevel(ValkeyModuleCtx *ctx) {
 
 absl::Status InitLogging(ValkeyModuleCtx *ctx,
                          std::optional<std::string> log_level_str) {
+  // A detached context preserves the module identity for logs emitted from
+  // worker threads and is valid for the module's full lifetime.
+  if (ctx != nullptr && *logging_context == nullptr) {
+    *logging_context = MakeUniqueValkeyDetachedThreadSafeContext(ctx);
+    active_logging_context.store(logging_context->get(),
+                                 std::memory_order_release);
+  }
   if (!log_level_str.has_value()) {
     auto engine_log_level = FetchEngineLogLevel(ctx);
     if (!engine_log_level.ok()) {
       // It is possible we can't get it, e.g. if the CONFIG command is renamed.
       // In such a case, we log a warning and default to NOTICE.
-      VMSDK_LOG(WARNING, ctx)
-          << "Failed to fetch Valkey Engine log level, "
-          << engine_log_level.status() << ", using default log level: "
-          << ToStrLogLevel(static_cast<int>(LogLevel::kNotice));
+      VMSDK_LOG(WARNING) << "Failed to fetch Valkey Engine log level, "
+                         << engine_log_level.status()
+                         << ", using default log level: "
+                         << ToStrLogLevel(static_cast<int>(LogLevel::kNotice));
       log_level_str = ToStrLogLevel(static_cast<int>(LogLevel::kNotice));
     } else {
       log_level_str = engine_log_level.value();
@@ -131,6 +145,19 @@ absl::Status InitLogging(ValkeyModuleCtx *ctx,
   return absl::OkStatus();
 }
 
+void ShutdownLogging() {
+  active_logging_context.store(nullptr, std::memory_order_release);
+  logging_context->reset();
+}
+
+void DisableLoggingContext() {
+  active_logging_context.store(nullptr, std::memory_order_release);
+}
+
+ValkeyModuleCtx *GetLoggingContext() {
+  return active_logging_context.load(std::memory_order_acquire);
+}
+
 const char *ReportedLogLevel(int log_level) {
   if (sink_options.log_level_specified) {
     return VALKEYMODULE_LOGLEVEL_WARNING;
@@ -139,8 +166,8 @@ const char *ReportedLogLevel(int log_level) {
 }
 
 void ValkeyLogSink::Send(const absl::LogEntry &entry) {
-  ValkeyModule_Log(ctx_, ReportedLogLevel(entry.verbosity()), "%s",
-                   GetSinkFormatter()(entry).c_str());
+  ValkeyModule_Log(GetLoggingContext(), ReportedLogLevel(entry.verbosity()),
+                   "%s", GetSinkFormatter()(entry).c_str());
 }
 
 void ValkeyIOLogSink::Send(const absl::LogEntry &entry) {

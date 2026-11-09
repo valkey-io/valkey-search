@@ -674,18 +674,18 @@ void SchemaManager::FlushDBIndexSchemas(ValkeyModuleCtx *ctx, int db_num,
   const char *flush_cmd = flush_all ? "FLUSHALL" : "FLUSHDB";
 
   auto to_delete = GetIndexSchemasInDBInternal(db_num);
-  VMSDK_LOG(NOTICE, ctx) << "Deleting index schema on " << flush_cmd
-                         << " of DB " << db_num;
+  VMSDK_LOG(NOTICE) << "Deleting index schema on " << flush_cmd << " of DB "
+                    << db_num;
   absl::once_flag log_recreate_once;
   for (const auto &name : to_delete) {
-    VMSDK_LOG(DEBUG, ctx) << "Deleting index schema "
-                          << vmsdk::config::RedactIfNeeded(name) << " on "
-                          << flush_cmd << " of DB " << db_num;
+    VMSDK_LOG(DEBUG) << "Deleting index schema "
+                     << vmsdk::config::RedactIfNeeded(name) << " on "
+                     << flush_cmd << " of DB " << db_num;
     auto old_schema = RemoveIndexSchemaInternal(db_num, name);
     if (!old_schema.ok()) {
-      VMSDK_LOG(WARNING, ctx) << "Unable to delete index schema "
-                              << vmsdk::config::RedactIfNeeded(name) << " on "
-                              << flush_cmd << " of DB " << db_num;
+      VMSDK_LOG(WARNING) << "Unable to delete index schema "
+                         << vmsdk::config::RedactIfNeeded(name) << " on "
+                         << flush_cmd << " of DB " << db_num;
       continue;
     }
     if (coordinator_enabled_) {
@@ -693,18 +693,18 @@ void SchemaManager::FlushDBIndexSchemas(ValkeyModuleCtx *ctx, int db_num,
       // cluster-level construct, not a node-level construct. To delete,
       // FT.DROPINDEX must be done explicitly.
       absl::call_once(log_recreate_once, [&]() {
-        VMSDK_LOG(NOTICE, ctx) << "Recreating index schema on " << flush_cmd
-                               << " of DB " << db_num;
+        VMSDK_LOG(NOTICE) << "Recreating index schema on " << flush_cmd
+                          << " of DB " << db_num;
       });
       auto to_add = old_schema.value()->ToProto();
-      VMSDK_LOG(DEBUG, ctx)
-          << "Recreating index schema " << vmsdk::config::RedactIfNeeded(name)
-          << " on " << flush_cmd << " of DB " << db_num;
+      VMSDK_LOG(DEBUG) << "Recreating index schema "
+                       << vmsdk::config::RedactIfNeeded(name) << " on "
+                       << flush_cmd << " of DB " << db_num;
       auto add_status = CreateIndexSchemaInternal(ctx, *to_add);
       if (!add_status.ok()) {
-        VMSDK_LOG(WARNING, ctx) << "Unable to recreate index schema "
-                                << vmsdk::config::RedactIfNeeded(name) << " on "
-                                << flush_cmd << " of DB " << db_num;
+        VMSDK_LOG(WARNING) << "Unable to recreate index schema "
+                           << vmsdk::config::RedactIfNeeded(name) << " on "
+                           << flush_cmd << " of DB " << db_num;
       }
     }
     // Move expensive destruction (radix trees, posting lists, per-key indexes)
@@ -753,8 +753,8 @@ void SchemaManager::OnReplicationLoadStart(ValkeyModuleCtx *ctx) {
   // first have flushed the DB, so there should be no additional memory
   // pressure, and the final swap from the staging schema set to the live schema
   // set is very cheap.
-  VMSDK_LOG(NOTICE, ctx) << "Staging indices during RDB load due to "
-                            "replication, will apply on loading finished";
+  VMSDK_LOG(NOTICE) << "Staging indices during RDB load due to "
+                       "replication, will apply on loading finished";
   staging_indices_due_to_repl_load_ = true;
 }
 
@@ -764,12 +764,11 @@ void SchemaManager::OnLoadingEnded(ValkeyModuleCtx *ctx) {
     // Perform swap of staged schemas to main schemas. Note that no merge
     // occurs here, since for RDB load we are guaranteed that the new state
     // is not applied incrementally.
-    VMSDK_LOG(NOTICE, ctx)
-        << "Applying staged indices at the end of RDB loading";
+    VMSDK_LOG(NOTICE) << "Applying staged indices at the end of RDB loading";
     auto status = RemoveAll();
     if (!status.ok()) {
-      VMSDK_LOG(WARNING, ctx) << "Failed to remove contents of existing "
-                                 "schemas on loading end.";
+      VMSDK_LOG(WARNING) << "Failed to remove contents of existing "
+                            "schemas on loading end.";
     }
     db_to_index_schemas_ = staged_db_to_index_schemas_.Get();
     staged_db_to_index_schemas_ = absl::flat_hash_map<
@@ -865,9 +864,9 @@ absl::Status SchemaManager::LoadIndex(
   // the existing index schemas. The loading ended callback will swap these
   // atomically.
   if (staging_indices_due_to_repl_load_.Get()) {
-    VMSDK_LOG(NOTICE, ctx) << "Staging index from RDB: "
-                           << vmsdk::config::RedactIfNeeded(name) << " (in db "
-                           << db_num << ")";
+    VMSDK_LOG(NOTICE) << "Staging index from RDB: "
+                      << vmsdk::config::RedactIfNeeded(name) << " (in db "
+                      << db_num << ")";
     staged_db_to_index_schemas_.Get()[db_num][name] = std::move(index_schema);
 
     // Increment completed index counter for restore progress tracking
@@ -880,9 +879,9 @@ absl::Status SchemaManager::LoadIndex(
   // case we are loading on top of an existing index schema set. This
   // happens for example when a module triggers RDB load on a running
   // server. In this case, we may have existing indices when we load the DB.
-  VMSDK_LOG(NOTICE, detached_ctx_.get())
-      << "Loading index from RDB: " << vmsdk::config::RedactIfNeeded(name)
-      << " (in db " << db_num << ")";
+  VMSDK_LOG(NOTICE) << "Loading index from RDB: "
+                    << vmsdk::config::RedactIfNeeded(name) << " (in db "
+                    << db_num << ")";
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   auto remove_existing_status = RemoveIndexSchemaInternal(db_num, name);
   if (remove_existing_status.ok()) {
@@ -910,7 +909,7 @@ void SchemaManager::OnFlushEndDBCallback(ValkeyModuleCtx *ctx,
                                          void *data) {
   auto *flush_info = static_cast<ValkeyModuleFlushInfo *>(data);
   if (flush_info == nullptr) {
-    VMSDK_LOG(WARNING, ctx)
+    VMSDK_LOG(WARNING)
         << "FLUSHDB event without flush info, assuming all databases";
   }
   // The engine reports dbnum -1 when every database was flushed.
@@ -949,10 +948,10 @@ void SchemaManager::OnShutdownCallback(ValkeyModuleCtx *ctx,
   if (db_to_index_schemas_.empty()) {
     return;
   }
-  VMSDK_LOG(NOTICE, ctx) << "Deleting all index schemas on SHUTDOWN event";
+  VMSDK_LOG(NOTICE) << "Deleting all index schemas on SHUTDOWN event";
   auto status = RemoveAll();
   if (!status.ok()) {
-    VMSDK_LOG(WARNING, ctx)
+    VMSDK_LOG(WARNING)
         << "Failed to delete all index schemas on SHUTDOWN event: "
         << status.message();
   }
@@ -996,9 +995,9 @@ absl::Status SchemaManager::ShowIndexSchemas(ValkeyModuleCtx *ctx,
     ValkeyModule_ReplyWithArray(ctx, inner_map.size());
     for (const auto &[name, schema] : inner_map) {
       auto proto = schema->ToProto()->DebugString();
-      VMSDK_LOG(DEBUG, ctx) << "Index Schema in DB " << db_num << ": "
-                            << vmsdk::config::RedactIfNeeded(name) << " "
-                            << vmsdk::config::RedactIfNeeded(proto);
+      VMSDK_LOG(DEBUG) << "Index Schema in DB " << db_num << ": "
+                       << vmsdk::config::RedactIfNeeded(name) << " "
+                       << vmsdk::config::RedactIfNeeded(proto);
       ValkeyModule_ReplyWithStringBuffer(ctx, proto.data(), proto.size());
     }
   }

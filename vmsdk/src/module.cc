@@ -87,7 +87,7 @@ int OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc,
   // was registered under the name and version it describes itself with.
   if (options.name == nullptr || std::strcmp(options.name, module_name) != 0 ||
       options.version != module_version) {
-    VMSDK_LOG(WARNING, ctx)
+    VMSDK_LOG(WARNING)
         << "Module registered as '" << module_name << "' v" << module_version
         << " but describes itself as '"
         << (options.name == nullptr ? "(null)" : options.name) << "' v"
@@ -95,19 +95,20 @@ int OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc,
         << ". The VALKEY_MODULE arguments must match the Options fields.";
     return VALKEYMODULE_ERR;
   }
-  VMSDK_LOG(NOTICE, ctx) << "Ran " << vmsdk::GetDeferredInitializerCount()
-                         << " deferred static initializers";
+  VMSDK_LOG(NOTICE) << "Ran " << vmsdk::GetDeferredInitializerCount()
+                    << " deferred static initializers";
   if (ValkeyModule_GetServerVersion == nullptr) {
-    VMSDK_LOG(WARNING, ctx)
+    VMSDK_LOG(WARNING)
         << "ValkeyModule_GetServerVersion function is not available";
     return VALKEYMODULE_ERR;
   }
   auto server_version = vmsdk::ValkeyVersion(ValkeyModule_GetServerVersion());
   if (server_version < options.minimum_valkey_server_version) {
-    VMSDK_LOG(WARNING, ctx)
-        << "Minimum required server version is "
-        << vmsdk::ValkeyVersion(options.minimum_valkey_server_version)
-        << ", Current version is " << vmsdk::ValkeyVersion(server_version);
+    VMSDK_LOG(WARNING) << "Minimum required server version is "
+                       << vmsdk::ValkeyVersion(
+                              options.minimum_valkey_server_version)
+                       << ", Current version is "
+                       << vmsdk::ValkeyVersion(server_version);
     return VALKEYMODULE_ERR;
   }
   if (auto status = AddACLCategories(ctx, options.acl_categories);
@@ -146,7 +147,7 @@ int OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc,
           if (it == seen_bases.end() &&
               line.find(" r-x") != std::string::npos) {
             seen_bases[base_addr] = module;
-            VMSDK_LOG(NOTICE, ctx)
+            VMSDK_LOG(NOTICE)
                 << ">>> Loaded Module: " << module << " Base: 0x" << base_addr;
           }
         }
@@ -159,13 +160,12 @@ int OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc,
 int OnLoadDone(absl::Status status, ValkeyModuleCtx *ctx,
                const Options &options) {
   if (status.ok()) {
-    VMSDK_LOG(NOTICE, ctx) << options.name
-                           << " module was successfully loaded!";
+    VMSDK_LOG(NOTICE) << options.name << " module was successfully loaded!";
     // The switch to the Valkey allocator happened at the top of
     // ValkeyModule_OnLoad, before static initialization -- see VALKEY_MODULE.
     return VALKEYMODULE_OK;
   }
-  VMSDK_LOG(WARNING, ctx) << status.message().data();
+  VMSDK_LOG(WARNING) << status.message().data();
   return VALKEYMODULE_ERR;
 }
 }  // namespace module

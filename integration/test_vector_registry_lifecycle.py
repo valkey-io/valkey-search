@@ -15,6 +15,7 @@ pass and guard behaviour that is currently correct.
 
 import os
 import shutil
+import time
 import pytest
 import valkey
 from valkey import Valkey
@@ -29,6 +30,11 @@ DIM = 128
 VALID = [float(i) for i in range(DIM)]
 # Too few components to be a DIM-wide vector: rejected by IsValidSizeVector.
 SHORT = [1.0, 2.0]
+
+
+def vector(seed: int, salt: float = 0.0) -> bytes:
+    """A vector distinct per seed, so a key can be told apart by its bytes."""
+    return float_to_bytes([seed + salt + i / DIM for i in range(DIM)])
 
 
 class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
@@ -85,13 +91,14 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         algo: str = "HNSW",
         mixed: bool = False,
         name: str = "idx",
+        prefix: str = "doc",
     ) -> Index:
         self.assert_sharing_active()
         fields = [Vector("vec", DIM, type=algo, distance="L2")]
         if mixed:
             fields += [Numeric("num"), Tag("tag")]
         return Index(
-            name, fields, prefixes=["doc"], type=key_type
+            name, fields, prefixes=[prefix], type=key_type
         )
 
     def write_key(self, index: Index, suffix: str, vec, mixed: bool = False, client=None):
@@ -126,8 +133,9 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
             self.write_key(index, "missing", None, mixed),
         )
 
-    def wait_for_docs(self, index: Index, count: int):
-        waiters.wait_for_equal(lambda: index.info(self.client).num_docs, count)
+    def wait_for_docs(self, index: Index, count: int, client=None):
+        client = client or self.client
+        waiters.wait_for_equal(lambda: index.info(client).num_docs, count)
 
     def knn_hits(self, index: Index, query=VALID) -> int:
         """Documents returned by a KNN scan. Uses FT.SEARCH directly rather
@@ -1924,6 +1932,81 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         r.execute_command("SELECT", 5)
         r.execute_command("FLUSHDB")
         r.execute_command("SELECT", 0)
+
+    # ---- unshare and load gaps -------------------------------------------
+    #
+    # The engine never copies or frees a string-ref field's bytes; the registry
+    # entry is their only owner. A path that drops the entry while the hash
+    # still points at the record leaves the hash reading freed memory. The
+    # expired-key and rename tests expose that by letting the next index's
+    # vectors reuse the freed chunk before reading the hash; under ASan they
+    # fail on the read itself.
+
+    GAP_KEYS = 40
+
+    def write_distinct_keys(self, prefix: str, salt: float = 0.0, client=None, count=None, **fields):
+        client = client or self.client
+        for k in range(count or self.GAP_KEYS):
+            client.hset(f"{prefix}:{k}", mapping={"vec": vector(k, salt), **fields})
+
+    def wait_for_unshare_drain(self):
+        waiters.wait_for_equal(
+            lambda: self.registry_stat("pending_unshare_cnt"), 0, timeout=60
+        )
+
+    def drop_index_leaving_pending_unshares(self):
+        """GAP_KEYS shared keys under doc:*, index dropped with all but one
+        still queued for unshare."""
+        self.client.config_set("search.vector-unshare-batch-size", "1")
+        index = self.build_index()
+        index.create(self.client)
+        # A second field keeps the key alive when the HDEL test removes the vector.
+        self.write_distinct_keys("doc", other="x")
+        assert self.registry_stat("entry_cnt") == self.GAP_KEYS
+        index.drop(self.client)
+
+    def reuse_freed_vector_memory(self) -> Index:
+        """Allocate GAP_KEYS new shared vectors; relies on the allocator
+        handing back the chunk the dropped index just released."""
+        fill = self.build_index(name="fill", prefix="fill")
+        fill.create(self.client)
+        self.write_distinct_keys("fill", salt=0.5)
+        return fill
+
+    def test_hdel_during_pending_unshare_does_not_crash(self):
+        """Removing a queued key's vector field crashes the server.
+
+        Stimulus: drop an index with keys pending unshare, then HDEL the vector
+        field. The cron's UnshareWithValkey asks the engine whether the field
+        is a string ref, and hashTypeHasStringRef dereferences the missing
+        field's lookup result.
+
+        Expected: the unshare is a no-op for a field that no longer exists.
+        Observed: SIGSEGV on a NULL entry.
+        """
+        self.drop_index_leaving_pending_unshares()
+        pipe = self.client.pipeline(transaction=False)
+        for k in range(self.GAP_KEYS):
+            pipe.hdel(f"doc:{k}", "vec")
+        pipe.execute()
+
+        self.wait_for_unshare_drain()
+        assert self.client.ping()
+
+    def test_hdel_then_rename_out_of_prefix_does_not_crash(self):
+        """HDEL of the vector field followed by RENAME out of the index prefix
+        must not crash in MoveKey -> UnshareWithValkey."""
+        index = self.build_index()
+        index.create(self.client)
+        self.client.hset("doc:0", mapping={"vec": vector(0), "other": "x"})
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 1)
+
+        self.client.hdel("doc:0", "vec")
+        self.client.rename("doc:0", "outside:0")
+
+        assert self.client.ping()
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0)
+
 
 class TestVectorRegistryPersistence(ValkeySearchTestCaseDebugMode):
     """Save on one server, load on another.

@@ -1332,4 +1332,127 @@ TEST_F(VectorRegistryTest, RemoveIndexKeysSwapDBMovesPending) {
   VMSDK_EXPECT_OK(options::GetVectorUnshareBatchSize().SetValue(1024));
 }
 
+TEST_F(VectorRegistryTest,
+       UnshareWithValkeySkipsMissingFieldWithoutCallingHashHasStringRef) {
+  auto &registry = VectorRegistry::Instance();
+  auto k1 = StringInternStore::Intern("k_hdel_unshare");
+  auto attr = StringInternStore::Intern("vec");
+  MockIndex index(2, attr->Str(), 0);
+
+  std::vector<float> vec_data = {1.0f, 2.0f};
+  std::string vec_str(reinterpret_cast<const char *>(vec_data.data()),
+                      vec_data.size() * sizeof(float));
+  auto valkey_vec = vmsdk::MakeUniqueValkeyString(vec_str);
+
+  registry.DedupOrConstruct(
+      k1, valkey_vec.get(),
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &index);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 1);
+
+  EXPECT_CALL(*kMockValkeyModule,
+              OpenKey(testing::_, testing::_,
+                      VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_WRITE))
+      .WillOnce(TestValkeyModule_OpenKeyDefaultImpl);
+  EXPECT_CALL(*kMockValkeyModule, KeyType(testing::_))
+      .WillOnce(Return(VALKEYMODULE_KEYTYPE_HASH));
+  EXPECT_CALL(
+      *kMockValkeyModule,
+      HashGet(testing::_, VALKEYMODULE_HASH_CFIELDS | VALKEYMODULE_HASH_EXISTS,
+              testing::_, testing::An<int *>(), nullptr))
+      .WillOnce(testing::DoAll(testing::SetArgPointee<3>(0),
+                               Return(VALKEYMODULE_OK)));
+  EXPECT_CALL(*kMockValkeyModule, HashHasStringRef(testing::_, testing::_))
+      .Times(0);
+  EXPECT_CALL(*kMockValkeyModule,
+              HashSet(testing::_, testing::_, testing::_, testing::_, nullptr))
+      .Times(0);
+
+  std::vector<InternedStringPtr> keys = {k1};
+  registry.RemoveIndexKeys(0, attr, keys);
+  EXPECT_EQ(registry.GetPendingUnsharesCount(), 0);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 0);
+}
+
+TEST_F(VectorRegistryTest,
+       ShareWithValkeySkipsMissingFieldWithoutCallingHashHasStringRef) {
+  auto &registry = VectorRegistry::Instance();
+  auto key = StringInternStore::Intern("k_hdel_share");
+  auto attr = StringInternStore::Intern("vec");
+  MockIndex index(2, attr->Str(), 0);
+
+  std::vector<float> vec_data = {1.0f, 2.0f};
+  std::string vec_str(reinterpret_cast<const char *>(vec_data.data()),
+                      vec_data.size() * sizeof(float));
+  auto valkey_vec = vmsdk::MakeUniqueValkeyString(vec_str);
+
+  EXPECT_CALL(*kMockValkeyModule,
+              OpenKey(testing::_, testing::_,
+                      VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_WRITE))
+      .WillOnce(TestValkeyModule_OpenKeyDefaultImpl);
+  EXPECT_CALL(
+      *kMockValkeyModule,
+      HashGet(testing::_, VALKEYMODULE_HASH_CFIELDS | VALKEYMODULE_HASH_EXISTS,
+              testing::_, testing::An<int *>(), nullptr))
+      .WillOnce(testing::DoAll(testing::SetArgPointee<3>(0),
+                               Return(VALKEYMODULE_OK)));
+  EXPECT_CALL(*kMockValkeyModule, HashHasStringRef(testing::_, testing::_))
+      .Times(0);
+  EXPECT_CALL(*kMockValkeyModule,
+              HashSetStringRef(testing::_, testing::_, testing::_, testing::_))
+      .Times(0);
+
+  auto rec = registry.DedupOrConstruct(
+      key, valkey_vec.get(),
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &index);
+  EXPECT_NE(rec, nullptr);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 1);
+  EXPECT_EQ(registry.GetStats().hash_sharing_hits, 0);
+  EXPECT_EQ(registry.GetStats().hash_sharing_errors, 0);
+}
+
+TEST_F(
+    VectorRegistryTest,
+    OverwriteWithInvalidSizeErasesWhenFieldMissingWithoutCallingHashHasStringRef) {
+  auto &registry = VectorRegistry::Instance();
+  auto key = StringInternStore::Intern("k_hdel_invalid_size");
+  auto attr = StringInternStore::Intern("vec");
+  MockIndex index(2, attr->Str(), 0);
+
+  std::vector<float> vec_data = {1.0f, 2.0f};
+  std::string vec_str(reinterpret_cast<const char *>(vec_data.data()),
+                      vec_data.size() * sizeof(float));
+  auto valkey_vec = vmsdk::MakeUniqueValkeyString(vec_str);
+
+  auto rec = registry.DedupOrConstruct(
+      key, valkey_vec.get(),
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &index);
+  EXPECT_NE(rec, nullptr);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 1);
+
+  EXPECT_CALL(*kMockValkeyModule,
+              OpenKey(testing::_, testing::_,
+                      VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ))
+      .WillOnce(TestValkeyModule_OpenKeyDefaultImpl);
+  EXPECT_CALL(
+      *kMockValkeyModule,
+      HashGet(testing::_, VALKEYMODULE_HASH_CFIELDS | VALKEYMODULE_HASH_EXISTS,
+              testing::_, testing::An<int *>(), nullptr))
+      .WillOnce(testing::DoAll(testing::SetArgPointee<3>(0),
+                               Return(VALKEYMODULE_OK)));
+  EXPECT_CALL(*kMockValkeyModule, HashHasStringRef(testing::_, testing::_))
+      .Times(0);
+
+  std::vector<float> bad_data = {1.0f, 2.0f, 3.0f};
+  std::string bad_str(reinterpret_cast<const char *>(bad_data.data()),
+                      bad_data.size() * sizeof(float));
+  auto bad_vec = vmsdk::MakeUniqueValkeyString(bad_str);
+
+  auto rec_bad = registry.DedupOrConstruct(
+      key, bad_vec.get(),
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &index);
+  EXPECT_NE(rec_bad, nullptr);
+  EXPECT_EQ(rec_bad.size, bad_str.size());
+  EXPECT_EQ(registry.GetStats().entry_cnt, 0);
+}
+
 }  // namespace valkey_search

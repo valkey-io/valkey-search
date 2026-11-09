@@ -154,6 +154,23 @@ void VectorRegistry::EraseTrackedRecord(int db_num, const RegistryKey &key) {
   ExtractTrackedRecord(db_num, key.key, key.attribute_identifier);
 }
 
+namespace {
+
+bool HashFieldHasStringRef(ValkeyModuleKey *key_obj,
+                           ValkeyModuleString *attr_str) {
+  int exists = 0;
+  const char *field_cstr = ValkeyModule_StringPtrLen(attr_str, nullptr);
+  if (ValkeyModule_HashGet(key_obj,
+                           VALKEYMODULE_HASH_CFIELDS | VALKEYMODULE_HASH_EXISTS,
+                           field_cstr, &exists, nullptr) != VALKEYMODULE_OK ||
+      !exists) {
+    return false;
+  }
+  return ValkeyModule_HashHasStringRef(key_obj, attr_str) == 1;
+}
+
+}  // namespace
+
 bool VectorRegistry::IsEraseTrackedRecordSafe(
     int db_num, const InternedStringPtr &key, absl::string_view vector_str,
     absl::string_view attribute_identifier,
@@ -177,8 +194,7 @@ bool VectorRegistry::IsEraseTrackedRecordSafe(
   }
   auto attribute_identifier_str =
       vmsdk::MakeUniqueValkeyString(attribute_identifier);
-  return ValkeyModule_HashHasStringRef(key_obj.get(),
-                                       attribute_identifier_str.get()) != 1;
+  return !HashFieldHasStringRef(key_obj.get(), attribute_identifier_str.get());
 }
 
 bool VectorRegistry::ShareWithValkey(
@@ -202,6 +218,14 @@ bool VectorRegistry::ShareWithValkey(
   }
   auto attribute_identifier_str =
       vmsdk::MakeUniqueValkeyString(attribute_identifier);
+  int exists = 0;
+  if (ValkeyModule_HashGet(
+          key_obj.get(), VALKEYMODULE_HASH_CFIELDS | VALKEYMODULE_HASH_EXISTS,
+          ValkeyModule_StringPtrLen(attribute_identifier_str.get(), nullptr),
+          &exists, nullptr) != VALKEYMODULE_OK ||
+      !exists) {
+    return false;
+  }
   if (ValkeyModule_HashHasStringRef(key_obj.get(),
                                     attribute_identifier_str.get()) == 1) {
     return false;
@@ -277,7 +301,7 @@ bool VectorRegistry::UnshareWithValkey(
     return false;
   }
   auto attr_str = vmsdk::MakeUniqueValkeyString(attribute_identifier);
-  if (ValkeyModule_HashHasStringRef(key_obj, attr_str.get()) != 1) {
+  if (!HashFieldHasStringRef(key_obj, attr_str.get())) {
     return false;
   }
   auto raw_vec = vector_record.GetRawVector();

@@ -699,8 +699,10 @@ inline int TestValkeyModule_HashGetExistsDefaultImpl(ValkeyModuleKey *key,
                                                      const char *field,
                                                      int *exists_out,
                                                      void *terminating_null) {
-  CHECK(false);
-  return VALKEYMODULE_ERR;
+  if (exists_out) {
+    *exists_out = 1;
+  }
+  return VALKEYMODULE_OK;
 }
 
 inline int TestValkeyModule_HashGetDefaultImpl(ValkeyModuleKey *key, int flags,

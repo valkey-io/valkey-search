@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstdint>
 
+#include "vmsdk/src/debug.h"
 #include "vmsdk/src/info.h"
 #include "vmsdk/src/module_config.h"
 
@@ -122,19 +123,11 @@ auto query_migrate_batch =
         })
         .Build();
 
-/// Register the "huge-hash-map-advisory-migration" config: when false, no
-/// advisory MigrateSome() runs (the ingest, query and server cron callers);
-/// each mutation's own migration still does. For tests that need backgrounds
-/// to stay put.
-auto advisory_migration =
-    config::BooleanBuilder("huge-hash-map-advisory-migration",  // name
-                           true)                                // default
-        .Dev()
-        .WithModifyCallback([](bool value) {
-          internal::g_huge_map_advisory_migration.store(
-              value, std::memory_order_relaxed);
-        })
-        .Build();
+// When off, no advisory MigrateSome() runs (the ingest, query and server cron
+// callers); each mutation's own migration still does. For tests that need
+// backgrounds to stay put: FT._DEBUG CONTROLLED_VARIABLE SET
+// HugeMapAdvisoryMigration no.
+CONTROLLED_BOOLEAN(HugeMapAdvisoryMigration, true);
 
 DEV_INTEGER_COUNTER(huge, huge_hash_map_rehashes);
 
@@ -159,7 +152,6 @@ size_t g_huge_map_cron_migrate_batch = kDefaultCronMigrateBatch;
 size_t g_huge_map_key_info_migrate_batch = kDefaultKeyInfoMigrateBatch;
 size_t g_huge_map_ingest_migrate_batch = kDefaultIngestMigrateBatch;
 size_t g_huge_map_query_migrate_batch = kDefaultQueryMigrateBatch;
-std::atomic<bool> g_huge_map_advisory_migration{true};
 
 size_t HugeMapEarlyStart(size_t growth) {
   constexpr double kGoldenRatioFraction = 0.6180339887498949;
@@ -207,8 +199,8 @@ config::Number &GetHugeFlatHashMapIngestMigrateBatch() {
   return dynamic_cast<config::Number &>(*ingest_migrate_batch);
 }
 
-config::Boolean &GetHugeFlatHashMapAdvisoryMigration() {
-  return dynamic_cast<config::Boolean &>(*advisory_migration);
+bool HugeMapAdvisoryMigrationEnabled() {
+  return HugeMapAdvisoryMigration.GetValue();
 }
 
 config::Number &GetHugeFlatHashMapQueryMigrateBatch() {

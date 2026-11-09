@@ -4,7 +4,7 @@ Advisory HugeFlatHashMap migration (vmsdk/src/huge/flat_hash_map.h).
 While a table grows it keeps its old table (the background) and moves entries
 out of it a few at a time. Besides each mutation's own moves, "advisory"
 callers -- ingest, queries and server cron -- move more, so backgrounds finish
-even when traffic stops. The dev config huge-hash-map-advisory-migration turns
+even when traffic stops. The controlled variable HugeMapAdvisoryMigration turns
 all of those off, which lets a test leave backgrounds in place and then turn
 one source back on at a time. The dev INFO field huge_hash_maps_migrating
 counts the tables that still have a background.
@@ -35,6 +35,11 @@ def _config_set(client: Valkey, name: str, value: str) -> None:
     client.execute_command("CONFIG", "SET", f"search.{name}", value)
 
 
+def _advisory_migration(client: Valkey, value: str) -> None:
+    assert client.execute_command("FT._DEBUG", "CONTROLLED_VARIABLE", "SET",
+                                  "HugeMapAdvisoryMigration", value) == b"OK"
+
+
 class TestHugeHashMapMigration(ValkeySearchTestCaseDebugMode):
 
     def test_server_cron_drains_main_thread_maps(self):
@@ -45,7 +50,7 @@ class TestHugeHashMapMigration(ValkeySearchTestCaseDebugMode):
         store, and the vector registry's tables).
         """
         client: Valkey = self.server.get_new_client()
-        _config_set(client, "huge-hash-map-advisory-migration", "no")
+        _advisory_migration(client, "no")
         # A mutation moves the fewest entries it can, so a table that grows
         # keeps its background for nearly the whole of its next cycle.
         _config_set(client, "huge-hash-map-migrate-batch", "1")
@@ -75,9 +80,9 @@ class TestHugeHashMapMigration(ValkeySearchTestCaseDebugMode):
 
             # From here on, no command touches search: whatever drains now is
             # server cron.
-            _config_set(client, "huge-hash-map-advisory-migration", "yes")
+            _advisory_migration(client, "yes")
             waiters.wait_for_true(lambda: _maps_migrating(client) < frozen,
                                   timeout=30)
         finally:
-            _config_set(client, "huge-hash-map-advisory-migration", "yes")
+            _advisory_migration(client, "yes")
             _config_set(client, "huge-hash-map-migrate-batch", "8")

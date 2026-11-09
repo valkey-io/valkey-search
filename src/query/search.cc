@@ -917,6 +917,28 @@ SortByKey SortByKey::Legacy(absl::string_view sortby_alias) {
   return key;
 }
 
+bool KnnPrefillAddsSortKey(const SearchParameters &parameters,
+                           const SortByKey &key) {
+  if (parameters.IsNonVectorQuery() || parameters.no_content ||
+      parameters.all_content || parameters.return_attributes.empty() ||
+      !parameters.sortby_parameter.has_value()) {
+    return false;
+  }
+  // Sorted from Neighbor::distance, not from attribute_contents.
+  const std::string &field = parameters.sortby_parameter->field;
+  if ((parameters.score_as &&
+       field == vmsdk::ToStringView(parameters.score_as.get())) ||
+      field == GetVrScoreFieldName(parameters)) {
+    return false;
+  }
+  return std::none_of(
+      parameters.return_attributes.begin(), parameters.return_attributes.end(),
+      [&](const ReturnAttribute &attr) {
+        return attr.identifier.get() &&
+               vmsdk::ToStringView(attr.identifier.get()) == key.identifier;
+      });
+}
+
 absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
     absl::StatusOr<std::vector<indexes::Neighbor>> results,
     const SearchParameters &parameters) {
@@ -942,25 +964,11 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
   // This also returns stored bytes for other RETURN fields instead of indexed
   // copies. Issue #1440.
   std::optional<SortByKey> sortby_key;
-  // Sorted from Neighbor::distance, not from attribute_contents.
-  const bool sort_by_computed_key =
-      parameters.sortby_parameter.has_value() &&
-      ((parameters.score_as &&
-        parameters.sortby_parameter->field ==
-            vmsdk::ToStringView(parameters.score_as.get())) ||
-       parameters.sortby_parameter->field == GetVrScoreFieldName(parameters));
-  if (parameters.sortby_parameter.has_value() && !sort_by_computed_key &&
+  if (parameters.sortby_parameter.has_value() &&
       options::EnabledInVersion(1, 3, 0)) {
     const std::string &sortby_field = parameters.sortby_parameter->field;
     sortby_key.emplace(*parameters.index_schema, sortby_field);
-    const bool sort_key_already_returned = std::any_of(
-        parameters.return_attributes.begin(),
-        parameters.return_attributes.end(), [&](const ReturnAttribute &attr) {
-          return attr.identifier.get() &&
-                 vmsdk::ToStringView(attr.identifier.get()) ==
-                     sortby_key->identifier;
-        });
-    if (!sort_key_already_returned) {
+    if (KnnPrefillAddsSortKey(parameters, *sortby_key)) {
       auto index = parameters.index_schema->GetIndex(sortby_field);
       // Defensive guard for callers that bypass parser and shard validation.
       DCHECK(index.ok()) << index.status();

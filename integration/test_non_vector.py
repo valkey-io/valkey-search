@@ -1361,16 +1361,21 @@ class TestSortByAliasGate(ValkeySearchTestCaseDebugMode):
                     b"sbk:3", b"#6", [b"n", b"0.323456789012"],
                     b"sbk:1", b"#7", [b"n", b"0.123456789012"],
                     b"sbk:4", None, [b"n", b"0.4234567890123456"]]
-        for release, text_expected, alias_expected in (
-                ("1.2.1", legacy, legacy), ("1.3.0", by_text, by_alias)):
+        counter = "search_compatibility-ft_search_sortby_alias"
+        for release, text_expected, alias_expected, counted in (
+                ("1.2.1", legacy, legacy, 1), ("1.3.0", by_text, by_alias, 0)):
             assert client.execute_command(
                 "CONFIG", "SET", "search.emulate-release", release) == b"OK"
             for field, expected in (("t", text_expected),
                                     ("s", alias_expected)):
+                before = client.info("SEARCH").get(counter, 0)
                 result = client.execute_command(
                     "FT.SEARCH", "sbk_idx", *knn, "SORTBY", field, "ASC",
                     "WITHSORTKEYS", "RETURN", "1", "n", "DIALECT", "2")
                 assert result == expected, f"emulate-release {release} {field}"
+                # `t` has no alias, but the pre-fill still changes its reply.
+                assert client.info("SEARCH").get(counter, 0) - before == counted, (
+                    release, field)
 
     def test_sortby_alias_stray_field(self):
         # An undeclared field named like the alias is not the attribute.

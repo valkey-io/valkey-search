@@ -491,6 +491,11 @@ const VectorRangePredicate *GetVectorRangePredicate(
 // returns "" when the query has no VR predicate.
 std::string GetVrScoreFieldName(const SearchParameters &parameters);
 
+// From 1.3.0 a KNN query reads the SORTBY value from its index when RETURN
+// does not name it.
+bool KnnPrefillAddsSortKey(const SearchParameters &parameters,
+                           const SortByKey &key);
+
 // Count the number of VectorRangePredicate nodes in the predicate tree. Used
 // at parse time to reject unsupported multi-VR queries (single-VR only).
 // Returns 0 when predicate is null.

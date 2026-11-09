@@ -151,7 +151,7 @@ query::SortByKey ResolveSortByKey(const SearchCommand &command) {
   const std::string &alias = command.sortby_parameter->field;
   query::SortByKey key(*command.index_schema, alias);
 
-  if (key.identifier == alias) {
+  if (key.identifier == alias && !query::KnnPrefillAddsSortKey(command, key)) {
     if (options::EnabledInVersion(1, 3, 0)) {
       return key;
     }

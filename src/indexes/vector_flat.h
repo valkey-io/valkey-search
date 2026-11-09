@@ -46,6 +46,7 @@ class VectorFlat : public VectorBase {
       SupplementalContentChunkIter&& iter) ABSL_NO_THREAD_SAFETY_ANALYSIS;
   ~VectorFlat() override = default;
   size_t GetDataTypeSize() const override { return sizeof(T); }
+  uint64_t GetMaxInternalLabel() const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
   const hnswlib::SpaceInterface<float>* GetSpace() const {
     return space_.get();

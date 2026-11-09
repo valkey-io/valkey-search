@@ -1,4 +1,5 @@
 import base64
+import struct
 from math import exp
 import os
 import tempfile
@@ -439,3 +440,40 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
 
         for t in client_threads:
             t.join()
+
+class TestInsertAfterLoad(ValkeySearchTestCaseDebugMode):
+    DIM = 4
+
+    def vec(self, base: float) -> bytes:
+        return struct.pack(f"<{self.DIM}f", *[base + 0.1 * d for d in range(self.DIM)])
+
+    def knn(self, index: Index, query: bytes, k: int) -> set[bytes]:
+        res = self.client.execute_command(
+            "FT.SEARCH", index.name, f"*=>[KNN {k} @v $q]",
+            "PARAMS", "2", "q", query, "LIMIT", "0", str(k), "NOCONTENT",
+        )
+        return set(res[1:])
+
+    @pytest.mark.parametrize("algo", ["HNSW", "FLAT"])
+    def test_insert_after_load(self, algo):
+        """Keys inserted after an RDB load must get ids above every loaded id."""
+        index = Index("idx", [Vector("v", self.DIM, type=algo, ef=100)], prefixes=["doc:"])
+        index.create(self.client)
+        loaded = {f"doc:{i}".encode() for i in range(10)}
+        new = {f"doc:new{i}".encode() for i in range(5)}
+
+        for i in range(10):
+            self.client.hset(f"doc:{i}", mapping={"v": self.vec(i)})
+        self.client.execute_command("SAVE")
+        self.server.restart(remove_rdb=False)
+        waiters.wait_for_true(lambda: index.backfill_complete(self.client))
+
+        for i in range(5):
+            self.client.hset(f"doc:new{i}", mapping={"v": self.vec(100 + i)})
+        for i in range(5):
+            assert self.knn(index, self.vec(100 + i), 1) == {f"doc:new{i}".encode()}
+        assert self.knn(index, self.vec(0), 15) == loaded | new
+
+        for key in loaded:
+            self.client.delete(key)
+        assert self.knn(index, self.vec(100), 5) == new

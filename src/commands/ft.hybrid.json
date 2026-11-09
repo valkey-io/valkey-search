@@ -548,6 +548,12 @@
         "optional": true
       },
       {
+        "name": "LOCALONLY",
+        "type": "pure-token",
+        "optional": true,
+        "token": "LOCALONLY"
+      },
+      {
         "name": "APPLY",
         "type": "block",
         "token": "APPLY",

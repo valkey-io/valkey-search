@@ -102,6 +102,12 @@ struct SearchPartitionResultsTracker {
   [[maybe_unused]] int outstanding_requests ABSL_GUARDED_BY(mutex);
   // Shared cancellation token for the fanout.
   cancel::Token token;
+  // Stops the remote RPCs. With partial results disabled, any cancellation of
+  // the query, including a local timeout, ends the fanout, so the remote RPCs
+  // follow `token`. With partial results enabled, a local timeout must not
+  // drop the remote shards' results, so only CancelFanout() stops them.
+  std::stop_source fanout_stop;
+  std::stop_token remote_stop_token;
   // Ensures the fanout-cancel metric is counted at most once per fanout.
   std::atomic_bool cancel_counted{false};
   std::unique_ptr<SearchParameters> parameters ABSL_GUARDED_BY(mutex);
@@ -126,6 +132,9 @@ struct SearchPartitionResultsTracker {
       : outstanding_requests(outstanding_requests),
         // Initialize token before moving parameters.
         token(parameters->cancellation_token),
+        remote_stop_token(parameters->enable_partial_results
+                              ? fanout_stop.get_token()
+                              : token->GetStopToken()),
         parameters(std::move(parameters)) {}
 
   // Cancel all fanout work. Call this without holding mutex.
@@ -134,6 +143,7 @@ struct SearchPartitionResultsTracker {
     if (!cancel_counted.exchange(true)) {
       FanoutCancels.Increment(1);
     }
+    fanout_stop.request_stop();
     token->Cancel();
   }
 
@@ -146,7 +156,7 @@ struct SearchPartitionResultsTracker {
         // Ignore CANCELLED caused by fanout cancellation.
         bool propagated_cancel =
             status.error_code() == grpc::StatusCode::CANCELLED &&
-            token->GetStopToken().stop_requested();
+            remote_stop_token.stop_requested();
         // Store the first non-propagated error.
         if (!has_node_error.load() && !propagated_cancel) {
           has_node_error.store(true);
@@ -482,13 +492,13 @@ absl::Status PerformSearchFanoutAsync(
     if (search_targets.size() >=
             valkey_search::options::GetAsyncFanoutThreshold().GetValue() &&
         thread_pool->Size() > 1) {
-      PerformRemoteSearchRequestAsync(
-          std::move(request_copy), target_address, coordinator_client_pool,
-          tracker, tracker->token->GetStopToken(), thread_pool);
+      PerformRemoteSearchRequestAsync(std::move(request_copy), target_address,
+                                      coordinator_client_pool, tracker,
+                                      tracker->remote_stop_token, thread_pool);
     } else {
       PerformRemoteSearchRequest(std::move(request_copy), target_address,
                                  coordinator_client_pool, tracker,
-                                 tracker->token->GetStopToken());
+                                 tracker->remote_stop_token);
     }
   }
   if (has_local_target) {

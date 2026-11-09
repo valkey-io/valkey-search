@@ -150,7 +150,6 @@ class FanoutCancellationTest : public ValkeySearchTest {
     return parameters;
   }
 
-  ValkeyModuleCtx fake_ctx_;
   std::shared_ptr<MockIndexSchema> index_schema_;
   coordinator::MockClientPool client_pool_;
   std::unique_ptr<vmsdk::ThreadPool> thread_pool_;
@@ -430,6 +429,38 @@ TEST_F(FanoutCancellationTest,
   coordinator::SearchIndexPartitionResponse response;
   pending_done(grpc::Status::OK, response);
   pending_done = nullptr;
+}
+
+// Cancel the query token, as a local timeout does, while a remote is pending.
+// With partial results enabled, the remote must keep running so its results
+// can still be returned. With partial results disabled, the remote is stopped.
+TEST_F(FanoutCancellationTest,
+       QueryCancelStopsRemotesOnlyWithoutPartialResults) {
+  for (bool enable_partial_results : {true, false}) {
+    SCOPED_TRACE(enable_partial_results);
+    auto pending_remote = MakeRemoteNode(1);
+    std::vector<vmsdk::cluster_map::NodeInfo> targets = {pending_remote};
+
+    std::stop_token remote_token;
+    coordinator::SearchIndexPartitionCallback pending_done;
+    CreatePendingRemote(1, &remote_token, &pending_done);
+
+    auto parameters = CreateMockParameter(enable_partial_results);
+    auto query_token = parameters->cancellation_token;
+
+    ASSERT_TRUE(PerformSearchFanoutAsync(&fake_ctx_, targets, &client_pool_,
+                                         std::move(parameters),
+                                         thread_pool_.get())
+                    .ok());
+    query_token->Cancel();
+
+    EXPECT_EQ(remote_token.stop_requested(), !enable_partial_results);
+
+    coordinator::SearchIndexPartitionResponse response;
+    pending_done(grpc::Status::OK, response);
+    pending_done = nullptr;
+    testing::Mock::VerifyAndClearExpectations(&client_pool_);
+  }
 }
 
 }  // namespace

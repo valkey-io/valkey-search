@@ -31,14 +31,23 @@ class TestFTSearchPartitionConsistencyControls(ClusterTestUtils, ValkeySearchClu
         self.control_set("ForceTimeout", "yes")
         self.control_set("TimeoutPollFrequency", "0")
 
-        # Disable partial results, get empty result due to timeout
+        # Disable partial results, get empty result due to timeout. The first
+        # shard to time out cancels the rest of the fan-out (#1284), so the
+        # other shards may stop without a forced timeout of their own.
+        fanout_cancels = self._check_info_sum("search_fanout-cancels")
         hnsw_result = search(client, "hnsw", True, None, enable_partial_results=False)
         assert hnsw_result == []
-        self.check_info_sum("search_test-counter-ForceCancels", 3)
+        self.check_info_sum("search_fanout-cancels", fanout_cancels + 1)
+        waiters.wait_for_true(
+            lambda: self._check_info_sum("search_test-counter-ForceCancels") >= 1)
 
-        # Enable and get partial results
+        # Enable and get partial results. Nothing cancels the fan-out, so every
+        # shard records its own forced timeout.
+        force_cancels = self._check_info_sum("search_test-counter-ForceCancels")
         hnsw_result = search(client, "hnsw", False, None, enable_partial_results=True)
-        self.check_info_sum("search_test-counter-ForceCancels", 6)
+        waiters.wait_for_true(
+            lambda: self._check_info_sum("search_test-counter-ForceCancels")
+            >= force_cancels + 3)
         assert hnsw_result[0] != nominal_hnsw_result[0]
 
         self.control_set("ForceTimeout", "no")

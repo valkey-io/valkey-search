@@ -590,23 +590,33 @@ class TestCancelCME(ValkeySearchClusterTestCaseDebugMode):
           sum_value
         )
 
-    def check_cancel_sum(self, sum_value: int):
-        """Total cancellations across the cluster, regardless of how each shard
-        observed the cancellation.
+    def _cancel_sum(self) -> int:
+        return self._check_info_sum(
+            "search_test-counter-ForceCancels"
+        ) + self._check_info_sum("search_test-counter-gRPCCancels")
 
-        With cooperative fan-out cancellation (issue #1284), when the
-        coordinator aborts an unrecoverable ALLSHARDS query it calls
-        TryCancel() on the outstanding remote RPCs. A remote shard that sees
-        its gRPC context cancelled before its own ForceTimeout poll fires
-        records the cancellation as gRPCCancels rather than ForceCancels.
-        Which counter a shard increments is therefore a race, but exactly one
-        of them moves per shard, so their sum is deterministic.
+    def fanout_counts(self) -> tuple[int, int]:
+        """Snapshot for check_failed_fanout, taken before the query."""
+        return self._cancel_sum(), self._check_info_sum("search_fanout-cancels")
+
+    def check_failed_fanout(self, before: tuple[int, int]):
+        """Check one ALLSHARDS query that failed on a forced timeout.
+
+        With fan-out cancellation (issue #1284), the first shard to fail makes
+        the coordinator cancel the rest of the fan-out. The other shards then
+        record ForceCancels, gRPCCancels, or nothing: the coordinator's local
+        search shares the fan-out token and stops without counting, and a
+        remote can stop before its first poll. Per-shard counts are therefore
+        a race. Only these are deterministic: the coordinator counts exactly
+        one fan-out cancel, and at least one shard records a cancellation.
         """
-        waiters.wait_for_equal(
-            lambda: self._check_info_sum("search_test-counter-ForceCancels")
-            + self._check_info_sum("search_test-counter-gRPCCancels"),
-            sum_value,
-        )
+        cancels, fanout_cancels = before
+        self.check_info_sum("search_fanout-cancels", fanout_cancels + 1)
+        waiters.wait_for_true(lambda: self._cancel_sum() > cancels)
+
+    def check_info_increased(self, name: str, before: int, delta: int = 1):
+        """Wait until the cluster-wide sum of `name` is at least before+delta."""
+        waiters.wait_for_true(lambda: self._check_info_sum(name) >= before + delta)
     
     def sum_docs(self, index: Index) -> int:
         return sum([index.info(self.client_for_primary(i)).num_docs for i in range(len(self.replication_groups))])
@@ -645,27 +655,37 @@ class TestCancelCME(ValkeySearchClusterTestCaseDebugMode):
         self.control_set("ForceTimeout", "yes")
         self.control_set("TimeoutPollFrequency", "1")
 
+        # Each query below fails with partial results disabled, so the fan-out
+        # cancels the shards that have not failed yet. Those shards may stop
+        # before the pre-filtering decision, so only the shard that timed out
+        # is sure to count a pre-filtering request. See check_failed_fanout.
+
         #
         # Normal HNSW path
         #
+        before = self.fanout_counts()
         hnsw_result = search(client, "hnsw", True, None, enable_partial_results=False)
-        self.check_cancel_sum(3)
+        self.check_failed_fanout(before)
 
         #
         # Pre-filtering FLAT path (flat always uses pre-filtering)
         #
+        before = self.fanout_counts()
+        prefiltering = self._check_info_sum("search_prefiltering_requests_count")
         flat_result = search(client, "flat", True, 10, enable_partial_results=False)
-        self.check_cancel_sum(6)
-        self.check_info_sum("search_prefiltering_requests_count", 3)
+        self.check_failed_fanout(before)
+        self.check_info_increased("search_prefiltering_requests_count", prefiltering)
 
         #
         # Pre-filtering HNSW path
         # Set a high pre-filtering threshold so all shards use pre-filtering
         #
         self.config_set("search.prefiltering-threshold-ratio", "0.5")
+        before = self.fanout_counts()
+        prefiltering = self._check_info_sum("search_prefiltering_requests_count")
         hnsw_result = search(client, "hnsw", True, 10, enable_partial_results=False)
-        self.check_info_sum("search_prefiltering_requests_count", 6)
-        self.check_cancel_sum(9)
+        self.check_failed_fanout(before)
+        self.check_info_increased("search_prefiltering_requests_count", prefiltering)
 
     @wait_for_background_tasks()
     def test_vector_range_timeoutCME(self):
@@ -692,16 +712,26 @@ class TestCancelCME(ValkeySearchClusterTestCaseDebugMode):
         self.control_set("ForceTimeout", "yes")
         self.control_set("TimeoutPollFrequency", "1")
 
+        # With partial results disabled, the fan-out cancels the other shards
+        # once one times out, so per-shard counts are a race.
+        before = self.fanout_counts()
         range_search(client, "hnsw", True, enable_partial_results=False)
-        self.check_info_sum("search_test-counter-ForceCancels", 3)
+        self.check_failed_fanout(before)
+        before = self.fanout_counts()
         range_search(client, "flat", True, enable_partial_results=False)
-        self.check_info_sum("search_test-counter-ForceCancels", 6)
+        self.check_failed_fanout(before)
 
+        # With partial results enabled nothing is cancelled for the shards, so
+        # every shard records its own forced timeout.
+        force_cancels = self._check_info_sum("search_test-counter-ForceCancels")
         hnsw_result = range_search(client, "hnsw", False, enable_partial_results=True)
-        self.check_info_sum("search_test-counter-ForceCancels", 9)
+        self.check_info_increased(
+            "search_test-counter-ForceCancels", force_cancels, 3)
         assert hnsw_result[0] < 41
+        force_cancels = self._check_info_sum("search_test-counter-ForceCancels")
         flat_result = range_search(client, "flat", False, enable_partial_results=True)
-        self.check_info_sum("search_test-counter-ForceCancels", 12)
+        self.check_info_increased(
+            "search_test-counter-ForceCancels", force_cancels, 3)
         assert flat_result[0] < 41
         self.control_set("ForceTimeout", "no")
 

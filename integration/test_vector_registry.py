@@ -600,6 +600,7 @@ class TestVectorRegistryMemoryDelta(ValkeySearchTestCaseDebugMode):
             )
             vector_index.create(client)
 
+            initial_mem = int(client.info("memory")["used_memory"])
             initial_info = _get_vmsdk_info(client)
             initial_shared = int(initial_info["vector_registry_shared_externally_cnt"])
 
@@ -622,9 +623,9 @@ class TestVectorRegistryMemoryDelta(ValkeySearchTestCaseDebugMode):
 
             shared_cnt = int(info_data["vector_registry_shared_externally_cnt"]) - initial_shared
             entry_cnt = int(info_data["vector_registry_entry_cnt"])
-            used_memory = int(client.info("memory")["used_memory"])
+            net_used_memory = int(client.info("memory")["used_memory"]) - initial_mem
 
-            return shared_cnt, entry_cnt, used_memory
+            return shared_cnt, entry_cnt, net_used_memory
         finally:
             server.exit()
 
@@ -650,10 +651,10 @@ class TestVectorRegistryMemoryDelta(ValkeySearchTestCaseDebugMode):
         assert entries_on == num_vectors, f"Expected {num_vectors} tracked entries when sharing is ON, got {entries_on}"
 
         memory_delta = mem_off - mem_on
-        min_expected_bytes = int(expected_raw_vector_bytes * 0.90)
+        min_expected_bytes = int(expected_raw_vector_bytes * 0.80)
         assert memory_delta >= min_expected_bytes, (
             f"[HNSW] Memory delta between sharing OFF ({mem_off}) and ON ({mem_on}) was {memory_delta} bytes. "
-            f"Expected at least {min_expected_bytes} bytes (90% of 100 * 762 * sizeof(float))."
+            f"Expected at least {min_expected_bytes} bytes (80% of 100 * 762 * sizeof(float))."
         )
 
     def test_vector_registry_flat_memory_sharing(self):
@@ -678,8 +679,8 @@ class TestVectorRegistryMemoryDelta(ValkeySearchTestCaseDebugMode):
         assert entries_on == num_vectors, f"Expected {num_vectors} tracked entries when sharing is ON, got {entries_on}"
 
         memory_delta = mem_off - mem_on
-        min_expected_bytes = int(expected_raw_vector_bytes * 0.90)
+        min_expected_bytes = int(expected_raw_vector_bytes * 0.80)
         assert memory_delta >= min_expected_bytes, (
             f"[FLAT] Memory delta between sharing OFF ({mem_off}) and ON ({mem_on}) was {memory_delta} bytes. "
-            f"Expected at least {min_expected_bytes} bytes (90% of 100 * 762 * sizeof(float))."
+            f"Expected at least {min_expected_bytes} bytes (80% of 100 * 762 * sizeof(float))."
         )

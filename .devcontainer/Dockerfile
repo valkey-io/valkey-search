@@ -41,6 +41,7 @@ RUN apt update && \
         clangd \
         jq \
         ccache \
+        lcov \
         memtier-benchmark && \
     # Install precompiled dependencies for fast builds
     ARCH=$(dpkg --print-architecture) && \

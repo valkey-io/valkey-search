@@ -112,6 +112,9 @@ class TestAppMetrics(ValkeySearchTestCaseDebugMode):
             # byte lengths while search.emulate-release is below 1.3.0.
             "compatibility-min_stem_size_code_points",
             "compatibility-fuzzy_code_point_distance",
+            # Counts non-UTF-8 TAG values indexed while search.emulate-release
+            # is below 1.3.0.
+            "compatibility-tag_rejects_non_utf8",
             "coordinator_bytes_in",
             "coordinator_bytes_out",
             "coordinator_client_get_global_metadata_failure_count",
@@ -156,6 +159,7 @@ class TestAppMetrics(ValkeySearchTestCaseDebugMode):
             "result_record_dropped_count",
             "successful_requests_count",
             "vector_requests_count",
+            "vector_range_results_fetched_limited_count",
             "rdb_load_failure_cnt",
             "rdb_load_success_cnt",
             "rdb_save_failure_cnt",

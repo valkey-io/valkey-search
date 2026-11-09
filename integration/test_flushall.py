@@ -23,6 +23,29 @@ class TestFlushAllCMD(ValkeySearchTestCaseBase):
 
         assert client.execute_command("FT._LIST") == []
 
+    def test_flushall_multidb_CMD(self):
+        """
+            FLUSHALL must drop the indexes of every DB, not just DB 0
+        """
+        num_dbs = 3
+        clients = []
+        for db_num in range(num_dbs):
+            client = self.server.get_new_client()
+            client.select(db_num)
+            clients.append(client)
+
+        index = Index("hnsw", [Vector("v", 3, type="HNSW", m=2, efc=1), Numeric("n")])
+        for client in clients:
+            index.create(client)
+            index.load_data(client, 100)
+            waiters.wait_for_equal(lambda: index.info(client).num_docs, 100)
+
+        clients[0].execute_command("FLUSHALL SYNC")
+
+        for db_num, client in enumerate(clients):
+            assert client.execute_command("DBSIZE") == 0
+            assert client.execute_command("FT._LIST") == [], f"index left behind in DB {db_num}"
+
 class TestFlushAllCME(ValkeySearchClusterTestCase):
 
     def sum_docs(self, index: Index) -> int:
@@ -47,3 +70,40 @@ class TestFlushAllCME(ValkeySearchClusterTestCase):
 
         assert client.execute_command("FT._LIST") == [hnsw_index.name.encode()]
         waiters.wait_for_equal(lambda: self.sum_docs(hnsw_index), 0)
+
+    def test_flushall_multidb_CME(self):
+        """
+            FLUSHALL must clear the indexes of every DB in cluster mode too
+        """
+        num_dbs = 3
+        primary = self.get_primary(2)
+        clients = {}
+        for db_num in range(num_dbs):
+            client = primary.connect()
+            client.select(db_num)
+            clients[db_num] = client
+
+        index = Index("hnsw", [Vector("v", 3, type="HNSW", m=2, efc=1), Numeric("n")],
+                      prefixes=["p:"])
+        NUM_VECTORS = 100
+
+        # Keys carry the same hash tag as TestMultiDBCME so they all land on the
+        # primary these clients are connected to. A prefix cannot hold the tag.
+        def load_tagged_keys(client):
+            for i in range(NUM_VECTORS):
+                client.hset(f"p:{{0}}:{i:08d}", mapping=index.make_data(i))
+
+        for db_num in range(num_dbs):
+            index.create(clients[db_num])
+            load_tagged_keys(clients[db_num])
+            waiters.wait_for_equal(
+                lambda c=clients[db_num]: index.info(c).num_docs, NUM_VECTORS)
+
+        clients[0].execute_command("flushall sync")
+
+        for db_num in range(num_dbs):
+            # Coordinated mode keeps the definition and recreates it empty.
+            assert clients[db_num].execute_command("FT._LIST") == [index.name.encode()], \
+                f"index missing in DB {db_num}"
+            waiters.wait_for_equal(
+                lambda c=clients[db_num]: index.info(c).num_docs, 0)

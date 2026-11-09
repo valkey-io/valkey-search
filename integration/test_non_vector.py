@@ -1071,6 +1071,46 @@ class TestNonVector(ValkeySearchTestCaseBase):
             )[0] == 0
         )
 
+    def test_json_match_all_sortby(self):
+        """A bare `*` on a JSON index has no filter, so the fetch is returned
+        without revalidation. The sortby field must still be found under its
+        alias, not its `$.price` path, or the reply is left unsorted."""
+        client: Valkey = self.server.get_new_client()
+        assert client.execute_command(
+            "FT.CREATE", "idx", "ON", "JSON", "PREFIX", "1", "doc:",
+            "SCHEMA", "$.price", "AS", "price", "NUMERIC"
+        ) == b"OK"
+        for i, price in enumerate([30, 10, 40, 20]):
+            assert client.execute_command(
+                "JSON.SET", f"doc:{i}", "$", json.dumps({"price": price})
+            ) == b"OK"
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+
+        result = client.execute_command(
+            "FT.SEARCH", "idx", "*", "SORTBY", "price", "ASC", "WITHSORTKEYS"
+        )
+        assert result[0] == 4
+        # Each row is key, sort key, fields.
+        rows = [result[i:i + 3] for i in range(1, len(result), 3)]
+        assert [row[0] for row in rows] == [b"doc:1", b"doc:3", b"doc:0", b"doc:2"]
+        assert [row[1] for row in rows] == [b"#10", b"#20", b"#30", b"#40"]
+
+    def test_json_root_field_sortby(self):
+        """A field defined on the root path `$` is both the whole record and
+        the sortby field, so the fetched root is read twice."""
+        client: Valkey = self.server.get_new_client()
+        assert client.execute_command(
+            "FT.CREATE", "idx", "ON", "JSON", "PREFIX", "1", "k:",
+            "SCHEMA", "$", "AS", "doc", "TAG"
+        ) == b"OK"
+        assert client.execute_command("JSON.SET", "k:1", "$", '"red"') == b"OK"
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+
+        result = client.execute_command("FT.SEARCH", "idx", "*", "SORTBY", "doc")
+        assert result[0] == 1
+        assert result[1] == b"k:1"
+        assert b"$" in result[2]
+
     def test_bulk_limit_background_changes(self):
         """
             Test bulk operations with various LIMIT and OFFSET combinations to validate background limit changes.

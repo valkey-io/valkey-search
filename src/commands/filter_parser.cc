@@ -9,6 +9,7 @@
 
 #include <cctype>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <memory>
 #include <string>
@@ -22,9 +23,11 @@
 #include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
+#include "src/commands/ft_create_parser.h"
 #include "src/index_schema.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
+#include "src/indexes/scoring/scorer.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
 #include "src/indexes/text/language.h"
@@ -33,6 +36,7 @@
 #include "src/utils/scanner.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/status/status_macros.h"
+#include "vmsdk/src/utils.h"
 
 namespace valkey_search {
 
@@ -387,7 +391,8 @@ FilterParser::ParseVectorRangeQueryAttributes() {
         return absl::InvalidArgumentError(
             "$epsilon must be a valid non-negative number");
       }
-      if (epsilon_val < 0) {
+      // Zeros are rejected by the HNSW check below.
+      if (indexes::scoring::IsNegativeNonZero(epsilon_val)) {
         return absl::InvalidArgumentError(
             "$epsilon must be a valid non-negative number");
       }
@@ -411,8 +416,8 @@ absl::StatusOr<std::unique_ptr<query::VectorRangePredicate>>
 FilterParser::ParseVectorRangePredicate(const std::string& attribute_alias) {
   // At entry: "@<attribute_alias>:[VECTOR_RANGE" has already been consumed by
   // ParseExpression. We now parse the remainder of the bracket contents:
-  //   <radius> $<blob_param> [AS <name>] ]
-  // (EF_RUNTIME is parsed and ignored), followed by optional suffix
+  //   <radius> $<blob_param> [EF_RUNTIME <ef>] [AS <name>] ]
+  // followed by optional suffix
   // query attributes: ]=>{$yield_distance_as: ...}
   auto index = index_schema_.GetIndex(attribute_alias);
   if (!index.ok()) {
@@ -464,15 +469,27 @@ FilterParser::ParseVectorRangePredicate(const std::string& attribute_alias) {
   // Parse optional parameters: EF_RUNTIME <value>, AS <name>
   std::optional<std::string> score_as;
   std::optional<double> epsilon;
+  std::optional<size_t> ef_runtime;
+  std::string ef_runtime_param_name;
   SkipWhitespace();
   while (!IsEnd() && Peek() != ']') {
     // Try to match known optional parameter keywords
     if (MatchInsensitive("EF_RUNTIME")) {
-      // Parsed and ignored: HNSW SearchRange sets ef from
-      // search.max-nonvector-search-results-fetched.
+      // Overrides the HNSW field's EF_RUNTIME for the initial range beam;
+      // FLAT ignores it. search.max-nonvector-search-results-fetched caps the
+      // results retained by either algorithm.
       VMSDK_ASSIGN_OR_RETURN(auto ef_value,
                              ParseToken("]", "EF_RUNTIME argument is missing"));
-      (void)ef_value;
+      if (!ef_value.empty() && ef_value[0] == '$') {
+        // Resolved from PARAMS, and checked, after parsing. An empty name
+        // would read as "no override", so reject it like the other $params.
+        if (ef_value.size() == 1) {
+          return absl::InvalidArgumentError("EF_RUNTIME argument is missing");
+        }
+        ef_runtime_param_name = ef_value.substr(1);
+      } else {
+        VMSDK_ASSIGN_OR_RETURN(ef_runtime, ParseVectorRangeEfRuntime(ef_value));
+      }
     } else if (MatchInsensitive("AS")) {
       VMSDK_ASSIGN_OR_RETURN(auto as_name,
                              ParseToken("]", "AS argument is missing"));
@@ -507,14 +524,12 @@ FilterParser::ParseVectorRangePredicate(const std::string& attribute_alias) {
       }
       if (attrs.epsilon.has_value()) {
         // For compatibility, $epsilon is an HNSW-only knob and must be strictly
-        // positive: reject it on FLAT indexes and reject a value of 0. (The
-        // value is not yet forwarded to the range traversal; see
-        // SearchVectorRangeQuery.)
+        // positive: reject it on FLAT indexes and reject a value of 0.
         if (index.value()->GetIndexerType() != indexes::IndexerType::kHNSW) {
           return absl::InvalidArgumentError(
               "Invalid option (Error parsing vector similarity parameters)");
         }
-        if (attrs.epsilon.value() <= 0) {
+        if (indexes::scoring::IsZero(attrs.epsilon.value())) {
           return absl::InvalidArgumentError(
               "Invalid option (Error parsing vector similarity parameters)");
         }
@@ -533,7 +548,27 @@ FilterParser::ParseVectorRangePredicate(const std::string& attribute_alias) {
   if (!radius_param_name.empty()) {
     predicate->SetRadiusParamName(std::move(radius_param_name));
   }
+  predicate->SetEfRuntime(ef_runtime);
+  if (!ef_runtime_param_name.empty()) {
+    predicate->SetEfRuntimeParamName(std::move(ef_runtime_param_name));
+  }
   return predicate;
+}
+
+absl::StatusOr<size_t> ParseVectorRangeEfRuntime(absl::string_view value) {
+  // Bounded with KNN's EF_RUNTIME check and error text. SimpleAtoi, unlike
+  // vmsdk::To, rejects trailing characters.
+  int64_t ef = 0;
+  if (!absl::SimpleAtoi(value, &ef)) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("`", value, "` is not a valid numeric value"));
+  }
+  const auto max_ef_runtime = options::GetMaxEfRuntime().GetValue();
+  VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(ef, 1, max_ef_runtime))
+      << "`EF_RUNTIME` must be a positive integer greater than 0 and "
+         "cannot exceed "
+      << max_ef_runtime << ".";
+  return static_cast<size_t>(ef);
 }
 
 absl::StatusOr<absl::string_view> FilterParser::ParseTagString() {
@@ -1256,7 +1291,7 @@ absl::Status FilterParser::MaybeConsumeQMABlock(query::Predicate& predicate) {
 }
 
 // Parses a QMA block. Expects the parser position to be after `=> {`.
-// Parses `$weight:` followed by a positive float, expects closing `}`.
+// Parses `$weight:` followed by a non-negative float, expects closing `}`.
 // Returns the weight value on success.
 absl::StatusOr<double> FilterParser::ParseQMABlock() {
   // Parse attribute name starting with $
@@ -1289,7 +1324,7 @@ absl::StatusOr<double> FilterParser::ParseQMABlock() {
     return absl::InvalidArgumentError("Missing value for QMA attribute name");
   }
   // Parse the number manually. Non-numeric input fails SimpleAtod below and
-  // non-positive values (including a leading '-') are caught by value <= 0.
+  // negative values (a leading '-') are caught by value < 0.
   std::string number_str;
   if (!IsEnd() && Peek() == '-') {
     number_str += expression_[pos_++];
@@ -1300,10 +1335,10 @@ absl::StatusOr<double> FilterParser::ParseQMABlock() {
   double value;
   if (!absl::SimpleAtod(number_str, &value)) {
     return absl::InvalidArgumentError(
-        "Invalid weight value: expected a positive number");
+        "Invalid weight value: expected a non-negative number");
   }
-  if (value <= 0.0) {
-    return absl::InvalidArgumentError("Weight must be a positive number");
+  if (value < 0.0) {
+    return absl::InvalidArgumentError("Weight must be a non-negative number");
   }
   // SetWeight narrows to float, so a value above FLT_MAX would become inf and
   // then produce a NaN score wherever it meets a zero document score. Reject it

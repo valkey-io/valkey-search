@@ -9,15 +9,26 @@
 
 #include <cstddef>
 #include <memory>
+#include <string>
 #include <thread>
 #include <utility>
 #include <vector>
 
 #include "absl/status/status.h"
+#include "absl/strings/string_view.h"
+#include "gmock/gmock.h"
+#include "grpcpp/support/status.h"
 #include "gtest/gtest.h"
+#include "src/coordinator/coordinator.pb.h"
 #include "src/indexes/vector_base.h"
+#include "src/query/fanout.h"
 #include "src/query/search.h"
 #include "src/utils/string_interning.h"
+#include "testing/common.h"
+#include "testing/coordinator/common.h"
+#include "vmsdk/src/cluster_map.h"
+#include "vmsdk/src/testing_infra/utils.h"
+#include "vmsdk/src/thread_pool.h"
 
 namespace valkey_search::query {
 namespace {
@@ -249,6 +260,46 @@ TEST(MultiSearchTrackerTest, ConcurrentCompletions) {
     t.join();
   }
   EXPECT_EQ(finalize_count.load(), 1);
+}
+
+// Each remote shard's gRPC target must be a valid host:port, which for an IPv6
+// node means a bracketed host.
+class MultiSearchFanoutTest : public ValkeySearchTest {};
+
+TEST_F(MultiSearchFanoutTest, RemoteTargetsBracketIpv6) {
+  auto params = MakeParams(1);
+  bool finalize_called = false;
+  params->on_all_arms_complete = [&](std::unique_ptr<MultiSearchParameters>) {
+    finalize_called = true;
+  };
+
+  std::vector<vmsdk::cluster_map::NodeInfo> targets(2);
+  targets[0].socket_address = {.primary_endpoint = "10.0.0.1", .port = 6379};
+  targets[1].socket_address = {.primary_endpoint = "2001:db8::5", .port = 6379};
+
+  auto mock_client = std::make_shared<coordinator::MockClient>();
+  EXPECT_CALL(*mock_client, MultiSearchIndexPartition(testing::_, testing::_))
+      .WillRepeatedly(
+          [](std::unique_ptr<coordinator::MultiSearchIndexPartitionRequest> req,
+             coordinator::MultiSearchIndexPartitionCallback done) {
+            coordinator::MultiSearchIndexPartitionResponse response;
+            response.add_sub_responses();
+            done(grpc::Status::OK, response);
+          });
+  coordinator::MockClientPool client_pool;
+  std::vector<std::string> addresses;
+  EXPECT_CALL(client_pool, GetClient(testing::_))
+      .WillRepeatedly([&](absl::string_view address) {
+        addresses.emplace_back(address);
+        return mock_client;
+      });
+
+  vmsdk::ThreadPool thread_pool("multi-search-fanout-test", 1);
+  VMSDK_EXPECT_OK(fanout::PerformMultiSearchFanoutAsync(
+      nullptr, targets, &client_pool, std::move(params), &thread_pool));
+  EXPECT_TRUE(finalize_called);
+  EXPECT_THAT(addresses, testing::UnorderedElementsAre("10.0.0.1:26673",
+                                                       "[2001:db8::5]:26673"));
 }
 
 }  // namespace

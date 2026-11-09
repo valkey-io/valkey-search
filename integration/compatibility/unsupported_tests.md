@@ -15,7 +15,9 @@ Two markers are used, and they mean different things:
   been closed, and both the marker and the entry here should be removed.
 
 Sections 1-4 and 6 cover the text-search suite (`generate_text.py`); section 5
-covers the FT.HYBRID suite (`generate_hybrid.py`).
+covers the FT.HYBRID suite (`generate_hybrid.py`); section 7 covers the scoring
+suite (`generate_scoring.py`); section 8 covers the FT.AGGREGATE suite
+(`generate.py`).
 
 ## 1. Exact Phrase Query
 
@@ -124,51 +126,15 @@ subsets, `@__key`, `AS` renames of an existing field, a rename onto another
 field's name, two renames at once, and renames referenced by a following
 `SORTBY`, `APPLY` or `GROUPBY`.
 
-### 5.2. The suite sweeps HASH keys only — waiting on PR 1381
+### 5.2. The suite sweeps HASH keys only — resolved
 
-**Status:** open, fix identified and measured, not yet merged.
+**Status:** closed. Kept as a heading so the numbering of the sections below
+does not shift.
 
-`generate_hybrid.py` runs against HASH indexes and does not sweep JSON. Naming
-an indexed field in a pipeline stage — `GROUPBY 1 @color`, `SORTBY 2 @price
-ASC` — does not resolve under `LOAD *` on a JSON index, because the document
-arrives as a single `$` column. That is an FT.AGGREGATE limitation, not an
-FT.HYBRID one: the equivalent FT.AGGREGATE query has the same problem, and
-FT.HYBRID has no key-type-specific code of its own.
-
-The fix is PR 1381, "Ask for content with `all_content`, not by leaving the
-list empty". Today an empty `return_attributes` means two different things,
-"fetch nothing" and "fetch the whole record", so a stage that names a field
-cannot ask for it alongside `LOAD *`. 1381 splits them with an explicit flag.
-
-**FT.HYBRID does not get that fix for free.** `FusedResolver` in
-`src/commands/ft_hybrid.cc` copies `return_attributes` and `no_content` but
-not `all_content`, and `WantsNoDatabaseContent` still tests `loadall_`.
-Landing 1381 without that three-line follow-up silently *empties* `LOAD *`
-replies rather than fixing them — a JSON `LOAD *` returns no `$` column at
-all, and a HASH `LOAD * SORTBY 2 @price ASC` returns only `price`. There is no
-compile error to catch it; the flag just stays false.
-
-Measured on a merged build (hybrid + 1381 + that follow-up) against a redis:8
-reference, over the 15 cases in `test_loadall_feeding_a_stage`:
-
-| build | hash | json |
-|---|---|---|
-| `hybrid` alone | 10 pass / 1 fail | 4 pass / 7 fail |
-| merged + follow-up | 11 pass / 0 fail | 11 pass / 0 fail |
-
-(Four of the 15 record a reference error rather than an answer, so they pass
-unconditionally: Redis auto-loads for SORTBY and GROUPBY but not for APPLY or
-FILTER. They are kept to pin that, as 1381 does for FT.AGGREGATE.)
-
-`test_loadall_feeding_a_stage` carries those cases now, marked `skip`. When
-1381 and the follow-up land: drop the skip, delete this section, and
-parametrize `TestHybridCompatibility` over both key types — after gating
-`test_load_unknown_field`'s `LOAD 1 $.price` case to HASH, because that path
-resolves on a JSON index and would otherwise XPASS for the wrong reason.
-
-Note 1381 does **not** address 5.1: it never touches the schema lookup that
-produces "Index field `x` does not exist", and `LOAD 1 @nosuchfield` is
-rejected identically before and after the merge.
+`LOAD *` now asks for the whole record through `all_content`, and a field a
+pipeline stage names is fetched alongside it, so `generate_hybrid.py` sweeps
+both HASH and JSON. `test_load_unknown_field`'s `LOAD 1 $.price` case runs on
+HASH only, because that path resolves on a JSON index.
 
 ### 5.3. An incomplete KNN block — valkey accepts, Redis rejects
 
@@ -691,3 +657,42 @@ each is described, with the measured Redis behavior, in `known_differences.md`
   punctuation (§4.2).
 - `test_multilang_turkish_uppercase` — Redis applies no Turkish casing, so
   `IŞIK` does not match `ışık` (§4.4).
+
+## 7. Scoring
+
+### 7.1. A `$weight` over a stemmed term — excluded
+
+On the `default` index variant, which stems its text fields, every query
+containing `$weight` is marked `excluded`. valkey-search applies a term's
+weight to all of its stem leaves, Redis to the exact word only
+(`known_differences.md` §1.9). This covers the `weight` shape and any
+`text_numeric_tag`, `text_vector` or `text_numeric_tag_vector` query whose text
+part was drawn from it. Weighted queries on the `NOSTEM` variants (`nostem`,
+`docscore`, `stopwords`) are compared normally.
+
+### 7.2. A `$weight` over an OR group in cluster mode — excluded
+
+In `scoring-cluster-answers.pickle.gz`, every query that puts a `$weight` on an
+OR group is marked `excluded`. On a shard where only one branch of the OR
+matches any document, Redis ignores the group's weight and valkey-search
+applies it (`known_differences.md` §1.10). These queries are still compared in
+the standalone answers.
+
+## 8. FT.AGGREGATE
+
+### 8.1. `LOAD * SORTBY` on a NUMERIC HASH field — excluded
+
+In `test_aggregate_loadall_stage` and `test_aggregate_loadall_two_stages`, the
+`sortby 2 @n1 asc` cases are marked `excluded` on HASH. `n1` is declared
+NUMERIC, but under `LOAD *` on a HASH index Redis sorts it as a string:
+
+```
+FT.AGGREGATE hash_idx1 @n1:[-inf inf] LOAD * SORTBY 2 @n1 ASC
+Redis:  n1 = -1, -2, -3, -4, -5, 0, 1, 2, 3, 4
+Valkey: n1 = -5, -4, -3, -2, -1, 0, 1, 2, 3, 4
+```
+
+valkey-search types the field from the schema and sorts it as a number. That
+is a deliberate difference, not a gap, so the case is not compared. JSON is
+compared normally: there the value arrives as a JSON number and both engines
+sort it numerically.

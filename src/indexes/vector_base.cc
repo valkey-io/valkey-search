@@ -10,10 +10,12 @@
 #include <sys/types.h>
 
 #include <algorithm>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -36,8 +38,11 @@
 #include "src/indexes/fp16.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
+#include "src/indexes/scoring/scorer.h"
 #include "src/indexes/tag.h"
+#include "src/indexes/text/text_index.h"
 #include "src/query/predicate.h"
+#include "src/query/query_context.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
@@ -142,19 +147,44 @@ std::vector<char> NormalizeVector(absl::string_view record,
   }
 }
 
+PrefilterEvaluator::PrefilterEvaluator(query::QueryContext &query_ctx,
+                                       QueryOperations query_operations,
+                                       const IndexSchema &index_schema,
+                                       bool source_resolves_text)
+    : query::Evaluator(query_operations),
+      query_ctx_(query_ctx),
+      index_schema_(index_schema),
+      source_resolves_text_(source_resolves_text) {}
+
 bool PrefilterEvaluator::Evaluate(const query::Predicate &predicate,
                                   const InternedStringPtr &key) {
+  return EvaluateFull(predicate, key).matches;
+}
+
+query::EvaluationResult PrefilterEvaluator::EvaluateFull(
+    const query::Predicate &predicate, const InternedStringPtr &key) {
   key_ = &key;
+  // The evaluator outlives the key loop, so the lazily fetched per-key tree
+  // must be dropped here or the next key would evaluate against this one's.
+  per_key_index_fetched_ = false;
   auto res = predicate.Evaluate(*this);
   key_ = nullptr;
-  return res.matches;
+  return res;
+}
+
+const text::TextIndex *PrefilterEvaluator::PerKeyTextIndex() {
+  if (!per_key_index_fetched_) {
+    per_key_index_fetched_ = true;
+    per_key_index_ = query_ctx_.PerKeyTextIndex(*key_);
+  }
+  return per_key_index_;
 }
 
 query::EvaluationResult PrefilterEvaluator::EvaluateTags(
     const query::TagPredicate &predicate) {
-  bool case_sensitive = true;
-  auto tags = predicate.GetIndex()->GetValue(*key_, case_sensitive);
-  return predicate.Evaluate(tags ? &*tags : nullptr, case_sensitive);
+  CHECK(key_);
+  return predicate.Evaluate(
+      std::get<query::TagLeaf>(query_ctx_.GetOrResolve(&predicate)), *key_);
 }
 
 query::EvaluationResult PrefilterEvaluator::EvaluateNumeric(
@@ -167,18 +197,9 @@ query::EvaluationResult PrefilterEvaluator::EvaluateNumeric(
 query::EvaluationResult PrefilterEvaluator::EvaluateText(
     const query::TextPredicate &predicate, bool require_positions) {
   CHECK(key_);
-  if (!text_index_) {
-    return query::EvaluationResult(false);
-  }
-  return predicate.Evaluate(*text_index_, *key_, require_positions);
-}
-
-query::EvaluationResult PrefilterEvaluator::EvaluateFull(
-    const query::Predicate &predicate, const InternedStringPtr &key) {
-  key_ = &key;
-  auto res = predicate.Evaluate(*this);
-  key_ = nullptr;
-  return res;
+  return query::EvaluateTextLeaf(query_ctx_, predicate, *key_,
+                                 require_positions,
+                                 [this] { return PerKeyTextIndex(); });
 }
 
 query::EvaluationResult PrefilterEvaluator::EvaluateVectorRange(
@@ -188,13 +209,7 @@ query::EvaluationResult PrefilterEvaluator::EvaluateVectorRange(
   if (query_vector.empty()) {
     return query::EvaluationResult(false);
   }
-  DCHECK(index_schema_)
-      << "PrefilterEvaluator requires a non-null index_schema "
-         "to evaluate VectorRange predicates";
-  if (!index_schema_) {
-    return query::EvaluationResult(false);
-  }
-  auto index = index_schema_->GetIndex(predicate.GetAlias());
+  auto index = index_schema_.GetIndex(predicate.GetAlias());
   if (!index.ok()) {
     return query::EvaluationResult(false);
   }
@@ -571,6 +586,12 @@ absl::StatusOr<float> VectorBase::RecomputeDistance(
   return ComputeDistance(query, vector_record, query_magnitude);
 }
 
+absl::StatusOr<float> VectorBase::RecomputeRangeDistance(
+    absl::string_view record, absl::string_view query) const {
+  VMSDK_ASSIGN_OR_RETURN(float distance, RecomputeDistance(record, query));
+  return ClampCosineDistance(distance);
+}
+
 bool VectorBase::AddPrefilteredKey(
     absl::string_view query, float query_magnitude,
     const InternedStringPtr &key, uint64_t count,
@@ -626,15 +647,46 @@ absl::Status VectorBase::ForEachUnTrackedKey(
   return absl::OkStatus();
 }
 
-std::vector<Neighbor> VectorBase::SearchRangeExhaustive(
+absl::StatusOr<float> VectorBase::ValidateRangeSearchInputs(
+    absl::string_view query, const RangeQuery &range) const {
+  if (!IsValidSizeVector(query)) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Vector blob size (", query.size(),
+        ") does not match index dimensions (", GetVectorDataSize(), ")"));
+  }
+  const float radius = range.radius;
+  if (scoring::IsNaN(radius)) {
+    return absl::InvalidArgumentError(
+        "VECTOR_RANGE radius is not a valid number");
+  }
+  if (scoring::IsNegativeNonZero(radius)) {
+    return absl::InvalidArgumentError(
+        "VECTOR_RANGE radius must be non-negative");
+  }
+  // The HNSW shell arithmetic requires a finite, non-negative epsilon; the
+  // query path passes VectorRangePredicate::GetSearchEpsilon(), which is.
+  if (scoring::IsNaN(range.epsilon) || scoring::IsInf(range.epsilon) ||
+      scoring::IsNegativeNonZero(range.epsilon)) {
+    return absl::InvalidArgumentError(
+        "VECTOR_RANGE epsilon must be a finite non-negative number");
+  }
+  if (scoring::IsInf(radius)) {
+    return std::numeric_limits<float>::max();
+  }
+  // Normalize -0 to +0 so shell arithmetic and diagnostics have one zero.
+  return scoring::IsZero(radius) ? 0.0f : radius;
+}
+
+RangeResult VectorBase::SearchRangeExhaustive(
     absl::string_view query, float radius, cancel::Token &cancellation_token,
-    hnswlib::BaseFilterFunctor *filter) const {
+    size_t max_results, hnswlib::BaseFilterFunctor *filter) const {
   auto nq = NormalizeQueryIfNeeded(query);
   const float query_magnitude =
       normalize_ ? CalcReciprocalMagnitude(nq.view, GetVectorDataType())
                  : kDefaultMagnitude;
-  std::vector<Neighbor> neighbors;
-  neighbors.reserve(kRangeReserve);
+  RangeResult result;
+  std::vector<Neighbor> &neighbors = result.neighbors;
+  neighbors.reserve(std::min(kRangeReserve, max_results));
   for (const auto &[key, metadata] : tracked_metadata_by_key_) {
     if (cancellation_token->IsCancelled()) {
       break;
@@ -648,10 +700,14 @@ std::vector<Neighbor> VectorBase::SearchRangeExhaustive(
     }
     float distance = RangeDistance(nq.view, query_magnitude, vector_record);
     if (distance <= radius) {
+      if (neighbors.size() >= max_results) {
+        result.truncated = true;
+        break;
+      }
       neighbors.emplace_back(key, distance);
     }
   }
-  return neighbors;
+  return result;
 }
 
 template absl::StatusOr<std::vector<Neighbor>> VectorBase::CreateReply<float>(

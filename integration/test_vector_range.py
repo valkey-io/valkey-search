@@ -9,12 +9,18 @@ query attributes, FT.SEARCH options, error handling, and dialect compatibility.
 
 import math
 import struct
+import time
+import numpy as np
 import pytest
 from valkey import ResponseError
 from valkey.client import Valkey
-from valkey_search_test_case import ValkeySearchTestCaseBase
+from valkey_search_test_case import (
+    ValkeySearchClusterTestCase,
+    ValkeySearchTestCaseBase,
+    ValkeySearchTestCaseDebugMode,
+)
 from valkeytestframework.conftest import resource_port_tracker
-from utils import IndexingTestHelper
+from utils import IndexingTestHelper, find_local_key
 
 
 def float_to_bytes(floats):
@@ -44,6 +50,215 @@ def parse_result_with_fields(result):
         }
         parsed[key] = field_dict
     return parsed
+
+
+# ---------------------------------------------------------------------------
+# HNSW range search against FLAT at scale
+# ---------------------------------------------------------------------------
+# HNSW range search is approximate, FLAT is exact. On seeded clustered data,
+# every HNSW result must be a FLAT result at the same distance, and HNSW must
+# find most of the FLAT results. Radii lie midway between the FLAT distances
+# of the n-th and (n+1)-th nearest keys, so each holds exactly n keys.
+SCALE_KEYS = 10000
+SCALE_DIM = 16
+SCALE_QUERIES = 20
+RANGE_SIZES = (1, 10, 100)
+# None leaves $epsilon out of the query (default 0.01). $epsilon must be
+# positive, so 1e-6 stands for a traversal shell at the radius itself.
+EPSILONS = (None, 1e-6, 0.1)
+# Mean recall over every query, radius and epsilon, and the floor for the mean
+# of any one (range size, epsilon) cell.
+MIN_RECALL = 0.95
+MIN_CELL_RECALL = 0.9
+
+
+def clustered_vectors(rng, n, dim=SCALE_DIM, clusters=20):
+    """n float32 vectors around `clusters` random centers."""
+    centers = rng.normal(0.0, 4.0, (clusters, dim))
+    labels = rng.integers(0, clusters, n)
+    return (centers[labels] + rng.normal(0.0, 1.0, (n, dim))).astype(
+        np.float32)
+
+
+def unit_rows(vectors):
+    """Each row scaled to unit length, as float32 (a zero row stays zero)."""
+    norms = np.linalg.norm(vectors.astype(np.float64), axis=1, keepdims=True)
+    return (vectors / np.where(norms == 0.0, 1.0, norms)).astype(np.float32)
+
+
+def range_field(metric):
+    """Field holding the vectors for `metric`: IP uses the unit vectors."""
+    return "u" if metric == "IP" else "v"
+
+
+def create_range_indexes(client, metric, prefix="sc:", dim=SCALE_DIM,
+                         ef_runtime=None):
+    """Create FLAT and HNSW indexes over `prefix` for `metric`. Returns their
+    names (flat, hnsw)."""
+    names = []
+    for algo in ("FLAT", "HNSW"):
+        name = f"{algo.lower()}_{metric.lower()}"
+        extra = []
+        if algo == "HNSW" and ef_runtime is not None:
+            extra = ["EF_RUNTIME", str(ef_runtime)]
+        assert client.execute_command(
+            "FT.CREATE", name, "ON", "HASH", "PREFIX", "1", prefix,
+            "SCHEMA", range_field(metric), "VECTOR", algo, str(6 + len(extra)),
+            "TYPE", "FLOAT32", "DIM", str(dim), "DISTANCE_METRIC", metric,
+            *extra,
+        ) == b"OK"
+        names.append(name)
+    return tuple(names)
+
+
+def write_vectors(client, ids, vectors, prefix="sc:"):
+    """HSET key prefix+id with v = the vector and u = its unit vector."""
+    pipe = client.pipeline(transaction=False)
+    for i, vec, unit in zip(ids, vectors, unit_rows(vectors), strict=True):
+        pipe.hset(f"{prefix}{i}", mapping={
+            "v": vec.astype("<f4").tobytes(),
+            "u": unit.astype("<f4").tobytes(),
+        })
+    pipe.execute()
+
+
+def wait_indexed(clients, indexes, timeout=120):
+    """Wait until every index is fully indexed on every client's node."""
+    deadline = time.monotonic() + timeout
+    for client in clients:
+        for index in indexes:
+            while True:
+                try:
+                    if IndexingTestHelper.is_indexing_complete_on_node(
+                            client, index):
+                        break
+                except ResponseError:
+                    pass  # Not yet created on this node.
+                assert time.monotonic() < deadline, f"{index} not indexed"
+                time.sleep(0.1)
+
+
+def scale_queries(rng, vectors, metric, count=SCALE_QUERIES):
+    """Query vectors near `count` random stored vectors."""
+    picked = vectors[rng.choice(len(vectors), count, replace=False)]
+    queries = (picked + rng.normal(0.0, 0.3, picked.shape)).astype(np.float32)
+    return unit_rows(queries) if metric == "IP" else queries
+
+
+def range_distances(client, index, field, query, radius, epsilon=None,
+                    ef_runtime=None):
+    """VECTOR_RANGE query yielding the distance. Returns {key: distance}."""
+    attrs = "$yield_distance_as: d"
+    if epsilon is not None:
+        attrs = f"$epsilon: {epsilon}; " + attrs
+    ef = f" EF_RUNTIME {ef_runtime}" if ef_runtime is not None else ""
+    result = client.execute_command(
+        "FT.SEARCH", index,
+        f"@{field}:[VECTOR_RANGE $r $BLOB{ef}]=>{{{attrs}}}",
+        "PARAMS", "4", "r", f"{radius:.9g}",
+        "BLOB", query.astype("<f4").tobytes(),
+        "RETURN", "1", "d", "LIMIT", "0", str(2 * SCALE_KEYS),
+        "DIALECT", "2",
+    )
+    parsed = {key: float(fields["d"])
+              for key, fields in parse_result_with_fields(result).items()}
+    assert result[0] == len(parsed)
+    return parsed
+
+
+def knn_radii(client, flat_index, field, query, sizes=RANGE_SIZES):
+    """[(n, radius holding the n nearest keys)] for a FLAT range query.
+
+    The radii come from the range query's own distances, not KNN's: the two
+    paths round COSINE differently (by ~1e-7 near a distance of 0.03), so a
+    midpoint between KNN distances can put a near-tied key on the wrong side.
+    KNN only bounds a range query that holds the k nearest keys. The index
+    compares float32 distances with a float32 radius, so a size is skipped
+    when no float32 radius separates its nth and (n+1)th distances.
+    """
+    k = max(sizes) + 1
+    result = client.execute_command(
+        "FT.SEARCH", flat_index, f"*=>[KNN {k} @{field} $BLOB AS d]",
+        "PARAMS", "2", "BLOB", query.astype("<f4").tobytes(),
+        "RETURN", "1", "d", "LIMIT", "0", str(k), "DIALECT", "2",
+    )
+    knn_dists = [float(fields["d"])
+                 for fields in parse_result_with_fields(result).values()]
+    assert len(knn_dists) == k
+    # Far wider than the KNN/range rounding gap, so the range query holds at
+    # least the k nearest keys.
+    bound = max(knn_dists)
+    bound += max(abs(bound) * 1e-3, 1e-5)
+    dists = sorted(range_distances(client, flat_index, field, query,
+                                   bound).values())
+    assert len(dists) >= k, (len(dists), k)
+    radii = []
+    for n in sizes:
+        inner, outer = np.float32(dists[n - 1]), np.float32(dists[n])
+        radius = np.float32((dists[n - 1] + dists[n]) / 2)
+        if inner < radius < outer:
+            radii.append((n, float(radius)))
+    return radii
+
+
+def check_hnsw_range_matches_flat(client, metric, queries, flat_index,
+                                  hnsw_index):
+    """Every HNSW range result is a FLAT result at the same distance, and
+    HNSW finds at least MIN_RECALL of the FLAT results on average. Returns
+    the mean recall per (range size, epsilon)."""
+    field = range_field(metric)
+    recalls = {(n, eps): [] for n in RANGE_SIZES for eps in EPSILONS}
+    for query in queries:
+        for n, radius in knn_radii(client, flat_index, field, query):
+            flat = range_distances(client, flat_index, field, query, radius)
+            assert len(flat) == n, (metric, n, radius)
+            for eps in EPSILONS:
+                hnsw = range_distances(
+                    client, hnsw_index, field, query, radius, eps)
+                extra = hnsw.keys() - flat.keys()
+                assert not extra, (metric, n, eps, extra)
+                for key, dist in hnsw.items():
+                    assert math.isclose(dist, flat[key], rel_tol=1e-5,
+                                        abs_tol=1e-5), (metric, key)
+                recalls[(n, eps)].append(len(hnsw) / n)
+    means = {cell: sum(r) / len(r) for cell, r in recalls.items()}
+    overall = sum(means.values()) / len(means)
+    assert overall >= MIN_RECALL, (metric, overall, means)
+    assert min(means.values()) >= MIN_CELL_RECALL, (metric, means)
+    return means
+
+
+def delete_and_reinsert(client, rng, vectors):
+    """Delete 30% of the SCALE_KEYS keys, add 2000 new keys and give 1000
+    surviving keys new vectors. Returns the vectors now stored."""
+    deleted = rng.choice(SCALE_KEYS, 3 * SCALE_KEYS // 10, replace=False)
+    pipe = client.pipeline(transaction=False)
+    for i in deleted:
+        pipe.delete(f"sc:{i}")
+    pipe.execute()
+    survivors = np.setdiff1d(np.arange(SCALE_KEYS), deleted)
+    updated = rng.choice(survivors, 1000, replace=False)
+    fresh = clustered_vectors(rng, 3000)
+    added = np.arange(SCALE_KEYS, SCALE_KEYS + 2000)
+    write_vectors(client, added, fresh[:2000])
+    write_vectors(client, updated, fresh[2000:])
+    stored = dict(zip(survivors, vectors[survivors]))
+    stored.update(zip(added, fresh[:2000]))
+    stored.update(zip(updated, fresh[2000:]))
+    return np.array(list(stored.values()), dtype=np.float32)
+
+
+def check_saturated_epsilon_matches_flat(client, flat_index, hnsw_index):
+    """$epsilon values beyond float range (accepted as in Redis) widen the
+    HNSW walk to the whole graph, so the HNSW range result is the FLAT one.
+    Expects the 20 x 20 grid of integer points written by the caller."""
+    query = np.array([3.3, 4.7], dtype=np.float32)
+    radius = 20.5
+    flat = range_distances(client, flat_index, "v", query, radius)
+    assert 0 < len(flat) < 400
+    for epsilon in ("inf", "nan", "1e40"):
+        hnsw = range_distances(client, hnsw_index, "v", query, radius, epsilon)
+        assert hnsw == pytest.approx(flat), epsilon
 
 
 # ---------------------------------------------------------------------------
@@ -247,134 +462,195 @@ class TestVectorRange(ValkeySearchTestCaseBase):
     # HNSW candidate cap and the fetch-limited counter
     # =================================================================
 
-    def test_hnsw_fetch_limited_counter(self):
-        """
-        An HNSW range query counts toward
-        search_nonvector_results_fetched_limited_count only when the
-        max-nonvector-search-results-fetched cap may have dropped in-radius
-        docs: the cap was hit and even the farthest candidate is in range.
-        Such a query falls back to an exhaustive scan and returns every doc
-        in range.
-        Each index holds fewer than M (16) vectors, so the HNSW graph is
-        complete and the fetch returns exactly the `cap` nearest.
-        """
+    def test_flat_range_hard_cap_and_counter(self):
+        """FLAT distinguishes exactly N matches from an N+1 witness."""
         client = self.server.get_new_client()
-        # L2 distances from QUERY_VEC: 0, 1, 4, 4, 9, 100 (doc:5 ties doc:2).
-        self._create_hnsw_index(client)
+        client.config_set("search.max-nonvector-search-results-fetched", "3")
+        self._create_flat_index(client, dim=2)
+        vectors = {
+            "doc:0": [0.0, 0.0],
+            "doc:1": [1.0, 0.0],
+            "doc:2": [2.0, 0.0],
+            "doc:3": [3.0, 0.0],
+        }
         self._load_vector_data(
-            client, vectors={**VECTORS, "doc:5": [-2.0, 0.0, 0.0]})
-        # COSINE: c:0 is the query of the clamping case below; the nearest
-        # doc to the opposite query [-1, -2, -3] is at distance ~1.08.
+            client, vectors={key: vectors[key] for key in list(vectors)[:3]})
+        IndexingTestHelper.wait_for_indexing_complete_on_node(client, "idx")
+
+        counter = "search_vector_range_results_fetched_limited_count"
+        query = "@vec:[VECTOR_RANGE 100 $blob]=>{$yield_distance_as: dist}"
+        args = (
+            "PARAMS", "2", "blob", float_to_bytes([0.0, 0.0]),
+            "RETURN", "1", "dist", "LIMIT", "0", "10",
+        )
+        before = client.info("search")[counter]
+        exact = self._search(client, "idx", query, *args)
+        assert exact[0] == 3
+        assert len(parse_result_with_fields(exact)) == 3
+        assert client.info("search")[counter] == before
+
+        self._load_vector_data(client, vectors={"doc:3": vectors["doc:3"]})
+        IndexingTestHelper.wait_for_indexing_complete_on_node(client, "idx")
+        truncated = self._search(client, "idx", query, *args)
+        retained = parse_result_with_fields(truncated)
+        assert truncated[0] == len(retained) == 3
+        assert retained.keys() <= vectors.keys()
+        for key, fields in retained.items():
+            assert float(fields["dist"]) == pytest.approx(
+                l2_distance([0.0, 0.0], vectors[key]))
+        after_truncated = client.info("search")[counter]
+        assert after_truncated == before + 1
+
+        client.config_set("search.max-nonvector-search-results-fetched", "0")
+        assert self._search(client, "idx", query, *args) == [0]
+        assert client.info("search")[counter] == after_truncated + 1
+
+    def test_hnsw_range_hard_cap_walk_and_exact_fallback(self):
+        """The HNSW walk and its COSINE radius-2 exact fallback cap at N."""
+        client = self.server.get_new_client()
+        client.config_set("search.max-nonvector-search-results-fetched", "5")
         self._create_hnsw_index(
-            client, index_name="cidx", prefix="c:", distance="COSINE")
-        self._load_vector_data(client, vectors={
-            "c:0": [1.0, 2.0, 3.0],
-            "c:1": [3.0, -1.0, 0.0],
-            "c:2": [0.0, 0.0, 1.0],
-        })
-        client.execute_command(
-            "CONFIG", "SET", "search.info-developer-visible", "yes")
-        cap_config = "search.max-nonvector-search-results-fetched"
+            client, index_name="walk", prefix="walk:", dim=2)
+        self._create_hnsw_index(
+            client, index_name="exact", prefix="exact:", dim=2,
+            distance="COSINE")
+        for i in range(6):
+            client.hset(
+                f"walk:{i}", mapping={"vec": float_to_bytes([0.0, 0.0])})
+            client.hset(
+                f"exact:{i}", mapping={"vec": float_to_bytes([1.0, 0.0])})
+        wait_indexed([client], ("walk", "exact"))
 
-        def search_and_count(index, radius, query_vec, cap):
-            """Return (result count, fetch-limited counter increment)."""
-            client.execute_command("CONFIG", "SET", cap_config, str(cap))
-            counter = "search_nonvector_results_fetched_limited_count"
-            before = client.info("search").get(counter, 0)
+        counter = "search_vector_range_results_fetched_limited_count"
+        before = client.info("search")[counter]
+        for index, radius, query in (
+                ("walk", 0, [0.0, 0.0]),
+                ("exact", 2, [1.0, 0.0])):
             result = self._search(
-                client, index,
-                f"@vec:[VECTOR_RANGE {radius} $blob]",
-                "PARAMS", "2", "blob", float_to_bytes(query_vec),
-                "NOCONTENT",
+                client, index, f"@vec:[VECTOR_RANGE {radius} $blob]",
+                "PARAMS", "2", "blob", float_to_bytes(query),
+                "NOCONTENT", "LIMIT", "0", "10",
             )
-            return result[0], client.info("search").get(counter, 0) - before
+            assert result[0] == 5
+            assert len(result) == 6
+            after = client.info("search")[counter]
+            assert after == before + 1
+            before = after
 
-        # A cap of 3 fetches doc:0, doc:1 and one of doc:2 / doc:5.
-        # doc:3 (distance 9) and the other distance-4 doc are in range
-        # but the cap cut them off, so the exhaustive scan returns them.
-        assert search_and_count("idx", 10, QUERY_VEC, 3) == (5, 1)
-        # A distance equal to the radius is in range, as in the result
-        # filter, so the cut-off distance-4 doc counts.
-        assert search_and_count("idx", 4, QUERY_VEC, 3) == (4, 1)
-        # The farthest fetched candidate (distance 4) is out of range, so
-        # nothing in range was dropped.
-        assert search_and_count("idx", 3.9, QUERY_VEC, 3) == (2, 0)
-        assert search_and_count("idx", 0, QUERY_VEC, 3) == (1, 0)
-        # The cap is above the index size.
-        assert search_and_count("idx", 1000, QUERY_VEC, 100) == (6, 0)
-        # A cap of 0 fetches nothing, so every query counts and scans.
-        assert search_and_count("idx", 1000, QUERY_VEC, 0) == (6, 1)
-        # The only candidate is out of range.
-        assert search_and_count(
-            "cidx", 0.5, [-1.0, -2.0, -3.0], 1) == (0, 0)
-        # The self-distance of c:0 is usually not exactly 0 in float
-        # arithmetic, so whether it is within radius 0 depends on the
-        # cosine clamping. The counter must clamp like the result filter.
-        count, delta = search_and_count("cidx", 0, [1.0, 2.0, 3.0], 1)
-        assert delta == count
+    def test_hnsw_pagination_matches_flat_at_cap(self):
+        """When the true count is at most N, HNSW pages match exact FLAT."""
+        client = self.server.get_new_client()
+        client.config_set("search.max-nonvector-search-results-fetched", "4")
+        flat_index, hnsw_index = create_range_indexes(
+            client, "L2", prefix="page:", dim=2)
+        vectors = np.array([
+            [0.0, 0.0],
+            [1.0, 0.0],
+            [2.0, 0.0],
+            [3.0, 0.0],
+            [10.0, 0.0],
+            [11.0, 0.0],
+        ], dtype=np.float32)
+        write_vectors(client, range(len(vectors)), vectors, prefix="page:")
+        wait_indexed([client], (flat_index, hnsw_index))
 
-    def test_hnsw_vector_range_complete_past_fetch_cap(self):
+        counter = "search_vector_range_results_fetched_limited_count"
+        before = client.info("search")[counter]
+        query = "@v:[VECTOR_RANGE 10 $blob]=>{$yield_distance_as: dist}"
+
+        def page(index, offset, count):
+            return self._search(
+                client, index, query,
+                "PARAMS", "2", "blob", float_to_bytes([0.0, 0.0]),
+                "SORTBY", "dist", "ASC", "NOCONTENT",
+                "LIMIT", str(offset), str(count),
+            )
+
+        for offset, count, expected_keys in (
+                (0, 2, [b"page:0", b"page:1"]),
+                (2, 2, [b"page:2", b"page:3"])):
+            flat = page(flat_index, offset, count)
+            hnsw = page(hnsw_index, offset, count)
+            assert flat == hnsw == [4, *expected_keys]
+        assert client.info("search")[counter] == before
+
+    @pytest.mark.parametrize("metric", ["L2", "IP", "COSINE"])
+    def test_hnsw_range_matches_flat_at_scale(self, metric):
         """
-        With more docs in range than max-nonvector-search-results-fetched,
-        HNSW range search returns all of them, as FLAT does, alone and
-        combined with a tag by AND and by OR. The cap is lowered to 1000 at
-        runtime over 3000 docs, and restored afterwards.
+        On 10k clustered 16-d vectors, HNSW range results are FLAT results at
+        the same distance, and HNSW recall against FLAT is at least
+        MIN_RECALL, for radii holding ~1, ~10 and ~100 keys and $epsilon
+        omitted, 1e-6 and 0.1.
         """
         client = self.server.get_new_client()
-        schema = ["t", "TAG", "z", "TAG"]
-        self._create_hnsw_index(client, "hidx", extra_fields=schema, dim=2)
-        self._create_flat_index(client, "fidx", extra_fields=schema, dim=2)
-        # A 60 x 50 grid of integer points, so the squared L2 distances from
-        # the origin are exact in float32 and in the brute force below. Tag z
-        # marks 250 docs outside the radius.
-        docs = {}
-        pipe = client.pipeline(transaction=False)
-        for i in range(3000):
-            vec = [float(i % 60), float(i // 60)]
-            mapping = {"vec": float_to_bytes(vec), "t": "x" if i % 2 else "y"}
-            if i % 60 >= 55:
-                mapping["z"] = "z"
-            docs[f"doc:{i}"] = (vec, mapping)
-            pipe.hset(f"doc:{i}", mapping=mapping)
-        pipe.execute()
-        for index in ("hidx", "fidx"):
-            IndexingTestHelper.wait_for_indexing_complete_on_node(client, index)
+        rng = np.random.default_rng(41)
+        flat_index, hnsw_index = create_range_indexes(client, metric)
+        vectors = clustered_vectors(rng, SCALE_KEYS)
+        write_vectors(client, range(SCALE_KEYS), vectors)
+        wait_indexed([client], (flat_index, hnsw_index))
+        check_hnsw_range_matches_flat(
+            client, metric, scale_queries(rng, vectors, metric),
+            flat_index, hnsw_index)
 
-        radius = 2500.5
-        query = [0.0, 0.0]
+    @pytest.mark.parametrize("metric", ["L2", "IP", "COSINE"])
+    def test_hnsw_range_matches_flat_after_deletes(self, metric):
+        """
+        HNSW range results still match FLAT after 30% of the keys are
+        deleted, 2000 keys are added and 1000 keys get new vectors: no
+        deleted key and no stale distance is returned, and recall holds.
+        """
+        client = self.server.get_new_client()
+        rng = np.random.default_rng(42)
+        flat_index, hnsw_index = create_range_indexes(client, metric)
+        vectors = clustered_vectors(rng, SCALE_KEYS)
+        write_vectors(client, range(SCALE_KEYS), vectors)
+        wait_indexed([client], (flat_index, hnsw_index))
+        stored = delete_and_reinsert(client, rng, vectors)
+        wait_indexed([client], (flat_index, hnsw_index))
+        assert client.dbsize() == len(stored) == 9000
+        check_hnsw_range_matches_flat(
+            client, metric, scale_queries(rng, stored, metric),
+            flat_index, hnsw_index)
 
-        def matching(pred):
-            return {k for k, (vec, fields) in docs.items() if pred(vec, fields)}
+    def test_hnsw_range_small_ball_far_from_entry_point(self):
+        """
+        A small ball around a tight cluster far from the rest of the data,
+        inserted after it so the graph entry point lies elsewhere, returns
+        the keys FLAT returns: all 20 keys of the cluster, or its 5 nearest.
+        The walk locates the ball with an EF_RUNTIME-wide beam, as KNN does;
+        with the default EF_RUNTIME of 10, KNN and range search both miss the
+        third cluster here, so the index uses 100.
+        """
+        client = self.server.get_new_client()
+        rng = np.random.default_rng(43)
+        flat_index, hnsw_index = create_range_indexes(
+            client, "L2", ef_runtime=100)
+        cloud = rng.normal(0.0, 1.0, (5000, SCALE_DIM)).astype(np.float32)
+        write_vectors(client, range(5000), cloud)
+        centers = [np.full(SCALE_DIM, 30.0 * sign, dtype=np.float32)
+                   for sign in (1, -1)]
+        centers.append(np.where(np.arange(SCALE_DIM) % 2, 30.0, -30.0)
+                       .astype(np.float32))
+        balls = []
+        for j, center in enumerate(centers):
+            ids = range(5000 + 20 * j, 5020 + 20 * j)
+            ball = (center + rng.normal(0.0, 0.05, (20, SCALE_DIM))).astype(
+                np.float32)
+            write_vectors(client, ids, ball)
+            balls.append(({f"sc:{i}" for i in ids}, center, ball))
+        wait_indexed([client], (flat_index, hnsw_index))
 
-        def in_range(vec):
-            return l2_distance(vec, query) <= radius
-
-        vr = f"@vec:[VECTOR_RANGE {radius} $blob]"
-        cases = [
-            (vr, matching(lambda v, f: in_range(v))),
-            ("@vec:[VECTOR_RANGE 10000 $blob]", set(docs)),
-            (vr + " @t:{x}", matching(
-                lambda v, f: in_range(v) and f["t"] == "x")),
-            ("@z:{z} | " + vr, matching(
-                lambda v, f: in_range(v) or "z" in f)),
-        ]
-        assert [len(expected) for _, expected in cases] == [
-            2011, 3000, 995, 2261]
-        cap_config = "search.max-nonvector-search-results-fetched"
-        original_cap = client.execute_command("CONFIG", "GET", cap_config)[1]
-        client.execute_command("CONFIG", "SET", cap_config, "1000")
-        try:
-            for query_string, expected in cases:
-                for index in ("hidx", "fidx"):
-                    result = self._search(
-                        client, index, query_string,
-                        "PARAMS", "2", "blob", float_to_bytes(query),
-                        "NOCONTENT", "LIMIT", "0", "3000",
-                    )
-                    assert result[0] == len(expected), (index, query_string)
-                    assert parse_result_keys(result) == expected
-        finally:
-            client.execute_command("CONFIG", "SET", cap_config, original_cap)
+        for keys, center, ball in balls:
+            # Squared distances from the center: the ball's keys lie within
+            # ~0.1, the nearest other key ~3000 away.
+            dists = np.sort(((ball.astype(np.float64) - center) ** 2).sum(1))
+            for radius, expected in ((1.0, 20), ((dists[4] + dists[5]) / 2, 5)):
+                flat = range_distances(client, flat_index, "v", center, radius)
+                assert len(flat) == expected and flat.keys() <= keys
+                for eps in EPSILONS:
+                    hnsw = range_distances(
+                        client, hnsw_index, "v", center, radius, eps)
+                    assert hnsw.keys() == flat.keys(), (radius, eps)
 
     # =================================================================
     # 5. Vector Range AND tag filter
@@ -408,6 +684,47 @@ class TestVectorRange(ValkeySearchTestCaseBase):
         assert result[0] == 2
         keys = parse_result_keys(result)
         assert keys == {"doc:0", "doc:2"}
+
+    def test_vector_range_and_prefix(self):
+        """
+        Vector Range AND a prefix. One evaluator handles every candidate and
+        fetches each key's own text tree lazily; a prefix is answered from
+        that tree, where a term is answered from the shared postings. Each
+        candidate matches through a different word, so a tree left over from
+        the previous key gets the later ones wrong. The negated form is the
+        one that reaches the evaluator; without the negation the AND trusts
+        the prefix fetcher.
+        """
+        client = self.server.get_new_client()
+        self._create_hnsw_index(client, extra_fields=["body", "TEXT"])
+        extra = {
+            "doc:0": {"body": "alpha beta"},
+            "doc:1": {"body": "alpha gamma"},
+            "doc:2": {"body": "beta gamut"},
+            "doc:3": {"body": "alpha"},
+            "doc:4": {"body": "gamble"},
+        }
+        self._load_vector_data(client, extra_data=extra)
+
+        query_blob = float_to_bytes(QUERY_VEC)
+        # radius=5 matches doc:0,1,2; gam* matches doc:1,2,4.
+        result = self._search(
+            client, "idx",
+            "@vec:[VECTOR_RANGE 5 $blob] @body:gam*",
+            "PARAMS", "2", "blob", query_blob,
+            "NOCONTENT",
+        )
+        assert result[0] == 2, result
+        assert parse_result_keys(result) == {"doc:1", "doc:2"}
+
+        result = self._search(
+            client, "idx",
+            "@vec:[VECTOR_RANGE 5 $blob] -@body:gam*",
+            "PARAMS", "2", "blob", query_blob,
+            "NOCONTENT",
+        )
+        assert result[0] == 1, result
+        assert parse_result_keys(result) == {"doc:0"}
 
     # =================================================================
     # 6. Vector Range AND numeric filter
@@ -474,6 +791,35 @@ class TestVectorRange(ValkeySearchTestCaseBase):
         assert result[0] == 3
         keys = parse_result_keys(result)
         assert keys == {"doc:0", "doc:1", "doc:3"}
+
+    def test_vector_range_or_hard_cap_has_unspecified_survivors(self):
+        """OR retains N unspecified survivors and records one truncation."""
+        client = self.server.get_new_client()
+        client.config_set("search.max-nonvector-search-results-fetched", "3")
+        self._create_flat_index(client, extra_fields=["category", "TAG"])
+        vectors = {f"doc:v{i}": [i * 0.1, 0.0, 0.0] for i in range(6)}
+        extra = {key: {"category": "ordinary"} for key in vectors}
+        self._load_vector_data(client, vectors=vectors, extra_data=extra)
+        client.hset("doc:special", mapping={"category": "special"})
+        IndexingTestHelper.wait_for_indexing_complete_on_node(client, "idx")
+
+        expected_union = {*vectors, "doc:special"}
+        counter = "search_vector_range_results_fetched_limited_count"
+        params = ("PARAMS", "2", "blob", float_to_bytes(QUERY_VEC))
+        for query in (
+                "@vec:[VECTOR_RANGE 1 $blob] | @category:{special}",
+                "@category:{special} | @vec:[VECTOR_RANGE 1 $blob]"):
+            before = client.info("search")[counter]
+            result = self._search(
+                client, "idx", query, *params,
+                "NOCONTENT", "LIMIT", "0", "100",
+            )
+            survivors = parse_result_keys(result)
+            assert result[0] == len(survivors) == 3
+            assert survivors <= expected_union
+            # The VECTOR_RANGE child and the final OR union both have more
+            # matches than the cap, but one query increments the counter once.
+            assert client.info("search")[counter] == before + 1
 
 
     # =================================================================
@@ -635,6 +981,18 @@ class TestVectorRange(ValkeySearchTestCaseBase):
             "NOCONTENT",
         )
         assert result[0] >= 1
+
+    def test_query_attr_epsilon_saturated(self):
+        """
+        $epsilon: inf, nan and 1e40 on an HNSW field return the FLAT result.
+        """
+        client = self.server.get_new_client()
+        flat_index, hnsw_index = create_range_indexes(client, "L2", dim=2)
+        grid = np.array([[i % 20, i // 20] for i in range(400)],
+                        dtype=np.float32)
+        write_vectors(client, range(400), grid)
+        wait_indexed([client], (flat_index, hnsw_index))
+        check_saturated_epsilon_matches_flat(client, flat_index, hnsw_index)
 
     # =================================================================
     # 13. Query attributes: both $yield_distance_as and $epsilon
@@ -1332,23 +1690,63 @@ class TestVectorRange(ValkeySearchTestCaseBase):
     # 37. Optional params: EF_RUNTIME
     # =================================================================
 
-    def test_optional_param_ef_runtime(self):
+    def test_optional_param_ef_runtime_flat_ignored(self):
         """
-        EF_RUNTIME is parsed and ignored for Vector Range.
+        FLAT accepts and ignores the VECTOR_RANGE EF_RUNTIME override.
         Req: 1.3
+        """
+        client = self.server.get_new_client()
+        self._create_flat_index(client)
+        self._load_vector_data(client)
+
+        query_blob = float_to_bytes(QUERY_VEC)
+        results = []
+        for suffix in ("", " EF_RUNTIME 100"):
+            result = self._search(
+                client, "idx",
+                f"@vec:[VECTOR_RANGE 5 $blob{suffix}]",
+                "PARAMS", "2", "blob", query_blob,
+                "NOCONTENT",
+            )
+            results.append(parse_result_keys(result))
+        assert results == [
+            {"doc:0", "doc:1", "doc:2"},
+            {"doc:0", "doc:1", "doc:2"},
+        ]
+
+    def test_parameterized_ef_runtime(self):
+        """
+        EF_RUNTIME specified as $param is resolved from PARAMS and checked as
+        a literal is: a valid value matches the literal's result, an invalid
+        or missing one is an error.
         """
         client = self.server.get_new_client()
         self._create_hnsw_index(client)
         self._load_vector_data(client)
 
         query_blob = float_to_bytes(QUERY_VEC)
-        result = self._search(
-            client, "idx",
-            "@vec:[VECTOR_RANGE 5 $blob EF_RUNTIME 100]",
-            "PARAMS", "2", "blob", query_blob,
-            "NOCONTENT",
-        )
-        assert parse_result_keys(result) == {"doc:0", "doc:1", "doc:2"}
+
+        def search(ef_clause, *params):
+            return self._search(
+                client, "idx", f"@vec:[VECTOR_RANGE 5 $blob {ef_clause}]",
+                "PARAMS", str(2 + len(params)), "blob", query_blob, *params,
+                "NOCONTENT",
+            )
+
+        literal = parse_result_keys(search("EF_RUNTIME 100"))
+        assert literal == {"doc:0", "doc:1", "doc:2"}
+        assert parse_result_keys(
+            search("EF_RUNTIME $ef", "ef", "100")) == literal
+        for value, message in (
+                ("0", "`EF_RUNTIME` must be a positive integer greater than "
+                      "0 and cannot exceed"),
+                ("abc", "`abc` is not a valid numeric value")):
+            with pytest.raises(ResponseError) as e:
+                search("EF_RUNTIME $ef", "ef", value)
+            assert message in str(e.value), (value, str(e.value))
+        with pytest.raises(ResponseError) as e:
+            search("EF_RUNTIME $ef")
+        assert "Parameter ef not found" in str(e.value), str(e.value)
 
     # =================================================================
     # 38. Optional params: AS (alias for distance field)
@@ -1769,6 +2167,45 @@ class TestVectorRange(ValkeySearchTestCaseBase):
             f"Distances not in ASC order after SORTBY: {distances}"
         )
 
+    def test_aggregate_hard_cap_reducer_and_cursor(self):
+        """Reducers and cursors consume only the N retained range matches."""
+        client = self.server.get_new_client()
+        client.config_set("search.max-nonvector-search-results-fetched", "3")
+        self._create_flat_index(client)
+        vectors = {f"doc:{i}": [float(i), 0.0, 0.0] for i in range(5)}
+        self._load_vector_data(client, vectors=vectors)
+        IndexingTestHelper.wait_for_indexing_complete_on_node(client, "idx")
+
+        counter = "search_vector_range_results_fetched_limited_count"
+        query = "@vec:[VECTOR_RANGE 100 $blob]"
+        params = ("PARAMS", "2", "blob", float_to_bytes(QUERY_VEC))
+        before = client.info("search")[counter]
+        reduced = self._aggregate(
+            client, "idx", query, *params,
+            "GROUPBY", "0", "REDUCE", "COUNT", "0", "AS", "count",
+        )
+        assert reduced == [1, [b"count", b"3"]]
+        after_reducer = client.info("search")[counter]
+        assert after_reducer == before + 1
+
+        batch, cursor = self._aggregate(
+            client, "idx", query, *params,
+            "LOAD", "1", "@__key", "SORTBY", "2", "@__key", "ASC",
+            "WITHCURSOR", "COUNT", "2",
+        )
+        assert batch[0] == 2
+        assert len(batch[1:]) == 2
+        assert cursor != 0
+        rows = list(batch[1:])
+        batch, cursor = client.execute_command(
+            "FT.CURSOR", "READ", "idx", cursor, "COUNT", "2")
+        assert batch[0] == 1
+        assert cursor == 0
+        rows.extend(batch[1:])
+        assert len(rows) == 3
+        assert {row[1].decode() for row in rows} <= vectors.keys()
+        assert client.info("search")[counter] == after_reducer + 1
+
     # =================================================================
     # KNN pre-filter containing a VECTOR_RANGE predicate (rejected)
     # =================================================================
@@ -1813,3 +2250,435 @@ class TestVectorRange(ValkeySearchTestCaseBase):
                 "=>[KNN 5 @vec $kblob AS knn_dist]",
                 "PARAMS", "4", "vrblob", query_blob, "kblob", query_blob,
             )
+
+
+class TestVectorRangeReplaceDeleted(ValkeySearchTestCaseDebugMode):
+    """HNSW range search with search.hnsw-allow-replace-deleted, a developer
+    config, so new keys reuse deleted graph slots under fresh labels."""
+
+    @pytest.mark.parametrize("metric", ["L2", "IP", "COSINE"])
+    def test_hnsw_range_matches_flat_after_replaced_deletes(self, metric):
+        """
+        After deletes and re-inserts that reuse the deleted slots, HNSW range
+        results are FLAT results at the same distance and recall holds: a
+        result reported by slot id instead of label names the wrong key.
+        """
+        client = self.server.get_new_client()
+        client.config_set("search.hnsw-allow-replace-deleted", "yes")
+        rng = np.random.default_rng(44)
+        flat_index, hnsw_index = create_range_indexes(client, metric)
+        vectors = clustered_vectors(rng, SCALE_KEYS)
+        write_vectors(client, range(SCALE_KEYS), vectors)
+        wait_indexed([client], (flat_index, hnsw_index))
+        stored = delete_and_reinsert(client, rng, vectors)
+        wait_indexed([client], (flat_index, hnsw_index))
+        assert client.dbsize() == len(stored)
+        check_hnsw_range_matches_flat(
+            client, metric, scale_queries(rng, stored, metric),
+            flat_index, hnsw_index)
+
+
+class TestVectorRangeCluster(ValkeySearchClusterTestCase):
+    """VECTOR_RANGE through the coordinator on 3 primaries."""
+
+    def _primaries(self):
+        return [self.client_for_primary(i)
+                for i in range(len(self.replication_groups))]
+
+    def test_hnsw_range_matches_flat_cluster(self):
+        """
+        On 10k L2 vectors spread over 3 shards, HNSW range results through
+        the coordinator are FLAT results at the same distance, with recall of
+        at least MIN_RECALL.
+        """
+        cluster_client = self.new_cluster_client()
+        rng = np.random.default_rng(45)
+        flat_index, hnsw_index = create_range_indexes(cluster_client, "L2")
+        vectors = clustered_vectors(rng, SCALE_KEYS)
+        write_vectors(cluster_client, range(SCALE_KEYS), vectors)
+        primaries = self._primaries()
+        wait_indexed(primaries, (flat_index, hnsw_index))
+        assert sum(p.dbsize() for p in primaries) == SCALE_KEYS
+        check_hnsw_range_matches_flat(
+            primaries[0], "L2", scale_queries(rng, vectors, "L2"),
+            flat_index, hnsw_index)
+
+    def test_flat_range_hard_cap_is_per_shard(self):
+        """The cap applies independently on shards, not to the global total."""
+        cluster_client = self.new_cluster_client()
+        flat_index, _ = create_range_indexes(cluster_client, "L2", dim=2)
+        primaries = self._primaries()
+        cap = 3
+        tags = [find_local_key(primary, f"vr-cap-owner-{i}:")
+                for i, primary in enumerate(primaries)]
+
+        def add(shard, indexes):
+            keys = set()
+            pipe = primaries[shard].pipeline(transaction=False)
+            for i in indexes:
+                key = f"sc:{{{tags[shard]}}}:{i}"
+                keys.add(key)
+                pipe.hset(key, mapping={"v": float_to_bytes([0.0, 0.0])})
+            pipe.execute()
+            return keys
+
+        shard_keys = [add(shard, range(2)) for shard in range(len(primaries))]
+        wait_indexed(primaries, (flat_index,))
+        counter = "search_vector_range_results_fetched_limited_count"
+        for primary in primaries:
+            primary.config_set(
+                "search.max-nonvector-search-results-fetched", str(cap))
+
+        def counts():
+            return [primary.info("search")[counter]
+                    for primary in primaries]
+
+        before = counts()
+        query = np.zeros(2, dtype=np.float32)
+        below_cap = range_distances(
+            primaries[0], flat_index, "v", query, radius=0)
+        assert below_cap.keys() == set().union(*shard_keys)
+        assert len(below_cap) == 2 * len(primaries) > cap
+        assert counts() == before
+
+        overloaded = 1
+        shard_keys[overloaded] |= add(overloaded, range(2, 5))
+        wait_indexed(primaries, (flat_index,))
+        before = counts()
+        capped = range_distances(
+            primaries[0], flat_index, "v", query, radius=0)
+        assert capped.keys() <= set().union(*shard_keys)
+        for shard, keys in enumerate(shard_keys):
+            retained = capped.keys() & keys
+            if shard == overloaded:
+                assert len(retained) == cap
+            else:
+                assert retained == keys
+        assert len(capped) == cap + 2 * (len(primaries) - 1)
+        deltas = [after - old
+                  for after, old in zip(counts(), before, strict=True)]
+        assert deltas == [1 if i == overloaded else 0
+                          for i in range(len(primaries))]
+
+    def test_query_ef_runtime_reaches_non_owner_shards(self):
+        """A per-query EF_RUNTIME reaches remote shards and raises recall.
+
+        The coordinator owns no documents. Each other primary owns 10k vectors,
+        and the two clouds are far apart so each query's ball is served by one
+        remote shard. The balls hold 1x and 2x the field EF_RUNTIME of 1, where
+        the beam width decides recall. If the optional predicate field is lost
+        in fanout, EF_RUNTIME 50 behaves like the field default and this test
+        fails.
+        """
+        cluster_client = self.new_cluster_client()
+        keys_per_shard = 10000
+        dim = 32
+        field_ef = 1
+        flat_index, hnsw_index = create_range_indexes(
+            cluster_client, "L2", prefix="ef:", dim=dim,
+            ef_runtime=field_ef)
+        primaries = self._primaries()
+
+        # Reusing each returned key as a hash tag keeps all derived document
+        # keys on that primary. Primary 0 remains a non-owner coordinator.
+        tags = [find_local_key(primaries[i], f"ef-owner-{i}:")
+                for i in (1, 2)]
+        rng = np.random.default_rng(54)
+        first = clustered_vectors(rng, keys_per_shard, dim=dim)
+        second = clustered_vectors(rng, keys_per_shard, dim=dim) + 100.0
+        write_vectors(primaries[1], range(keys_per_shard), first,
+                      prefix=f"ef:{{{tags[0]}}}:")
+        write_vectors(primaries[2], range(keys_per_shard), second,
+                      prefix=f"ef:{{{tags[1]}}}:")
+        wait_indexed(primaries, (flat_index, hnsw_index), timeout=600)
+        assert [p.dbsize() for p in primaries] == [0, keys_per_shard,
+                                                   keys_per_shard]
+
+        # On this data a field EF_RUNTIME of 5 or 10 already finds 98-100% of
+        # balls of 1-25 keys, which leaves EF_RUNTIME 50 nothing to raise.
+        ball_sizes = (field_ef, 2 * field_ef)
+        efs = ((field_ef, None), (50, 50))
+        recalls = {(n, ef): [] for n in ball_sizes for ef, _ in efs}
+        queries = scale_queries(rng, first, "L2", count=40)
+        for query in queries:
+            for n, radius in knn_radii(primaries[0], flat_index, "v", query,
+                                       sizes=ball_sizes):
+                flat = range_distances(
+                    primaries[0], flat_index, "v", query, radius)
+                assert len(flat) == n
+                for ef, query_ef in efs:
+                    result = range_distances(
+                        primaries[0], hnsw_index, "v", query, radius,
+                        ef_runtime=query_ef)
+                    extra = result.keys() - flat.keys()
+                    assert not extra, (ef, extra)
+                    for key, distance in result.items():
+                        assert math.isclose(
+                            distance, flat[key], rel_tol=1e-5,
+                            abs_tol=1e-5), (ef, key, distance, flat[key])
+                    recalls[(n, ef)].append(len(result) / n)
+
+        means = {cell: sum(r) / len(r) for cell, r in recalls.items()}
+        print("\nRemote-shard VECTOR_RANGE recall by ball size: " + ", ".join(
+            f"{n}: field EF_RUNTIME {field_ef}={means[(n, field_ef)]:.3f} "
+            f"query EF_RUNTIME 50={means[(n, 50)]:.3f}" for n in ball_sizes))
+        # Over 10 graph builds on this data, the field EF_RUNTIME found
+        # 0.79-0.93 of each ball and EF_RUNTIME 50 found all of it, so the
+        # smallest gain was 0.075.
+        for n in ball_sizes:
+            assert means[(n, 50)] >= 0.95, (n, means)
+            assert means[(n, 50)] >= means[(n, field_ef)] + 0.05, (n, means)
+
+    def test_query_attr_epsilon_saturated_cluster(self):
+        """
+        $epsilon: inf, nan and 1e40 reach every shard through the coordinator
+        and return the FLAT result.
+        """
+        cluster_client = self.new_cluster_client()
+        flat_index, hnsw_index = create_range_indexes(
+            cluster_client, "L2", dim=2)
+        grid = np.array([[i % 20, i // 20] for i in range(400)],
+                        dtype=np.float32)
+        write_vectors(cluster_client, range(400), grid)
+        primaries = self._primaries()
+        wait_indexed(primaries, (flat_index, hnsw_index))
+        check_saturated_epsilon_matches_flat(
+            primaries[0], flat_index, hnsw_index)
+
+
+class TestVectorRangeBenchmark(ValkeySearchTestCaseBase):
+    """Small-radius VECTOR_RANGE on HNSW against FLAT: the walk must match
+    FLAT's recall while the test records comparative latency."""
+
+    def test_small_radius_hnsw_recall_with_latency_report(self):
+        """
+        Over 10k 16-d vectors, small-radius (~1, ~10 keys) HNSW range queries
+        match FLAT key-for-key at MIN_RECALL. The HNSW and FLAT median latency
+        is measured and reported without making shared CI timing a gate.
+        """
+        client = self.server.get_new_client()
+        rng = np.random.default_rng(47)
+        flat_index, hnsw_index = create_range_indexes(client, "L2")
+        vectors = clustered_vectors(rng, SCALE_KEYS)
+        write_vectors(client, range(SCALE_KEYS), vectors)
+        wait_indexed([client], (flat_index, hnsw_index))
+        queries = scale_queries(rng, vectors, "L2", count=SCALE_QUERIES)
+
+        def timed(index, query, radius):
+            """(latency in seconds, result key set) for one range query."""
+            start = time.perf_counter()
+            got = range_distances(client, index, "v", query, radius)
+            return time.perf_counter() - start, got.keys()
+
+        flat_latencies, hnsw_latencies, recalls = [], [], []
+        for query in queries:
+            for _, radius in knn_radii(client, flat_index, "v", query,
+                                       sizes=(1, 10)):
+                flat_dt, flat_keys = timed(flat_index, query, radius)
+                hnsw_dt, hnsw_keys = timed(hnsw_index, query, radius)
+                assert hnsw_keys <= flat_keys, (radius, hnsw_keys - flat_keys)
+                flat_latencies.append(flat_dt)
+                hnsw_latencies.append(hnsw_dt)
+                recalls.append(len(hnsw_keys) / max(len(flat_keys), 1))
+
+        flat_median = sorted(flat_latencies)[len(flat_latencies) // 2]
+        hnsw_median = sorted(hnsw_latencies)[len(hnsw_latencies) // 2]
+        recall = sum(recalls) / len(recalls)
+        print(f"\nVECTOR_RANGE small-radius latency over {len(recalls)} "
+              f"queries: FLAT median {flat_median * 1e3:.3f} ms, "
+              f"HNSW median {hnsw_median * 1e3:.3f} ms, HNSW recall {recall:.3f}")
+        assert recall >= MIN_RECALL, recall
+
+
+class TestVectorRangeEfRuntimeSweep(ValkeySearchTestCaseBase):
+    """Per-query EF_RUNTIME sets the width of the beam the HNSW range walk
+    keeps outside the ball. The walk homes in as a KNN@ef search does and then
+    floods the ball, so its recall is never below KNN recall at the same ef,
+    and a wider per-query beam raises it."""
+
+    KEYS = 50000
+    DIM = 32
+    QUERIES = 30
+    FIELD_EF = 10
+    # None sends no EF_RUNTIME, so the walk uses FIELD_EF.
+    QUERY_EFS = (None, 5, 10, 50)
+    # ef/2, ef, 2ef and 10ef for each of QUERY_EFS, and 2.5x FIELD_EF.
+    BALL_SIZES = (2, 5, 10, 20, 25, 50, 100, 500)
+    # Floor for every cell at the widest per-query EF_RUNTIME (measured
+    # minimum 0.967).
+    WIDE_EF_MIN_RECALL = 0.93
+
+    def knn_keys(self, client, index, field, query, n, ef):
+        """Keys of an HNSW KNN query for n neighbors at EF_RUNTIME ef."""
+        result = client.execute_command(
+            "FT.SEARCH", index,
+            f"*=>[KNN {n} @{field} $BLOB"
+            f"{'' if ef is None else f' EF_RUNTIME {ef}'} AS d]",
+            "PARAMS", "2", "BLOB", query.astype("<f4").tobytes(),
+            "NOCONTENT", "LIMIT", "0", str(n), "DIALECT", "2",
+        )
+        return parse_result_keys(result)
+
+    @pytest.mark.parametrize("metric", ["L2", "COSINE"])
+    def test_hnsw_range_recall_follows_query_ef_runtime(self, metric):
+        """
+        On 50k clustered 32-d vectors with field EF_RUNTIME 10, sweep the
+        per-query EF_RUNTIME over none (the field's 10), 5, 10 and 50 and the
+        ball over 2..500 keys. Every HNSW key is a FLAT key at the same
+        distance; each cell's range recall is at least HNSW KNN recall at the
+        same ef; and raising the per-query EF_RUNTIME from 5 to 50 raises mean
+        recall.
+        """
+        client = self.server.get_new_client()
+        rng = np.random.default_rng(53)
+        field = range_field(metric)
+        flat_index, hnsw_index = create_range_indexes(
+            client, metric, dim=self.DIM, ef_runtime=self.FIELD_EF)
+        vectors = clustered_vectors(rng, self.KEYS, dim=self.DIM)
+        write_vectors(client, range(self.KEYS), vectors)
+        wait_indexed([client], (flat_index, hnsw_index), timeout=600)
+        queries = scale_queries(rng, vectors, metric, count=self.QUERIES)
+
+        cells = [(n, ef) for n in self.BALL_SIZES for ef in self.QUERY_EFS]
+        range_recall = {cell: [] for cell in cells}
+        knn_recall = {cell: [] for cell in cells}
+        for query in queries:
+            for n, radius in knn_radii(client, flat_index, field, query,
+                                       sizes=self.BALL_SIZES):
+                flat = range_distances(client, flat_index, field, query,
+                                       radius)
+                assert len(flat) == n, (metric, n, radius)
+                for ef in self.QUERY_EFS:
+                    hnsw = range_distances(client, hnsw_index, field, query,
+                                           radius, ef_runtime=ef)
+                    extra = hnsw.keys() - flat.keys()
+                    assert not extra, (metric, n, ef, extra)
+                    for key, dist in hnsw.items():
+                        assert math.isclose(dist, flat[key], rel_tol=1e-5,
+                                            abs_tol=1e-5), (metric, key)
+                    range_recall[(n, ef)].append(len(hnsw) / n)
+                    knn = self.knn_keys(client, hnsw_index, field, query, n,
+                                        ef)
+                    knn_recall[(n, ef)].append(len(knn & flat.keys()) / n)
+
+        mean = lambda xs: sum(xs) / len(xs)
+        range_means = {cell: mean(r) for cell, r in range_recall.items()}
+        knn_means = {cell: mean(r) for cell, r in knn_recall.items()}
+        print(f"\n{metric} recall, range (KNN) by ball size x query "
+              f"EF_RUNTIME; field EF_RUNTIME {self.FIELD_EF}")
+        print("ball " + "".join(f"{f'ef={ef}':>16}" for ef in self.QUERY_EFS))
+        for n in self.BALL_SIZES:
+            print(f"{n:>4} " + "".join(
+                f"{range_means[(n, ef)]:>8.3f} ({knn_means[(n, ef)]:.3f})"
+                for ef in self.QUERY_EFS))
+
+        for cell in cells:
+            assert range_means[cell] >= knn_means[cell], (
+                metric, cell, range_means[cell], knn_means[cell])
+        by_ef = {ef: mean([range_means[(n, ef)] for n in self.BALL_SIZES])
+                 for ef in self.QUERY_EFS}
+        assert by_ef[50] > by_ef[5], (metric, by_ef)
+        for n in self.BALL_SIZES:
+            assert range_means[(n, 50)] >= self.WIDE_EF_MIN_RECALL, (
+                metric, n, range_means[(n, 50)])
+
+
+# ---------------------------------------------------------------------------
+# INKEYS under the per-shard VECTOR_RANGE cap
+# ---------------------------------------------------------------------------
+# Five keys lie in the ball and the cap is 3. INKEYS restricts the query, so
+# it must be applied before the cap: each in-range key named alone in INKEYS is
+# returned, as KNN and non-vector queries do and as Redis does.
+INKEYS_CAP = 3
+INKEYS_BALL = 5
+INKEYS_SHAPES = (
+    "@{f}:[VECTOR_RANGE 1 $blob]",
+    "@{f}:[VECTOR_RANGE 1 $blob] | @t:{{none}}",
+    "@{f}:[VECTOR_RANGE 1 $blob] @t:{{a}}",
+)
+
+
+def inkeys_search(client, index, shape, field, keys):
+    """NOCONTENT VECTOR_RANGE query at the zero vector restricted to keys."""
+    result = client.execute_command(
+        "FT.SEARCH", index, shape.format(f=field),
+        "PARAMS", "2", "blob", float_to_bytes([0.0, 0.0]),
+        "INKEYS", str(len(keys)), *keys, "NOCONTENT", "DIALECT", "2",
+    )
+    assert result[0] == len(result) - 1
+    return parse_result_keys(result)
+
+
+class TestVectorRangeInkeysCap(ValkeySearchTestCaseBase):
+
+    @pytest.mark.parametrize("algo", ["FLAT", "HNSW"])
+    def test_inkeys_applies_before_range_cap(self, algo):
+        client = self.server.get_new_client()
+        assert client.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:",
+            "SCHEMA", "t", "TAG", "body", "TEXT", "vec", "VECTOR",
+            algo, "6",
+            "TYPE", "FLOAT32", "DIM", "2", "DISTANCE_METRIC", "L2",
+        ) == b"OK"
+        ball = [f"doc:{i}" for i in range(INKEYS_BALL)]
+        for i, key in enumerate(ball):
+            client.hset(key, mapping={
+                "t": "a", "body": "keep" if i % 2 == 0 else "drop",
+                "vec": float_to_bytes([0.1 * (i + 1), 0.0])})
+        client.hset("doc:far", mapping={
+            "t": "a", "vec": float_to_bytes([10.0, 0.0])})
+        client.hset("doc:tag-only", mapping={"t": "a", "body": "keep"})
+        wait_indexed([client], ("idx",))
+        client.config_set("search.max-nonvector-search-results-fetched",
+                          str(INKEYS_CAP))
+
+        for shape in INKEYS_SHAPES:
+            assert len(inkeys_search(client, "idx", shape, "vec",
+                                     ball)) == INKEYS_CAP, shape
+            for key in ball:
+                assert inkeys_search(client, "idx", shape, "vec",
+                                     [key]) == {key}, (shape, key)
+            assert inkeys_search(client, "idx", shape, "vec",
+                                 ["doc:far"]) == set(), shape
+
+        text_and = "@{f}:[VECTOR_RANGE 1 $blob] @body:keep"
+        assert inkeys_search(
+            client, "idx", text_and, "vec", ["doc:0"]) == {"doc:0"}
+        assert inkeys_search(
+            client, "idx", text_and, "vec", ["doc:1"]) == set()
+
+        negated = "-@{f}:[VECTOR_RANGE 1 $blob]"
+        assert inkeys_search(
+            client, "idx", negated, "vec",
+            ["doc:tag-only", "doc:missing"]) == {"doc:tag-only"}
+
+
+class TestVectorRangeInkeysCapCluster(ValkeySearchClusterTestCase):
+
+    def test_inkeys_applies_before_range_cap_on_remote_shard(self):
+        """All keys live on shard 1 and the query enters at shard 0."""
+        cluster_client = self.new_cluster_client()
+        indexes = create_range_indexes(cluster_client, "L2", dim=2)
+        primaries = [self.client_for_primary(i)
+                     for i in range(len(self.replication_groups))]
+        tag = find_local_key(primaries[1], "vr-inkeys-")
+        ball = [f"sc:{{{tag}}}:{i}" for i in range(INKEYS_BALL)]
+        for i, key in enumerate(ball):
+            primaries[1].hset(key, mapping={
+                "v": float_to_bytes([0.1 * (i + 1), 0.0])})
+        far = f"sc:{{{tag}}}:far"
+        primaries[1].hset(far, mapping={"v": float_to_bytes([10.0, 0.0])})
+        wait_indexed(primaries, indexes)
+        for primary in primaries:
+            primary.config_set(
+                "search.max-nonvector-search-results-fetched", str(INKEYS_CAP))
+
+        for index in indexes:
+            assert len(inkeys_search(primaries[0], index, INKEYS_SHAPES[0],
+                                     "v", ball)) == INKEYS_CAP, index
+            for key in ball:
+                assert inkeys_search(primaries[0], index, INKEYS_SHAPES[0],
+                                     "v", [key]) == {key}, (index, key)
+            assert inkeys_search(
+                primaries[0], index, "-@{f}:[VECTOR_RANGE 1 $blob]", "v",
+                [far, "sc:missing"]) == {far}, index

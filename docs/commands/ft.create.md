@@ -98,7 +98,7 @@ See [Numeric Field Format](../topics/search-data-formats.md#numeric-fields) for 
   - `INITIAL_CAP <size>` (optional): Initial index size.
   - `M <number>` (optional): Number of maximum allowed outgoing edges for each node in the graph in each layer. on layer zero the maximal number of outgoing edges will be 2\*M. Default is 16, the maximum is 512\.
   - `EF_CONSTRUCTION <number>` (optional): controls the number of vectors examined during index construction. Higher values for this parameter will improve recall ratio at the expense of longer index creation times. The default value is 200\. Maximum value is 4096\.
-  - `EF_RUNTIME <number>` (optional): controls the number of vectors to be examined during a query operation. The default is 10, and the max is 4096\. You can set this parameter value for each query you run. Higher values increase query times, but improve query recall.
+  - `EF_RUNTIME <number>` (optional): Controls HNSW search effort. Higher values can improve recall at the expense of longer query times. The default is 10. The maximum is set by `search.max-vector-ef-runtime`. A query can override the field value.
   - `DISTANCE_METRIC [L2 | IP | COSINE]` (required): Specifies the distance algorithm.
 
 See [Vector Field Format](../topics/search-data-formats.md#vector-fields) for more details and examples.
@@ -117,7 +117,7 @@ This table shows the actual computation that Search uses when computing the dist
 
 `SORTABLE` (optional): This parameter is not required. Any field may be used with `SORTBY` whether or not it is declared `SORTABLE`. It is recorded on the attribute and reported by [`FT.INFO`](ft.info.md), but does not otherwise affect indexing or query behavior.
 
-- `UNF` (optional): Only valid immediately after `SORTABLE`. In RediSearch this keeps a sortable field's sort value in its original, un-normalized form rather than lowercased. `SORTBY` already compares the stored field value directly, so this has no effect beyond being reported by [`FT.INFO`](ft.info.md).
+- `UNF` (optional): Only valid immediately after `SORTABLE`. In RediSearch this keeps the sort value of a `SORTABLE` field in its original form instead of converting it to lowercase. `SORTBY` already compares the stored field value directly, so this has no effect beyond being reported by [`FT.INFO`](ft.info.md).
 
 ## Examples
 

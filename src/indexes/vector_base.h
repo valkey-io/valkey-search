@@ -48,11 +48,29 @@ enum class QueryOperations : uint64_t;
 class IndexSchema;
 }  // namespace valkey_search
 
+namespace valkey_search::query {
+class QueryContext;
+}
+
 namespace valkey_search::indexes {
+namespace text {
+class TextIndex;
+class TextIndexSchema;
+}  // namespace text
 
 constexpr float kDefaultMagnitude = 1.0f;
 // Initial capacity of a range search's result vector.
 constexpr size_t kRangeReserve = 128;
+
+// Lets an hnswlib traversal poll a cancel::Token.
+class CancelCondition : public hnswlib::BaseCancellationFunctor {
+ public:
+  explicit CancelCondition(cancel::Token &token) : token_(token) {}
+  bool isCancelled() override { return token_->IsCancelled(); }
+
+ private:
+  cancel::Token &token_;
+};
 
 inline constexpr size_t UpperBoundToMultipleOf64(size_t num) {
   return (num + 63) & ~size_t(63);
@@ -368,6 +386,51 @@ absl::string_view LookupKeyByValue(
   }
 }
 
+// A range search for the keys within `radius` of the query vector.
+struct RangeQuery {
+  float radius = 0.0f;
+  // HNSW also walks through nodes within radius * (1 + epsilon) without
+  // emitting them; FLAT ignores it. Must be finite and non-negative.
+  float epsilon = 0.0f;
+  // Restricts the keys searched; not owned.
+  hnswlib::BaseFilterFunctor *filter = nullptr;
+  // HNSW beam width; nullopt uses the field's EF_RUNTIME. FLAT ignores it.
+  std::optional<size_t> ef_runtime;
+  // Set by the AND planner to ask only whether the range can beat a sibling
+  // with this many candidates. Retains at most this many results (and never
+  // more than the configured cap). An HNSW walk that cannot decide reports
+  // truncation instead of falling back to an exact scan.
+  std::optional<size_t> probe_limit;
+};
+
+// The result cap for `range`: the configured cap, lowered by a probe limit.
+inline size_t RangeResultLimit(const RangeQuery &range, size_t configured_cap) {
+  return range.probe_limit.has_value()
+             ? std::min(configured_cap, *range.probe_limit)
+             : configured_cap;
+}
+
+// Why an HNSW range search scanned every tracked key instead of, or after,
+// walking the graph.
+enum class RangeFallback {
+  kNone,
+  // search.max-nonvector-search-results-fetched is 0.
+  kCapZero,
+  // A COSINE radius of 2 or more holds every key.
+  kCosineFullRadius,
+  // The walk met a NaN distance, or an infinite COSINE one.
+  kNonFiniteDistance,
+  // The walk saw the cap's worth of results within the shell and no witness.
+  kShellFilled,
+};
+
+struct RangeResult {
+  std::vector<Neighbor> neighbors;
+  // Set when a match beyond the retained neighbors was observed.
+  bool truncated = false;
+  RangeFallback fallback = RangeFallback::kNone;
+};
+
 struct TrackedKeyMetadata {
   uint64_t internal_id;
   // If normalize_ is false, this will be 1.0f. Otherwise, it will be the
@@ -445,14 +508,16 @@ class VectorBase : public IndexBase {
       const InternedStringPtr &key) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
   size_t GetVectorDataSize() const { return GetDataTypeSize() * dimensions_; }
 
-  // Returns the neighbors within `radius` of `query`, unordered. FLAT scans
-  // every vector. HNSW runs an approximate KNN search for up to
-  // search.max-nonvector-search-results-fetched candidates, so it can miss
-  // keys; it falls back to SearchRangeExhaustive when the fetch fills the cap
-  // with the farthest candidate still in range.
-  virtual absl::StatusOr<std::vector<Neighbor>> SearchRange(
-      absl::string_view query, float radius, cancel::Token &cancellation_token,
-      std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr) = 0;
+  // Returns up to search.max-nonvector-search-results-fetched neighbors within
+  // `range.radius`, unordered, and sets `truncated` after observing an
+  // additional matching neighbor. FLAT scans exhaustively until that witness.
+  // HNSW homes in on the query with an `ef_runtime`-wide beam, defaulting to
+  // the field's EF_RUNTIME, and also walks through nodes within
+  // radius * (1 + epsilon) without emitting them. HNSW exact fallbacks obey
+  // the same result cap.
+  virtual absl::StatusOr<RangeResult> SearchRange(
+      absl::string_view query, const RangeQuery &range,
+      cancel::Token &cancellation_token) = 0;
 
   // Distance and internal label for `key`, or an error if untracked. Backs
   // IsWithinVectorRange. Search-phase only: lock-free, like
@@ -483,8 +548,8 @@ class VectorBase : public IndexBase {
   // IsWithinVectorRange is not.
   bool IsRecordWithinVectorRange(absl::string_view record,
                                  absl::string_view query, float radius) const {
-    auto distance = RecomputeDistance(record, query);
-    return distance.ok() && ClampCosineDistance(*distance) <= radius;
+    auto distance = RecomputeRangeDistance(record, query);
+    return distance.ok() && *distance <= radius;
   }
   bool IsVectorIndex() const override { return true; }
   virtual uint64_t GetMaxLoadedLabel() const { return 0; }
@@ -522,6 +587,12 @@ class VectorBase : public IndexBase {
   bool IsValidSizeVector(absl::string_view record) const {
     return IsValidSizeVector(record.size());
   }
+  // Validates the query blob, radius and epsilon at a SearchRange boundary.
+  // Returns a finite, non-negative radius: positive infinity is normalized to
+  // FLT_MAX, matching command parsing. Malformed input returns a status rather
+  // than reaching a distance kernel or a fatal internal invariant.
+  absl::StatusOr<float> ValidateRangeSearchInputs(
+      absl::string_view query, const RangeQuery &range) const;
   // Distance between `query` and the vector in `record`, where `record` is the
   // raw bytes just read back from the database rather than anything the index
   // holds.
@@ -533,6 +604,9 @@ class VectorBase : public IndexBase {
   // under a reader lock.
   absl::StatusOr<float> RecomputeDistance(absl::string_view record,
                                           absl::string_view query) const;
+  // Recomputes and clamps a VECTOR_RANGE distance using current record bytes.
+  absl::StatusOr<float> RecomputeRangeDistance(absl::string_view record,
+                                               absl::string_view query) const;
   const InternedStringPtr &GetInternedAttributeIdentifier() const {
     return interned_attribute_identifier_;
   }
@@ -586,13 +660,14 @@ class VectorBase : public IndexBase {
     return ClampCosineDistance(ComputeDistance(query, record, query_magnitude));
   }
 
-  // Every tracked key within `radius` of `query`, unordered, for FLAT/HNSW
-  // alike. Lock-free: phase-based locking keeps queries and mutations
+  // Tracked keys within `radius` of `query`, unordered, for FLAT/HNSW alike:
+  // at most `max_results`, and the scan stops at one more match, setting
+  // `truncated`. Lock-free: phase-based locking keeps queries and mutations
   // mutually exclusive, so key_to_metadata_mutex_ is not needed here.
-  std::vector<Neighbor> SearchRangeExhaustive(
+  RangeResult SearchRangeExhaustive(
       absl::string_view query, float radius, cancel::Token &cancellation_token,
-      hnswlib::BaseFilterFunctor *filter = nullptr) const
-      ABSL_NO_THREAD_SAFETY_ANALYSIS;
+      size_t max_results,
+      hnswlib::BaseFilterFunctor *filter) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
   // Holds an optionally-normalized query vector. `view` is always valid and
   // points either into `storage` (if normalization was applied) or into the
@@ -700,13 +775,11 @@ class VectorBase : public IndexBase {
 
 class PrefilterEvaluator : public query::Evaluator {
  public:
-  explicit PrefilterEvaluator(
-      const valkey_search::indexes::text::TextIndex *text_index,
-      QueryOperations query_operations,
-      const valkey_search::IndexSchema *index_schema)
-      : query::Evaluator(query_operations),
-        text_index_(text_index),
-        index_schema_(index_schema) {}
+  // Built once per query and reused across candidates.
+  PrefilterEvaluator(query::QueryContext &query_ctx,
+                     QueryOperations query_operations,
+                     const IndexSchema &index_schema,
+                     bool source_resolves_text = true);
   bool Evaluate(const query::Predicate &predicate,
                 const InternedStringPtr &key);
   // Like Evaluate(), but returns the full EvaluationResult so that callers
@@ -718,7 +791,7 @@ class PrefilterEvaluator : public query::Evaluator {
     CHECK(key_);
     return *key_;
   }
-  bool IsPrefilterEvaluator() const override { return true; }
+  bool IsPrefilterEvaluator() const override { return source_resolves_text_; }
 
  private:
   query::EvaluationResult EvaluateTags(
@@ -729,9 +802,16 @@ class PrefilterEvaluator : public query::Evaluator {
                                        bool require_positions) override;
   query::EvaluationResult EvaluateVectorRange(
       const query::VectorRangePredicate &predicate) override;
-  const valkey_search::indexes::text::TextIndex *text_index_;
+  // The candidate's own tree, fetched on the first leaf that needs it. Many
+  // predicates never do (tag/numeric, or text served from the context).
+  const text::TextIndex *PerKeyTextIndex();
+
+  query::QueryContext &query_ctx_;
+  const IndexSchema &index_schema_;
+  const bool source_resolves_text_;
   const InternedStringPtr *key_{nullptr};
-  const valkey_search::IndexSchema *index_schema_{nullptr};
+  const text::TextIndex *per_key_index_{nullptr};
+  bool per_key_index_fetched_{false};
 };
 
 }  // namespace valkey_search::indexes

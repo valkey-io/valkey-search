@@ -95,6 +95,17 @@ if(UNIX AND NOT APPLE AND NOT SAN_BUILD)
     TARGET libsearch APPEND PROPERTY LINK_DEPENDS
     ${CMAKE_SOURCE_DIR}/vmsdk/deferred_init.lds)
 
+  # GNU gold cannot parse INSERT. Where it is the default linker, use BFD.
+  include(CheckCXXSourceCompiles)
+  set(CMAKE_REQUIRED_LINK_OPTIONS
+      "LINKER:-T,${CMAKE_SOURCE_DIR}/vmsdk/deferred_init.lds")
+  check_cxx_source_compiles("int main() { return 0; }"
+                            LINKER_SUPPORTS_DEFERRED_INIT_LDS)
+  unset(CMAKE_REQUIRED_LINK_OPTIONS)
+  if(NOT LINKER_SUPPORTS_DEFERRED_INIT_LDS)
+    target_link_options(libsearch PRIVATE -fuse-ld=bfd)
+  endif()
+
   add_custom_command(
     TARGET libsearch
     POST_BUILD

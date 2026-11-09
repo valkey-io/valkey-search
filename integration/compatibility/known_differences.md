@@ -168,6 +168,161 @@ Measured against Redis 8:
   `search.cursor-max-count` / `search.cursor-max-idle-ms` configs; out of range
   values are an error rather than being clamped.
 
+### 1.7 Weight on a group nested in a group of the same operator
+
+The OR and AND cases below are the same known underlying issue: Redis's parser
+flattens a nested OR inside an OR, or a nested AND inside an AND, into one flat
+OR or AND. The inner group's `$weight` then lands on the whole flattened node --
+including legs outside the weighted group. valkey-search keeps the nesting and
+applies the weight only to the group it is written on. Measured on
+`redis:latest`, `SCORER BM25STD`:
+
+```
+OR in OR, a document containing library but neither lamp nor kiwi:
+query                                             Redis    valkey-search
+library                                           7.18     7.18
+((lamp | kiwi) | library)                         9.75     9.75
+((lamp | kiwi) => { $weight: 2.0 } | library)     19.49    12.31
+
+AND in AND, a document containing all three terms:
+lemon                                             0.89     0.89
+(smooth plum)                                     4.02     4.02
+(lemon (smooth plum))                             4.91     4.91
+(lemon (smooth plum) => { $weight: 0.5 })         2.45     2.90
+```
+
+Redis's 19.49 is 2 x 9.75 and its 2.45 is 0.5 x 4.91: the weight scaled
+`library` and `lemon`, which are outside the weighted group. Group wrappers do
+not stop it: `(((lamp | kiwi)) => { $weight: 2.0 } | library)` diverges the same
+way. A weighted group whose parent has the other operator (OR in AND, AND in
+OR), a weighted group on its own, and `$weight: 1.0` all agree.
+
+`scoring_query_builder.py` never weights a group whose operator matches its
+parent's, so the `weight` shape does not compare this case.
+
+### 1.8 English stemming: Snowball version skew
+
+valkey-search vendors Snowball 3.0.1 (`third_party/snowball`); Redis's English
+stemmer is older and maps some ordinary words to different roots. Valkey stems
+from the vendored library; Redis stems from `FT.EXPLAIN` on `redis:latest`
+(8.10.1):
+
+```
+word           valkey-search   Redis
+university     universiti      univers
+organize       organiz         organ
+organization   organiz         organ
+organic        organic         organ
+```
+
+So `organic` matches `organize` on Redis but not on valkey-search, and a
+stemmed term's root and inflection leaves (and their dt) differ wherever the
+roots differ. This affects both recall and scoring on a stemmed English field.
+The scoring `default` variant avoids it by keeping only words that stem the
+same in both engines (`STEMMING_SCORING_EXTRA_WORDS` in `data_sets.py`), so no
+generator compares it.
+
+### 1.9 Weight on a stemmed term
+
+A stemmed query term scores as the sum of up to three leaves: the exact word,
+the stem root, and the root's other inflections. Redis applies the term's own
+`$weight` to the exact-word leaf only and leaves the root and inflection leaves
+at weight 1. valkey-search applies it to every leaf, so the weight scales
+everything the term matched. A weight on a group scales every leaf in both
+engines.
+
+This is deliberate: the weight is what the user wrote on the term, and a
+document that matches only through stemming should not escape it. BM25STD over
+three documents `running`, `run` and `runs`, query `@text:running`:
+
+```
+document   query                                    Redis   valkey-search
+running    @text:running                            1.45    1.45
+running    (@text:running) => { $weight: 2 }        2.43    2.90
+run        (@text:running) => { $weight: 2 }        0.98    1.96
+runs       (@text:running) => { $weight: 2 }        0.47    0.94
+```
+
+`generate_scoring.py` marks every weighted query on the stemmed `default`
+variant `excluded` (`unsupported_tests.md` §7.1).
+
+### 1.10 Weight on an OR group with only one non-empty branch
+
+Redis ignores an OR group's `$weight` when only one branch of the OR matches any
+document in the index. A branch is empty if it is a term no document contains, or
+an AND containing such a term. The query then scores as the remaining branch
+alone. valkey-search applies the weight regardless. Measured on `redis:latest`,
+`SCORER BM25STD`, on the `nostem` scoring corpus, for a document containing
+`heavy`. `zzqqxx` is in no document:
+
+```
+query                                        Redis    valkey-search
+heavy                                        1.387    1.387
+(heavy | zzqqxx) => { $weight: 0.5 }         1.387    0.694
+(heavy | zzqqxx) => { $weight: 3.0 }         1.387    4.162
+```
+
+With a second non-empty branch, both engines apply the weight and agree. That
+holds for `(heavy | olive | zzqqxx) => { $weight: 0.5 }`, where `olive` is in
+three documents. Redis's EXPLAINSCORE shows the group's `Weight 0.50` replaced
+by `Weight 1.00` once only one branch is left.
+
+The standalone generators never meet this: every queried term occurs somewhere
+in the corpus. A cluster shard holds only part of the corpus, so a branch is
+often empty there. `generate_scoring_cluster.py` therefore records every query
+that weights an OR group as `excluded`, 764 of 14504 answers. See
+`unsupported_tests.md` §7.2.
+
+### 1.11 What counts as a number in a comparison
+
+A comparison with a numeric operand converts the other operand without falling
+back to comparing strings. When it cannot, `<`, `<=`, `>` and `>=` fail the
+query ("Error converting string"), while `==` is false and `!=` is true.
+Redis's conversion is stricter than valkey-search's
+(`Value::AsDouble`, which uses `strtod`): Redis rejects leading whitespace and
+hex, so `5 < ' 7'` and `5 < '0x10'` are errors on Redis 8 and compare as
+numbers on valkey-search.
+
+### 1.12 Arithmetic on a non-number
+
+`'abc' + 4` and `lower(@n) + 1` (a null) fail the query on Redis 8 ("Invalid
+numeric value"). valkey-search answers nil and keeps the record.
+
+### 1.13 Chained comparisons
+
+Redis comparisons do not chain: `@a < @b < @c` and `@a == @b == @c` are syntax
+errors. valkey-search parses them left to right, as `(@a < @b) < @c`.
+`test_aggregate_numeric_triadic_operators` produces 36 such commands per key
+type; the harness reports each as a permissiveness warning, not a failure.
+
+### 1.14 An array against a scalar
+
+A comparison between an array (TOLIST, RANDOM_SAMPLE) and a number or string
+keeps valkey-search's generic comparison, which reads the array as the empty
+string. Redis compares the array's first element (see 1.5).
+
+### 1.15 Error messages
+
+Where both engines fail a query on an evaluation error, the messages differ:
+valkey-search's string-function errors name the argument and the expected
+type, but not in Redis's `VALIDATE_ARG__STRING` form. The harness compares only
+that both engines raised.
+
+### 1.16 SORTBY over numbers and non-numeric strings
+
+Redis 8 fails a SORTBY whose column holds both numbers and strings that do
+not convert to numbers ("Error converting string"), as a `<` between them
+would. valkey-search sorts them, comparing such a pair as strings. Nulls
+(`lower()` of a number) and missing values sort the same on both: a null
+first ascending and last descending, a missing value last either way.
+
+### 1.17 Parameters in expressions
+
+Redis 8 rejects a `$param` inside an APPLY, FILTER or SORTBY expression
+("Unknown symbol"). valkey-search accepts it: a parameter whose text is a
+number is a number, any other is a string, as the text would be if written in
+place unquoted.
+
 ## 2. Where the two reference engines disagree
 
 These are not valkey-search defects. They are places where `redis:latest` and
@@ -193,6 +348,10 @@ group answers the reducer's identity. redis-stack reads such an input as `0`.
 redis-stack.
 
 ## 3. Notes on the harness and the reference engine
+
+* **An FT.CREATE FILTER over constants alone crashes Redis 8.** `FILTER
+  "'10' < 9"` takes the server down, so the filter generators never list an
+  expression without a field reference.
 
 * **`contains()` with a vector needle hangs Redis.** `contains(<any
   string-valued operand>, @v1)` never returns and pins the server at 100% CPU:

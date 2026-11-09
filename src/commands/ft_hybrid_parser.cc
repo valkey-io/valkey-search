@@ -736,6 +736,12 @@ absl::Status ParseCombineClause(MultiSearchParameters &env,
       }
       VMSDK_ASSIGN_OR_RETURN(env.combine_function,
                              expr::Expression::Compile(cctx, expr_sv));
+      // The result is the document's fused score, so it must be a number.
+      if (env.combine_function->GetResultType() !=
+          expr::Expression::Type::kNumber) {
+        return absl::InvalidArgumentError(absl::StrCat(
+            "COMBINE FUNCTION `", expr_sv, "` does not produce a number"));
+      }
       saw_expr = true;
     } else {
       return absl::InvalidArgumentError(
@@ -800,6 +806,7 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
   //    embedded AggregateParameters in env.agg.
   if (env.agg == nullptr) {
     env.agg = std::make_unique<aggregate::AggregateParameters>(env.db_num);
+    env.agg->hybrid_ = true;
     env.agg->index_schema = env.index_schema;
     env.agg->index_schema_name = env.index_schema_name;
     env.agg->dialect = 2;
@@ -832,13 +839,15 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
     // here are the backstop, and they report rather than abort so no future
     // alias path can take the server down.
     if (env.agg->AddRecordAttribute("__key", "__key", "__key",
-                                    indexes::IndexerType::kNone) !=
+                                    indexes::IndexerType::kNone,
+                                    expr::Expression::Type::kString) !=
         aggregate::AggregateParameters::kKeyColumn) {
       return absl::InternalError("FT.HYBRID could not seed the `__key` column");
     }
     auto score_sv = vmsdk::ToStringView(env.agg->score_as.get());
     if (env.agg->AddRecordAttribute(score_sv, score_sv, score_sv,
-                                    indexes::IndexerType::kNone) !=
+                                    indexes::IndexerType::kNone,
+                                    expr::Expression::Type::kNumber) !=
         aggregate::AggregateParameters::kScoreColumn) {
       return absl::InternalError(absl::StrCat("FT.HYBRID could not seed the `",
                                               score_sv, "` score column"));
@@ -1185,13 +1194,11 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
     // the arm later. Neighbor::score is a KNN distance only for a vector arm;
     // a text SEARCH arm carries a BM25-style relevance score instead. A VSIM
     // arm's score stays its distance whatever its pre-filter contains, which
-    // is what vector_score_only says; the QueryHasTextPredicate arm of the
+    // is what vector_score_only says; the scored-predicate arm of the
     // test guards the `text=>[KNN ...]` shape that ApplyHybridTextScore
     // overwrites with text relevance, which no FT.HYBRID arm can be written as
     // any more but which costs nothing to keep answering correctly.
-    env.per_arm_score_is_distance.push_back(
-        arm->IsVectorQuery() &&
-        (arm->vector_score_only || !QueryHasTextPredicate(*arm)));
+    env.per_arm_score_is_distance.push_back(!arm->ScoreIsRelevance());
     // And which metric produced it: the similarity a distance maps to differs
     // by metric, and `arms` is emptied at dispatch.
     auto metric = data_model::DISTANCE_METRIC_UNSPECIFIED;
@@ -1210,6 +1217,12 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
 
   // Clear the now-stale stack-local index_interface_ pointer.
   env.agg->parse_vars_.index_interface_ = nullptr;
+  // parse_vars views argv (and a stack local for a filtered VSIM arm); a
+  // parked cursor outlives both.
+  env.agg->parse_vars.ClearAtEndOfParse();
+  for (auto &arm : env.arms) {
+    arm->parse_vars.ClearAtEndOfParse();
+  }
 
   // A score alias naming a column the LOAD clause explicitly emits is
   // rejected rather than silently resolved. Both would land in the same reply

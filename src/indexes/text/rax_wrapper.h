@@ -46,8 +46,14 @@ of keys in a text index's subtree.
 #include "posting.h"
 #include "rax/rax.h"
 #include "src/indexes/text/invasive_ptr.h"
+#include "vmsdk/src/info.h"
 
 namespace valkey_search::indexes::text {
+
+// Counts tree walks (point lookups and prefix iterations). Query code
+// caches leaf resolutions so this stays flat as the candidate count grows;
+// tests assert on it.
+extern vmsdk::info_field::Integer rax_walks;
 
 // Stem tree target: maps stem root to list of parent words that stem to it.
 // Example: "happi" → {"happy", "happiness", "happily"}
@@ -101,6 +107,9 @@ class Rax {
   // Searches for word and returns its Postings target as InvasivePtr.
   // Returns empty InvasivePtr if word not found.
   InvasivePtr<Postings> FindPostingsTarget(absl::string_view word) const;
+
+  // Same for a stem tree entry's StemParents target.
+  InvasivePtr<StemParents> FindStemParentsTarget(absl::string_view word) const;
 
   // Get the total number of unique words in the RadixTree (i.e. total number of
   // entries).

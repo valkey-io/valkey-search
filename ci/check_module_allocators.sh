@@ -240,7 +240,14 @@ done
 #               i2d_* family with a null output pointer) must be released with
 #               OPENSSL_free, which is CRYPTO_free inside libcrypto -- so both
 #               the allocation and the free happen on the far side of the
-#               boundary, as with getaddrinfo/freeaddrinfo.
+#               boundary, as with getaddrinfo/freeaddrinfo. OpenSSL 1.1
+#               (libssl.so.1.1, libcrypto.so.1.1) also imports the legacy
+#               HMAC_CTX_new, EC_KEY_new_by_curve_name, EVP_PKEY_new and
+#               PEM_read_bio_RSAPrivateKey, each paired with its free function
+#               likewise; SHA256_* and HMAC_* write into caller buffers.
+#   libpthread, Split out of libc before glibc 2.34. Only threads, locks,
+#   librt,      TLS keys, clock_gettime and dlopen/dlsym/dlclose are imported;
+#   libdl       none returns memory for the caller to free.
 #   libm,       No allocation.
 #   libmvec
 #   libgcc_s    Unwinder only.
@@ -258,7 +265,9 @@ done
 # libstdc++.so.6.
 #
 ALLOWED_NEEDED="libc.so.6 libm.so.6 libmvec.so.1 libgcc_s.so.1
-                libssl.so.3 libcrypto.so.3 libsystemd.so.0"
+                libssl.so.3 libcrypto.so.3 libsystemd.so.0
+                libssl.so.1.1 libcrypto.so.1.1
+                libpthread.so.0 librt.so.1 libdl.so.2"
 
 # Unquoted, so that the newlines and indentation above collapse to single
 # spaces; the match below relies on every entry being space-delimited.

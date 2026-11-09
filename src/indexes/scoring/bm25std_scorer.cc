@@ -39,6 +39,11 @@ float Bm25StdScorer::ScoreLeaf(const LeafScoreInput& input) const {
 
 float Bm25StdScorer::ComposeDocumentScore(float sum_of_terms,
                                           float document_score) const {
+  // Zero relevance (e.g. only `$weight: 0` clauses) scores 0 for any document
+  // score, where the reference returns NaN for 0 * inf.
+  if (sum_of_terms == 0.0f) {
+    return 0.0f;
+  }
   // 0 * inf is NaN in either direction, and a NaN score is not merely wrong: it
   // breaks the strict-weak-ordering the result sort relies on. Propagate the
   // infinite operand instead of multiplying.

@@ -90,7 +90,9 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
   void *dist_func_param_{nullptr};
 
   mutable std::mutex label_lookup_lock;  // lock for label_lookup_
-  std::unordered_map<labeltype, tableint> label_lookup_;
+  std::unordered_map<labeltype, tableint>
+      label_lookup_;  // only contains live slots
+  labeltype max_loaded_label_{0};  // max label stamped on any slot at load time
 
   std::default_random_engine level_generator_;
   std::default_random_engine update_probability_generator_;
@@ -987,6 +989,11 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     data_level0_memory_ = std::make_unique<ChunkedArray>(
         size_data_per_element_, k_elements_per_chunk, max_elements);
 
+    labeltype max_label = 0;
+    // Tracks tombstoned slots by label to detect duplicates during load.
+    std::unordered_map<labeltype, tableint> tombstoned_label_lookup_;
+    // Slots whose duplicate label must be reassigned, mapped to their vector.
+    std::unordered_map<tableint, std::string> dup_label_slots;
     for (size_t i = 0; i < cur_element_count_; i++) {
       VMSDK_ASSIGN_OR_RETURN(auto chunk, input.LoadChunk());
       loadCheck(chunk->size() ==
@@ -996,9 +1003,43 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       labeltype id;
       memcpy((char *)&id, chunk->data() + size_links_level0_ + vector_size_,
              sizeof(labeltype));
-      *(char **)((*data_level0_memory_)[i] + offsetData_) =
+      max_label = std::max(max_label, id);
+
+      // A label can appear on multiple slots in RDBs written by older versions.
+      // We ensure that the live slot wins the label in a duplicate label situation,
+      // and any duplicate tombstone slots get re-labeled to a new unique label.
+      if (!isMarkedDeleted(static_cast<tableint>(i))) {
+        loadCheck(label_lookup_.find(id) == label_lookup_.end(),
+                  "duplicate live label in index");
+
+        // Mark any tombstones slots with the same label for duplicate handling
+        auto tomb_dup_it = tombstoned_label_lookup_.find(id);
+        if (tomb_dup_it != tombstoned_label_lookup_.end()) {
+          dup_label_slots[tomb_dup_it->second] = std::string(
+              getDataByInternalId(tomb_dup_it->second), vector_size_);
+          tombstoned_label_lookup_.erase(tomb_dup_it);
+        }
+
+        // Track the vector
+        *(char **)((*data_level0_memory_)[i] + offsetData_) =
           vector_tracker->TrackVector(id, chunk->data() + size_links_level0_,
                                       vector_size_);
+        label_lookup_[id] = i;
+      } else {
+        if (tombstoned_label_lookup_.find(id) != tombstoned_label_lookup_.end()
+            || label_lookup_.find(id) != label_lookup_.end()) {
+          // Allow the first tombstone with the label to maintain ownership
+          dup_label_slots[i] =
+              std::string(chunk->data() + size_links_level0_, vector_size_);
+        } else {
+          // Track the vector
+          *(char **)((*data_level0_memory_)[i] + offsetData_) =
+              vector_tracker->TrackVector(id, chunk->data() + size_links_level0_,
+                                          vector_size_);
+          tombstoned_label_lookup_[id] = i;
+        }
+      }
+
       memcpy((*data_level0_memory_)[i] + label_offset_, (char *)&id,
              sizeof(labeltype));
 
@@ -1016,6 +1057,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         loadCheck(l0_neighbors[j] != i, "level-0 self-loop");
       }
     }
+    valkey_search::Metrics::GetStats().hnsw_duplicate_label_on_load_cnt +=
+        dup_label_slots.size();
 
     std::vector<std::mutex>(max_elements).swap(link_list_locks_);
     std::vector<std::mutex>(MAX_LABEL_OPERATION_LOCKS).swap(label_op_locks_);
@@ -1036,25 +1079,6 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       element_levels_[i] = 0;
       *reinterpret_cast<char **>((*linkLists_)[i]) = nullptr;
 
-      labeltype ext_label = getExternalLabel(i);
-
-      // A label can appear on multiple slots in RDBs written by older versions.
-      // There can be one live slot and any number of tombstoned slots all
-      // carrying the same label. We just need to rebuild the label lookup to
-      // point the label at the live slot if there is one.
-      auto dup_it = label_lookup_.find(ext_label);
-      if (dup_it == label_lookup_.end()) {
-        label_lookup_[ext_label] = i;
-      } else {
-        valkey_search::Metrics::GetStats().hnsw_duplicate_label_on_load_cnt +=
-            1;
-        if (!isMarkedDeleted(static_cast<tableint>(i))) {
-          loadCheck(isMarkedDeleted(dup_it->second),
-                    "duplicate live label in index");
-          // Overwrite mapping to tombstoned slot with the live one.
-          dup_it->second = i;
-        }
-      }
       size_t linkListSize;
       VMSDK_ASSIGN_OR_RETURN(auto size_chunk, input.LoadChunk());
       loadCheck(size_chunk->size() == sizeof(size_t),
@@ -1090,6 +1114,16 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         }
       }
     }
+
+    // Re-label the duplicates with unique labels
+    for (auto &[slot, vec] : dup_label_slots) {
+      labeltype label = ++max_label;
+      setExternalLabel(slot, label);
+      // Track the vector
+      *(char **)((*data_level0_memory_)[slot] + offsetData_) =
+          vector_tracker->TrackVector(label, vec.data(), vector_size_);
+    }
+    max_loaded_label_ = max_label;
 
     // --- Global graph-invariant pass (requires all element_levels_ loaded) ---
     // The entry point must be one of the tallest nodes (proven invariant:
@@ -1180,6 +1214,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       throw std::runtime_error("Label not found");
     }
     tableint internalId = search->second;
+    label_lookup_.erase(search);
     lock_table.unlock();
 
     markDeletedInternal(internalId);
@@ -1206,29 +1241,6 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       throw std::runtime_error(
           "The requested to delete element is already deleted");
     }
-  }
-
-  /*
-   * Removes the deleted mark of the node, does NOT really change the current
-   * graph.
-   *
-   * Note: the method is not safe to use when replacement of deleted elements is
-   * enabled, because elements marked as deleted can be completely removed by
-   * addPoint
-   */
-  void unmarkDelete(labeltype label) {
-    // lock all operations with element by label
-    std::unique_lock<std::mutex> lock_label(getLabelOpMutex(label));
-
-    std::unique_lock<std::mutex> lock_table(label_lookup_lock);
-    auto search = label_lookup_.find(label);
-    if (search == label_lookup_.end()) {
-      throw std::runtime_error("Label not found");
-    }
-    tableint internalId = search->second;
-    lock_table.unlock();
-
-    unmarkDeletedInternal(internalId);
   }
 
   /*
@@ -1271,11 +1283,10 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 
   /*
    * Adds point. Updates the point if it is already in the index.
-   * If replacement of deleted elements is enabled: replaces previously deleted
-   * point if any, updating it with new point. If the label already exists in a
-   * slot, the same slot will be used.
+   * If replacement of deleted elements is enabled, a tombstoned slot is reused
+   * if there are any available, and the old label of the slot is returned.
    */
-  void addPoint(const void *data_point, labeltype label,
+  std::optional<labeltype> addPoint(const void *data_point, labeltype label,
                 bool replace_deleted = false) {
     if ((allow_replace_deleted_ == false) && (replace_deleted == true)) {
       throw std::runtime_error(
@@ -1284,29 +1295,23 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 
     // lock all operations with element by label
     std::unique_lock<std::mutex> lock_label(getLabelOpMutex(label));
-    if (!replace_deleted) {
-      addPoint(data_point, label, -1);
-      return;
-    }
 
     // If the label already exists, reuse the same slot.
+    // WARN: Labels are not to be reused unless updating a live slot.
     {
       std::unique_lock<std::mutex> lock_table(label_lookup_lock);
       auto search = label_lookup_.find(label);
       if (search != label_lookup_.end()) {
         tableint existing = search->second;
         lock_table.unlock();
-        if (isMarkedDeleted(existing)) {
-          {
-            std::unique_lock<std::mutex> lock_deleted_elements(
-                deleted_elements_lock);
-            deleted_elements.erase(existing);
-          }
-          unmarkDeletedInternal(existing);
-        }
         updatePoint(data_point, existing, 1.0);
-        return;
+        return std::nullopt;
       }
+    }
+
+    if (!replace_deleted) {
+      addPoint(data_point, label, -1);
+      return std::nullopt;
     }
 
     // Otherwise, reuse a vacant tombstoned slot if any.
@@ -1329,14 +1334,16 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       labeltype label_replaced = getExternalLabel(internal_id_replaced);
       setExternalLabel(internal_id_replaced, label);
 
+      // Add the slot back to the label lookup now that it's live again
       std::unique_lock<std::mutex> lock_table(label_lookup_lock);
-      label_lookup_.erase(label_replaced);
       label_lookup_[label] = internal_id_replaced;
       lock_table.unlock();
 
       unmarkDeletedInternal(internal_id_replaced);
       updatePoint(data_point, internal_id_replaced, 1.0);
+      return std::optional<labeltype>(label_replaced);
     }
+    return std::nullopt;
   }
 
   void updatePoint(const void *dataPoint, tableint internalId,
@@ -1521,36 +1528,14 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
   }
 
   tableint addPoint(const void *data_point, labeltype label, int level) {
+    if (cur_element_count_ >= max_elements_) {
+      throw std::runtime_error(
+          "The number of elements exceeds the specified limit");
+    }
+
     tableint cur_c = 0;
     {
-      // Checking if the element with the same label already exists
-      // if so, updating it *instead* of creating a new element.
       std::unique_lock<std::mutex> lock_table(label_lookup_lock);
-      auto search = label_lookup_.find(label);
-      if (search != label_lookup_.end()) {
-        tableint existingInternalId = search->second;
-        if (allow_replace_deleted_) {
-          if (isMarkedDeleted(existingInternalId)) {
-            throw std::runtime_error(
-                "Can't use addPoint to update deleted elements if replacement "
-                "of deleted elements is enabled.");
-          }
-        }
-        lock_table.unlock();
-
-        if (isMarkedDeleted(existingInternalId)) {
-          unmarkDeletedInternal(existingInternalId);
-        }
-        updatePoint(data_point, existingInternalId, 1.0);
-
-        return existingInternalId;
-      }
-
-      if (cur_element_count_ >= max_elements_) {
-        throw std::runtime_error(
-            "The number of elements exceeds the specified limit");
-      }
-
       cur_c = cur_element_count_;
       cur_element_count_++;
       label_lookup_[label] = cur_c;

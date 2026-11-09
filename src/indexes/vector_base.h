@@ -181,7 +181,7 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   char* TrackVector(uint64_t internal_id, char* vector, size_t len) override;
   InternedStringPtr InternVector(absl::string_view record,
                                  std::optional<float>& magnitude);
-  virtual uint64_t GetMaxInternalLabel() const { return 0; }
+  virtual uint64_t GetMaxLoadedLabel() const { return 0; }
   virtual size_t GetLabelCount() const { return 0; }
 
   bool IsVectorIndex() const override { return true; }

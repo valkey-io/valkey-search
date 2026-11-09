@@ -90,6 +90,7 @@ message VectorRangePredicate {
   optional double epsilon = 5;
   bytes query_vector = 6;
   string radius_param_name = 7;
+  optional uint32 ef_runtime = 8;
 }
 
 message AndPredicate {
@@ -197,6 +198,9 @@ message SearchIndexPartitionRequest {
   // -- so a mixed-version fanout does not turn `LOAD *` into a fetch of
   // nothing.
   bool all_content = 25;
+  // Preserves a derived command's NoProcessingRequired() decision after the
+  // shard reconstructs this request as base SearchParameters.
+  bool force_content_processing = 26;
 }
 
 message InkeysFilter {

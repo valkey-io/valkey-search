@@ -773,12 +773,15 @@ class ClientSystem:
 
     def execute_command(self, *cmd):
         print("Execute:", *cmd)
+        # A cluster client cannot route a command written as one string.
+        if isinstance(cmd[0], str):
+            cmd = (*cmd[0].split(), *cmd[1:])
         result = self.client.execute_command(*cmd)
         #print("Result:", result)
         return result
     
     def ft_info(self, index):
-        values = self.client.execute_command(f"FT.INFO {index}")
+        values = self.client.execute_command("FT.INFO", index)
         result = {unbytes(values[i]):unbytes(values[i+1]) for i in range(0, len(values), 2)}
         return result
         
@@ -1757,6 +1760,23 @@ TYPED_COMPARISON_FILTER_EXPRS = {
     "filter typed strlen vs quote": "strlen(@title) > '3'",
     "filter typed lower vs lit":    "lower(@category) > 5",
     "filter typed lower vs quote":  "lower(@category) > 'c'",
+    # Measured on Redis 8: a comparison with a string that does not convert to
+    # a number is an error for < <= > >= -- the document is rejected, even
+    # under a negation -- and == false, != true. && and || evaluate their right
+    # side only when needed. lower() of a JSON number is a null, which orders
+    # below everything; on HASH the field is a string. (A FILTER over
+    # constants alone crashes Redis 8, so none are listed.)
+    "filter typed num vs nonnum lt":   "@price < 'abc'",
+    "filter typed num vs nonnum ne":   "@price != 'abc'",
+    "filter typed not num vs nonnum":  "!(@price < 'abc')",
+    "filter typed not text vs num":    "!(@title < 5)",
+    "filter typed and short circuit":  "!(0 && (@title < 5))",
+    "filter typed or short circuit":   "1 || (@title < 5)",
+    "filter typed or error first":     "(@title < 5) || 1",
+    "filter typed lower num lt":       "lower(@price) < 5",
+    "filter typed lower num eq":       "lower(@price) == lower(@rating)",
+    "filter typed exists lower num":   "exists(lower(@price))",
+    "filter typed substr quoted arg":  "!(substr(@title, '0', 1) == 'q')",
 }
 
 FILTER_DATASETS = {
@@ -2278,7 +2298,9 @@ def load_data_cluster(cluster_client, test_case, data_set, key_type, data_source
     # filter, sortkey, return) replayed in cluster mode raised KeyError on
     # data[data_set].
     if data_source is None:
-        if data_set in HYBRID_DATASETS:
+        if data_set in SCORING_DATASETS:
+            data_source = "scoring"
+        elif data_set in HYBRID_DATASETS:
             data_source = "hybrid"
         elif data_set in TEXT_DATASETS:
             data_source = "text"
@@ -2298,6 +2320,8 @@ def load_data_cluster(cluster_client, test_case, data_set, key_type, data_source
             data = compute_data_sets(vector_data_type=vector_data_type)
         case "text":
             data = compute_text_data_sets(data_set, schema_type=schema_type)
+        case "scoring":
+            data = compute_scoring_data_sets(data_set, schema_type=schema_type)
         case "hybrid":
             data = compute_hybrid_data_sets()
         case "filter":
@@ -2317,6 +2341,9 @@ def load_data_cluster(cluster_client, test_case, data_set, key_type, data_source
             primary0.execute_command(*create_cmd)
         else:
             primary0.execute_command(create_cmd)
+    from utils import IndexingTestHelper
+    IndexingTestHelper.wait_for_indexing_complete_on_all_nodes(
+        test_case.get_all_primary_clients(), f"{key_type}_idx1")
 
     for key, fields in data[data_set][SETS_KEY(key_type)]:
         if key_type == "hash":

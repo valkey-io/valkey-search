@@ -116,6 +116,9 @@ config::Number &GetMaxTermExpansions();
 /// Return the largest COUNT accepted by WITHCURSOR and FT.CURSOR READ
 config::Number &GetCursorMaxCount();
 
+/// Return the longest REGEX pattern (bytes) accepted by FT._LIST
+config::Number &GetMaxRegexPatternBytes();
+
 /// Return the largest MAXIDLE (milliseconds) accepted by WITHCURSOR
 config::Number &GetCursorMaxIdleMs();
 

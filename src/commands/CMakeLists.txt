@@ -36,6 +36,7 @@ target_link_libraries(commands PUBLIC rank_fusion)
 target_link_libraries(commands PUBLIC multi_search)
 target_link_libraries(commands PUBLIC response_generator)
 target_link_libraries(commands PUBLIC search)
+target_link_libraries(commands PUBLIC regex_util)
 target_link_libraries(commands PUBLIC vmsdklib)
 target_link_libraries(commands PUBLIC valkey_module)
 

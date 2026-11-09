@@ -221,6 +221,7 @@ set(UTILS_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/utils/intrusive_ref_count_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/utils/lru_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/utils/patricia_tree_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/utils/regex_util_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/utils/scanner_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/utils/numeric_btree_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/utils/string_interning_test.cc)
@@ -235,6 +236,7 @@ target_link_libraries(valkey_utils_test PRIVATE intrusive_list)
 target_link_libraries(valkey_utils_test PRIVATE lru)
 target_link_libraries(valkey_utils_test PRIVATE scanner)
 target_link_libraries(valkey_utils_test PRIVATE numeric_btree)
+target_link_libraries(valkey_utils_test PRIVATE regex_util)
 finalize_test_flags(valkey_utils_test)
 
 

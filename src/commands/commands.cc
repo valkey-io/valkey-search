@@ -10,6 +10,8 @@
 #include <memory>
 #include <vector>
 
+#include "absl/time/clock.h"
+#include "absl/time/time.h"
 #include "fanout.h"
 #include "ft_create_parser.h"
 #include "src/acl.h"
@@ -164,6 +166,8 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
 
     if (ABSL_PREDICT_FALSE(!ValkeySearch::Instance().SupportParallelQueries() ||
                            inside_multi_exec)) {
+      const absl::Time sync_deadline =
+          absl::Now() + absl::Milliseconds(parameters->timeout_ms);
       VMSDK_RETURN_IF_ERROR(
           query::Search(*parameters, query::SearchMode::kLocal));
       // Check if operation failed first to get the actual error message
@@ -176,6 +180,19 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
       // Check if operation was cancelled and partial results are disabled.
       if (!parameters->enable_partial_results &&
           parameters->cancellation_token->IsCancelled()) {
+        ValkeyModule_ReplyWithError(
+            ctx, "Search operation cancelled due to timeout");
+        ++Metrics::GetStats().query_failed_requests_cnt;
+        return absl::OkStatus();
+      }
+      // SendReply revalidates text predicates against a key's index unlocked,
+      // which is only correct and safe once its in-flight mutation is applied.
+      // A synchronous reply cannot park this query, so block here, bounded by
+      // its timeout.
+      if (parameters->GetContentProcessing() ==
+              query::kContentionCheckRequired &&
+          !parameters->index_schema->WaitForContendedKeys(
+              parameters->search_result.neighbors, sync_deadline)) {
         ValkeyModule_ReplyWithError(
             ctx, "Search operation cancelled due to timeout");
         ++Metrics::GetStats().query_failed_requests_cnt;

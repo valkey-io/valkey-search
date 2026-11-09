@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# redisearch-docker.sh — run RediSearch (redis-stack-server) in a throwaway
-# Docker container as the parity reference for valkey-search work.
+# redisearch-docker.sh — run RediSearch (redis:latest, Redis 8 with native
+# search) in a throwaway Docker container as the parity reference for
+# valkey-search work.
 #
 #   redisearch-docker.sh up                 # start container, wait for readiness
 #   redisearch-docker.sh cli [ARGS...]      # redis-cli against it (interactive if no args)
@@ -8,15 +9,17 @@
 #   redisearch-docker.sh status             # is it up? what image/version?
 #
 # Env:
-#   RS_IMAGE   image to run (default: redis/redis-stack-server:latest).
+#   RS_IMAGE   image to run (default: redis:latest, the reference engine the
+#              in-repo compatibility harness records against).
 #              For a recorded parity claim, set this to a fixed tag or digest
-#              (e.g. redis/redis-stack-server:7.4.0-v1) so the run is repeatable;
-#              `latest` is a mutable tag and can resolve to a different build later.
+#              (e.g. redis:8.10.3) so the run is repeatable; `latest` is a
+#              mutable tag and can resolve to a different build later.
 #   RS_NAME    container name  (default: redisearch-compat)
-#   RS_PORT    host port       (default: 6399, chosen to avoid a local 6379)
+#   RS_PORT    host port       (default: 6399, chosen to avoid a local 6379).
+#              Published on 127.0.0.1 only: the container has no password.
 set -euo pipefail
 
-RS_IMAGE="${RS_IMAGE:-redis/redis-stack-server:latest}"
+RS_IMAGE="${RS_IMAGE:-redis:latest}"
 RS_NAME="${RS_NAME:-redisearch-compat}"
 RS_PORT="${RS_PORT:-6399}"
 
@@ -32,10 +35,13 @@ running_port() {
 
 # Resolved image reference of the running container (repo digest if available,
 # else the configured image), so a run is self-documenting even under `latest`.
+# RepoDigests is a field of the image, not the container, so look up the
+# container's image ID first.
 running_image() {
-  local digest
-  digest=$(docker inspect -f '{{ range .RepoDigests }}{{ . }}{{ break }}{{ end }}' \
-    "$RS_NAME" 2>/dev/null || true)
+  local image_id digest
+  image_id=$(docker inspect -f '{{ .Image }}' "$RS_NAME" 2>/dev/null || true)
+  digest=$(docker image inspect -f '{{ range .RepoDigests }}{{ . }}{{ break }}{{ end }}' \
+    "$image_id" 2>/dev/null || true)
   if [ -n "$digest" ]; then echo "$digest"; return; fi
   docker inspect -f '{{ .Config.Image }}' "$RS_NAME" 2>/dev/null || true
 }
@@ -68,8 +74,8 @@ case "$cmd" in
     # Remove a stopped container of the same name, if any.
     docker rm -f "$RS_NAME" >/dev/null 2>&1 || true
     echo "starting $RS_IMAGE as $RS_NAME on host port $RS_PORT ..."
-    docker run -d --name "$RS_NAME" -p "${RS_PORT}:6379" "$RS_IMAGE" >/dev/null
-    # Wait for readiness (redis-stack takes a moment to load the module).
+    docker run -d --name "$RS_NAME" -p "127.0.0.1:${RS_PORT}:6379" "$RS_IMAGE" >/dev/null
+    # Wait for readiness (the server takes a moment to load the search module).
     for i in $(seq 1 30); do
       if docker exec "$RS_NAME" redis-cli PING 2>/dev/null | grep -qx PONG; then
         # Confirm the search module is actually loaded.

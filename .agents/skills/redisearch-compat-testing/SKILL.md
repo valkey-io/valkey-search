@@ -87,19 +87,19 @@ Use this for a one-off "what does RediSearch do here?" look. If the case can be 
 
    So: classify the divergence against `COMPATIBILITY.md`, then check whether the in-repo suite already covers it. If it falls under a non-goal (e.g. you are only comparing error *wording*), it is out of scope and Docker measurement is unnecessary. If it is an expected-compatibility area not already captured, proceed to measure.
 
-1. **Start RediSearch in Docker.** Use **`redis:latest`** (Redis 8, native RediSearch) to match the reference engine the in-repo harness records against; only pull in `redis/redis-stack-server` to explain a reference-vs-reference disagreement (see `known_differences.md §2`). The helper defaults to redis-stack for the interactive shell but takes any image via `RS_IMAGE`. The helper lives in this skill's `scripts/` dir; run the examples below from there (the paths are relative to it):
+1. **Start RediSearch in Docker.** Use **`redis:latest`** (Redis 8, native RediSearch) to match the reference engine the in-repo harness records against; only pull in `redis/redis-stack-server` to explain a reference-vs-reference disagreement (see `known_differences.md §2`). The helper defaults to `redis:latest` and takes any image via `RS_IMAGE`. The helper lives in this skill's `scripts/` dir; run the examples below from there (the paths are relative to it):
 
    ```bash
    cd .agents/skills/redisearch-compat-testing        # helper path is relative to here
-   RS_IMAGE=redis:latest ./scripts/redisearch-docker.sh up   # match the harness reference engine
+   ./scripts/redisearch-docker.sh up                         # redis:latest, the harness reference engine
    ./scripts/redisearch-docker.sh cli                        # drop into redis-cli against it
    ./scripts/redisearch-docker.sh down                       # stop and remove the container
    ```
 
-2. **Pin the image, then record the version you measured.** These are two distinct steps. RediSearch behavior can change across releases, so a parity claim is only meaningful with a fixed reference. The default `RS_IMAGE=redis/redis-stack-server:latest` is a **mutable tag** — fine for a quick look, but for any recorded parity claim set `RS_IMAGE` to a fixed tag or digest so the run is repeatable:
+2. **Pin the image, then record the version you measured.** These are two distinct steps. RediSearch behavior can change across releases, so a parity claim is only meaningful with a fixed reference. The default `RS_IMAGE=redis:latest` is a **mutable tag** — fine for a quick look, but for any recorded parity claim set `RS_IMAGE` to a fixed tag or digest so the run is repeatable:
 
    ```bash
-   RS_IMAGE=redis/redis-stack-server:7.4.0-v1 ./scripts/redisearch-docker.sh up   # pin the image
+   RS_IMAGE=redis:8.10.3 ./scripts/redisearch-docker.sh up      # pin the image (or redis@sha256:...)
    ./scripts/redisearch-docker.sh cli FT._LIST                  # sanity: module loaded
    ./scripts/redisearch-docker.sh cli MODULE LIST               # record the search module version
    ```
@@ -154,7 +154,8 @@ Use this for a one-off "what does RediSearch do here?" look. If the case can be 
 | Regenerate reference pickles | `./integration/compatibility/regenerate.sh` (uses `redis:latest`; commit the updated `*.pickle.gz`) |
 | Run the compat suite (per AGENTS.md) | `.devcontainer/run_in_docker.sh ./build.sh --run-integration-tests --debug` |
 | Filter to the compat replay | `.devcontainer/run_in_docker.sh bash -c 'TEST_PATTERN=compatibility integration/run.sh'` |
-| Start RediSearch (harness reference) | `RS_IMAGE=redis:latest ./scripts/redisearch-docker.sh up` (from the skill dir) |
+| Start RediSearch (harness reference) | `./scripts/redisearch-docker.sh up` (from the skill dir; defaults to `redis:latest`) |
+| Pin the reference for a recorded claim | `RS_IMAGE=redis:8.10.3 ./scripts/redisearch-docker.sh up` |
 | Start redis-stack (reference disagreement only) | `RS_IMAGE=redis/redis-stack-server:7.4.0-v1 ./scripts/redisearch-docker.sh up` |
 | One-off command | `./scripts/redisearch-docker.sh cli FT.SEARCH idx '*'` |
 | Interactive shell | `./scripts/redisearch-docker.sh cli` |

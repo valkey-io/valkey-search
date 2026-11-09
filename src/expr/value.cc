@@ -282,8 +282,8 @@ std::ostream& operator<<(std::ostream& os, const Value& v) {
 }
 
 static Ordering CompareDoubles(double l, double r) {
-  // -ffast-math doesn't handle compares correctly with infinities or nans, we
-  // do it integer.
+  // NaN is unordered. Other values compare as sign-magnitude integers, with
+  // -0 equal to 0.
   if (std::isnan(l) || std::isnan(r)) {
     return Ordering::kUNORDERED;
   }

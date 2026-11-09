@@ -286,6 +286,9 @@ struct SearchParameters {
   // FT.AGGREGATE sets this from `LOAD *`. FT.SEARCH derives it in
   // PostParseQueryString, where a bare search means the whole record.
   bool all_content{false};
+  // Set on deserialized fanout requests when the originating command's
+  // derived parameters require content processing despite no_content.
+  bool force_content_processing{false};
   FilterParseResults filter_parse_results;
   // True when the filter tree contains a (single) VectorRangePredicate. In the
   // single-VR model the matched distance is carried in Neighbor::distance;
@@ -355,7 +358,8 @@ struct SearchParameters {
   // set first. When true, the query can complete on the background thread and
   // skip content loading.
   virtual bool NoProcessingRequired() const {
-    return no_content && !sortby_parameter.has_value();
+    return !force_content_processing && no_content &&
+           !sortby_parameter.has_value();
   }
 
   virtual absl::Status PreParseQueryString();
@@ -451,7 +455,8 @@ class Predicate;
 size_t EvaluateFilterAsPrimary(
     const SearchParameters &parameters, const Predicate *predicate,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
-    bool negate, float or_weight_multiplier = 1.0f);
+    bool negate, float or_weight_multiplier = 1.0f, bool *truncated = nullptr,
+    size_t range_probe_limit = SIZE_MAX);
 
 // Defined in the header to support testing
 absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
@@ -460,10 +465,12 @@ absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
 
 // Vector Range query (no KNN): returns the keys matching the filter, with the
 // VR distance in Neighbor::distance, in key order. A query that is only the VR
-// predicate is answered by VectorBase::SearchRange; a compound one evaluates
-// the full predicate tree per fetched key.
+// predicate and has no INKEYS delegates to VectorBase::SearchRange. INKEYS is
+// evaluated directly as the complete candidate set; other compound queries
+// evaluate the full predicate tree per fetched key.
 absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
-    const SearchParameters &parameters, QueryContext &query_ctx);
+    const SearchParameters &parameters, QueryContext &query_ctx)
+    ABSL_SHARED_LOCKS_REQUIRED(parameters.index_schema->GetTimeSlicedMutex());
 
 std::priority_queue<std::pair<float, hnswlib::labeltype>>
 CalcBestMatchingPrefilteredKeys(
@@ -471,6 +478,10 @@ CalcBestMatchingPrefilteredKeys(
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
     indexes::VectorBase *vector_index, size_t qualified_entries,
     QueryContext &query_ctx);
+
+// Returns the single VECTOR_RANGE predicate in `parameters`, or nullptr.
+const VectorRangePredicate *GetVectorRangePredicate(
+    const SearchParameters &parameters);
 
 // Returns the distance score field name for the single VR predicate in the
 // query: the $yield_distance_as (or AS) name if set, otherwise "" (empty).
@@ -488,12 +499,12 @@ size_t CountVectorRangePredicates(const Predicate *predicate);
 // Check if no results should be returned based on limit parameters
 bool ShouldReturnNoResults(const SearchParameters &parameters);
 
-// Increments the developer-visible "nonvector_results_fetched_limited_count"
-// INFO counter. The counter object is file-static to search.cc; this accessor
-// lets other translation units (e.g. the HNSW range search) report the same
-// "fetch hit the max-candidates cap" signal against the one shared counter,
-// rather than registering a duplicate field.
-void RecordNonVectorResultsFetchedLimited();
+// INFO counters, for behavioral tests: the non-vector fetch-cap counter, the
+// VECTOR_RANGE truncation counter, and the HNSW range exact-scan counter for
+// `fallback` (0 for kNone).
+int64_t GetNonVectorResultsFetchedLimitedCount();
+int64_t GetVectorRangeResultsFetchedLimitedCount();
+int64_t GetVectorRangeFallbackCount(indexes::RangeFallback fallback);
 
 // Scans for the vector filter delimiter `=>` that is followed by `[` (after
 // optional whitespace). Returns the position of `=>` or npos if not found.

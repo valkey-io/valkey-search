@@ -577,10 +577,10 @@ static auto rax_target_mutex_pool_size =
         .Build();
 
 /// Register the "--max-nonvector-search-results-fetched" flag. Controls the
-/// maximum number of results to fetch in background threads before content
-/// fetching on non-vector (numeric/tag/text) query paths. This controls
-/// potential OOM by limiting the result set size before expensive content
-/// fetching from the keyspace.
+/// maximum number of results retained in background threads before content
+/// fetching on non-vector (numeric/tag/text/VECTOR_RANGE) query paths. This
+/// controls potential OOM by limiting the result set size before expensive
+/// content fetching from the keyspace.
 /// Note: If queries use LIMIT with a large offset (e.g., LIMIT offset count
 /// where offset + count exceeds this value), consider increasing this config
 /// to ensure all paginated results are accessible.

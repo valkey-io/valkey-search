@@ -206,7 +206,10 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
   const auto &index = attribute.index();
   switch (index.index_type_case()) {
     case data_model::Index::IndexTypeCase::kTagIndex: {
-      return std::make_shared<indexes::Tag>(index.tag_index());
+      return std::make_shared<indexes::Tag>(
+          index.tag_index(),
+          index_schema->GetAttributeDataType().ToProto() ==
+              data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON);
     }
     case data_model::Index::IndexTypeCase::kNumericIndex: {
       return std::make_shared<indexes::Numeric>(index.numeric_index());
@@ -673,10 +676,13 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
                              attribute_data_type_->ToProto(), db_num_);
       continue;
     }
+    const bool raw =
+        attribute.GetIndex() && attribute.GetIndex()->WantsRawAttribute();
     vmsdk::UniqueValkeyString attr_val =
-        attribute_data_type_
-            ->GetAttribute(ctx, key_obj.get(), key_cstr,
-                           attribute.GetIdentifier())
+        (raw ? attribute_data_type_->GetRawAttribute(
+                   ctx, key_obj.get(), key_cstr, attribute.GetIdentifier())
+             : attribute_data_type_->GetAttribute(ctx, key_obj.get(), key_cstr,
+                                                  attribute.GetIdentifier()))
             .value_or(vmsdk::UniqueValkeyString());
     if (attr_val && attribute_data_type_->AttributesProvidedAsString() &&
         attribute.GetIndex()) {

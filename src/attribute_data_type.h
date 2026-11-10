@@ -64,6 +64,13 @@ class AttributeDataType {
   virtual absl::StatusOr<vmsdk::UniqueValkeyString> GetAttribute(
       ValkeyModuleCtx *ctx, ValkeyModuleKey *open_key, absl::string_view key,
       absl::string_view identifier) const = 0;
+  // Like GetAttribute, but without per-type normalization. For JSON this is
+  // the JSON module's match array as-is.
+  virtual absl::StatusOr<vmsdk::UniqueValkeyString> GetRawAttribute(
+      ValkeyModuleCtx *ctx, ValkeyModuleKey *open_key, absl::string_view key,
+      absl::string_view identifier) const {
+    return GetAttribute(ctx, open_key, key, identifier);
+  }
   virtual int GetValkeyEventTypes() const {
     return VALKEYMODULE_NOTIFY_GENERIC | VALKEYMODULE_NOTIFY_EXPIRED |
            VALKEYMODULE_NOTIFY_EVICTED;
@@ -119,6 +126,9 @@ class JsonAttributeDataType : public AttributeDataType {
   absl::StatusOr<vmsdk::UniqueValkeyString> GetAttribute(
       ValkeyModuleCtx *ctx, ValkeyModuleKey *open_key, absl::string_view key,
       absl::string_view identifier) const override;
+  absl::StatusOr<vmsdk::UniqueValkeyString> GetRawAttribute(
+      ValkeyModuleCtx *ctx, ValkeyModuleKey *open_key, absl::string_view key,
+      absl::string_view identifier) const override;
   inline int GetValkeyEventTypes() const override {
     return VALKEYMODULE_NOTIFY_MODULE |
            AttributeDataType::GetValkeyEventTypes();
@@ -138,6 +148,9 @@ class JsonAttributeDataType : public AttributeDataType {
 };
 
 bool IsJsonModuleSupported(ValkeyModuleCtx *ctx);
+// Converts a JSON module match array to the value GetAttribute returns.
+absl::Status NormalizeJsonAttribute(absl::string_view attribute,
+                                    vmsdk::UniqueValkeyString &out_attribute);
 using JsonSharedAPIGetValueFn = int (*)(ValkeyModuleKey *key, const char *path,
                                         ValkeyModuleString **result);
 // Used just for testing

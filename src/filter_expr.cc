@@ -43,6 +43,16 @@ expr::Value FilterAttributeReference::GetValue(
     return expr::Value(expr::Value::Nil("Field Missing"));
   }
   auto data_view = itr->second.GetStringView();
+  // A JSON TAG field arrives as the raw match array (see
+  // Tag::WantsRawAttribute).
+  if (type_ == indexes::IndexerType::kTag &&
+      data_type_ == data_model::ATTRIBUTE_DATA_TYPE_JSON) {
+    vmsdk::UniqueValkeyString normalized;
+    if (!NormalizeJsonAttribute(data_view, normalized).ok()) {
+      return expr::Value(expr::Value::Nil("Field Missing"));
+    }
+    return expr::Value(std::string(vmsdk::ToStringView(normalized.get())));
+  }
   // Whether a NUMERIC field is a *runtime number* to a FILTER depends on the
   // key type, and Redisearch draws the same line:
   //

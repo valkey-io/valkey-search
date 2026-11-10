@@ -53,7 +53,9 @@ namespace valkey_search {
 template <typename T, typename K>
 class IndexTeser : public T {
  public:
-  explicit IndexTeser(K proto) : T(K(proto)) {}
+  template <typename... Args>
+  explicit IndexTeser(K proto, Args &&...args)
+      : T(K(proto), std::forward<Args>(args)...) {}
   // AddRecord/ModifyRecord return true iff the value was indexed (kAdded), so
   // existing tests that check success/skip via a bool keep working. Use the
   // *Result variants below to distinguish kMissing from kInvalidData.

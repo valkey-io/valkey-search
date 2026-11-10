@@ -23,7 +23,9 @@
 #include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
+#include "src/attribute_data_type.h"
 #include "src/indexes/index_base.h"
+#include "src/indexes/json_tag_decoder.h"
 #include "src/indexes/text/rax/rax.h"
 #include "src/query/predicate.h"
 #include "src/utils/scanner.h"
@@ -90,6 +92,51 @@ extern "C" void *TagMutateTrampoline(void *current, void *ctx) {
   return StorageToSlot(bag.Release());
 }
 
+// Below 1.3.0, a JSON TAG value is indexed as it was before arrays were
+// supported.
+bool DecodeJsonTagArrays() { return options::EnabledInVersion(1, 3, 0); }
+
+template <typename Fn>
+bool ForEachSplitTag(absl::string_view data, char separator, Fn &&fn) {
+  for (absl::string_view part : absl::StrSplit(data, separator)) {
+    auto tag = absl::StripAsciiWhitespace(part);
+    if (!tag.empty() && fn(tag)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Each tag is a varint length followed by its bytes.
+void AppendPackedTag(std::string &packed, absl::string_view tag) {
+  size_t n = tag.size();
+  while (n >= 0x80) {
+    packed.push_back(static_cast<char>((n & 0x7f) | 0x80));
+    n >>= 7;
+  }
+  packed.push_back(static_cast<char>(n));
+  packed.append(tag);
+}
+
+template <typename Fn>
+void ForEachPackedTag(absl::string_view packed, Fn &&fn) {
+  while (!packed.empty()) {
+    size_t n = 0;
+    for (int shift = 0;; shift += 7) {
+      auto byte = static_cast<unsigned char>(packed.front());
+      packed.remove_prefix(1);
+      n |= static_cast<size_t>(byte & 0x7f) << shift;
+      if ((byte & 0x80) == 0) {
+        break;
+      }
+    }
+    if (fn(packed.substr(0, n))) {
+      return;
+    }
+    packed.remove_prefix(n);
+  }
+}
+
 bool IsValidPrefix(absl::string_view str) {
   return str.length() < 2 || str[str.length() - 1] != '*' ||
          str[str.length() - 2] != '*';
@@ -97,7 +144,7 @@ bool IsValidPrefix(absl::string_view str) {
 
 }  // namespace
 
-Tag::Tag(const data_model::TagIndex &tag_index_proto)
+Tag::Tag(const data_model::TagIndex &tag_index_proto, bool json)
     : IndexBase(IndexerType::kTag),
       separator_(tag_index_proto.separator()[0]),
       explicit_separator_(
@@ -105,6 +152,7 @@ Tag::Tag(const data_model::TagIndex &tag_index_proto)
               ? std::optional<bool>(tag_index_proto.explicit_separator())
               : std::nullopt),
       case_sensitive_(tag_index_proto.case_sensitive()),
+      json_(json),
       tree_(raxNew()) {}
 
 Tag::~Tag() { raxFreeWithCallback(tree_, &TagFreeCallback); }
@@ -118,6 +166,49 @@ std::string Tag::Normalize(absl::string_view tag) const {
     c = absl::ascii_tolower(static_cast<unsigned char>(c));
   }
   return out;
+}
+
+InternedStringPtr Tag::InternRecord(absl::string_view data) const {
+  if (!json_) {
+    return StringInternStore::Intern(data);
+  }
+  std::string packed;
+  absl::flat_hash_set<absl::string_view> seen;
+  auto pack = [&](absl::string_view tag) {
+    if (seen.insert(tag).second) {
+      AppendPackedTag(packed, tag);
+    }
+    return false;
+  };
+  if (DecodeJsonTagArrays()) {
+    auto decoded = DecodeJsonTags(data, separator_);
+    for (const auto &tag : decoded.tags) {
+      pack(tag);
+    }
+  } else if (vmsdk::UniqueValkeyString normalized;
+             NormalizeJsonAttribute(data, normalized).ok()) {
+    ForEachSplitTag(vmsdk::ToStringView(normalized.get()), separator_, pack);
+  }
+  return StringInternStore::Intern(packed);
+}
+
+template <typename Fn>
+void Tag::ForEachStoredTag(absl::string_view stored, Fn &&fn) const {
+  if (json_) {
+    ForEachPackedTag(stored, fn);
+  } else {
+    ForEachSplitTag(stored, separator_, fn);
+  }
+}
+
+absl::flat_hash_set<absl::string_view> Tag::StoredTags(
+    absl::string_view stored) const {
+  absl::flat_hash_set<absl::string_view> tags;
+  ForEachStoredTag(stored, [&](absl::string_view tag) {
+    tags.insert(tag);
+    return false;
+  });
+  return tags;
 }
 
 void Tag::IndexTagForKey(absl::string_view tag, const InternedStringPtr &key) {
@@ -145,8 +236,8 @@ absl::StatusOr<RecordResult> Tag::AddRecord(const InternedStringPtr &key,
     return RecordResult::kInvalidData;
   }
 
-  auto interned_data = StringInternStore::Intern(data_sv);
-  auto parsed_tags = ParseRecordTags(*interned_data, separator_);
+  auto interned_data = InternRecord(data_sv);
+  auto parsed_tags = StoredTags(*interned_data);
   absl::MutexLock lock(&index_mutex_);
   if (parsed_tags.empty()) {
     // An empty tag set is a missing value, not invalid data. (Non-UTF-8
@@ -155,7 +246,7 @@ absl::StatusOr<RecordResult> Tag::AddRecord(const InternedStringPtr &key,
     return RecordResult::kMissing;
   }
   auto [_, succ] = tracked_tags_by_keys_.insert(
-      {key, TagInfo{.raw_tag_string = std::move(interned_data)}});
+      {key, TagInfo{.stored_tags = std::move(interned_data)}});
   if (!succ) {
     return absl::AlreadyExistsError(
         absl::StrCat("Key `", key->Str(), "` already exists"));
@@ -254,8 +345,8 @@ absl::StatusOr<RecordResult> Tag::ModifyRecord(const InternedStringPtr &key,
     return RecordResult::kInvalidData;
   }
 
-  auto interned_data = StringInternStore::Intern(data_sv);
-  auto new_parsed_tags = ParseRecordTags(*interned_data, separator_);
+  auto interned_data = InternRecord(data_sv);
+  auto new_parsed_tags = StoredTags(*interned_data);
   if (new_parsed_tags.empty()) {
     [[maybe_unused]] auto res =
         RemoveRecord(key, indexes::DeletionType::kIdentifier);
@@ -269,7 +360,7 @@ absl::StatusOr<RecordResult> Tag::ModifyRecord(const InternedStringPtr &key,
         absl::StrCat("Key `", key->Str(), "` not found"));
   }
   auto &tag_info = it->second;
-  auto old_parsed_tags = ParseRecordTags(*tag_info.raw_tag_string, separator_);
+  auto old_parsed_tags = StoredTags(*tag_info.stored_tags);
 
   // insert new tags that are not present in the old tags.
   for (const auto &tag : new_parsed_tags) {
@@ -284,7 +375,7 @@ absl::StatusOr<RecordResult> Tag::ModifyRecord(const InternedStringPtr &key,
     }
   }
 
-  tag_info.raw_tag_string = std::move(interned_data);
+  tag_info.stored_tags = std::move(interned_data);
   return RecordResult::kAdded;
 }
 
@@ -303,7 +394,7 @@ absl::StatusOr<bool> Tag::RemoveRecord(const InternedStringPtr &key,
     return false;
   }
   auto &tag_info = it->second;
-  auto parsed_tags = ParseRecordTags(*tag_info.raw_tag_string, separator_);
+  auto parsed_tags = StoredTags(*tag_info.stored_tags);
   for (const auto &tag : parsed_tags) {
     DeindexTagForKey(tag, key);
   }
@@ -346,9 +437,10 @@ uint32_t Tag::GetMutationWeight() const {
 InternedStringPtr Tag::GetRawValue(const InternedStringPtr &key) const {
   // Note that the Tag index is not mutated while the time sliced mutex is
   // in a read mode and therefore it is safe to skip lock acquiring.
+  DCHECK(!json_) << "A JSON TAG index stores decoded tags";
   if (auto it = tracked_tags_by_keys_.find(key);
       it != tracked_tags_by_keys_.end()) {
-    return it->second.raw_tag_string;
+    return it->second.stored_tags;
   }
   return {};
 }
@@ -360,7 +452,7 @@ std::optional<absl::flat_hash_set<absl::string_view>> Tag::GetValue(
   if (auto it = tracked_tags_by_keys_.find(key);
       it != tracked_tags_by_keys_.end()) {
     case_sensitive = case_sensitive_;
-    return ParseRecordTags(*it->second.raw_tag_string, separator_);
+    return StoredTags(*it->second.stored_tags);
   }
   return std::nullopt;
 }
@@ -554,19 +646,19 @@ size_t Tag::GetPrefixMatchDocCount(absl::string_view prefix_value,
   auto it = tracked_tags_by_keys_.find(key);
   if (it == tracked_tags_by_keys_.end()) return 0;
 
-  for (const auto &part :
-       absl::StrSplit(it->second.raw_tag_string->Str(), separator_)) {
-    const absl::string_view tag = absl::StripAsciiWhitespace(part);
-    // Empty tags are never indexed (ParseRecordTags drops them), and a bare `*`
-    // query gives an empty prefix that would otherwise match one.
-    if (tag.empty()) continue;
+  // Stored tags are never empty, so a bare `*` query's empty prefix cannot
+  // match one.
+  size_t count = 0;
+  ForEachStoredTag(it->second.stored_tags->Str(), [&](absl::string_view tag) {
     if (case_sensitive_ ? absl::StartsWith(tag, prefix)
                         : absl::StartsWithIgnoreCase(tag, prefix)) {
       auto bag = LookupValue(tag);
-      return bag ? bag->size() : 0;
+      count = bag ? bag->size() : 0;
+      return true;
     }
-  }
-  return 0;
+    return false;
+  });
+  return count;
 }
 
 bool Tag::IsTracked(const InternedStringPtr &key) const {

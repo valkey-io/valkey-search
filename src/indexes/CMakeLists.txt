@@ -98,6 +98,7 @@ set(SRCS_TAG
 
 valkey_search_add_static_library(tag "${SRCS_TAG}")
 target_include_directories(tag PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(tag PUBLIC attribute_data_type)
 target_link_libraries(tag PUBLIC index_base)
 target_link_libraries(tag PUBLIC rdb_serialization)
 target_link_libraries(tag PUBLIC predicate_header)

@@ -944,6 +944,13 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
       vmsdk::UniqueValkeyString attribute_value = nullptr;
       switch (attribute_info.index->GetIndexerType()) {
         case indexes::IndexerType::kTag: {
+          if (parameters.index_schema->GetAttributeDataType().ToProto() ==
+              data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON) {
+            // A JSON TAG index holds decoded tags, not the field's value, so
+            // read it from the key.
+            any_value_missing = true;
+            break;
+          }
           auto tag_index = dynamic_cast<indexes::Tag *>(attribute_info.index);
           auto tag_value_ptr = tag_index->GetRawValue(neighbor.external_id);
           if (tag_value_ptr) {

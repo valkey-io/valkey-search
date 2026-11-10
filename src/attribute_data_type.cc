@@ -13,6 +13,7 @@
 #include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "absl/strings/strip.h"
@@ -165,6 +166,19 @@ absl::Status NormalizeJsonAttribute(absl::string_view attribute,
   out_attribute.swap(attribute_ptr);
   return absl::OkStatus();
 }
+
+// A match array that NormalizeJsonAttribute treats as missing is missing here
+// too.
+absl::Status KeepRawJsonAttribute(vmsdk::UniqueValkeyString value,
+                                  vmsdk::UniqueValkeyString &out_attribute) {
+  auto view = vmsdk::ToStringView(value.get());
+  if (!absl::StartsWith(view, "[") || view == "[]") {
+    return absl::NotFoundError("Invalid attribute");
+  }
+  out_attribute = std::move(value);
+  return absl::OkStatus();
+}
+
 // GetJsonAttribute is the actual implementation for retrieving a JSON value.
 // If the JSON module is not loaded, it returns an error.
 // It prefers using the JSON shared API, and falls back to VM_Call if the API is
@@ -174,7 +188,8 @@ absl::Status NormalizeJsonAttribute(absl::string_view attribute,
 absl::Status GetJsonAttribute(ValkeyModuleCtx *ctx, ValkeyModuleKey *open_key,
                               absl::string_view key,
                               absl::string_view identifier,
-                              vmsdk::UniqueValkeyString *attribute) {
+                              vmsdk::UniqueValkeyString *attribute,
+                              bool raw = false) {
   vmsdk::VerifyMainThread();
   if (!IsJsonModuleSupported(ctx)) {
     return absl::UnavailableError("The JSON module is not supported");
@@ -193,8 +208,9 @@ absl::Status GetJsonAttribute(ValkeyModuleCtx *ctx, ValkeyModuleKey *open_key,
     if (!attribute) {
       return absl::OkStatus();
     }
-    return NormalizeJsonAttribute(vmsdk::ToStringView(attribute_tmp.get()),
-                                  *attribute);
+    return raw ? KeepRawJsonAttribute(std::move(attribute_tmp), *attribute)
+               : NormalizeJsonAttribute(
+                     vmsdk::ToStringView(attribute_tmp.get()), *attribute);
   }
   auto reply = vmsdk::UniquePtrValkeyCallReply(ValkeyModule_Call(
       ctx, kJsonCmd.data(), "cc", key.data(), identifier.data()));
@@ -212,8 +228,9 @@ absl::Status GetJsonAttribute(ValkeyModuleCtx *ctx, ValkeyModuleKey *open_key,
   if (!attribute) {
     return absl::OkStatus();
   }
-  return NormalizeJsonAttribute(vmsdk::ToStringView(reply_str.get()),
-                                *attribute);
+  return raw ? KeepRawJsonAttribute(std::move(reply_str), *attribute)
+             : NormalizeJsonAttribute(vmsdk::ToStringView(reply_str.get()),
+                                      *attribute);
 }
 
 absl::StatusOr<vmsdk::UniqueValkeyString> JsonAttributeDataType::GetAttribute(
@@ -222,6 +239,17 @@ absl::StatusOr<vmsdk::UniqueValkeyString> JsonAttributeDataType::GetAttribute(
   vmsdk::UniqueValkeyString attribute;
   VMSDK_RETURN_IF_ERROR(
       GetJsonAttribute(ctx, open_key, key, identifier, &attribute));
+  return attribute;
+}
+
+absl::StatusOr<vmsdk::UniqueValkeyString>
+JsonAttributeDataType::GetRawAttribute(ValkeyModuleCtx *ctx,
+                                       ValkeyModuleKey *open_key,
+                                       absl::string_view key,
+                                       absl::string_view identifier) const {
+  vmsdk::UniqueValkeyString attribute;
+  VMSDK_RETURN_IF_ERROR(
+      GetJsonAttribute(ctx, open_key, key, identifier, &attribute, true));
   return attribute;
 }
 

@@ -37,6 +37,39 @@ class JsonScanner {
     return input_.empty();
   }
 
+  // The text of the next value, skipped as a whole.
+  std::optional<absl::string_view> RawValue() {
+    SkipWhitespace();
+    const char *begin = input_.data();
+    int depth = 0;
+    while (!input_.empty()) {
+      char c = input_.front();
+      if (c == '"') {
+        if (!String().has_value()) {
+          return std::nullopt;
+        }
+        continue;
+      }
+      if (c == '[' || c == '{') {
+        ++depth;
+      } else if (c == ']' || c == '}') {
+        if (depth == 0) {
+          break;
+        }
+        --depth;
+      } else if (c == ',' && depth == 0) {
+        break;
+      }
+      input_.remove_prefix(1);
+    }
+    absl::string_view raw(begin, input_.data() - begin);
+    raw = absl::StripTrailingAsciiWhitespace(raw);
+    if (depth != 0 || raw.empty()) {
+      return std::nullopt;
+    }
+    return raw;
+  }
+
   std::optional<std::string> String() {
     if (!Consume("\"")) {
       return std::nullopt;
@@ -139,6 +172,34 @@ JsonTags DecodeJsonTags(absl::string_view json, std::optional<char> separator) {
     return Invalid();
   }
   return result;
+}
+
+JsonFirstMatch DecodeJsonFirstMatch(absl::string_view json) {
+  JsonScanner scanner(json);
+  if (!scanner.Consume("[") || scanner.Consume("]")) {
+    return {.status = JsonTags::Status::kMissing};
+  }
+  if (scanner.Consume("null")) {
+    return {.value = std::nullopt};
+  }
+  if (scanner.Consume("true")) {
+    return {.value = "1"};
+  }
+  if (scanner.Consume("false")) {
+    return {.value = "0"};
+  }
+  auto raw = scanner.RawValue();
+  if (!raw.has_value()) {
+    return {.status = JsonTags::Status::kInvalid};
+  }
+  if (raw->front() != '"') {
+    return {.value = std::string(*raw)};
+  }
+  auto value = vmsdk::JsonUnquote(raw->substr(1, raw->size() - 2));
+  if (!value.has_value()) {
+    return {.status = JsonTags::Status::kInvalid};
+  }
+  return {.value = std::move(value)};
 }
 
 }  // namespace valkey_search::indexes

@@ -29,6 +29,17 @@ struct JsonTags {
 // or kept as-is without one. Empty values produce no tag.
 JsonTags DecodeJsonTags(absl::string_view json, std::optional<char> separator);
 
+struct JsonFirstMatch {
+  JsonTags::Status status{JsonTags::Status::kOk};
+  // nullopt for a null match.
+  std::optional<std::string> value;
+};
+
+// The first of the JSON module's matches, as a Redis FILTER reads a TAG field:
+// a string unescaped, true and false as "1" and "0", and an array or object as
+// its JSON text.
+JsonFirstMatch DecodeJsonFirstMatch(absl::string_view json);
+
 }  // namespace valkey_search::indexes
 
 #endif  // VALKEYSEARCH_SRC_INDEXES_JSON_TAG_DECODER_H_

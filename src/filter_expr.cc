@@ -14,6 +14,7 @@
 #include "absl/strings/string_view.h"
 #include "src/attribute_data_type.h"
 #include "src/index_schema.h"
+#include "src/indexes/json_tag_decoder.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/type_conversions.h"
 
@@ -44,14 +45,17 @@ expr::Value FilterAttributeReference::GetValue(
   }
   auto data_view = itr->second.GetStringView();
   // A JSON TAG field arrives as the raw match array (see
-  // Tag::WantsRawAttribute).
+  // Tag::WantsRawAttribute), of which Redis reads the first match.
   if (type_ == indexes::IndexerType::kTag &&
       data_type_ == data_model::ATTRIBUTE_DATA_TYPE_JSON) {
-    vmsdk::UniqueValkeyString normalized;
-    if (!NormalizeJsonAttribute(data_view, normalized).ok()) {
+    auto match = indexes::DecodeJsonFirstMatch(data_view);
+    if (match.status != indexes::JsonTags::Status::kOk) {
       return expr::Value(expr::Value::Nil("Field Missing"));
     }
-    return expr::Value(std::string(vmsdk::ToStringView(normalized.get())));
+    if (!match.value.has_value()) {
+      return expr::Value::Null();
+    }
+    return expr::Value(*std::move(match.value));
   }
   // Whether a NUMERIC field is a *runtime number* to a FILTER depends on the
   // key type, and Redisearch draws the same line:

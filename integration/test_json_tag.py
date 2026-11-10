@@ -73,6 +73,29 @@ class TestJsonTag(ValkeySearchTestCaseBase):
             "FT.SEARCH", "idx", knn, *params, "NOCONTENT", "DIALECT", "2")
         assert set(res[1:]) == {b"d:2"}
 
+    def test_filter_reads_first_match(self):
+        client: Valkey = self.server.get_new_client()
+        self.set_release(client, "1.3.0")
+        for idx, path, flt in (
+                ("whole", "$.t", """@t=='["a","b"]' || @t=='1'"""),
+                ("each", "$.t[*]", '@t=="a"')):
+            assert client.execute_command(
+                "FT.CREATE", idx, "ON", "JSON", "PREFIX", "1", "d:",
+                "FILTER", flt, "SCHEMA", path, "AS", "t", "TAG") == b"OK"
+        client.execute_command("JSON.SET", "d:1", "$", '{"t":["a","b"]}')
+        client.execute_command("JSON.SET", "d:2", "$", '{"t":["b","a"]}')
+        client.execute_command("JSON.SET", "d:3", "$", '{"t":true}')
+        for idx in ("whole", "each"):
+            IndexingTestHelper.wait_for_backfill_complete_on_node(client, idx)
+
+        def keys(idx):
+            res = client.execute_command(
+                "FT.SEARCH", idx, "@t:{a | b | true}", "NOCONTENT")
+            return set(res[1:])
+
+        assert keys("whole") == {b"d:1", b"d:3"}
+        assert keys("each") == {b"d:1"}
+
     def separator(self, client):
         attrs = client.execute_command("FT.INFO", "idx")
         attrs = attrs[attrs.index(b"attributes") + 1]

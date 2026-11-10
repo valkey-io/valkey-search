@@ -98,5 +98,28 @@ INSTANTIATE_TEST_SUITE_P(
       return info.param.name;
     });
 
+TEST(JsonFirstMatchTest, Decode) {
+  struct Case {
+    std::string json;
+    Status status;
+    std::optional<std::string> value;
+  };
+  for (const auto &c : std::vector<Case>{
+           {R"(["s"])", Status::kOk, "s"},
+           {R"(["say \"hi\"","b"])", Status::kOk, R"(say "hi")"},
+           {R"([["a","x\"y"]])", Status::kOk, R"(["a","x\"y"])"},
+           {R"([{"k":"v"}])", Status::kOk, R"({"k":"v"})"},
+           {"[true]", Status::kOk, "1"},
+           {"[false]", Status::kOk, "0"},
+           {R"([null,"a"])", Status::kOk, std::nullopt},
+           {"[]", Status::kMissing, std::nullopt},
+           {R"(["a)", Status::kInvalid, std::nullopt},
+       }) {
+    auto result = DecodeJsonFirstMatch(c.json);
+    EXPECT_EQ(result.status, c.status) << c.json;
+    EXPECT_EQ(result.value, c.value) << c.json;
+  }
+}
+
 }  // namespace
 }  // namespace valkey_search::indexes

@@ -45,9 +45,13 @@ expr::Value FilterAttributeReference::GetValue(
   }
   auto data_view = itr->second.GetStringView();
   // A JSON TAG field arrives as the raw match array (see
-  // Tag::WantsRawAttribute), of which Redis reads the first match.
+  // Tag::WantsRawAttribute), of which Redis reads the first match. Redis reads
+  // nothing from a legacy path.
   if (type_ == indexes::IndexerType::kTag &&
       data_type_ == data_model::ATTRIBUTE_DATA_TYPE_JSON) {
+    if (legacy_path_) {
+      return expr::Value(expr::Value::Nil("Field Missing"));
+    }
     auto match = indexes::DecodeJsonFirstMatch(data_view);
     if (match.status != indexes::JsonTags::Status::kOk) {
       return expr::Value(expr::Value::Nil("Field Missing"));

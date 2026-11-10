@@ -206,10 +206,11 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
   const auto &index = attribute.index();
   switch (index.index_type_case()) {
     case data_model::Index::IndexTypeCase::kTagIndex: {
+      const bool json = index_schema->GetAttributeDataType().ToProto() ==
+                        data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON;
       return std::make_shared<indexes::Tag>(
-          index.tag_index(),
-          index_schema->GetAttributeDataType().ToProto() ==
-              data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON);
+          index.tag_index(), json,
+          json && IsJsonLegacyPath(attribute.identifier()));
     }
     case data_model::Index::IndexTypeCase::kNumericIndex: {
       return std::make_shared<indexes::Numeric>(index.numeric_index());
@@ -2481,11 +2482,13 @@ absl::StatusOr<vmsdk::ValkeyVersion> IndexSchema::GetMinVersion(
 absl::StatusOr<std::unique_ptr<expr::Expression::AttributeReference>>
 IndexSchema::MakeReference(absl::string_view name, bool create) {
   auto data_type = attribute_data_type_->ToProto();
+  const bool is_json = data_type == data_model::ATTRIBUTE_DATA_TYPE_JSON;
   // Try to find by alias first (attributes_ is keyed by alias)
   auto itr = attributes_.find(std::string(name));
   if (itr != attributes_.end()) {
     return std::make_unique<FilterAttributeReference>(
-        std::string(name), itr->second.GetIndex()->GetIndexerType(), data_type);
+        std::string(name), itr->second.GetIndex()->GetIndexerType(), data_type,
+        is_json && IsJsonLegacyPath(itr->second.GetIdentifier()));
   }
   // Try to find by identifier
   auto id_itr = identifier_to_alias_.find(std::string(name));
@@ -2494,8 +2497,8 @@ IndexSchema::MakeReference(absl::string_view name, bool create) {
     auto type = attr_itr != attributes_.end()
                     ? attr_itr->second.GetIndex()->GetIndexerType()
                     : indexes::IndexerType::kNone;
-    return std::make_unique<FilterAttributeReference>(id_itr->second, type,
-                                                      data_type);
+    return std::make_unique<FilterAttributeReference>(
+        id_itr->second, type, data_type, is_json && IsJsonLegacyPath(name));
   }
   if (!create) {
     // The field is not declared in the schema. For a HASH index it can still

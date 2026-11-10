@@ -13,6 +13,7 @@
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/match.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/variant.h"
 #include "src/index_schema.pb.h"
@@ -148,6 +149,11 @@ class JsonAttributeDataType : public AttributeDataType {
 };
 
 bool IsJsonModuleSupported(ValkeyModuleCtx *ctx);
+// Whether a JSON identifier is a legacy path (`.a`, `a`) rather than a
+// JSONPath (`$.a`). Redisearch indexes nothing for a legacy path.
+inline bool IsJsonLegacyPath(absl::string_view identifier) {
+  return !absl::StartsWith(identifier, "$");
+}
 // Converts a JSON module match array to the value GetAttribute returns.
 absl::Status NormalizeJsonAttribute(absl::string_view attribute,
                                     vmsdk::UniqueValkeyString &out_attribute);

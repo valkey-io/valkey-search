@@ -203,6 +203,18 @@ TEST_F(JsonTagIndexTest, InvalidValue) {
   EXPECT_TRUE(index->AddRecord("before", "[5]").value());
 }
 
+TEST_F(JsonTagIndexTest, LegacyPathIndexesNothing) {
+  data_model::TagIndex tag_index_proto;
+  tag_index_proto.set_separator(",");
+  index = std::make_unique<IndexTeser<Tag, data_model::TagIndex>>(
+      tag_index_proto, /*json=*/true, /*json_legacy_path=*/true);
+  SetRelease(3);
+  EXPECT_EQ(index->AddRecordResult("k", R"(["a","c"])").value(),
+            RecordResult::kMissing);
+  SetRelease(2);
+  EXPECT_TRUE(index->AddRecord("k", R"(["a","c"])").value());
+}
+
 TEST_F(JsonTagIndexTest, SeparatorPolicy) {
   const std::string value = R"([" a , b "])";
   SetRelease(3);

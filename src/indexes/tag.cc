@@ -153,7 +153,8 @@ bool IsValidPrefix(absl::string_view str) {
 
 }  // namespace
 
-Tag::Tag(const data_model::TagIndex &tag_index_proto, bool json)
+Tag::Tag(const data_model::TagIndex &tag_index_proto, bool json,
+         bool json_legacy_path)
     : IndexBase(IndexerType::kTag),
       separator_(tag_index_proto.separator()[0]),
       explicit_separator_(
@@ -162,6 +163,7 @@ Tag::Tag(const data_model::TagIndex &tag_index_proto, bool json)
               : std::nullopt),
       case_sensitive_(tag_index_proto.case_sensitive()),
       json_(json),
+      json_legacy_path_(json_legacy_path),
       tree_(raxNew()) {}
 
 Tag::~Tag() { raxFreeWithCallback(tree_, &TagFreeCallback); }
@@ -204,7 +206,9 @@ std::optional<InternedStringPtr> Tag::InternRecord(
     }
     return false;
   };
-  auto decoded = DecodeJsonTags(data, JsonSeparator());
+  auto decoded = json_legacy_path_
+                     ? JsonTags{.status = JsonTags::Status::kMissing}
+                     : DecodeJsonTags(data, JsonSeparator());
   if (DecodeJsonTagArrays()) {
     if (decoded.status == JsonTags::Status::kInvalid) {
       return std::nullopt;

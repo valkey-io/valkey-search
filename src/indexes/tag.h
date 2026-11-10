@@ -55,7 +55,10 @@ class Tag : public IndexBase {
  public:
   using KeySet = BagOfInternedStringPtrs;
 
-  explicit Tag(const data_model::TagIndex &tag_index_proto, bool json = false);
+  // `json_legacy_path`: a JSON field declared with a legacy path (see
+  // IsJsonLegacyPath), which from 1.3.0 is never indexed.
+  explicit Tag(const data_model::TagIndex &tag_index_proto, bool json = false,
+               bool json_legacy_path = false);
   ~Tag() override;
 
   absl::StatusOr<RecordResult> AddRecord(const InternedStringPtr &key,
@@ -229,6 +232,7 @@ class Tag : public IndexBase {
   const std::optional<bool> explicit_separator_;
   const bool case_sensitive_;
   const bool json_;
+  const bool json_legacy_path_;
   rax *tree_ ABSL_GUARDED_BY(index_mutex_);
 };
 

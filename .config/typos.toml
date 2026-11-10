@@ -15,7 +15,10 @@ extend-ignore-re = [
     "opposit",
     "uniqu",
     "worl*",
-    ".*unning"
+    ".*unning",
+    # Wildcard query terms in test data: gam*, *ing, *ell*
+    "\\*[A-Za-z]+",
+    "[A-Za-z]+\\*"
 ]
 [default.extend-words]
 Fo = "Fo"

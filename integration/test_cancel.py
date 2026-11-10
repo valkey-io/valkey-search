@@ -11,7 +11,11 @@ from typing import Any, Union
 from valkeytestframework.util import waiters
 import threading
 import time
-from utils import pausepoint_hit, wait_for_background_tasks
+from utils import (
+    pausepoint_hit,
+    wait_for_async_queries_drained,
+    wait_for_background_tasks,
+)
 
 def canceller(client, client_id):
     my_id = client.execute_command("client id")
@@ -722,16 +726,18 @@ class TestCancelCME(ValkeySearchClusterTestCaseDebugMode):
         self.check_failed_fanout(before)
 
         # With partial results enabled nothing is cancelled for the shards, so
-        # every shard records its own forced timeout.
+        # each of the 3 shards records exactly one forced timeout. A shard that
+        # the previous ALLSHARDS query cancelled can still count after the
+        # reply, so let all queries finish before each snapshot.
+        wait_for_async_queries_drained(self)
         force_cancels = self._check_info_sum("search_test-counter-ForceCancels")
         hnsw_result = range_search(client, "hnsw", False, enable_partial_results=True)
-        self.check_info_increased(
-            "search_test-counter-ForceCancels", force_cancels, 3)
+        self.check_info_sum("search_test-counter-ForceCancels", force_cancels + 3)
         assert hnsw_result[0] < 41
+        wait_for_async_queries_drained(self)
         force_cancels = self._check_info_sum("search_test-counter-ForceCancels")
         flat_result = range_search(client, "flat", False, enable_partial_results=True)
-        self.check_info_increased(
-            "search_test-counter-ForceCancels", force_cancels, 3)
+        self.check_info_sum("search_test-counter-ForceCancels", force_cancels + 3)
         assert flat_result[0] < 41
         self.control_set("ForceTimeout", "no")
 

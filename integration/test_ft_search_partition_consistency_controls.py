@@ -8,6 +8,7 @@ from valkey_search_test_case import (
 from indexes import *
 from valkeytestframework.util import waiters
 from test_cancel import search, search_command, Any
+from utils import wait_for_async_queries_drained
 
 class TestFTSearchPartitionConsistencyControls(ClusterTestUtils, ValkeySearchClusterTestCaseDebugMode):
     def test_ft_search_partition_controls(self):
@@ -41,13 +42,14 @@ class TestFTSearchPartitionConsistencyControls(ClusterTestUtils, ValkeySearchClu
         waiters.wait_for_true(
             lambda: self._check_info_sum("search_test-counter-ForceCancels") >= 1)
 
-        # Enable and get partial results. Nothing cancels the fan-out, so every
-        # shard records its own forced timeout.
+        # Enable and get partial results. Nothing cancels the fan-out, so each
+        # of the 3 shards records exactly one forced timeout. A shard that the
+        # query above cancelled can still count after its reply, so let all
+        # queries finish before the snapshot.
+        wait_for_async_queries_drained(self)
         force_cancels = self._check_info_sum("search_test-counter-ForceCancels")
         hnsw_result = search(client, "hnsw", False, None, enable_partial_results=True)
-        waiters.wait_for_true(
-            lambda: self._check_info_sum("search_test-counter-ForceCancels")
-            >= force_cancels + 3)
+        self.check_info_sum("search_test-counter-ForceCancels", force_cancels + 3)
         assert hnsw_result[0] != nominal_hnsw_result[0]
 
         self.control_set("ForceTimeout", "no")

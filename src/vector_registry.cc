@@ -165,10 +165,8 @@ enum class HashFieldRefState {
 HashFieldRefState GetHashFieldRefState(ValkeyModuleKey *key_obj,
                                        ValkeyModuleString *attr_str) {
   int exists = 0;
-  const char *field_cstr = ValkeyModule_StringPtrLen(attr_str, nullptr);
-  if (ValkeyModule_HashGet(key_obj,
-                           VALKEYMODULE_HASH_CFIELDS | VALKEYMODULE_HASH_EXISTS,
-                           field_cstr, &exists, nullptr) != VALKEYMODULE_OK ||
+  if (ValkeyModule_HashGet(key_obj, VALKEYMODULE_HASH_EXISTS, attr_str, &exists,
+                           nullptr) != VALKEYMODULE_OK ||
       !exists) {
     return HashFieldRefState::kMissing;
   }

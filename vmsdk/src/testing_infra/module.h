@@ -758,7 +758,13 @@ inline int TestValkeyModule_HashGet(ValkeyModuleKey *key, int flags, ...) {
   va_list args;
   va_start(args, flags);
 
-  const char *field = va_arg(args, const char *);
+  const char *field = nullptr;
+  if (flags & VALKEYMODULE_HASH_CFIELDS) {
+    field = va_arg(args, const char *);
+  } else {
+    ValkeyModuleString *field_str = va_arg(args, ValkeyModuleString *);
+    field = field_str ? field_str->data.c_str() : nullptr;
+  }
   int result;
   if (flags & VALKEYMODULE_HASH_EXISTS) {
     int *exists_out = va_arg(args, int *);

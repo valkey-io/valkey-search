@@ -50,9 +50,7 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
 
     # ---- observation -----------------------------------------------------
 
-    def registry_stat(self, name: str) -> int:
-        """One `search_vector_registry_*` INFO field."""
-        info = self.client.execute_command("INFO", "everything")
+    def _parse_registry_stat(self, info, name: str) -> int:
         key = f"search_vector_registry_{name}"
         if isinstance(info, dict):
             return int(info[key])
@@ -60,6 +58,12 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
             if line.startswith(key + ":"):
                 return int(line.split(":", 1)[1])
         raise KeyError(key)
+
+    def registry_stat(self, name: str) -> int:
+        """One `search_vector_registry_*` INFO field."""
+        return self._parse_registry_stat(
+            self.client.execute_command("INFO", "everything"), name
+        )
 
     def assert_sharing_active(self):
         """The feature is a no-op unless the engine exposes the sharing API and
@@ -1962,8 +1966,10 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         index.create(self.client)
         # A second field keeps the key alive when the HDEL test removes the vector.
         self.write_distinct_keys("doc", other="x")
+        self.wait_for_docs(index, self.GAP_KEYS)
         assert self.registry_stat("entry_cnt") == self.GAP_KEYS
         index.drop(self.client)
+        waiters.wait_for_true(lambda: self.registry_stat("pending_unshare_cnt") > 0)
 
     def reuse_freed_vector_memory(self) -> Index:
         """Allocate GAP_KEYS new shared vectors; relies on the allocator
@@ -1985,25 +1991,40 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         Observed: SIGSEGV on a NULL entry.
         """
         self.drop_index_leaving_pending_unshares()
-        pipe = self.client.pipeline(transaction=False)
+        pipe = self.client.pipeline(transaction=True)
         for k in range(self.GAP_KEYS):
             pipe.hdel(f"doc:{k}", "vec")
-        pipe.execute()
+        pipe.execute_command("INFO", "everything")
+        info = pipe.execute()[-1]
+        assert self._parse_registry_stat(info, "pending_unshare_cnt") > 0
 
         self.wait_for_unshare_drain()
         assert self.client.ping()
 
     def test_hdel_then_rename_out_of_prefix_does_not_crash(self):
-        """HDEL of the vector field followed by RENAME out of the index prefix
-        must not crash in MoveKey -> UnshareWithValkey."""
+        """HDEL or logical field expiry of the vector field followed by RENAME
+        out of the index prefix must not crash in MoveKey -> UnshareWithValkey."""
+        self.client.execute_command("DEBUG", "SET-ACTIVE-EXPIRE", "0")
         index = self.build_index()
         index.create(self.client)
+
+        # Case 1: Explicit HDEL followed by RENAME out of prefix
         self.client.hset("doc:0", mapping={"vec": vector(0), "other": "x"})
         waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 1)
-
         self.client.hdel("doc:0", "vec")
         self.client.rename("doc:0", "outside:0")
+        assert self.client.ping()
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0)
 
+        # Case 2: Logically expired field (still live when HPEXPIRE's hexpire
+        # notification fires, then expires silently with active-expire off so
+        # VectorRegistry still holds the tracked record when MoveKey runs)
+        self.client.hset("doc:1", mapping={"vec": vector(1), "other": "x"})
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 1)
+        self.client.execute_command("HPEXPIRE", "doc:1", 80, "FIELDS", 1, "vec")
+        time.sleep(0.15)
+        assert self.registry_stat("entry_cnt") == 1
+        self.client.rename("doc:1", "outside:1")
         assert self.client.ping()
         waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0)
 

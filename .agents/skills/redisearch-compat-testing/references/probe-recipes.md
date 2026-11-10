@@ -33,8 +33,8 @@ FT.CREATE idx ON HASH PREFIX 1 doc: SCHEMA n NUMERIC name TEXT
 HSET doc:1 n 5 name alice
 HSET doc:2 n 9 name bob
 
-# One param used (n via @n), one unused (unused) — RediSearch: succeeds.
-FT.SEARCH idx "@n:[5 5]" PARAMS 4 n 5 unused 99 DIALECT 2
+# One param used ($n), one unused (unused) — RediSearch: succeeds.
+FT.SEARCH idx "@n:[$n $n]" PARAMS 4 n 5 unused 99 DIALECT 2
 
 # All params unused — RediSearch: succeeds.
 FT.SEARCH idx "*" PARAMS 2 foo bar DIALECT 2

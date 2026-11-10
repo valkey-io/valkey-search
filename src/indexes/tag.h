@@ -196,8 +196,9 @@ class Tag : public IndexBase {
   // Normalize a tag for storage / lookup: lowercase if !case_sensitive_,
   // pass-through otherwise.
   std::string Normalize(absl::string_view tag) const;
-  // What tracked_tags_by_keys_ stores for record `data`.
-  InternedStringPtr InternRecord(absl::string_view data) const;
+  // What tracked_tags_by_keys_ stores for record `data`, or nullopt if `data`
+  // is invalid.
+  std::optional<InternedStringPtr> InternRecord(absl::string_view data) const;
   // Calls `fn` on each tag in `stored`, in order, until it returns true. May
   // repeat a tag for HASH.
   template <typename Fn>

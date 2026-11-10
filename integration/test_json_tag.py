@@ -51,3 +51,22 @@ class TestJsonTag(ValkeySearchTestCaseBase):
             "PARAMS", "2", "q", struct.pack("<2f", 0, 0),
             "RETURN", "1", "t", "DIALECT", "2")
         assert res == [1, b"d:1", [b"t", b"a"]]
+
+    def test_invalid_value_drops_key_from_1_3_0(self):
+        client: Valkey = self.server.get_new_client()
+        self.set_release(client, "1.3.0")
+        self.create(client)
+        client.execute_command("JSON.SET", "d:1", "$", '{"t":"a","v":[0,0]}')
+        client.execute_command("JSON.SET", "d:2", "$", '{"t":5,"v":[0,0]}')
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+        knn = "*=>[KNN 10 @v $q]"
+        params = ("PARAMS", "2", "q", struct.pack("<2f", 0, 0))
+        res = client.execute_command(
+            "FT.SEARCH", "idx", knn, *params, "NOCONTENT", "DIALECT", "2")
+        assert set(res[1:]) == {b"d:1"}
+
+        client.execute_command("JSON.SET", "d:2", "$.t", '"a"')
+        client.execute_command("JSON.SET", "d:1", "$.t", '[true]')
+        res = client.execute_command(
+            "FT.SEARCH", "idx", knn, *params, "NOCONTENT", "DIALECT", "2")
+        assert set(res[1:]) == {b"d:2"}

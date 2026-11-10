@@ -181,6 +181,21 @@ TEST_F(JsonTagIndexTest, GateSwitchRemovesOldTags) {
   EXPECT_THAT(Tags("m"), testing::UnorderedElementsAre("a", "b"));
 }
 
+TEST_F(JsonTagIndexTest, InvalidValue) {
+  SetRelease(3);
+  EXPECT_EQ(index->AddRecordResult("k", "[5]").value(),
+            RecordResult::kInvalidData);
+  EXPECT_TRUE(index->AddRecord("m", R"(["a"])").value());
+  EXPECT_EQ(index->ModifyRecordResult("m", "[[true]]").value(),
+            RecordResult::kInvalidData);
+  EXPECT_EQ(index->GetTagValueDocCount("a"), 0);
+  EXPECT_EQ(index->GetTrackedKeyCount(), 0);
+  EXPECT_EQ(index->GetUnTrackedKeyCount(), 2);
+
+  SetRelease(2);
+  EXPECT_TRUE(index->AddRecord("before", "[5]").value());
+}
+
 TEST_F(TagIndexTest, RemoveRecordAndSearchTest) {
   EXPECT_TRUE(index->AddRecord("key1", "tag1").value());
   EXPECT_TRUE(index->AddRecord("key2", "tag2").value());

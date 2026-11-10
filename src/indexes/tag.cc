@@ -168,7 +168,11 @@ std::string Tag::Normalize(absl::string_view tag) const {
   return out;
 }
 
-InternedStringPtr Tag::InternRecord(absl::string_view data) const {
+std::optional<InternedStringPtr> Tag::InternRecord(
+    absl::string_view data) const {
+  if (RejectNonUtf8(data)) {
+    return std::nullopt;
+  }
   if (!json_) {
     return StringInternStore::Intern(data);
   }
@@ -182,6 +186,9 @@ InternedStringPtr Tag::InternRecord(absl::string_view data) const {
   };
   if (DecodeJsonTagArrays()) {
     auto decoded = DecodeJsonTags(data, separator_);
+    if (decoded.status == JsonTags::Status::kInvalid) {
+      return std::nullopt;
+    }
     for (const auto &tag : decoded.tags) {
       pack(tag);
     }
@@ -229,24 +236,22 @@ void Tag::DeindexTagForKey(absl::string_view tag,
 absl::StatusOr<RecordResult> Tag::AddRecord(const InternedStringPtr &key,
                                             AttributeData &&data) {
   auto str = data.ConsumeString();
-  auto data_sv = vmsdk::ToStringView(str.get());
-  if (RejectNonUtf8(data_sv)) {
+  auto interned_data = InternRecord(vmsdk::ToStringView(str.get()));
+  if (!interned_data.has_value()) {
     absl::MutexLock lock(&index_mutex_);
     untracked_keys_.insert(key);
     return RecordResult::kInvalidData;
   }
 
-  auto interned_data = InternRecord(data_sv);
-  auto parsed_tags = StoredTags(*interned_data);
+  auto parsed_tags = StoredTags(**interned_data);
   absl::MutexLock lock(&index_mutex_);
   if (parsed_tags.empty()) {
-    // An empty tag set is a missing value, not invalid data. (Non-UTF-8
-    // content is handled above by RejectNonUtf8.)
+    // An empty tag set is a missing value, not invalid data.
     untracked_keys_.insert(key);
     return RecordResult::kMissing;
   }
   auto [_, succ] = tracked_tags_by_keys_.insert(
-      {key, TagInfo{.stored_tags = std::move(interned_data)}});
+      {key, TagInfo{.stored_tags = *std::move(interned_data)}});
   if (!succ) {
     return absl::AlreadyExistsError(
         absl::StrCat("Key `", key->Str(), "` already exists"));
@@ -338,15 +343,14 @@ absl::flat_hash_set<absl::string_view> Tag::ParseRecordTags(
 absl::StatusOr<RecordResult> Tag::ModifyRecord(const InternedStringPtr &key,
                                                AttributeData &&data) {
   auto str = data.ConsumeString();
-  auto data_sv = vmsdk::ToStringView(str.get());
-  if (RejectNonUtf8(data_sv)) {
+  auto interned_data = InternRecord(vmsdk::ToStringView(str.get()));
+  if (!interned_data.has_value()) {
     [[maybe_unused]] auto res =
         RemoveRecord(key, indexes::DeletionType::kIdentifier);
     return RecordResult::kInvalidData;
   }
 
-  auto interned_data = InternRecord(data_sv);
-  auto new_parsed_tags = StoredTags(*interned_data);
+  auto new_parsed_tags = StoredTags(**interned_data);
   if (new_parsed_tags.empty()) {
     [[maybe_unused]] auto res =
         RemoveRecord(key, indexes::DeletionType::kIdentifier);
@@ -375,7 +379,7 @@ absl::StatusOr<RecordResult> Tag::ModifyRecord(const InternedStringPtr &key,
     }
   }
 
-  tag_info.stored_tags = std::move(interned_data);
+  tag_info.stored_tags = *std::move(interned_data);
   return RecordResult::kAdded;
 }
 

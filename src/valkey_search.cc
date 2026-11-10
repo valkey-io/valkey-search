@@ -1227,6 +1227,15 @@ absl::Status ValkeySearch::Startup(ValkeyModuleCtx *ctx) {
                            }));
     VMSDK_RETURN_IF_ERROR(coordinator::ValidateTlsConfig(*coordinator_tls));
     VMSDK_LOG(NOTICE, ctx) << "Coordinator TLS enabled";
+  } else if (options::GetUseCoordinator().GetValue()) {
+    // The cluster bus is encrypted, so make it visible that the coordinator's
+    // traffic between nodes is not.
+    auto tls_cluster = valkey_search::GetConfigGetReply(ctx, "tls-cluster");
+    if (tls_cluster.ok() && *tls_cluster == "yes") {
+      VMSDK_LOG(WARNING, ctx)
+          << "tls-cluster is yes but coordinator-tls is off: coordinator "
+             "traffic between nodes is plaintext";
+    }
   }
 
   if (options::GetUseCoordinator().GetValue() && IsCluster()) {

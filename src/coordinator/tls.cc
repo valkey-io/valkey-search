@@ -128,12 +128,8 @@ absl::StatusOr<TlsConfig> LoadTlsConfig(
   if (!key.ok()) return key.status();
   config.key_file = *std::move(key);
 
-  auto ca = get_config("tls-ca-cert-file");
+  auto ca = RequireFile(get_config, "tls-ca-cert-file");
   if (!ca.ok()) return ca.status();
-  if (ca->empty()) {
-    return absl::FailedPreconditionError(
-        "Coordinator TLS requires tls-ca-cert-file to be set");
-  }
   config.ca_file = *std::move(ca);
 
   // A dedicated client identity is a pair; one half alone is a mistake, not a

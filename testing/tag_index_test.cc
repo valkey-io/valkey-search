@@ -654,6 +654,13 @@ TEST_F(TagIndexTest, ParseSearchTagsEmptyString) {
   EXPECT_TRUE(result.value().empty());
 }
 
+TEST_F(TagIndexTest, ParseSearchTagsKeepsEscapedTrailingWhitespace) {
+  auto result = indexes::Tag::ParseSearchTags(R"( \ a\  | b\\ )", '|');
+  ASSERT_TRUE(result.ok());
+  EXPECT_THAT(result.value(),
+              testing::UnorderedElementsAre(R"(\ a\ )", R"(b\\)"));
+}
+
 TEST_F(TagIndexTest, ParseSearchTagsWhitespaceOnly) {
   auto result = indexes::Tag::ParseSearchTags("   ", '|');
   ASSERT_TRUE(result.ok());

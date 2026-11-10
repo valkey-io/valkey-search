@@ -146,6 +146,15 @@ void ForEachPackedTag(absl::string_view packed, Fn &&fn) {
   }
 }
 
+// Whether `str[pos]` follows an odd number of backslashes.
+bool IsEscaped(absl::string_view str, size_t pos) {
+  size_t backslashes = 0;
+  while (pos > backslashes && str[pos - backslashes - 1] == '\\') {
+    ++backslashes;
+  }
+  return backslashes % 2 == 1;
+}
+
 bool IsValidPrefix(absl::string_view str) {
   return str.length() < 2 || str[str.length() - 1] != '*' ||
          str[str.length() - 2] != '*';
@@ -331,7 +340,12 @@ absl::StatusOr<absl::flat_hash_set<absl::string_view>> Tag::ParseSearchTags(
 
   // Helper: validate and insert a single tag (handles prefix wildcards)
   auto InsertTag = [&](absl::string_view raw) -> absl::Status {
-    auto tag = absl::StripAsciiWhitespace(raw);
+    auto tag = absl::StripLeadingAsciiWhitespace(raw);
+    // Trailing whitespace is stripped unless escaped (`\ `).
+    while (!tag.empty() && absl::ascii_isspace(tag.back()) &&
+           !IsEscaped(tag, tag.size() - 1)) {
+      tag.remove_suffix(1);
+    }
     if (tag.empty()) {
       return absl::OkStatus();  // Empty tags are silently ignored
     }

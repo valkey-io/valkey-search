@@ -196,6 +196,9 @@ class Tag : public IndexBase {
   // Normalize a tag for storage / lookup: lowercase if !case_sensitive_,
   // pass-through otherwise.
   std::string Normalize(absl::string_view tag) const;
+  // The separator values are split on, or nullopt for none: from 1.3.0, a
+  // JSON index created without SEPARATOR does not split.
+  std::optional<char> EffectiveSeparator() const;
   // What tracked_tags_by_keys_ stores for record `data`, or nullopt if `data`
   // is invalid.
   std::optional<InternedStringPtr> InternRecord(absl::string_view data) const;

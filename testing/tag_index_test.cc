@@ -6,6 +6,7 @@
  */
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -130,8 +131,14 @@ class JsonTagIndexTest : public vmsdk::ValkeyTest {
   void SetUp() override {
     vmsdk::ValkeyTest::SetUp();
     saved_emulate_release_ = options::GetEmulateRelease().GetValue();
+    Reset(std::nullopt);
+  }
+  void Reset(std::optional<bool> explicit_separator) {
     data_model::TagIndex tag_index_proto;
     tag_index_proto.set_separator(",");
+    if (explicit_separator.has_value()) {
+      tag_index_proto.set_explicit_separator(*explicit_separator);
+    }
     index = std::make_unique<IndexTeser<Tag, data_model::TagIndex>>(
         tag_index_proto, /*json=*/true);
   }
@@ -194,6 +201,24 @@ TEST_F(JsonTagIndexTest, InvalidValue) {
 
   SetRelease(2);
   EXPECT_TRUE(index->AddRecord("before", "[5]").value());
+}
+
+TEST_F(JsonTagIndexTest, SeparatorPolicy) {
+  const std::string value = R"([" a , b "])";
+  SetRelease(3);
+  for (auto explicit_separator : {std::optional<bool>(), std::optional(true)}) {
+    Reset(explicit_separator);
+    EXPECT_TRUE(index->AddRecord("k", value).value());
+    EXPECT_THAT(Tags("k"), testing::UnorderedElementsAre("a", "b"));
+  }
+  Reset(false);
+  EXPECT_TRUE(index->AddRecord("k", value).value());
+  EXPECT_THAT(Tags("k"), testing::ElementsAre(" a , b "));
+
+  SetRelease(2);
+  Reset(false);
+  EXPECT_TRUE(index->AddRecord("k", value).value());
+  EXPECT_THAT(Tags("k"), testing::UnorderedElementsAre("a", "b"));
 }
 
 TEST_F(TagIndexTest, RemoveRecordAndSearchTest) {

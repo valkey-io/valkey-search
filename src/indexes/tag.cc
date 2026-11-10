@@ -168,6 +168,14 @@ std::string Tag::Normalize(absl::string_view tag) const {
   return out;
 }
 
+std::optional<char> Tag::EffectiveSeparator() const {
+  if (json_ && explicit_separator_.has_value() && !*explicit_separator_ &&
+      DecodeJsonTagArrays()) {
+    return std::nullopt;
+  }
+  return separator_;
+}
+
 std::optional<InternedStringPtr> Tag::InternRecord(
     absl::string_view data) const {
   if (RejectNonUtf8(data)) {
@@ -185,7 +193,7 @@ std::optional<InternedStringPtr> Tag::InternRecord(
     return false;
   };
   if (DecodeJsonTagArrays()) {
-    auto decoded = DecodeJsonTags(data, separator_);
+    auto decoded = DecodeJsonTags(data, EffectiveSeparator());
     if (decoded.status == JsonTags::Status::kInvalid) {
       return std::nullopt;
     }
@@ -411,8 +419,9 @@ int Tag::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, "type");
   ValkeyModule_ReplyWithSimpleString(ctx, "TAG");
   ValkeyModule_ReplyWithSimpleString(ctx, "SEPARATOR");
+  auto separator = EffectiveSeparator();
   ValkeyModule_ReplyWithSimpleString(
-      ctx, std::string(&separator_, sizeof(char)).c_str());
+      ctx, separator.has_value() ? std::string(1, *separator).c_str() : "");
   ValkeyModule_ReplyWithSimpleString(ctx, "CASESENSITIVE");
   ValkeyModule_ReplyWithSimpleString(ctx, case_sensitive_ ? "1" : "0");
   ValkeyModule_ReplyWithSimpleString(ctx, "size");

@@ -12,10 +12,10 @@ class TestJsonTag(ValkeySearchTestCaseBase):
         assert client.execute_command(
             "CONFIG", "SET", "search.emulate-release", release) == b"OK"
 
-    def create(self, client, *args):
+    def create(self, client, *args, tag_args=()):
         assert client.execute_command(
             "FT.CREATE", "idx", "ON", "JSON", "PREFIX", "1", "d:", *args,
-            "SCHEMA", "$.t", "AS", "t", "TAG",
+            "SCHEMA", "$.t", "AS", "t", "TAG", *tag_args,
             "$.v", "AS", "v", "VECTOR", "FLAT", "6", "TYPE", "FLOAT32",
             "DIM", "2", "DISTANCE_METRIC", "L2") == b"OK"
 
@@ -70,3 +70,25 @@ class TestJsonTag(ValkeySearchTestCaseBase):
         res = client.execute_command(
             "FT.SEARCH", "idx", knn, *params, "NOCONTENT", "DIALECT", "2")
         assert set(res[1:]) == {b"d:2"}
+
+    def separator(self, client):
+        attrs = client.execute_command("FT.INFO", "idx")
+        attrs = attrs[attrs.index(b"attributes") + 1]
+        tag = next(a for a in attrs if b"TAG" in a)
+        return tag[tag.index(b"SEPARATOR") + 1]
+
+    def test_no_split_without_separator_from_1_3_0(self):
+        client: Valkey = self.server.get_new_client()
+        self.set_release(client, "1.3.0")
+        self.create(client)
+        client.execute_command("JSON.SET", "d:1", "$", '{"t":"a,b"}')
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+        assert self.separator(client) == b""
+        assert self.keys(client, "@t:{a}") == set()
+        assert self.keys(client, r"@t:{a\,b}") == {b"d:1"}
+
+        client.execute_command("FT.DROPINDEX", "idx")
+        self.create(client, tag_args=("SEPARATOR", ","))
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+        assert self.separator(client) == b","
+        assert self.keys(client, "@t:{a}") == {b"d:1"}

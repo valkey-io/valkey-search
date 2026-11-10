@@ -15,7 +15,6 @@
 #include <memory>
 #include <optional>
 #include <string>
-#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -174,16 +173,10 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> CreateVectorIndex(
                             index_schema->GetAttributeDataType().ToProto(),
                             index_schema->GetDBNum());
   }
-  if constexpr (std::is_same_v<AlgoT<T>, indexes::VectorHNSW<T>>) {
-    return AlgoT<T>::LoadFromRDB(ctx, &index_schema->GetAttributeDataType(),
-                                 vector_index_proto, attribute.identifier(),
-                                 std::move(*iter), index_schema->GetDBNum(),
-                                 key_labels);
-  } else {
-    return AlgoT<T>::LoadFromRDB(ctx, &index_schema->GetAttributeDataType(),
-                                 vector_index_proto, attribute.identifier(),
-                                 std::move(*iter), index_schema->GetDBNum());
-  }
+  return AlgoT<T>::LoadFromRDB(ctx, &index_schema->GetAttributeDataType(),
+                               vector_index_proto, attribute.identifier(),
+                               std::move(*iter), index_schema->GetDBNum(),
+                               key_labels);
 }
 
 // Selects the storage type for `AlgoT` from the schema's declared data type.
@@ -1519,19 +1512,14 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
   rdb_section->set_allocated_index_schema_contents(
       index_schema_proto.release());
 
+  // Each vector attribute adds a KEY_TO_ID_MAP section, plus a KEY_LABELS
+  // section when enabled.
+  const size_t vector_count = std::count_if(
+      attributes_.begin(), attributes_.end(), [](const auto &attribute) {
+        return indexes::IsVectorIndex(attribute.second.GetIndex());
+      });
   size_t supplemental_count =
-      GetAttributeCount() +
-      std::count_if(
-          attributes_.begin(), attributes_.end(), [](const auto &attribute) {
-            return indexes::IsVectorIndex(attribute.second.GetIndex());
-          });
-  if (RDBWriteKeyLabels()) {
-    supplemental_count += std::count_if(
-        attributes_.begin(), attributes_.end(), [](const auto &attribute) {
-          return attribute.second.GetIndex()->GetIndexerType() ==
-                 indexes::IndexerType::kHNSW;
-        });
-  }
+      GetAttributeCount() + vector_count * (RDBWriteKeyLabels() ? 2 : 1);
   if (RDBWriteV2()) {
     supplemental_count += 1;  // For Index Extension
   }
@@ -1555,8 +1543,8 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
     // serialized index schema proto above. We store here again to avoid any
     // dependencies on the ordering of multiple attributes.
     // We could remove the duplication in the future.
-    if (RDBWriteKeyLabels() && attribute.second.GetIndex()->GetIndexerType() ==
-                                   indexes::IndexerType::kHNSW) {
+    if (RDBWriteKeyLabels() &&
+        indexes::IsVectorIndex(attribute.second.GetIndex())) {
       VMSDK_RETURN_IF_ERROR(SaveSupplementalSection(
           rdb, data_model::SUPPLEMENTAL_CONTENT_KEY_LABELS,
           [&](auto &header) {

@@ -2767,8 +2767,9 @@ TEST_F(VectorIndexTest, SaveAndLoadFlatNewKeyGetsUnusedLabel) {
 // expired before the load, or a delete or update was still queued when the RDB
 // was saved. LoadTrackedKeys must keep the vector from the index content, so
 // searches stay safe and the graph edges still match the stored vector until
-// post-load reconciliation removes or re-indexes the key. With key labels, HNSW
-// makes that decision while loading each node instead of in LoadTrackedKeys.
+// post-load reconciliation removes or re-indexes the key. With key labels, the
+// index makes that decision while loading each node instead of in
+// LoadTrackedKeys.
 TEST_F(VectorIndexTest, LoadTrackedKeysWithoutKeyspaceVector) {
   constexpr size_t kLoaded = 10;
   constexpr size_t kMissingKey = 1;
@@ -2780,8 +2781,8 @@ TEST_F(VectorIndexTest, LoadTrackedKeysWithoutKeyspaceVector) {
   };
   for (auto &distance_metric :
        {data_model::DISTANCE_METRIC_COSINE, data_model::DISTANCE_METRIC_L2}) {
-    for (auto [hnsw, key_labels] :
-         {Mode{false, false}, Mode{true, false}, Mode{true, true}}) {
+    for (auto [hnsw, key_labels] : {Mode{false, false}, Mode{false, true},
+                                    Mode{true, false}, Mode{true, true}}) {
       SCOPED_TRACE(testing::Message()
                    << "distance_metric: " << distance_metric
                    << ", hnsw: " << hnsw << ", key_labels: " << key_labels);
@@ -2858,14 +2859,14 @@ TEST_F(VectorIndexTest, LoadTrackedKeysWithoutKeyspaceVector) {
             ValkeyModule_RetainString(nullptr, records[index]);
             return VALKEYMODULE_OK;
           });
+      absl::StatusOr<TrackedKeys> labels;
+      if (key_labels) {
+        labels = VectorBase::LoadKeyLabels(
+            SupplementalContentChunkIter(&labels_rdb));
+        VMSDK_EXPECT_OK(labels);
+      }
       std::shared_ptr<VectorBase> index;
       if (hnsw) {
-        absl::StatusOr<TrackedKeys> labels;
-        if (key_labels) {
-          labels = VectorBase::LoadKeyLabels(
-              SupplementalContentChunkIter(&labels_rdb));
-          VMSDK_EXPECT_OK(labels);
-        }
         auto loaded = VectorHNSW<float>::LoadFromRDB(
             &fake_ctx_, &hash_attribute_data_type_, proto,
             "attribute_identifier_2", SupplementalContentChunkIter(&rdb), 0,
@@ -2875,7 +2876,8 @@ TEST_F(VectorIndexTest, LoadTrackedKeysWithoutKeyspaceVector) {
       } else {
         auto loaded = VectorFlat<float>::LoadFromRDB(
             &fake_ctx_, &hash_attribute_data_type_, proto,
-            "attribute_identifier_2", SupplementalContentChunkIter(&rdb), 0);
+            "attribute_identifier_2", SupplementalContentChunkIter(&rdb), 0,
+            key_labels ? &*labels : nullptr);
         VMSDK_EXPECT_OK(loaded);
         index = std::move(loaded.value());
       }

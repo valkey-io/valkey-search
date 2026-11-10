@@ -100,6 +100,11 @@ class Tag : public IndexBase {
   InternedStringPtr GetRawValue(const InternedStringPtr &key) const
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
+  // The tags AddRecord would index for `data`, viewing into `storage`, or
+  // nullopt if `data` is invalid.
+  std::optional<absl::flat_hash_set<absl::string_view>> ParseRecord(
+      absl::string_view data, InternedStringPtr &storage) const;
+
   // Returns the parsed tag set for `key`, or nullopt if `key` is not tracked.
   // The returned set's string_views point into the interned tag string
   // held by the tracked entry; valid for the duration of the call under the

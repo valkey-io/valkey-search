@@ -87,11 +87,13 @@ namespace valkey_search::query {
 // goes through a main-thread QueryContext and never the time-sliced mutex.
 class PredicateEvaluator : public query::Evaluator {
  public:
-  PredicateEvaluator(const RecordsMap &records, InternedStringPtr target_key,
-                     QueryContext &query_ctx, QueryOperations query_operations,
+  PredicateEvaluator(const RecordsMap &records, RawAttributeReader read_raw,
+                     InternedStringPtr target_key, QueryContext &query_ctx,
+                     QueryOperations query_operations,
                      const IndexSchema &index_schema)
       : Evaluator(query_operations),
         records_(records),
+        read_raw_(read_raw),
         target_key_(std::move(target_key)),
         query_ctx_(query_ctx),
         index_schema_(index_schema) {}
@@ -99,7 +101,8 @@ class PredicateEvaluator : public query::Evaluator {
   const InternedStringPtr &GetTargetKey() const override { return target_key_; }
 
   EvaluationResult EvaluateTags(const query::TagPredicate &predicate) override {
-    auto tags = ReadRecordTags(records_, predicate);
+    InternedStringPtr storage;
+    auto tags = ReadRecordTags(records_, read_raw_, predicate, storage);
     return predicate.Evaluate(tags ? &*tags : nullptr,
                               predicate.GetIndex()->IsCaseSensitive());
   }
@@ -169,6 +172,7 @@ class PredicateEvaluator : public query::Evaluator {
 
  private:
   const RecordsMap &records_;
+  RawAttributeReader read_raw_;
   InternedStringPtr target_key_;
   QueryContext &query_ctx_;
   const IndexSchema &index_schema_;
@@ -184,6 +188,7 @@ DEV_INTEGER_COUNTER(query, predicate_revalidation);
 // key could free either.
 FilterVerification VerifyFilter(const query::SearchParameters &parameters,
                                 const RecordsMap &records,
+                                RawAttributeReader read_raw,
                                 const indexes::Neighbor &n,
                                 std::unique_ptr<QueryContext> &query_ctx) {
   auto predicate = parameters.filter_parse_results.root_predicate.get();
@@ -215,7 +220,7 @@ FilterVerification VerifyFilter(const query::SearchParameters &parameters,
         index_schema, indexes::scoring::GetScorer(parameters.scorer),
         LockMode::kShortLocks);
   }
-  PredicateEvaluator evaluator(records, n.external_id, *query_ctx,
+  PredicateEvaluator evaluator(records, read_raw, n.external_id, *query_ctx,
                                parameters.filter_parse_results.query_operations,
                                index_schema);
   // A null predicate is a match-all query: every document matches.
@@ -250,7 +255,8 @@ FilterVerification VerifyFilter(const query::SearchParameters &parameters,
     // nullopt (empty corpus / non-match) degrades to 0 rather than dropping the
     // already-admitted document.
     verification.recomputed_score =
-        RecomputeDocumentScore(predicate, n.external_id, *query_ctx, records)
+        RecomputeDocumentScore(predicate, n.external_id, *query_ctx, records,
+                               read_raw)
             .value_or(0.0f);
   }
   return verification;
@@ -331,7 +337,13 @@ absl::StatusOr<RecordsMap> GetContent(
                              ctx, vector_identifier, key_obj.get(),
                              neighbor.external_id->Str(), identifiers));
   if (!parameters.filter_parse_results.filter_identifiers.empty()) {
-    auto verification = VerifyFilter(parameters, content, neighbor, query_ctx);
+    auto read_raw = [&](absl::string_view identifier) {
+      return attribute_data_type
+          .GetRawAttribute(ctx, key_obj.get(), key, identifier)
+          .value_or(vmsdk::UniqueValkeyString());
+    };
+    auto verification =
+        VerifyFilter(parameters, content, read_raw, neighbor, query_ctx);
     if (!verification.matches) {
       return absl::NotFoundError("Verify filter failed");
     }

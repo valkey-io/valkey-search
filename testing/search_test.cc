@@ -2680,9 +2680,10 @@ class ScoreTextQueryTestBase : public ValkeySearchTest {
                       RecordsMapValue(vmsdk::MakeUniqueValkeyString(field),
                                       vmsdk::MakeUniqueValkeyString(value)));
     }
-    return query::RecomputeDocumentScore(parsed.value().root_predicate.get(),
-                                         StringInternStore::Intern(key),
-                                         query_ctx, records);
+    return query::RecomputeDocumentScore(
+        parsed.value().root_predicate.get(), StringInternStore::Intern(key),
+        query_ctx, records,
+        [](absl::string_view) { return vmsdk::UniqueValkeyString(); });
   }
 
   // Score `key` for `filter` through the IN-ITERATOR path

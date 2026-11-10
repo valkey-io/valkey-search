@@ -305,19 +305,20 @@ std::vector<query::ReturnAttribute> CopyReturnAttributes(
   return out;
 }
 
-// Reads the database fields a revalidation needs for one key. Mirrors what
-// GetContent does before it hands a record to VerifyFilter, minus the
-// reply-shaping: this content is read to make a decision, never returned.
+// Reads the database fields a revalidation needs for one key, from the
+// selected database, leaving the key open in `key_obj` for further reads.
+// Mirrors what GetContent does before it hands a record to VerifyFilter, minus
+// the reply-shaping: this content is read to make a decision, never returned.
 absl::StatusOr<RecordsMap> FetchRecordForRevalidation(
     ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
-    uint32_t db_num, absl::string_view key,
+    absl::string_view key,
     const absl::flat_hash_set<absl::string_view> &identifiers,
-    const std::optional<std::string> &vector_identifier) {
-  vmsdk::ValkeySelectDbGuard select_db_guard(ctx, db_num);
+    const std::optional<std::string> &vector_identifier,
+    vmsdk::UniqueValkeyOpenKey &key_obj) {
   auto key_str = vmsdk::MakeUniqueValkeyString(key);
   // NOEXPIRE for the same reason GetContent uses it: lazy expiry deletion
   // during a read can crash the server.
-  auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
+  key_obj = vmsdk::MakeUniqueValkeyOpenKey(
       ctx, key_str.get(), VALKEYMODULE_OPEN_KEY_NOEXPIRE | VALKEYMODULE_READ);
   if (!key_obj) {
     return absl::NotFoundError("Key not found");
@@ -448,9 +449,11 @@ void RevalidateArmsBeforeFusion(MultiSearchParameters &params) {
       // Read per arm rather than once per key: the two arms ask for the
       // document differently, and a vector arm's fetch fails outright when the
       // vector field is gone, which says nothing about the text arm.
+      vmsdk::ValkeySelectDbGuard select_db_guard(ctx.get(), params.db_num);
+      vmsdk::UniqueValkeyOpenKey key_obj;
       auto fetched = FetchRecordForRevalidation(
-          ctx.get(), attribute_data_type, params.db_num, n.external_id->Str(),
-          identifiers, vector_identifier[i]);
+          ctx.get(), attribute_data_type, n.external_id->Str(), identifiers,
+          vector_identifier[i], key_obj);
       if (!fetched.ok()) {
         // The key is gone, or unreadable. Either way this arm no longer
         // matches it.
@@ -459,7 +462,14 @@ void RevalidateArmsBeforeFusion(MultiSearchParameters &params) {
         continue;
       }
       const RecordsMap &records = *fetched;
-      auto verification = query::VerifyFilter(*arm, records, n, query_ctx);
+      auto read_raw = [&](absl::string_view identifier) {
+        return attribute_data_type
+            .GetRawAttribute(ctx.get(), key_obj.get(), n.external_id->Str(),
+                             identifier)
+            .value_or(vmsdk::UniqueValkeyString());
+      };
+      auto verification =
+          query::VerifyFilter(*arm, records, read_raw, n, query_ctx);
       if (!verification.matches) {
         drop[j] = 1;
         ++dropped;

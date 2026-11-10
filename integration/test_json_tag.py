@@ -1,9 +1,11 @@
 import struct
 
 from valkey.client import Valkey
-from valkey_search_test_case import ValkeySearchTestCaseBase
+from valkey_search_test_case import (ValkeySearchTestCaseBase,
+                                     ValkeySearchTestCaseDebugMode)
 from valkeytestframework.conftest import resource_port_tracker
-from utils import IndexingTestHelper
+from valkeytestframework.util import waiters
+from utils import IndexingTestHelper, run_in_thread
 
 
 class TestJsonTag(ValkeySearchTestCaseBase):
@@ -92,3 +94,74 @@ class TestJsonTag(ValkeySearchTestCaseBase):
         IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
         assert self.separator(client) == b","
         assert self.keys(client, "@t:{a}") == {b"d:1"}
+
+
+class TestJsonTagRevalidation(ValkeySearchTestCaseDebugMode):
+
+    def append_startup_args(self, args):
+        args = super().append_startup_args(args)
+        args["search.writer-threads"] = "2"
+        args["search.reader-threads"] = "4"
+        return args
+
+    def run_across_mutation(self, client, query, mutation):
+        """The result of `query`, parked behind `mutation` until it applies."""
+        client.execute_command(
+            "FT._DEBUG", "PAUSEPOINT", "SET", "mutation_processing")
+        mut_thread, _, mut_err = run_in_thread(
+            lambda: self.server.get_new_client().execute_command(*mutation))
+        waiters.wait_for_true(
+            lambda: client.execute_command(
+                "FT._DEBUG", "PAUSEPOINT", "TEST", "mutation_processing") >= 1,
+            timeout=5)
+        blocked = client.info("SEARCH").get(
+            "search_text_query_blocked_count", 0)
+        q_thread, res, err = run_in_thread(query)
+        # FT.HYBRID waits for the mutation; a tag-only FT.SEARCH does not.
+        waiters.wait_for_true(
+            lambda: not q_thread.is_alive()
+            or client.info("SEARCH")["search_text_query_blocked_count"]
+            >= blocked + 1,
+            timeout=5)
+        client.execute_command(
+            "FT._DEBUG", "PAUSEPOINT", "RESET", "mutation_processing")
+        mut_thread.join()
+        q_thread.join()
+        assert mut_err[0] is None
+        assert err[0] is None
+        return res[0]
+
+    def test_revalidation_decodes_array(self):
+        client: Valkey = self.server.get_new_client()
+        assert client.execute_command(
+            "CONFIG", "SET", "search.emulate-release", "1.3.0") == b"OK"
+        client.execute_command(
+            "FT.CREATE", "idx", "ON", "JSON", "PREFIX", "1", "d:",
+            "SCHEMA", "$.t", "AS", "t", "TAG",
+            "$.v", "AS", "v", "VECTOR", "FLAT", "6", "TYPE", "FLOAT32",
+            "DIM", "2", "DISTANCE_METRIC", "L2")
+        client.execute_command("JSON.SET", "d:1", "$", '{"t":[],"v":[9,9]}')
+        client.execute_command("JSON.SET", "d:2", "$", '{"t":["x"],"v":[0,0]}')
+
+        def search():
+            res = self.server.get_new_client().execute_command(
+                "FT.SEARCH", "idx", "@t:{x}")
+            return set(res[1::2])
+
+        def hybrid():
+            # The VSIM arm finds d:2 only, so d:1 can come from SEARCH alone.
+            res = self.server.get_new_client().execute_command(
+                "FT.HYBRID", "idx", "SEARCH", "@t:{x}",
+                "VSIM", "@v", "$q", "KNN", "2", "K", "1",
+                "PARAMS", "2", "q", struct.pack("<2f", 0, 0))
+            return {rec[rec.index(b"__key") + 1] for rec in res[1:]}
+
+        for query in (search, hybrid):
+            client.execute_command("JSON.SET", "d:1", "$.t", '["x","y"]')
+            IndexingTestHelper.wait_for_indexing_complete_on_node(client, "idx")
+            assert self.run_across_mutation(
+                client, query, ("JSON.SET", "d:1", "$.t", '["z","x"]')
+            ) == {b"d:1", b"d:2"}
+            assert self.run_across_mutation(
+                client, query, ("JSON.SET", "d:1", "$.t", '["z"]')
+            ) == {b"d:2"}

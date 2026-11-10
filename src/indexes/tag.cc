@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "absl/base/optimization.h"
+#include "absl/cleanup/cleanup.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -57,7 +58,9 @@ bool RejectNonUtf8(absl::string_view data) {
   if (options::EnabledInVersion(1, 3, 0)) {
     return true;
   }
-  tag_rejects_non_utf8_compat_counter.Increment();
+  if (!options::compat_counters_suppressed) {
+    tag_rejects_non_utf8_compat_counter.Increment();
+  }
   return false;
 }
 
@@ -224,6 +227,22 @@ absl::flat_hash_set<absl::string_view> Tag::StoredTags(
     return false;
   });
   return tags;
+}
+
+std::optional<absl::flat_hash_set<absl::string_view>> Tag::ParseRecord(
+    absl::string_view data, InternedStringPtr &storage) const {
+  // AddRecord or ModifyRecord already counted this record.
+  const bool was_suppressed =
+      std::exchange(options::compat_counters_suppressed, true);
+  absl::Cleanup restore = [was_suppressed] {
+    options::compat_counters_suppressed = was_suppressed;
+  };
+  auto interned = InternRecord(data);
+  if (!interned.has_value()) {
+    return std::nullopt;
+  }
+  storage = *std::move(interned);
+  return StoredTags(*storage);
 }
 
 void Tag::IndexTagForKey(absl::string_view tag, const InternedStringPtr &key) {

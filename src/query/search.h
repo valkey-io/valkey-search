@@ -20,6 +20,7 @@
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/functional/any_invocable.h"
+#include "absl/functional/function_ref.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -494,11 +495,18 @@ void ScoreTextQuery(const Predicate *root_predicate,
                     std::vector<indexes::BorrowedNeighbor> &candidates,
                     QueryContext &query_ctx);
 
+// Reads a field of the document being revalidated as
+// AttributeDataType::GetRawAttribute returns it; null if absent.
+using RawAttributeReader =
+    absl::FunctionRef<vmsdk::UniqueValkeyString(absl::string_view identifier)>;
+
 // A revalidated document's tags for the predicate's field, read from the
-// fetched record rather than the index, which may not reflect the mutation yet.
-// nullopt when the record has no such field.
+// fetched record (or `read_raw`, for an index that takes raw values) rather
+// than the index, which may not reflect the mutation yet. The returned views
+// may point into `storage`. nullopt when the record has no such field.
 std::optional<absl::flat_hash_set<absl::string_view>> ReadRecordTags(
-    const RecordsMap &records, const TagPredicate &predicate);
+    const RecordsMap &records, RawAttributeReader read_raw,
+    const TagPredicate &predicate, InternedStringPtr &storage);
 
 // Main-thread rescoring of one revalidated document, through the same ScoreNode
 // walk ScoreTextQuery runs so the result is on the shard-side scale.
@@ -508,7 +516,8 @@ std::optional<absl::flat_hash_set<absl::string_view>> ReadRecordTags(
 std::optional<float> RecomputeDocumentScore(const Predicate *root_predicate,
                                             const InternedStringPtr &key,
                                             QueryContext &query_ctx,
-                                            const RecordsMap &records);
+                                            const RecordsMap &records,
+                                            RawAttributeReader read_raw);
 
 }  // namespace valkey_search::query
 #endif  // VALKEYSEARCH_SRC_QUERY_SEARCH_H_

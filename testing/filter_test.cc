@@ -183,7 +183,8 @@ TEST_P(FilterTest, ParseParams) {
         *index_schema,
         indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std));
     indexes::PrefilterEvaluator evaluator(query_ctx, query_operations,
-                                          *index_schema);
+                                          *index_schema,
+                                          /*source_resolves_text=*/false);
     EXPECT_EQ(test_case.evaluate_success.value(),
               evaluator.Evaluate(root, interned_key));
     // The context is warm now; a second evaluation must not change the verdict.

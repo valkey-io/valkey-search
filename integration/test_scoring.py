@@ -966,14 +966,9 @@ class TestScoring(ValkeySearchTestCaseBase):
     # Group 16: the two hybrid strategies score alike. ADHOC_BF drains the
     # filter's fetchers (a pure text filter is trusted from the iterator) and
     # then ranks by distance; BATCHES walks HNSW and runs the full predicate
-    # through one PrefilterEvaluator per visited candidate. Same filter, same
-    # keys, same scores. K covers the corpus so recall is not a variable.
-    @pytest.mark.skip(reason=(
-        "https://github.com/valkey-io/valkey-search/issues/1424"
-        " -- the inline filter skips the text children of an AND, so BATCHES"
-        " admits every candidate for phrase, proximity and text+tag filters."
-        " The test is written to fail against that defect; unskip it when the"
-        " issue is fixed."))
+    # through one PrefilterEvaluator reused across visited candidates. Same
+    # filter, same keys, same scores. K covers the corpus so recall is not a
+    # variable.
     def test_hybrid_policies_score_alike(self):
         client = self.server.get_new_client()
         client.execute_command("CONFIG", "SET",

@@ -45,6 +45,28 @@ class TestJsonTag(ValkeySearchTestCaseBase):
         client.execute_command("JSON.SET", "d:1", "$.t", '["y"]')
         assert self.keys(client, "@t:{y}") == {b"d:1", b"d:2"}
 
+    def test_reload_after_upgrade_reindexes(self):
+        client: Valkey = self.server.get_new_client()
+        self.set_release(client, "1.2.0")
+        self.create(client)
+        client.execute_command("JSON.SET", "d:1", "$", '{"t":["x","y"]}')
+        client.execute_command("JSON.SET", "d:2", "$", '{"t":"a,b"}')
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+        assert self.keys(client, "@t:{x}") == set()
+        assert self.keys(client, "@t:{a}") == {b"d:2"}
+
+        # Raising emulate-release alone leaves indexed documents as they are.
+        self.set_release(client, "1.3.0")
+        assert self.keys(client, "@t:{x}") == set()
+
+        client.execute_command("SAVE")
+        client.execute_command("DEBUG", "RELOAD")
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+        assert self.separator(client) == b""
+        assert self.keys(client, "@t:{x}") == {b"d:1"}
+        assert self.keys(client, "@t:{a}") == set()
+        assert self.keys(client, r"@t:{a\,b}") == {b"d:2"}
+
     def test_filter_and_knn_return(self):
         client: Valkey = self.server.get_new_client()
         self.create(client, "FILTER", "@t == 'a'")

@@ -91,7 +91,10 @@ set(SRCS_RAX_LIB ${CMAKE_CURRENT_LIST_DIR}/text/rax/rax.c)
 valkey_search_add_static_library(rax_lib "${SRCS_RAX_LIB}")
 target_include_directories(rax_lib PUBLIC ${CMAKE_CURRENT_LIST_DIR}/text)
 
-set(SRCS_TAG ${CMAKE_CURRENT_LIST_DIR}/tag.cc ${CMAKE_CURRENT_LIST_DIR}/tag.h)
+set(SRCS_TAG
+    ${CMAKE_CURRENT_LIST_DIR}/json_tag_decoder.cc
+    ${CMAKE_CURRENT_LIST_DIR}/json_tag_decoder.h ${CMAKE_CURRENT_LIST_DIR}/tag.cc
+    ${CMAKE_CURRENT_LIST_DIR}/tag.h)
 
 valkey_search_add_static_library(tag "${SRCS_TAG}")
 target_include_directories(tag PUBLIC ${CMAKE_CURRENT_LIST_DIR})

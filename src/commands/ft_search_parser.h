@@ -38,6 +38,9 @@ struct SearchCommand : public QueryCommand {
     return sortby_parameter.has_value() || inkeys.has_value();
   }
 
+  // The FT.SEARCH reply is the merged top results' content and nothing else.
+  bool SupportsBoundedContent() const override { return true; }
+
   query::SerializationRange GetSerializationRange() const;
 
   // Replies one array per document in search_result.neighbors[start, end).

@@ -452,7 +452,11 @@ void ProcessNeighborsForReply(
     ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
     std::vector<indexes::Neighbor> &neighbors,
     const query::SearchParameters &parameters,
-    const std::optional<std::string> &vector_identifier) {
+    const std::optional<std::string> &vector_identifier, size_t head_limit) {
+  // Everything below -- fetch, revalidation, removal, re-ranking -- applies to
+  // the head only; the tail is left exactly as it came in.
+  const auto head_end =
+      neighbors.begin() + std::min(head_limit, neighbors.size());
   const auto max_content_size =
       options::GetMaxSearchResultRecordSize().GetValue();
   const auto max_content_fields =
@@ -487,7 +491,8 @@ void ProcessNeighborsForReply(
   // the rest of the reply, so leaf resolution runs once instead of once per
   // recomputed document.
   std::unique_ptr<query::QueryContext> query_ctx;
-  for (auto &neighbor : neighbors) {
+  for (auto it = neighbors.begin(); it != head_end; ++it) {
+    auto &neighbor = *it;
     // Remote neighbors (from fanout) always have attribute_contents populated,
     // so they skip this entire block. Only local neighbors without content
     // reach the slot ownership check below.
@@ -591,14 +596,13 @@ void ProcessNeighborsForReply(
       neighbor.attribute_contents = std::move(content.value());
     }
   }
-  // Remove all entries that don't have content now.
+  // Remove all head entries that don't have content now.
   // TODO: incorporate a retry in case of removal.
-  neighbors.erase(
-      std::remove_if(neighbors.begin(), neighbors.end(),
-                     [](const indexes::Neighbor &neighbor) {
-                       return !neighbor.attribute_contents.has_value();
-                     }),
-      neighbors.end());
+  const auto survivors_end = std::remove_if(
+      neighbors.begin(), head_end, [](const indexes::Neighbor &neighbor) {
+        return !neighbor.attribute_contents.has_value();
+      });
+  const auto kept_head = neighbors.erase(survivors_end, head_end);
 
   // Re-rank survivors when any score was recomputed: a document mutated
   // between shard-side scoring and this content fetch, so VerifyFilter
@@ -613,7 +617,7 @@ void ProcessNeighborsForReply(
   if (any_score_recomputed && !neighbors.empty() && !ranks_on_distance &&
       !parameters.sortby_parameter.has_value()) {
     std::stable_sort(
-        neighbors.begin(), neighbors.end(),
+        neighbors.begin(), kept_head,
         [](const indexes::Neighbor &a, const indexes::Neighbor &b) {
           if (a.score != b.score) {
             return a.score > b.score;
@@ -630,7 +634,7 @@ void ProcessNeighborsForReply(
   if (any_distance_recomputed && !neighbors.empty() && ranks_on_distance &&
       !parameters.sortby_parameter.has_value()) {
     std::stable_sort(
-        neighbors.begin(), neighbors.end(),
+        neighbors.begin(), kept_head,
         [](const indexes::Neighbor &a, const indexes::Neighbor &b) {
           if (a.distance != b.distance) {
             return a.distance < b.distance;

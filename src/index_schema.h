@@ -27,6 +27,7 @@
 #include "absl/synchronization/blocking_counter.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/time/time.h"
+#include "absl/types/span.h"
 #include "gtest/gtest_prod.h"
 #include "src/attribute.h"
 #include "src/attribute_data.h"
@@ -320,7 +321,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   // params is moved into the mutation queue and true is returned.
   // Otherwise params is untouched and false is returned.
   bool PerformKeyContentionCheck(
-      const std::vector<indexes::Neighbor> &neighbors,
+      absl::Span<const indexes::Neighbor> neighbors,
       std::unique_ptr<query::SearchParameters> &&params)
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
 

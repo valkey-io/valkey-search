@@ -156,6 +156,14 @@ const config::Boolean &GetRdbWriteV2();
 /// Return the configuration entry for RDB read v2
 const config::Boolean &GetRdbReadV2();
 
+/// Return whether cluster FT.SEARCH bounds per-shard content
+/// (valkey-search#1324)
+const config::Boolean &GetFanoutBoundedContent();
+
+/// Return the target fraction of bounded-content queries that may need a
+/// second round
+double GetFanoutContentRecoveryRate();
+
 /// Return the threshold for async fanout operations
 config::Number &GetAsyncFanoutThreshold();
 

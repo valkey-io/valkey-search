@@ -13,6 +13,7 @@
 #include <utility>
 
 #include "absl/functional/any_invocable.h"
+#include "absl/status/status.h"
 #include "grpcpp/server.h"
 #include "grpcpp/server_context.h"
 #include "grpcpp/support/server_callback.h"
@@ -68,7 +69,20 @@ class Service final : public Coordinator::CallbackService {
       const InfoIndexPartitionRequest* request,
       InfoIndexPartitionResponse* response) override;
 
+  // Bounded content fan-out recovery: content for the given keys, revalidated
+  // against the query, without running a search.
+  grpc::ServerUnaryReactor* FetchContent(
+      grpc::CallbackServerContext* context, const FetchContentRequest* request,
+      SearchIndexPartitionResponse* response) override;
+
  private:
+  // Converts `request` into `operation` and runs the index and slot
+  // consistency checks shared by every request that carries a search.
+  static absl::Status PrepareRemoteSearch(
+      grpc::CallbackServerContext* context,
+      const SearchIndexPartitionRequest& request,
+      RemoteResponderSearch& operation);
+
   static grpc::Status PerformSlotConsistencyCheck(
       uint64_t expected_slot_fingerprint);
 

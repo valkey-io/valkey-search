@@ -700,3 +700,64 @@ class TestFullTextInFlightBlockingCME(ValkeySearchClusterTestCaseDebugMode):
         # After mutations complete, no document contains "hello"
         result = search_res[0]
         assert result[0] == 0
+
+
+class TestFullTextInFlightBlockingCMEBoundedContent(TestFullTextInFlightBlockingCME):
+    """Every CME test above again with bounded content fan-out on, where a
+    shard checks contention only for the results it returns content for and
+    the rest are revalidated when the coordinator fetches them."""
+
+    def append_startup_args(self, args: dict[str, str]) -> dict[str, str]:
+        args = super().append_startup_args(args)
+        args["search.fanout-bounded-content"] = "yes"
+        return args
+
+    def test_inflight_write_past_the_content_limit(self):
+        """A write in flight to a winner past its shard's content limit (6 of
+        10 here) does not block that shard's search, but does block the
+        FetchContent for it, which then sees the written document."""
+        cluster_client: ValkeyCluster = self.new_cluster_client()
+        primary_clients = self.get_all_primary_clients()
+        keys = [f"doc:{{hot}}:{i:02d}" for i in range(12)]
+        owner_index = next(i for i, c in enumerate(primary_clients)
+                           if c.execute_command("CLUSTER", "KEYSLOT", keys[0])
+                           in self._owned_slots(c))
+        owner = primary_clients[owner_index]
+        coordinator = self.client_for_primary((owner_index + 1) % len(primary_clients))
+        coordinator.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:",
+            "SCHEMA", "content", "TEXT")
+        for key in keys:
+            cluster_client.execute_command("HSET", key, "content", "hello world")
+        IndexingTestHelper.wait_for_indexing_complete_on_all_nodes(primary_clients, "idx")
+        winners = coordinator.execute_command("FT.SEARCH", "idx", "@content:hello")[1::2]
+        target = winners[7]  # Past the content limit: fetched in round 2.
+
+        owner.execute_command("FT._DEBUG PAUSEPOINT SET mutation_processing")
+        writer, _, _ = run_in_thread(
+            lambda: cluster_client.execute_command("HSET", target, "content", "updated"))
+        waiters.wait_for_true(lambda: owner.execute_command(
+            "FT._DEBUG PAUSEPOINT TEST mutation_processing") > 0)
+        blocked = owner.info("SEARCH")["search_text_query_blocked_count"]
+        search_thread, search_res, search_err = run_in_thread(
+            lambda: coordinator.execute_command("FT.SEARCH", "idx", "@content:hello"))
+        waiters.wait_for_true(
+            lambda: owner.info("SEARCH")["search_text_query_blocked_count"] > blocked)
+        assert search_thread.is_alive()
+
+        owner.execute_command("FT._DEBUG PAUSEPOINT RESET mutation_processing")
+        writer.join()
+        search_thread.join()
+        assert search_err[0] is None
+        result = search_res[0]
+        assert target not in result[1::2]
+        assert result[0] == len(keys) - 1
+
+    @staticmethod
+    def _owned_slots(client):
+        port = client.connection_pool.connection_kwargs["port"]
+        owned = set()
+        for start, end, primary, *_ in client.execute_command("CLUSTER", "SLOTS"):
+            if primary[1] == port:
+                owned.update(range(start, end + 1))
+        return owned

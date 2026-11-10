@@ -33,6 +33,7 @@
 #include "src/index_schema.h"
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
+#include "src/query/content_resolution.h"
 #include "src/query/search.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
@@ -50,6 +51,10 @@
 namespace valkey_search::coordinator {
 
 CONTROLLED_SIZE_T(ForceRemoteFailCount, 0);
+// Test only: answer FetchContent as a shard whose slots changed would.
+CONTROLLED_BOOLEAN(ForceFetchContentSlotMismatch, false);
+// Test only: serve searches as a shard that predates content_limit would.
+CONTROLLED_BOOLEAN(ForceIgnoreContentLimit, false);
 CONTROLLED_SIZE_T(ForceIndexNotFoundError, 0);
 CONTROLLED_BOOLEAN(ForceServerQueueDepthExceeded, false);
 
@@ -97,14 +102,20 @@ void RecordSearchMetrics(bool failure,
   }
 }
 
+// `bounded_content` is set for a request carrying content_limit, where a
+// neighbor without content was deliberately left key and score only; it is
+// marked so the coordinator can tell it from a result with empty content.
 void SerializeNeighbors(SearchIndexPartitionResponse *response,
-                        const std::vector<indexes::Neighbor> &neighbors) {
+                        const std::vector<indexes::Neighbor> &neighbors,
+                        bool bounded_content) {
   for (const auto &neighbor : neighbors) {
     auto *neighbor_proto = response->add_neighbors();
     neighbor_proto->set_key(std::move(*neighbor.external_id));
     neighbor_proto->set_score(neighbor.score);
     neighbor_proto->set_distance(neighbor.distance);
-    if (neighbor.attribute_contents) {
+    if (!neighbor.attribute_contents) {
+      neighbor_proto->set_content_omitted(bounded_content);
+    } else {
       const auto &attribute_contents = neighbor.attribute_contents.value();
       for (const auto &[identifier, record] : attribute_contents) {
         auto contents = neighbor_proto->add_attribute_contents();
@@ -152,24 +163,40 @@ class RemoteResponderSearch : public query::SearchParameters {
     QueryCompleteImpl();
   }
 
+ protected:
+  // The completion's metrics. A search partition records the search metrics;
+  // other operations reusing this completion override it.
+  virtual void RecordMetrics(bool failure) {
+    RecordSearchMetrics(failure, std::move(latency_sample));
+  }
+
  private:
   void QueryCompleteImpl() {
     if (!search_result.status.ok() && (!enable_partial_results || multi_arm)) {
       (*on_done)(ToGrpcStatus(search_result.status));
-      RecordSearchMetrics(true, std::move(latency_sample));
+      RecordMetrics(true);
       return;
     }
     if (cancellation_token->IsCancelled()) {
       (*on_done)({grpc::StatusCode::DEADLINE_EXCEEDED,
                   std::string(query::kTimeoutMsg)});
-      RecordSearchMetrics(true, std::move(latency_sample));
+      RecordMetrics(true);
       return;
     }
-    SerializeNeighbors(response, search_result.neighbors);
+    SerializeNeighbors(response, search_result.neighbors,
+                       content_limit.has_value());
     response->set_total_count(search_result.total_count);
     (*on_done)(grpc::Status::OK);
-    RecordSearchMetrics(false, std::move(latency_sample));
+    RecordMetrics(false);
   }
+};
+
+// Bounded content fan-out recovery (FetchContent): resolves content for
+// given keys through the search completion path, without running a search.
+// Not a search partition, so it stays out of the search partition metrics.
+class RemoteContentFetch final : public RemoteResponderSearch {
+ protected:
+  void RecordMetrics(bool) override {}
 };
 
 grpc::Status Service::PerformSlotConsistencyCheck(
@@ -233,6 +260,29 @@ void Service::EnqueueSearchRequest(
 
 DEV_INTEGER_COUNTER(grpc, search_index_rpc_requests);
 
+absl::Status Service::PrepareRemoteSearch(
+    grpc::CallbackServerContext *context,
+    const SearchIndexPartitionRequest &request,
+    RemoteResponderSearch &operation) {
+  VMSDK_RETURN_IF_ERROR(
+      GRPCSearchRequestToParameters(request, context, &operation));
+
+  // perform index consistency check (index fingerprint/version), required
+  auto schema =
+      SchemaManager::Instance()
+          .GetIndexSchema(operation.db_num, operation.index_schema_name)
+          .value();
+  VMSDK_RETURN_IF_ERROR(ToAbslStatus(PerformIndexConsistencyCheck(
+      request.index_fingerprint_version(), schema)));
+
+  if (request.enable_consistency()) {
+    // Perform slot consistency check
+    VMSDK_RETURN_IF_ERROR(
+        ToAbslStatus(PerformSlotConsistencyCheck(request.slot_fingerprint())));
+  }
+  return absl::OkStatus();
+}
+
 void Service::SearchOneArm(grpc::CallbackServerContext *context,
                            const SearchIndexPartitionRequest &request,
                            SearchIndexPartitionResponse *response,
@@ -241,23 +291,12 @@ void Service::SearchOneArm(grpc::CallbackServerContext *context,
   auto latency_sample = SAMPLE_EVERY_N(100);
   auto StatusWrapper = [&]() -> absl::Status {
     auto search_operation = std::make_unique<RemoteResponderSearch>();
-    VMSDK_RETURN_IF_ERROR(GRPCSearchRequestToParameters(
-        request, context, search_operation.get()));
-    search_operation->multi_arm = multi_arm;
-
-    // perform index consistency check (index fingerprint/version), required
-    auto schema = SchemaManager::Instance()
-                      .GetIndexSchema(search_operation->db_num,
-                                      search_operation->index_schema_name)
-                      .value();
-    VMSDK_RETURN_IF_ERROR(ToAbslStatus(PerformIndexConsistencyCheck(
-        request.index_fingerprint_version(), schema)));
-
-    if (request.enable_consistency()) {
-      // Perform slot consistency check
-      VMSDK_RETURN_IF_ERROR(ToAbslStatus(
-          PerformSlotConsistencyCheck(request.slot_fingerprint())));
+    VMSDK_RETURN_IF_ERROR(
+        PrepareRemoteSearch(context, request, *search_operation));
+    if (ForceIgnoreContentLimit.GetValue()) {
+      search_operation->content_limit.reset();
     }
+    search_operation->multi_arm = multi_arm;
     // Consistency checks passed, now enqueue the search
     // Server-side queue depth check: reject partition requests when the reader
     // thread pool is overloaded. Without this, coordinators keep sending work
@@ -290,6 +329,47 @@ grpc::ServerUnaryReactor *Service::SearchIndexPartition(
   grpc::ServerUnaryReactor *reactor = context->DefaultReactor();
   SearchOneArm(context, *request, response,
                [reactor](grpc::Status s) { reactor->Finish(s); });
+  return reactor;
+}
+
+DEV_INTEGER_COUNTER(grpc, fetch_content_rpc_requests);
+
+grpc::ServerUnaryReactor *Service::FetchContent(
+    grpc::CallbackServerContext *context, const FetchContentRequest *request,
+    SearchIndexPartitionResponse *response) {
+  GRPCSuspensionGuard guard(GRPCSuspender::Instance());
+  fetch_content_rpc_requests.Increment();
+  grpc::ServerUnaryReactor *reactor = context->DefaultReactor();
+  // simulate failures for testing only
+  if (ForceRemoteFailCount.GetValue() > 0) {
+    ForceRemoteFailCount.Decrement();
+    reactor->Finish(grpc::Status(grpc::StatusCode::UNAVAILABLE,
+                                 "Simulated remote failure for testing"));
+    return reactor;
+  }
+  if (ForceFetchContentSlotMismatch.GetValue()) {
+    reactor->Finish(grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+                                 "Slot fingerprint mismatch"));
+    return reactor;
+  }
+  auto fetch = std::make_unique<RemoteContentFetch>();
+  auto status = PrepareRemoteSearch(context, request->query(), *fetch);
+  if (status.ok() && fetch->no_content) {
+    status = absl::InvalidArgumentError("FetchContent requires content");
+  }
+  if (!status.ok()) {
+    reactor->Finish(ToGrpcStatus(status));
+    return reactor;
+  }
+  fetch->response = response;
+  fetch->on_done = std::make_shared<ArmCompletionCallback>(
+      [reactor](grpc::Status s) { reactor->Finish(s); });
+  query::SeedContentFetch(*fetch, request->keys());
+  // Lets tests change the keys between the two rounds.
+  BACKGROUND_PAUSEPOINT("fetch_content");
+  vmsdk::RunByMain([fetch = std::move(fetch)]() mutable {
+    query::ResolveContent(std::move(fetch));
+  });
   return reactor;
 }
 

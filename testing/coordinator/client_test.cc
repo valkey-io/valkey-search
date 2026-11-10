@@ -85,8 +85,23 @@ class FakeCoordinatorAsync final
     ADD_FAILURE() << "Unexpected MultiSearchIndexPartition reactor call";
   }
 
+  void FetchContent(::grpc::ClientContext *, const FetchContentRequest *,
+                    SearchIndexPartitionResponse *response,
+                    std::function<void(::grpc::Status)> done) override {
+    *response = fetch_content_response;
+    done(fetch_content_status);
+  }
+
+  void FetchContent(::grpc::ClientContext *, const FetchContentRequest *,
+                    SearchIndexPartitionResponse *,
+                    ::grpc::ClientUnaryReactor *) override {
+    ADD_FAILURE() << "Unexpected FetchContent reactor call";
+  }
+
   SearchIndexPartitionResponse search_response;
   grpc::Status search_status = grpc::Status::OK;
+  SearchIndexPartitionResponse fetch_content_response;
+  grpc::Status fetch_content_status = grpc::Status::OK;
   InfoIndexPartitionResponse info_response;
   grpc::Status info_status = grpc::Status::OK;
   MultiSearchIndexPartitionResponse multi_search_response;
@@ -122,6 +137,13 @@ class FakeCoordinatorStub final : public Coordinator::StubInterface {
       ::grpc::ClientContext *, const MultiSearchIndexPartitionRequest &,
       MultiSearchIndexPartitionResponse *) override {
     ADD_FAILURE() << "Unexpected MultiSearchIndexPartition sync call";
+    return grpc::Status(grpc::StatusCode::UNIMPLEMENTED, "");
+  }
+
+  grpc::Status FetchContent(::grpc::ClientContext *,
+                            const FetchContentRequest &,
+                            SearchIndexPartitionResponse *) override {
+    ADD_FAILURE() << "Unexpected FetchContent sync call";
     return grpc::Status(grpc::StatusCode::UNIMPLEMENTED, "");
   }
 
@@ -196,6 +218,21 @@ class FakeCoordinatorStub final : public Coordinator::StubInterface {
     return nullptr;
   }
 
+  ::grpc::ClientAsyncResponseReaderInterface<SearchIndexPartitionResponse> *
+  AsyncFetchContentRaw(::grpc::ClientContext *, const FetchContentRequest &,
+                       ::grpc::CompletionQueue *) override {
+    ADD_FAILURE() << "Unexpected AsyncFetchContentRaw call";
+    return nullptr;
+  }
+
+  ::grpc::ClientAsyncResponseReaderInterface<SearchIndexPartitionResponse> *
+  PrepareAsyncFetchContentRaw(::grpc::ClientContext *,
+                              const FetchContentRequest &,
+                              ::grpc::CompletionQueue *) override {
+    ADD_FAILURE() << "Unexpected PrepareAsyncFetchContentRaw call";
+    return nullptr;
+  }
+
   FakeCoordinatorAsync async_;
 };
 
@@ -261,6 +298,59 @@ TEST_F(ClientByteCountingTest, CountsResponseBytesBeforeCallbackMutation) {
             actual_request_size);
   EXPECT_EQ(Metrics::GetStats().coordinator_bytes_in.load(),
             actual_response_size);
+}
+
+// FetchContent shares the unary-call path: the response and status reach the
+// callback, and both directions are counted.
+TEST_F(ClientByteCountingTest, FetchContentDeliversResponseAndCountsBytes) {
+  auto request = std::make_unique<FetchContentRequest>();
+  request->mutable_query()->set_index_schema_name("test_index_schema");
+  request->add_keys("key1");
+  request->add_keys("key2");
+  const size_t request_size = request->ByteSizeLong();
+
+  SearchIndexPartitionResponse response;
+  auto *neighbor = response.add_neighbors();
+  neighbor->set_key("key1");
+  auto *attribute = neighbor->add_attribute_contents();
+  attribute->set_identifier("title");
+  attribute->set_content("payload");
+  const size_t response_size = response.ByteSizeLong();
+
+  auto stub = std::make_unique<FakeCoordinatorStub>();
+  stub->async_stub()->fetch_content_response = response;
+  ClientImpl client(nullptr, "test_address", std::move(stub));
+
+  bool callback_called = false;
+  client.FetchContent(
+      std::move(request),
+      [&](grpc::Status status, SearchIndexPartitionResponse &resp) {
+        EXPECT_TRUE(status.ok());
+        ASSERT_EQ(resp.neighbors_size(), 1);
+        EXPECT_EQ(resp.neighbors(0).key(), "key1");
+        callback_called = true;
+      });
+  EXPECT_TRUE(callback_called);
+  EXPECT_EQ(Metrics::GetStats().coordinator_bytes_out.load(), request_size);
+  EXPECT_EQ(Metrics::GetStats().coordinator_bytes_in.load(), response_size);
+}
+
+TEST_F(ClientByteCountingTest, FetchContentFailureCountsNoResponseBytes) {
+  auto request = std::make_unique<FetchContentRequest>();
+  request->add_keys("key1");
+  auto stub = std::make_unique<FakeCoordinatorStub>();
+  stub->async_stub()->fetch_content_status =
+      grpc::Status(grpc::StatusCode::UNAVAILABLE, "down");
+  ClientImpl client(nullptr, "test_address", std::move(stub));
+
+  bool callback_called = false;
+  client.FetchContent(std::move(request), [&](grpc::Status status,
+                                              SearchIndexPartitionResponse &) {
+    EXPECT_EQ(status.error_code(), grpc::StatusCode::UNAVAILABLE);
+    callback_called = true;
+  });
+  EXPECT_TRUE(callback_called);
+  EXPECT_EQ(Metrics::GetStats().coordinator_bytes_in.load(), 0u);
 }
 
 // Test that we correctly count bytes for successful requests using real

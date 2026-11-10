@@ -39,6 +39,10 @@ class Client {
   virtual void MultiSearchIndexPartition(
       std::unique_ptr<MultiSearchIndexPartitionRequest> request,
       MultiSearchIndexPartitionCallback done) = 0;
+  // Bounded content fan-out recovery; the reply has the same shape as a
+  // search partition's.
+  virtual void FetchContent(std::unique_ptr<FetchContentRequest> request,
+                            SearchIndexPartitionCallback done) = 0;
   virtual void InfoIndexPartition(
       std::unique_ptr<InfoIndexPartitionRequest> request,
       InfoIndexPartitionCallback done, int timeout_ms = 5000) = 0;
@@ -63,6 +67,8 @@ class ClientImpl : public Client {
   void MultiSearchIndexPartition(
       std::unique_ptr<MultiSearchIndexPartitionRequest> request,
       MultiSearchIndexPartitionCallback done) override;
+  void FetchContent(std::unique_ptr<FetchContentRequest> request,
+                    SearchIndexPartitionCallback done) override;
   void InfoIndexPartition(std::unique_ptr<InfoIndexPartitionRequest> request,
                           InfoIndexPartitionCallback done,
                           int timeout_ms = 5000) override;

@@ -38,6 +38,10 @@ class MockClient : public Client {
               (std::unique_ptr<MultiSearchIndexPartitionRequest> request,
                MultiSearchIndexPartitionCallback done),
               (override));
+  MOCK_METHOD(void, FetchContent,
+              (std::unique_ptr<FetchContentRequest> request,
+               SearchIndexPartitionCallback done),
+              (override));
   MOCK_METHOD(void, InfoIndexPartition,
               (std::unique_ptr<InfoIndexPartitionRequest> request,
                InfoIndexPartitionCallback done, int timeout_ms),

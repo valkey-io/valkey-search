@@ -2086,7 +2086,7 @@ vmsdk::BlockedClientCategory IndexSchema::GetBlockedCategoryFromProto() const {
 }
 
 bool IndexSchema::PerformKeyContentionCheck(
-    const std::vector<indexes::Neighbor> &neighbors,
+    absl::Span<const indexes::Neighbor> neighbors,
     std::unique_ptr<query::SearchParameters> &&params) {
   const auto &dbkeyinfo_map = db_key_info_.Get();
   for (const auto &neighbor : neighbors) {

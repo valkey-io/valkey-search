@@ -264,6 +264,10 @@ struct SearchParameters {
   // Set on deserialized fanout requests when the originating command's
   // derived parameters require content processing despite no_content.
   bool force_content_processing{false};
+  // Bounded content fan-out, shard side: when set, results are still ranked
+  // and returned up to the limit, but content is resolved only for the first
+  // `content_limit` of them. See query/fanout_content_limit.h.
+  std::optional<uint64_t> content_limit;
   FilterParseResults filter_parse_results;
   // True when the filter tree contains a (single) VectorRangePredicate. In the
   // single-VR model the matched distance is carried in Neighbor::distance;
@@ -327,6 +331,12 @@ struct SearchParameters {
   virtual bool RequiresCompleteResults() const {
     return sortby_parameter.has_value() || inkeys.has_value();
   }
+
+  // Whether a cluster fan-out of this search may bound per-shard content.
+  // Opt-in: only a command whose reply is the merged, score-ranked top results
+  // overrides this. Commands that post-process the full candidate set (e.g.
+  // FT.AGGREGATE) keep the default.
+  virtual bool SupportsBoundedContent() const { return false; }
 
   // True when the search needs no post-search processing: a NOCONTENT reply
   // where nothing (e.g. SORTBY) requires loading and reordering the full result

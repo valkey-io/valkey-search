@@ -310,6 +310,67 @@ TEST_F(ResponseGeneratorTest, ProcessNeighborsForReplyContentLimits) {
   EXPECT_EQ(Metrics::GetStats().query_result_record_dropped_cnt, 2);
 }
 
+// Bounded content fan-out: with a head limit, only the head is fetched and
+// revalidated, a head result whose fetch fails is still removed, and the tail
+// is left in order without content -- never fetched, never removed.
+TEST_F(ResponseGeneratorTest, ProcessNeighborsForReplyHeadLimit) {
+  ValkeyModuleCtx fake_ctx;
+  EXPECT_CALL(*kMockValkeyModule, GetExpire(testing::_))
+      .WillRepeatedly(testing::Return(VALKEYMODULE_NO_EXPIRE));
+
+  std::vector<indexes::Neighbor> neighbors;
+  for (const char *key : {"head_ok", "head_gone", "tail_1", "tail_2"}) {
+    neighbors.push_back(indexes::Neighbor(StringInternStore::Intern(key), 0));
+  }
+
+  UnitTestSearchParameters parameters;
+  parameters.return_attributes.push_back(
+      {.identifier = vmsdk::MakeUniqueValkeyString("content"),
+       .alias = vmsdk::MakeUniqueValkeyString("content_alias")});
+  parameters.attribute_alias = "test_attribute";
+
+  MockAttributeDataType data_type;
+  EXPECT_CALL(data_type, ToProto()).WillRepeatedly([]() {
+    return data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH;
+  });
+  EXPECT_CALL(data_type,
+              FetchAllAttributes(&fake_ctx, testing::_, testing::_,
+                                 absl::string_view("head_ok"), testing::_))
+      .WillOnce([](auto &&...) -> absl::StatusOr<RecordsMap> {
+        RecordsMap content;
+        content.emplace(
+            "content", RecordsMapValue(vmsdk::MakeUniqueValkeyString("content"),
+                                       vmsdk::MakeUniqueValkeyString("v")));
+        return content;
+      });
+  EXPECT_CALL(data_type,
+              FetchAllAttributes(&fake_ctx, testing::_, testing::_,
+                                 absl::string_view("head_gone"), testing::_))
+      .WillOnce([](auto &&...) -> absl::StatusOr<RecordsMap> {
+        return absl::NotFoundError("gone");
+      });
+  EXPECT_CALL(data_type,
+              FetchAllAttributes(&fake_ctx, testing::_, testing::_,
+                                 absl::string_view("tail_1"), testing::_))
+      .Times(0);
+  EXPECT_CALL(data_type,
+              FetchAllAttributes(&fake_ctx, testing::_, testing::_,
+                                 absl::string_view("tail_2"), testing::_))
+      .Times(0);
+
+  ProcessNeighborsForReply(&fake_ctx, data_type, neighbors, parameters,
+                           parameters.attribute_alias, /*head_limit=*/2);
+
+  ASSERT_EQ(neighbors.size(), 3);
+  EXPECT_EQ(std::string(*neighbors[0].external_id), "head_ok");
+  ASSERT_TRUE(neighbors[0].attribute_contents.has_value());
+  EXPECT_EQ(ToStringMap(*neighbors[0].attribute_contents)["content"], "v");
+  EXPECT_EQ(std::string(*neighbors[1].external_id), "tail_1");
+  EXPECT_FALSE(neighbors[1].attribute_contents.has_value());
+  EXPECT_EQ(std::string(*neighbors[2].external_id), "tail_2");
+  EXPECT_FALSE(neighbors[2].attribute_contents.has_value());
+}
+
 // --- Score recompute on the main-thread content-fetch path ---
 //
 // When a document mutates between shard-side scoring and content fetch

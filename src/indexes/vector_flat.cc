@@ -34,6 +34,7 @@
 #include "src/query/search.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/cancel.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/utils.h"
@@ -214,19 +215,6 @@ absl::Status VectorFlat<T>::RemoveRecordImpl(uint64_t internal_id) {
   return absl::OkStatus();
 }
 
-// Paper over the impedance mismatch between the
-// cancel::Token and hnswlib::BaseCancellationFunctor.
-class CancelCondition : public hnswlib::BaseCancellationFunctor {
- public:
-  explicit CancelCondition(cancel::Token &token) : token_(token) {
-    CHECK(&token);
-  }
-  bool isCancelled() override { return token_->IsCancelled(); }
-
- private:
-  cancel::Token &token_;
-};
-
 template <typename T>
 absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::Search(
     absl::string_view query, uint64_t count, cancel::Token &cancellation_token,
@@ -277,34 +265,44 @@ float VectorFlat<T>::ComputeDistance(absl::string_view query,
 // Linear scan of the contiguous FLAT store: the loop and distance kernel of
 // FLAT KNN (BruteforceSearch::searchKnn), resolving a key only for a match.
 template <typename T>
-absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::SearchRange(
-    absl::string_view query, float radius, cancel::Token &cancellation_token,
-    std::unique_ptr<hnswlib::BaseFilterFunctor> filter) {
+absl::StatusOr<RangeResult> VectorFlat<T>::SearchRange(
+    absl::string_view query, const RangeQuery &range,
+    cancel::Token &cancellation_token) {
+  VMSDK_ASSIGN_OR_RETURN(const float radius,
+                         this->ValidateRangeSearchInputs(query, range));
+  const size_t max_results = RangeResultLimit(
+      range, static_cast<size_t>(
+                 options::GetMaxNonVectorSearchResultsFetched().GetValue()));
   auto nq = this->NormalizeQueryIfNeeded(query);
   const float query_magnitude =
       normalize_ ? CalcReciprocalMagnitude(nq.view, this->GetVectorDataType())
                  : kDefaultMagnitude;
 
-  std::vector<Neighbor> neighbors;
-  neighbors.reserve(kRangeReserve);
+  RangeResult result;
+  std::vector<Neighbor> &neighbors = result.neighbors;
+  neighbors.reserve(std::min(kRangeReserve, max_results));
   for (size_t i = 0; i < algo_->cur_element_count_; ++i) {
     if (cancellation_token->IsCancelled()) {
       break;
     }
     const auto *stored_vector = algo_->GetDataPtrByInternalId(i);
     const hnswlib::labeltype label = algo_->GetLabel(stored_vector);
-    if (!*stored_vector || (filter && !(*filter)(label))) {
+    if (!*stored_vector || (range.filter && !(*range.filter)(label))) {
       continue;
     }
     float distance =
         this->RangeDistance(nq.view, query_magnitude, *stored_vector);
     if (distance <= radius) {
       if (const auto *key = this->FindKeyDuringSearch(label)) {
+        if (neighbors.size() >= max_results) {
+          result.truncated = true;
+          break;
+        }
         neighbors.emplace_back(*key, distance);
       }
     }
   }
-  return neighbors;
+  return result;
 }
 
 template <typename T>

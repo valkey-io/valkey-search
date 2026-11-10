@@ -1194,7 +1194,6 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                 f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 apply @n1{op}@n2 as nn"
             )
 
-    @pytest.mark.skip(reason="Requires a large change to the underlying comparison operations and changes to many existing tests")
     def test_aggregate_numeric_triadic_operators(self, key_type, dialect, vector_data_type):
         self.setup_data("hard numbers", key_type, vector_data_type=vector_data_type)
         dyadic = ["+", "-", "*", "/", "^"]
@@ -1312,6 +1311,40 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                         "nn",
                 )
 
+    # Type-sensitive expressions, measured on Redis 8 (see the typed comparison
+    # block in src/expr/value.cc). A number is never turned into a string: a
+    # comparison with a string that does not convert is an error for < <= > >=,
+    # string functions reject numbers, lower()/upper() of a number is null, and
+    # && / || evaluate their right side only when needed. A field named by
+    # LOAD is a number; LOAD * on HASH hands the pipeline the raw string.
+    # check() also runs each command over queries that match nothing, where an
+    # evaluation error must not surface.
+    TYPED_EXPRESSIONS = [
+        "@n1 < 5", "@n1 < '5'", "@n1 < @n2", "@t1 < 'one.one2'", "@t1 < 5",
+        "@n1 < @t1", "@n1 == 'abc'", "@n1 != 'abc'", "@n1 < 'abc'",
+        "(@n1 < 'abc') + 1", "!(@n1 < 'abc')", "exists(@n1 < 'abc')",
+        "1 || (@n1 < 'abc')", "0 && (@n1 < 'abc')", "(@n1 < 'abc') || 1",
+        "strlen(@n1)", "strlen(@t1)", "startswith(@n1, '1')",
+        "contains(@t1, 1)", "substr(@t1, '0', 1)", "lower(@n1)",
+        "lower(@n1) < 5", "lower(@n1) < 'a'", "lower(@n1) == lower(@n2)",
+        "exists(lower(@n1))", "upper(@t1)",
+    ]
+
+    @pytest.mark.parametrize("load", [["4", "@__key", "@n1", "@n2", "@t1"],
+                                      ["*"]], ids=["explicit", "star"])
+    def test_aggregate_typed_expressions(self, key_type, dialect, load,
+                                         vector_data_type):
+        if vector_data_type != "FLOAT32":
+            pytest.skip("independent of the vector type")
+        if key_type == "json" and load == ["*"]:
+            pytest.skip("JSON's LOAD * exposes no fields to the pipeline")
+        self.setup_data("hard numbers", key_type, vector_data_type=vector_data_type)
+        for expr in self.TYPED_EXPRESSIONS:
+            self.check(dialect, "ft.aggregate", f"{key_type}_idx1", "*",
+                       "load", *load, "apply", expr, "as", "r")
+            self.check(dialect, "ft.aggregate", f"{key_type}_idx1", "*",
+                       "load", *load, "filter", expr)
+
     def test_search_sortby(self, key_type, dialect, vector_data_type):
         self.setup_data("sortable numbers", key_type)
 
@@ -1338,7 +1371,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
             # range keep the coverage without that noise; 100 still covers
             # "everything".
             radii = [0.001, 0.5, 1.999, 100.0]
-        epsilons = [None, 0.0, 0.1]
+        epsilons = [None, 0.0, 0.01, 0.1]
         for x in vector_points:
             for y in vector_points:
                 for z in vector_points:
@@ -1397,11 +1430,13 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         """VECTOR_RANGE combined with numeric filter via AND."""
         self.setup_data("sortable numbers", key_type)
         for r in [5.0, 50.0]:
-            self.checkrange(
-                dialect,
-                f"ft.search {key_type}_idx1 * @n1:[0 +inf] NOCONTENT",
-                radius=r,
-            )
+            for eps in [None, 0.0, 0.01, 0.1]:
+                self.checkrange(
+                    dialect,
+                    f"ft.search {key_type}_idx1 * @n1:[0 +inf] NOCONTENT",
+                    radius=r,
+                    query_attrs=f"{{$epsilon: {eps}}}" if eps is not None else None,
+                )
 
     def test_vector_range_and_tag(self, key_type, dialect, vector_data_type):
         """VECTOR_RANGE combined with tag filter via AND."""
@@ -1415,11 +1450,13 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
     def test_vector_range_or_numeric(self, key_type, dialect, vector_data_type):
         """VECTOR_RANGE combined with numeric filter via OR."""
         self.setup_data("sortable numbers", key_type)
-        self.checkrange(
-            dialect,
-            f"ft.search {key_type}_idx1 * | @n1:[0 +inf] NOCONTENT",
-            radius=1,
-        )
+        for eps in [None, 0.0, 0.01, 0.1]:
+            self.checkrange(
+                dialect,
+                f"ft.search {key_type}_idx1 * | @n1:[0 +inf] NOCONTENT",
+                radius=1,
+                query_attrs=f"{{$epsilon: {eps}}}" if eps is not None else None,
+            )
 
     def test_vector_range_negate(self, key_type, dialect, vector_data_type):
         """Negated VECTOR_RANGE returns complement."""

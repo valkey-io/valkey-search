@@ -48,6 +48,12 @@ vmsdk::info_field::Integer tag_rejects_non_utf8_compat_counter(
     "compatibility", "compatibility-tag_rejects_non_utf8",
     vmsdk::info_field::IntegerBuilder().App());
 
+// INFO counter for the JSON TAG decoding compatibility defect (see
+// COMPATIBILITY.md): JSON TAG values indexed differently than from 1.3.0.
+vmsdk::info_field::Integer json_tag_values_compat_counter(
+    "compatibility", "compatibility-json_tag_values",
+    vmsdk::info_field::IntegerBuilder().App());
+
 // Redisearch rejects non-UTF-8 TAG data. This is gated on
 // search.emulate-release so the legacy behavior (index it) is preserved by
 // default.
@@ -171,12 +177,15 @@ std::string Tag::Normalize(absl::string_view tag) const {
   return out;
 }
 
-std::optional<char> Tag::EffectiveSeparator() const {
-  if (json_ && explicit_separator_.has_value() && !*explicit_separator_ &&
-      DecodeJsonTagArrays()) {
+std::optional<char> Tag::JsonSeparator() const {
+  if (explicit_separator_.has_value() && !*explicit_separator_) {
     return std::nullopt;
   }
   return separator_;
+}
+
+std::optional<char> Tag::EffectiveSeparator() const {
+  return json_ && DecodeJsonTagArrays() ? JsonSeparator() : separator_;
 }
 
 std::optional<InternedStringPtr> Tag::InternRecord(
@@ -195,17 +204,25 @@ std::optional<InternedStringPtr> Tag::InternRecord(
     }
     return false;
   };
+  auto decoded = DecodeJsonTags(data, JsonSeparator());
   if (DecodeJsonTagArrays()) {
-    auto decoded = DecodeJsonTags(data, EffectiveSeparator());
     if (decoded.status == JsonTags::Status::kInvalid) {
       return std::nullopt;
     }
     for (const auto &tag : decoded.tags) {
       pack(tag);
     }
-  } else if (vmsdk::UniqueValkeyString normalized;
-             NormalizeJsonAttribute(data, normalized).ok()) {
+    return StringInternStore::Intern(packed);
+  }
+  vmsdk::UniqueValkeyString normalized;
+  if (NormalizeJsonAttribute(data, normalized).ok()) {
     ForEachSplitTag(vmsdk::ToStringView(normalized.get()), separator_, pack);
+  }
+  if (!options::compat_counters_suppressed &&
+      (decoded.status == JsonTags::Status::kInvalid ||
+       absl::flat_hash_set<absl::string_view>(decoded.tags.begin(),
+                                              decoded.tags.end()) != seen)) {
+    json_tag_values_compat_counter.Increment();
   }
   return StringInternStore::Intern(packed);
 }

@@ -28,15 +28,20 @@ class TestJsonTag(ValkeySearchTestCaseBase):
 
     def test_array_indexed_per_element_from_1_3_0(self):
         client: Valkey = self.server.get_new_client()
+        counter = "search_compatibility-json_tag_values"
         self.set_release(client, "1.2.0")
         self.create(client)
-        client.execute_command("JSON.SET", "d:1", "$", '{"t":["x","y"]}')
         IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
-        assert self.keys(client, "@t:{x}") == set()
+        before = client.info("SEARCH")[counter]
+        client.execute_command("JSON.SET", "d:0", "$", '{"t":"x"}')
+        client.execute_command("JSON.SET", "d:1", "$", '{"t":["x","y"]}')
+        IndexingTestHelper.wait_for_indexing_complete_on_node(client, "idx")
+        assert self.keys(client, "@t:{x}") == {b"d:0"}
+        assert client.info("SEARCH")[counter] - before == 1
 
         self.set_release(client, "1.3.0")
         client.execute_command("JSON.SET", "d:2", "$", '{"t":["x","y"]}')
-        assert self.keys(client, "@t:{x}") == {b"d:2"}
+        assert self.keys(client, "@t:{x}") == {b"d:0", b"d:2"}
         client.execute_command("JSON.SET", "d:1", "$.t", '["y"]')
         assert self.keys(client, "@t:{y}") == {b"d:1", b"d:2"}
 
@@ -188,3 +193,26 @@ class TestJsonTagRevalidation(ValkeySearchTestCaseDebugMode):
             assert self.run_across_mutation(
                 client, query, ("JSON.SET", "d:1", "$.t", '["z"]')
             ) == {b"d:2"}
+
+    def test_revalidation_does_not_count_compatibility(self):
+        client: Valkey = self.server.get_new_client()
+        counter = "search_compatibility-json_tag_values"
+        assert client.execute_command(
+            "CONFIG", "SET", "search.emulate-release", "1.2.0") == b"OK"
+        client.execute_command(
+            "FT.CREATE", "idx", "ON", "JSON", "PREFIX", "1", "d:",
+            "SCHEMA", "$.t", "AS", "t", "TAG")
+        client.execute_command("JSON.SET", "d:1", "$", '{"t":"x,y"}')
+        IndexingTestHelper.wait_for_indexing_complete_on_node(client, "idx")
+        before = client.info("SEARCH")[counter]
+
+        def search():
+            res = self.server.get_new_client().execute_command(
+                "FT.SEARCH", "idx", "@t:{x}")
+            return set(res[1::2])
+
+        # Only indexing the mutation counts, not rechecking it for the query.
+        assert self.run_across_mutation(
+            client, search, ("JSON.SET", "d:1", "$.t", '"x,z"')) == {b"d:1"}
+        IndexingTestHelper.wait_for_indexing_complete_on_node(client, "idx")
+        assert client.info("SEARCH")[counter] - before == 1

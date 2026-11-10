@@ -204,6 +204,8 @@ class Tag : public IndexBase {
   // The separator values are split on, or nullopt for none: from 1.3.0, a
   // JSON index created without SEPARATOR does not split.
   std::optional<char> EffectiveSeparator() const;
+  // The separator from 1.3.0, for a JSON index.
+  std::optional<char> JsonSeparator() const;
   // What tracked_tags_by_keys_ stores for record `data`, or nullopt if `data`
   // is invalid.
   std::optional<InternedStringPtr> InternRecord(absl::string_view data) const;

@@ -923,6 +923,8 @@ TEST_F(KeyspaceEventManagerTest,
       std::make_unique<TestableKeyspaceEventManager>();
   auto &registry = VectorRegistry::Instance();
   VMSDK_EXPECT_OK(options::GetVectorUnshareBatchSize().SetValue(1));
+  ON_CALL(*kMockValkeyModule, KeyType(_))
+      .WillByDefault(Return(VALKEYMODULE_KEYTYPE_HASH));
 
   auto attr = StringInternStore::Intern("vec");
   MockIndex index(2, attr->Str(), 0);
@@ -977,6 +979,8 @@ TEST_F(KeyspaceEventManagerTest,
       std::make_unique<TestableKeyspaceEventManager>();
   auto &registry = VectorRegistry::Instance();
   VMSDK_EXPECT_OK(options::GetVectorUnshareBatchSize().SetValue(1));
+  ON_CALL(*kMockValkeyModule, KeyType(_))
+      .WillByDefault(Return(VALKEYMODULE_KEYTYPE_HASH));
 
   EXPECT_CALL(*kMockValkeyModule, GetSelectedDb(_)).WillRepeatedly(Return(0));
 
@@ -1036,6 +1040,42 @@ TEST_F(KeyspaceEventManagerTest,
   TestValkeyModule_FreeString(nullptr, src_overwrite);
   TestValkeyModule_FreeString(nullptr, dst_overwrite);
   VMSDK_EXPECT_OK(options::GetVectorUnshareBatchSize().SetValue(1024));
+}
+
+TEST_F(KeyspaceEventManagerTest,
+       NotifySubscribersCleansUpVectorRegistryOnDeleteAndOverwriteEvents) {
+  auto keyspace_event_manager =
+      std::make_unique<TestableKeyspaceEventManager>();
+  auto &registry = VectorRegistry::Instance();
+  auto attr = StringInternStore::Intern("vec");
+  MockIndex index(2, attr->Str(), 0);
+
+  std::vector<float> vec_data = {1.0f, 2.0f};
+  auto valkey_vec = vmsdk::MakeUniqueValkeyString(
+      std::string(reinterpret_cast<const char *>(vec_data.data()),
+                  vec_data.size() * sizeof(float)));
+
+  const std::vector<std::pair<const char *, const char *>> events = {
+      {"k_del", "del"},         {"k_expired", "expired"},
+      {"k_evicted", "evicted"}, {"k_restore", "restore"},
+      {"k_copy_to", "copy_to"},
+  };
+  for (const auto &[key_name, _] : events) {
+    registry.DedupOrConstruct(
+        StringInternStore::Intern(key_name), valkey_vec.get(),
+        data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &index);
+  }
+  ASSERT_EQ(registry.GetStats().entry_cnt, events.size());
+
+  EXPECT_CALL(*kMockValkeyModule, GetSelectedDb(_)).WillRepeatedly(Return(0));
+  size_t remaining = events.size();
+  for (const auto &[key_name, event_name] : events) {
+    auto key_str = vmsdk::MakeUniqueValkeyString(key_name);
+    keyspace_event_manager->NotifySubscribers(
+        &fake_ctx_, VALKEYMODULE_NOTIFY_GENERIC, event_name, key_str.get());
+    --remaining;
+    EXPECT_EQ(registry.GetStats().entry_cnt, remaining);
+  }
 }
 }  // namespace
 

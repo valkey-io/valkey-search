@@ -652,6 +652,9 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
   auto key_cstr = vmsdk::ToStringView(key);
   auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
       ctx, key, VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
+  if (!key_obj && from_backfill) {
+    return;
+  }
 
   auto interned_key = StringInternStore::Intern(key_cstr);
   if (key_obj && !GetAttributeDataType().IsProperType(key_obj.get())) {

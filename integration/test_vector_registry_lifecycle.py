@@ -2071,6 +2071,51 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         for k in range(self.GAP_KEYS):
             assert client_db1.hget(f"doc:{k}", "vec") == vector(k), f"doc:{k} in DB 1 reads freed memory"
 
+    def test_dropindex_keeps_expired_key_vector(self):
+        """Unsharing a logically expired key must retain its VectorRecord until
+        Valkey physically reclaims the key, even with zero indexes subscribed."""
+        self.client.execute_command("DEBUG", "SET-ACTIVE-EXPIRE", "0")
+        index = self.build_index()
+        index.create(self.client)
+        self.client.hset("doc:0", mapping={"vec": vector(0)})
+        self.client.pexpire("doc:0", 1)
+        time.sleep(0.05)
+        before = self.client.execute_command("DEBUG", "DIGEST")
+
+        index.drop(self.client)
+        self.wait_for_unshare_drain()
+        assert self.registry_stat("entry_cnt") == 1
+
+        fill = self.reuse_freed_vector_memory()
+        self.client.delete(*[f"fill:{k}" for k in range(self.GAP_KEYS)])
+        fill.drop(self.client)
+        self.wait_for_unshare_drain()
+
+        assert self.client.info("keyspace")["db0"]["keys"] == 1
+        assert self.client.execute_command("DEBUG", "DIGEST") == before, (
+            "expired doc:0 reads different vector bytes: its field points at freed memory"
+        )
+
+        # With zero active indexes remaining, re-enabling active expiry fires
+        # ValkeyModuleEvent_Key (VALKEYMODULE_SUBEVENT_KEY_EXPIRED) and reclaims
+        # doc:0's retained VectorRecord.
+        self.client.execute_command("DEBUG", "SET-ACTIVE-EXPIRE", "1")
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0)
+
+    def test_overwrite_live_indexed_hash_cleans_up_registry(self):
+        """Overwriting a live indexed hash via SET fires KEY_OVERWRITTEN and
+        cleans up its tracked VectorRegistry entry even after index drop."""
+        index = self.build_index()
+        index.create(self.client)
+        self.client.hset("doc:0", mapping={"vec": vector(0)})
+        self.wait_for_docs(index, 1)
+        assert self.registry_stat("entry_cnt") == 1
+
+        self.client.set("doc:0", "plain-string-value")
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0)
+        assert self.client.get("doc:0") == b"plain-string-value"
+        index.drop(self.client)
+
 
 class TestVectorRegistryPersistence(ValkeySearchTestCaseDebugMode):
     """Save on one server, load on another.

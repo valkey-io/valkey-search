@@ -429,15 +429,18 @@ class VectorRegistryStateMachineTest
   void DeleteKey(absl::string_view key) {
     keyspace_.erase(std::string(key));
     shared_refs_.erase(std::string(key));
-    Notify(key);
+    Notify(key, VALKEYMODULE_NOTIFY_GENERIC, "del");
   }
 
-  void Notify(absl::string_view key) {
+  void Notify(absl::string_view key, int type = 0,
+              const char *event = "event") {
+    if (type == 0) {
+      type = GetParam().json ? VALKEYMODULE_NOTIFY_MODULE
+                             : VALKEYMODULE_NOTIFY_HASH;
+    }
     auto key_str = vmsdk::MakeUniqueValkeyString(key);
-    index_schema_->OnKeyspaceNotification(
-        &fake_ctx_,
-        GetParam().json ? VALKEYMODULE_NOTIFY_MODULE : VALKEYMODULE_NOTIFY_HASH,
-        "event", key_str.get());
+    KeyspaceEventManager::Instance().NotifySubscribers(&fake_ctx_, type, event,
+                                                       key_str.get());
     if (auto *pool = ValkeySearch::Instance().GetWriterThreadPool()) {
       WaitWorkerTasksAreCompleted(*pool);
     }
@@ -773,6 +776,29 @@ TEST_P(VectorRegistryStateMachineTest, KeyReplacedByWrongTypeIsUntracked) {
   Notify(kKey);
 
   ExpectNotTracked(kKey);
+  EXPECT_EQ(GetStats().entry_cnt, 0);
+}
+
+TEST_P(VectorRegistryStateMachineTest,
+       LogicallyExpiredHashRetainsRegistryEntryUntilReclaimed) {
+  WriteKey(kKey, FieldState::kValid, 1.0f);
+  ExpectTracked(kKey, 1.0f);
+
+  // Simulate logical expiration: OpenKey(NOEFFECTS | READ) returns nullptr
+  // while active expiry has not reclaimed the key yet (no "del"/"expired").
+  keyspace_.erase(std::string(kKey));
+  shared_refs_.erase(std::string(kKey));
+  Notify(kKey);
+
+  ExpectNotTracked(kKey);
+  if (SharingExpected()) {
+    EXPECT_EQ(GetStats().entry_cnt, 1);
+  } else {
+    EXPECT_EQ(GetStats().entry_cnt, 0);
+  }
+
+  // Once physical expiration fires, VectorRegistry releases the retained entry.
+  Notify(kKey, VALKEYMODULE_NOTIFY_EXPIRED, "expired");
   EXPECT_EQ(GetStats().entry_cnt, 0);
 }
 

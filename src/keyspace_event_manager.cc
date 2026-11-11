@@ -30,6 +30,11 @@ constexpr absl::string_view kRenameFromEvent = "rename_from";
 constexpr absl::string_view kRenameToEvent = "rename_to";
 constexpr absl::string_view kMoveFromEvent = "move_from";
 constexpr absl::string_view kMoveToEvent = "move_to";
+constexpr absl::string_view kDelEvent = "del";
+constexpr absl::string_view kExpiredEvent = "expired";
+constexpr absl::string_view kEvictedEvent = "evicted";
+constexpr absl::string_view kRestoreEvent = "restore";
+constexpr absl::string_view kCopyToEvent = "copy_to";
 
 inline bool IsMoveFromEvent(const char *event) {
   return event && (event == kRenameFromEvent || event == kMoveFromEvent);
@@ -37,6 +42,12 @@ inline bool IsMoveFromEvent(const char *event) {
 
 inline bool IsMoveToEvent(const char *event) {
   return event && (event == kRenameToEvent || event == kMoveToEvent);
+}
+
+inline bool IsDeleteEvent(const char *event) {
+  return event && (event == kDelEvent || event == kExpiredEvent ||
+                   event == kEvictedEvent || event == kRestoreEvent ||
+                   event == kCopyToEvent);
 }
 }  // namespace
 
@@ -165,8 +176,15 @@ void KeyspaceEventManager::NotifySubscribers(ValkeyModuleCtx *ctx, int type,
   }
   CHECK(!moved_src_key_);
 
-  auto subscriptions_to_notify =
-      GetMatchingSubscriptions(vmsdk::ToStringView(key), type);
+  auto key_view = vmsdk::ToStringView(key);
+  if (IsDeleteEvent(event)) {
+    VectorRegistry::Instance().OnKeyDeleted(ValkeyModule_GetSelectedDb(ctx),
+                                            key_view);
+  }
+  auto subscriptions_to_notify = GetMatchingSubscriptions(key_view, type);
+  if (subscriptions_to_notify.empty()) {
+    return;
+  }
   for (const auto &subscription : subscriptions_to_notify) {
     subscription->OnKeyspaceNotification(ctx, type, event, key);
   }

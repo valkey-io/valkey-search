@@ -95,6 +95,7 @@ class VectorRegistry {
   ValkeyModuleCtx *GetCtx() const { return ctx_.get(); }
 
   bool IsSharingActive() const { return hash_vector_sharing_; }
+  bool HasTrackedKeys() const { return !tracked_keys_by_db_.empty(); }
 
   void OnFlushDB(const ValkeyModuleFlushInfo *flush_info);
   void OnSwapDB(const ValkeyModuleSwapDbInfo *swap_info);
@@ -211,6 +212,7 @@ class VectorRegistry {
 
   friend class VectorRegistryTest;
   bool hash_vector_sharing_{false};
+  bool in_process_pending_unshares_{false};
   mutable Stats stats_;
   vmsdk::UniqueValkeyDetachedThreadSafeContext ctx_;
 
@@ -240,9 +242,11 @@ class VectorRegistry {
                          absl::string_view attribute_identifier,
                          const indexes::VectorRecord &vector_record,
                          size_t vector_size);
+  bool ShouldRetainMissingVector(
+      int db_num, const RegistryKey &search_key,
+      const data_model::AttributeDataType &attribute_data_type);
   bool IsEraseTrackedRecordSafe(
-      int db_num, const InternedStringPtr &key, absl::string_view vector_str,
-      absl::string_view attribute_identifier,
+      int db_num, const RegistryKey &search_key, absl::string_view vector_str,
       const data_model::AttributeDataType &attribute_data_type);
 };
 

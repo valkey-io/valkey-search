@@ -1725,10 +1725,42 @@ absl::Status IndexSchema::SaveIndexExtension(RDBChunkOutputStream out) const {
 }
 
 absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
-                                             RDBChunkInputStream input) {
+                                             RDBChunkInputStream input,
+                                             bool defer_keyspace_load) {
   CHECK(RDBReadV2());
   VMSDK_ASSIGN_OR_RETURN(size_t key_count, input.LoadObject<size_t>());
   rdb_load_keys.Increment(key_count);
+
+  if (defer_keyspace_load && !ForceRDBLoadFailure.GetValue()) {
+    constexpr size_t kMaxInitialReserve = 1024;
+    auto pending = std::make_unique<PendingIndexExtension>();
+    pending->keys.reserve(std::min(key_count, kMaxInitialReserve));
+    for (size_t i = 0; i < key_count; ++i) {
+      VMSDK_ASSIGN_OR_RETURN(auto keyname_str, input.LoadString());
+      pending->keys.push_back(std::move(keyname_str));
+    }
+    VMSDK_ASSIGN_OR_RETURN(size_t count, input.LoadObject<size_t>());
+    rdb_load_mutation_entries.Increment(count);
+    pending->mutation_entries.reserve(std::min(count, kMaxInitialReserve));
+    for (size_t i = 0; i < count; ++i) {
+      VMSDK_ASSIGN_OR_RETURN(auto keyname_str, input.LoadString());
+      VMSDK_ASSIGN_OR_RETURN(auto from_backfill, input.LoadObject<bool>());
+      VMSDK_ASSIGN_OR_RETURN([[maybe_unused]] auto from_multi,
+                             input.LoadObject<bool>());
+      pending->mutation_entries.push_back(
+          {std::move(keyname_str), from_backfill});
+    }
+    VMSDK_ASSIGN_OR_RETURN(size_t multi_count, input.LoadObject<size_t>());
+    rdb_load_multi_exec_entries.Increment(multi_count);
+    pending->multi_exec_keys.reserve(std::min(multi_count, kMaxInitialReserve));
+    for (size_t i = 0; i < multi_count; ++i) {
+      VMSDK_ASSIGN_OR_RETURN(auto keyname_str, input.LoadString());
+      pending->multi_exec_keys.push_back(std::move(keyname_str));
+    }
+    pending_index_extension_ = std::move(pending);
+    loaded_v2_ = true;
+    return absl::OkStatus();
+  }
 
   // Track current index restore progress
   Metrics::GetStats().rdb_restore_current_index_keys_total = key_count;
@@ -1738,45 +1770,13 @@ absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
 
   const size_t max_queue_size =
       options::GetMaxMutationQueueSizeOnRestore().GetValue();
-
-  // Batch size for queue checks - check every N keys to reduce mutex overhead
-  // Check more frequently when queue is near limit to maintain responsiveness
-  constexpr size_t kQueueCheckBatchSize = 100;
   size_t keys_since_last_check = 0;
   size_t current_queue_size = 0;
 
   for (size_t i = 0; i < key_count; ++i) {
-    // Batch queue size checks to reduce mutex lock overhead
-    // Only check every kQueueCheckBatchSize keys, or when queue was recently
-    // full
-    if (keys_since_last_check >= kQueueCheckBatchSize ||
-        current_queue_size >= max_queue_size) {
-      current_queue_size = GetMutatedRecordsSize();
-      keys_since_last_check = 0;
-
-      // Apply backpressure if mutation queue is too large
-      while (current_queue_size >= max_queue_size) {
-        // Use ValkeyModule_Yield to cooperatively yield during loading
-        ValkeyModule_Yield(ctx, VALKEYMODULE_YIELD_FLAG_CLIENTS, nullptr);
-        Metrics::GetStats().rdb_restore_backpressure_wait_cycles++;
-        current_queue_size = GetMutatedRecordsSize();
-
-        // Log periodically to show progress
-        VMSDK_LOG_EVERY_N_SEC(NOTICE, ctx, 30)
-            << "RDB restore backpressure: waiting for mutation queue to drain. "
-            << "Queue size: " << current_queue_size << ", Progress: " << i
-            << "/" << key_count << " keys loaded";
-      }
-    }
-
     VMSDK_ASSIGN_OR_RETURN(auto keyname_str, input.LoadString());
-    auto keyname = vmsdk::MakeUniqueValkeyString(keyname_str);
-    ProcessKeyspaceNotification(ctx, keyname.get(), false);
-    ValkeyModule_Yield(ctx, VALKEYMODULE_YIELD_FLAG_CLIENTS, nullptr);
-    keys_since_last_check++;
-
-    // Update restore progress counter
-    Metrics::GetStats().rdb_restore_current_index_keys_loaded = i + 1;
+    IngestKeyWithBackpressure(ctx, keyname_str, i, key_count, max_queue_size,
+                              keys_since_last_check, current_queue_size);
   }
 
   if (ForceRDBLoadFailure.GetValue()) {
@@ -1825,6 +1825,87 @@ absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
   return status;
 }
 
+void IndexSchema::IngestKeyWithBackpressure(ValkeyModuleCtx *ctx,
+                                            absl::string_view keyname_str,
+                                            size_t index, size_t key_count,
+                                            size_t max_queue_size,
+                                            size_t &keys_since_last_check,
+                                            size_t &current_queue_size) {
+  // Batch size for queue checks - check every N keys to reduce mutex overhead.
+  // Check more frequently when queue is near limit to maintain responsiveness.
+  constexpr size_t kQueueCheckBatchSize = 100;
+  if (keys_since_last_check >= kQueueCheckBatchSize ||
+      current_queue_size >= max_queue_size) {
+    current_queue_size = GetMutatedRecordsSize();
+    keys_since_last_check = 0;
+
+    // Apply backpressure if mutation queue is too large
+    while (current_queue_size >= max_queue_size) {
+      // Use ValkeyModule_Yield to cooperatively yield during loading
+      ValkeyModule_Yield(ctx, VALKEYMODULE_YIELD_FLAG_CLIENTS, nullptr);
+      Metrics::GetStats().rdb_restore_backpressure_wait_cycles++;
+      current_queue_size = GetMutatedRecordsSize();
+
+      // Log periodically to show progress
+      VMSDK_LOG_EVERY_N_SEC(NOTICE, ctx, 30)
+          << "RDB restore backpressure: waiting for mutation queue to drain. "
+          << "Queue size: " << current_queue_size << ", Progress: " << index
+          << "/" << key_count << " keys loaded";
+    }
+  }
+
+  auto keyname = vmsdk::MakeUniqueValkeyString(keyname_str);
+  ProcessKeyspaceNotification(ctx, keyname.get(), false);
+  ValkeyModule_Yield(ctx, VALKEYMODULE_YIELD_FLAG_CLIENTS, nullptr);
+  keys_since_last_check++;
+
+  // Update restore progress counter
+  Metrics::GetStats().rdb_restore_current_index_keys_loaded = index + 1;
+}
+
+absl::Status IndexSchema::ReplayIndexExtension(
+    ValkeyModuleCtx *ctx, const PendingIndexExtension &pending) {
+  const size_t key_count = pending.keys.size();
+  Metrics::GetStats().rdb_restore_current_index_keys_total = key_count;
+  Metrics::GetStats().rdb_restore_current_index_keys_loaded = 0;
+
+  VMSDK_LOG(NOTICE, ctx) << "Replaying deferred Index Extension, keys = "
+                         << key_count;
+
+  const size_t max_queue_size =
+      options::GetMaxMutationQueueSizeOnRestore().GetValue();
+  size_t keys_since_last_check = 0;
+  size_t current_queue_size = 0;
+
+  for (size_t i = 0; i < key_count; ++i) {
+    IngestKeyWithBackpressure(ctx, pending.keys[i], i, key_count,
+                              max_queue_size, keys_since_last_check,
+                              current_queue_size);
+  }
+
+  if (Metrics::GetStats().rdb_restore_backpressure_wait_cycles > 0) {
+    VMSDK_LOG(NOTICE, ctx)
+        << "RDB restore completed with backpressure. Total wait cycles: "
+        << Metrics::GetStats().rdb_restore_backpressure_wait_cycles
+        << " (max queue size: " << max_queue_size << ")";
+  }
+  VMSDK_RETURN_IF_ERROR(
+      ValkeySearch::Instance().GetWriterThreadPool()->SuspendWorkers());
+  VMSDK_LOG(NOTICE, ctx) << "Loading Mutation Entries, entries = "
+                         << pending.mutation_entries.size();
+  for (const auto &entry : pending.mutation_entries) {
+    auto keyname = vmsdk::MakeUniqueValkeyString(entry.key);
+    ProcessKeyspaceNotification(ctx, keyname.get(), entry.from_backfill);
+  }
+  VMSDK_LOG(NOTICE, ctx) << "Loading Multi/Exec Entries, entries = "
+                         << pending.multi_exec_keys.size();
+  for (const auto &keyname_str : pending.multi_exec_keys) {
+    auto keyname = StringInternStore::Intern(keyname_str);
+    EnqueueMultiMutation(keyname);
+  }
+  return ValkeySearch::Instance().GetWriterThreadPool()->ResumeWorkers();
+}
+
 // We need to iterate over the chunks to consume them
 static absl::Status SkipSupplementalContent(
     SupplementalContentIter &supplemental_iter, std::string_view reason) {
@@ -1841,7 +1922,10 @@ static absl::Status SkipSupplementalContent(
 absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
     ValkeyModuleCtx *ctx, vmsdk::ThreadPool *mutations_thread_pool,
     std::unique_ptr<data_model::IndexSchema> index_schema_proto,
-    SupplementalContentIter &&supplemental_iter) {
+    SupplementalContentIter &&supplemental_iter, bool defer_keyspace_load) {
+  if (ForceRDBLoadFailure.GetValue()) {
+    defer_keyspace_load = false;
+  }
   // Select the DB number in the context for subsequent usage.
   int db_num = static_cast<int>(index_schema_proto->db_num());
   if (ValkeyModule_SelectDb(ctx, db_num) != VALKEYMODULE_OK) {
@@ -1911,7 +1995,7 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
           auto *vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
           VMSDK_RETURN_IF_ERROR(vector_index->LoadTrackedKeys(
               ctx, &index_schema->GetAttributeDataType(),
-              supplemental_iter.IterateChunks()));
+              supplemental_iter.IterateChunks(), defer_keyspace_load));
           break;
         }
         case data_model::SupplementalContentType::
@@ -1928,7 +2012,8 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
               // ProcessKeyspaceNotification, which evaluates it.
               VMSDK_RETURN_IF_ERROR(index_schema->CompileFilter());
               VMSDK_RETURN_IF_ERROR(index_schema->LoadIndexExtension(
-                  ctx, RDBChunkInputStream(supplemental_iter.IterateChunks())));
+                  ctx, RDBChunkInputStream(supplemental_iter.IterateChunks()),
+                  defer_keyspace_load));
               if (!supplemental_content->mutation_queue_header()
                        .backfilling()) {
                 VMSDK_LOG(DEBUG, ctx) << "Backfill suppressed.";
@@ -2015,6 +2100,27 @@ void IndexSchema::DrainMutationQueue(ValkeyModuleCtx *ctx) const {
 }
 
 void IndexSchema::OnLoadingEnded(ValkeyModuleCtx *ctx) {
+  vmsdk::ValkeySelectDbGuard select_db_guard(ctx, db_num_);
+  if (backfill_job_.Get().has_value() && !backfill_job_.Get()->IsScanDone()) {
+    ValkeyModule_SelectDb(backfill_job_.Get()->scan_ctx.get(), db_num_);
+    backfill_job_.Get()->db_size =
+        ValkeyModule_DbSize(backfill_job_.Get()->scan_ctx.get());
+  }
+  for (const auto &[_, attribute] : attributes_) {
+    if (auto *vector_index =
+            dynamic_cast<indexes::VectorBase *>(attribute.GetIndex().get())) {
+      auto status =
+          vector_index->OnLoadingEnded(ctx, attribute_data_type_.get());
+      CHECK(status.ok()) << "Failed to populate vectors on loading ended: "
+                         << status.message();
+    }
+  }
+  if (pending_index_extension_) {
+    auto pending = std::move(pending_index_extension_);
+    auto status = ReplayIndexExtension(ctx, *pending);
+    CHECK(status.ok()) << "Failed to replay index extension on loading ended: "
+                       << status.message();
+  }
   if (loaded_v2_) {
     loaded_v2_ = false;
     VMSDK_LOG(NOTICE, ctx) << "RDB load completed, "
@@ -2032,7 +2138,6 @@ void IndexSchema::OnLoadingEnded(ValkeyModuleCtx *ctx) {
   // Clean up any potentially stale index entries that can arise from
   // pending record deletions being lost during RDB save.
   vmsdk::StopWatch stop_watch;
-  vmsdk::ValkeySelectDbGuard select_db_guard(ctx, db_num_);
   absl::flat_hash_map<std::string, MutatedAttributes> deletion_attributes;
   for (const auto &attribute : attributes_) {
     const auto &index = attribute.second.GetIndex();

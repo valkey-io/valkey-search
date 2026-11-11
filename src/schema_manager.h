@@ -88,6 +88,8 @@ class SchemaManager {
 
   void OnLoadingEnded(ValkeyModuleCtx *ctx)
       ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
+  void OnLoadingFailed(ValkeyModuleCtx *ctx)
+      ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
   void OnReplicationLoadStart(ValkeyModuleCtx *ctx);
 
   void PerformBackfill(ValkeyModuleCtx *ctx, uint32_t batch_size)

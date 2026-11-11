@@ -2028,6 +2028,73 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         assert self.client.ping()
         waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0)
 
+    @pytest.mark.parametrize(
+        "old_keys", [2 * GAP_KEYS, GAP_KEYS], ids=["stale_vectors", "missing_keys"]
+    )
+    def test_swapdb_full_sync_indexes_primary_dataset(self, old_keys: int):
+        """A `repl-diskless-load swapdb` full sync rebuilds the index from the
+        primary's dataset rather than the replica's old dataset.
+
+        Stimulus: replica has `repl-diskless-load swapdb`, pre-existing keys
+        `doc:0..old_keys-1`, and an existing index. A primary with a different
+        dataset `doc:0..2*GAP_KEYS-1` and an index is attached via SLAVEOF.
+        During RDB load the engine keeps the incoming dataset in a temporary
+        database and swaps it into `server.db` only after
+        `rdbLoadRioWithLoadingCtx` returns, so `LoadTrackedKeys` and
+        `LoadIndexExtension` must defer keyspace reads to `OnLoadingEnded`.
+        """
+        index = self.build_index(mixed=True)
+        self.write_distinct_keys("doc", count=old_keys, tag="replica_old")
+        index.create(self.client, wait_for_backfill=True)
+        assert self.registry_stat("entry_cnt") == old_keys
+        self.client.config_set("repl-diskless-load", "swapdb")
+
+        primary_server, primary, _ = self.start_server(
+            self.get_bind_port(), f"{self.test_name}_primary", False, True
+        )
+        try:
+            self.write_distinct_keys(
+                "doc",
+                salt=10.0,
+                client=primary,
+                count=2 * self.GAP_KEYS,
+                tag="primary_new",
+            )
+            index.create(primary, wait_for_backfill=True)
+
+            self.client.slaveof(
+                "127.0.0.1", primary.connection_pool.connection_kwargs["port"]
+            )
+            waiters.wait_for_true(
+                lambda: self.client.info("replication")["master_link_status"] == "up",
+                timeout=30,
+            )
+            self.wait_for_docs(index, 2 * self.GAP_KEYS)
+
+            assert self.client.hget("doc:0", "vec") == vector(0, salt=10.0)
+            assert self.search_count(index, "@tag:{primary_new}") == 2 * self.GAP_KEYS
+            assert self.search_count(index, "@tag:{replica_old}") == 0
+            top = self.client.execute_command(
+                "FT.SEARCH",
+                index.name,
+                "*=>[KNN 1 @vec $q]",
+                "PARAMS",
+                "2",
+                "q",
+                vector(0, salt=10.0),
+                "RETURN",
+                "1",
+                "__vec_score",
+                "DIALECT",
+                "2",
+            )
+            assert top[1] == b"doc:0"
+            assert float(top[2][1]) == pytest.approx(0.0)
+            assert self.registry_stat("entry_cnt") == 2 * self.GAP_KEYS
+            assert self.registry_stat("pending_unshare_cnt") == 0
+        finally:
+            primary_server.exit()
+
 
 class TestVectorRegistryPersistence(ValkeySearchTestCaseDebugMode):
     """Save on one server, load on another.

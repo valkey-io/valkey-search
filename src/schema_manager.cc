@@ -39,6 +39,7 @@
 #include "src/rdb_section.pb.h"
 #include "src/rdb_serialization.h"
 #include "src/valkey_search.h"
+#include "src/vector_registry.h"
 #include "vmsdk/src/info.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -759,30 +760,56 @@ void SchemaManager::OnReplicationLoadStart(ValkeyModuleCtx *ctx) {
 }
 
 void SchemaManager::OnLoadingEnded(ValkeyModuleCtx *ctx) {
-  absl::MutexLock lock(&db_to_index_schemas_mutex_);
-  if (staging_indices_due_to_repl_load_.Get()) {
-    // Perform swap of staged schemas to main schemas. Note that no merge
-    // occurs here, since for RDB load we are guaranteed that the new state
-    // is not applied incrementally.
-    VMSDK_LOG(NOTICE, ctx)
-        << "Applying staged indices at the end of RDB loading";
-    auto status = RemoveAll();
-    if (!status.ok()) {
-      VMSDK_LOG(WARNING, ctx) << "Failed to remove contents of existing "
-                                 "schemas on loading end.";
+  std::vector<std::shared_ptr<IndexSchema>> schemas;
+  {
+    absl::MutexLock lock(&db_to_index_schemas_mutex_);
+    if (staging_indices_due_to_repl_load_.Get()) {
+      // Perform swap of staged schemas to main schemas. Note that no merge
+      // occurs here, since for RDB load we are guaranteed that the new state
+      // is not applied incrementally.
+      VMSDK_LOG(NOTICE, ctx)
+          << "Applying staged indices at the end of RDB loading";
+      VectorRegistry::Instance().OnFlushDB(nullptr);
+      auto status = RemoveAll();
+      if (!status.ok()) {
+        VMSDK_LOG(WARNING, ctx) << "Failed to remove contents of existing "
+                                   "schemas on loading end.";
+      }
+      db_to_index_schemas_ = staged_db_to_index_schemas_.Get();
+      staged_db_to_index_schemas_ = absl::flat_hash_map<
+          uint32_t,
+          absl::flat_hash_map<std::string, std::shared_ptr<IndexSchema>>>();
+      staging_indices_due_to_repl_load_ = false;
     }
-    db_to_index_schemas_ = staged_db_to_index_schemas_.Get();
-    staged_db_to_index_schemas_ = absl::flat_hash_map<
-        uint32_t,
-        absl::flat_hash_map<std::string, std::shared_ptr<IndexSchema>>>();
-    staging_indices_due_to_repl_load_ = false;
+
+    for (const auto &[db_num, inner_map] : db_to_index_schemas_) {
+      for (const auto &[name, schema] : inner_map) {
+        schemas.push_back(schema);
+      }
+    }
   }
 
-  for (const auto &[db_num, inner_map] : db_to_index_schemas_) {
+  for (const auto &schema : schemas) {
+    schema->OnLoadingEnded(ctx);
+  }
+}
+
+void SchemaManager::OnLoadingFailed(ValkeyModuleCtx *ctx) {
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  if (!staging_indices_due_to_repl_load_.Get()) {
+    return;
+  }
+  VMSDK_LOG(WARNING, ctx)
+      << "Replication RDB loading failed, discarding staged indices";
+  for (const auto &[db_num, inner_map] : staged_db_to_index_schemas_.Get()) {
     for (const auto &[name, schema] : inner_map) {
-      schema->OnLoadingEnded(ctx);
+      schema->MarkAsDestructing();
     }
   }
+  staged_db_to_index_schemas_ = absl::flat_hash_map<
+      uint32_t,
+      absl::flat_hash_map<std::string, std::shared_ptr<IndexSchema>>>();
+  staging_indices_due_to_repl_load_ = false;
 }
 
 void SchemaManager::PerformBackfill(ValkeyModuleCtx *ctx, uint32_t batch_size) {
@@ -853,11 +880,13 @@ absl::Status SchemaManager::LoadIndex(
   // Load the index schema into memory
   auto index_schema_pb = std::unique_ptr<data_model::IndexSchema>(
       section->release_index_schema_contents());
-  VMSDK_ASSIGN_OR_RETURN(auto index_schema,
-                         IndexSchema::LoadFromRDB(ctx, mutations_thread_pool_,
-                                                  std::move(index_schema_pb),
-                                                  std::move(supplemental_iter)),
-                         _ << "Failed to load index schema from RDB!");
+  VMSDK_ASSIGN_OR_RETURN(
+      auto index_schema,
+      IndexSchema::LoadFromRDB(ctx, mutations_thread_pool_,
+                               std::move(index_schema_pb),
+                               std::move(supplemental_iter),
+                               staging_indices_due_to_repl_load_.Get()),
+      _ << "Failed to load index schema from RDB!");
   int db_num = index_schema->GetDBNum();
   const std::string &name = index_schema->GetName();
 
@@ -930,6 +959,9 @@ void SchemaManager::OnLoadingCallback(ValkeyModuleCtx *ctx,
   }
   if (subevent == VALKEYMODULE_SUBEVENT_LOADING_REPL_START) {
     SchemaManager::Instance().OnReplicationLoadStart(ctx);
+  }
+  if (subevent == VALKEYMODULE_SUBEVENT_LOADING_FAILED) {
+    SchemaManager::Instance().OnLoadingFailed(ctx);
   }
 }
 

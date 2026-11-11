@@ -28,6 +28,12 @@ class VectorBase;
 using StartSubscriptionFunction =
     std::function<absl::Status(ValkeyModuleCtx *, int)>;
 
+// Resolves the target database ID of a Valkey keyspace notification, working
+// around ValkeyModule_GetSelectedDb returning transaction_db_id rather than
+// the destination DB for cross-DB events (move_to, copy_to) during MULTI/EXEC.
+int GetKeyspaceNotificationDb(ValkeyModuleCtx *ctx, const char *event,
+                              ValkeyModuleString *key);
+
 // KeyspaceEventSubscription is an interface for classes that want to subscribe
 // to keyspace events.
 class KeyspaceEventSubscription {

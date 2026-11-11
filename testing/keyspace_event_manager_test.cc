@@ -923,6 +923,8 @@ TEST_F(KeyspaceEventManagerTest,
       std::make_unique<TestableKeyspaceEventManager>();
   auto &registry = VectorRegistry::Instance();
   VMSDK_EXPECT_OK(options::GetVectorUnshareBatchSize().SetValue(1));
+  ON_CALL(*kMockValkeyModule, KeyType(_))
+      .WillByDefault(Return(VALKEYMODULE_KEYTYPE_HASH));
 
   auto attr = StringInternStore::Intern("vec");
   MockIndex index(2, attr->Str(), 0);
@@ -957,6 +959,18 @@ TEST_F(KeyspaceEventManagerTest,
       TestValkeyModule_CreateStringPrintf(&fake_ctx_, "moved:1");
 
   EXPECT_CALL(*kMockValkeyModule, GetSelectedDb(_)).WillRepeatedly(Return(0));
+  EXPECT_CALL(*kMockValkeyModule, HashHasStringRef(_, _))
+      .WillRepeatedly(Return(1));
+  EXPECT_CALL(*kMockValkeyModule,
+              HashSet(_, VALKEYMODULE_HASH_NONE, _, _, nullptr))
+      .WillOnce([&](ValkeyModuleKey *key_obj, int, ValkeyModuleString *,
+                    ValkeyModuleString *val, void *) {
+        EXPECT_EQ(key_obj->key, "moved:1");
+        size_t len = 0;
+        const char *ptr = TestValkeyModule_StringPtrLen(val, &len);
+        EXPECT_EQ(absl::string_view(ptr, len), vec_str);
+        return VALKEYMODULE_OK;
+      });
   keyspace_event_manager->NotifySubscribers(
       &fake_ctx_, VALKEYMODULE_NOTIFY_GENERIC, "rename_from", src_key);
   keyspace_event_manager->NotifySubscribers(
@@ -977,6 +991,8 @@ TEST_F(KeyspaceEventManagerTest,
       std::make_unique<TestableKeyspaceEventManager>();
   auto &registry = VectorRegistry::Instance();
   VMSDK_EXPECT_OK(options::GetVectorUnshareBatchSize().SetValue(1));
+  ON_CALL(*kMockValkeyModule, KeyType(_))
+      .WillByDefault(Return(VALKEYMODULE_KEYTYPE_HASH));
 
   EXPECT_CALL(*kMockValkeyModule, GetSelectedDb(_)).WillRepeatedly(Return(0));
 
@@ -1036,6 +1052,241 @@ TEST_F(KeyspaceEventManagerTest,
   TestValkeyModule_FreeString(nullptr, src_overwrite);
   TestValkeyModule_FreeString(nullptr, dst_overwrite);
   VMSDK_EXPECT_OK(options::GetVectorUnshareBatchSize().SetValue(1024));
+}
+
+TEST_F(KeyspaceEventManagerTest,
+       NotifySubscribersCleansUpVectorRegistryOnDeleteAndOverwriteEvents) {
+  auto keyspace_event_manager =
+      std::make_unique<TestableKeyspaceEventManager>();
+  auto &registry = VectorRegistry::Instance();
+  auto attr = StringInternStore::Intern("vec");
+  MockIndex index(2, attr->Str(), 0);
+
+  std::vector<float> vec_data = {1.0f, 2.0f};
+  auto valkey_vec = vmsdk::MakeUniqueValkeyString(
+      std::string(reinterpret_cast<const char *>(vec_data.data()),
+                  vec_data.size() * sizeof(float)));
+
+  const std::vector<std::pair<const char *, const char *>> events = {
+      {"k_del", "del"},         {"k_expired", "expired"},
+      {"k_evicted", "evicted"}, {"k_restore", "restore"},
+      {"k_copy_to", "copy_to"},
+  };
+  for (const auto &[key_name, _] : events) {
+    registry.DedupOrConstruct(
+        StringInternStore::Intern(key_name), valkey_vec.get(),
+        data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &index);
+  }
+  ASSERT_EQ(registry.GetStats().entry_cnt, events.size());
+
+  EXPECT_CALL(*kMockValkeyModule, GetSelectedDb(_)).WillRepeatedly(Return(0));
+  size_t remaining = events.size();
+  for (const auto &[key_name, event_name] : events) {
+    auto key_str = vmsdk::MakeUniqueValkeyString(key_name);
+    keyspace_event_manager->NotifySubscribers(
+        &fake_ctx_, VALKEYMODULE_NOTIFY_GENERIC, event_name, key_str.get());
+    --remaining;
+    EXPECT_EQ(registry.GetStats().entry_cnt, remaining);
+  }
+}
+
+TEST_F(KeyspaceEventManagerTest,
+       MoveWhileAwaitingUnshareInMultiExecUsesDestinationKeyDb) {
+  auto keyspace_event_manager =
+      std::make_unique<TestableKeyspaceEventManager>();
+  auto &registry = VectorRegistry::Instance();
+  VMSDK_EXPECT_OK(options::GetVectorUnshareBatchSize().SetValue(1));
+  ON_CALL(*kMockValkeyModule, KeyType(_))
+      .WillByDefault(Return(VALKEYMODULE_KEYTYPE_HASH));
+
+  auto attr = StringInternStore::Intern("vec");
+  MockIndex index(2, attr->Str(), 0);
+  std::vector<float> vec_data = {1.0f, 2.0f};
+  std::string vec_str(reinterpret_cast<const char *>(vec_data.data()),
+                      vec_data.size() * sizeof(float));
+  auto valkey_vec = vmsdk::MakeUniqueValkeyString(vec_str);
+  auto k1 = StringInternStore::Intern("doc:1");
+  auto k2 = StringInternStore::Intern("doc:2");
+
+  registry.DedupOrConstruct(
+      k1, valkey_vec.get(),
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &index);
+  registry.DedupOrConstruct(
+      k2, valkey_vec.get(),
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &index);
+
+  std::vector<InternedStringPtr> keys = {k1, k2};
+  registry.RemoveIndexKeys(0, attr, keys);
+  ASSERT_EQ(registry.GetPendingUnsharesCount(), 1);
+  InternedStringPtr pending_key =
+      !registry.GetTrackedAttributes(0, k1->Str()).empty() ? k1 : k2;
+
+  // Simulate EXEC of a MULTI transaction in DB 0 moving `pending_key` to DB 1:
+  // ValkeyModule_GetSelectedDb(&fake_ctx_) continues returning
+  // transaction_db_id (0), while the destination key handle reports its actual
+  // DB (1).
+  EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx_))
+      .WillRepeatedly(Return(VALKEYMODULE_CTX_FLAGS_MULTI));
+  EXPECT_CALL(*kMockValkeyModule, GetSelectedDb(_)).WillRepeatedly(Return(0));
+  EXPECT_CALL(*kMockValkeyModule, GetDbIdFromModuleKey(_))
+      .WillRepeatedly(Return(1));
+  {
+    testing::InSequence seq;
+    EXPECT_CALL(*kMockValkeyModule, SelectDb(_, 1))
+        .WillOnce(Return(VALKEYMODULE_OK));
+    EXPECT_CALL(*kMockValkeyModule, SelectDb(_, 0))
+        .WillOnce(Return(VALKEYMODULE_OK));
+  }
+  EXPECT_CALL(*kMockValkeyModule, HashHasStringRef(_, _)).WillOnce(Return(1));
+  EXPECT_CALL(*kMockValkeyModule,
+              HashSet(_, VALKEYMODULE_HASH_NONE, _, _, nullptr))
+      .WillOnce([&](ValkeyModuleKey *key_obj, int, ValkeyModuleString *,
+                    ValkeyModuleString *val, void *) {
+        EXPECT_EQ(key_obj->key, pending_key->Str());
+        size_t len = 0;
+        const char *ptr = TestValkeyModule_StringPtrLen(val, &len);
+        EXPECT_EQ(absl::string_view(ptr, len), vec_str);
+        return VALKEYMODULE_OK;
+      });
+
+  ValkeyModuleString *key = TestValkeyModule_CreateStringPrintf(
+      &fake_ctx_, "%s", std::string(pending_key->Str()).c_str());
+
+  keyspace_event_manager->NotifySubscribers(
+      &fake_ctx_, VALKEYMODULE_NOTIFY_GENERIC, "move_from", key);
+  keyspace_event_manager->NotifySubscribers(
+      &fake_ctx_, VALKEYMODULE_NOTIFY_GENERIC, "move_to", key);
+
+  EXPECT_EQ(registry.GetPendingUnsharesCount(), 0);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 0);
+
+  TestValkeyModule_FreeString(nullptr, key);
+  VMSDK_EXPECT_OK(options::GetVectorUnshareBatchSize().SetValue(1024));
+}
+
+TEST_F(KeyspaceEventManagerTest,
+       MoveNotificationHandlesNestedNonMoveEventDuringMoveKey) {
+  auto keyspace_event_manager =
+      std::make_unique<TestableKeyspaceEventManager>();
+  auto &registry = VectorRegistry::Instance();
+  ON_CALL(*kMockValkeyModule, KeyType(_))
+      .WillByDefault(Return(VALKEYMODULE_KEYTYPE_HASH));
+
+  auto mock_sub_src = std::make_unique<MockKeyspaceEventSubscription>();
+  auto mock_sub_dst = std::make_unique<MockKeyspaceEventSubscription>();
+  auto mock_attr_type = std::make_unique<MockAttributeDataType>();
+
+  std::vector<std::string> prefixes_src = {"src:"};
+  std::vector<std::string> prefixes_dst = {"dst:"};
+  mock_sub_src->db_num_ = 2;
+  mock_sub_dst->db_num_ = 5;
+  EXPECT_CALL(*mock_attr_type, GetValkeyEventTypes())
+      .WillRepeatedly(
+          Return(VALKEYMODULE_NOTIFY_HASH | VALKEYMODULE_NOTIFY_GENERIC));
+  EXPECT_CALL(*mock_sub_src, GetAttributeDataType())
+      .WillRepeatedly(ReturnRef(*mock_attr_type));
+  EXPECT_CALL(*mock_sub_src, GetKeyPrefixes())
+      .WillRepeatedly(ReturnRef(prefixes_src));
+  EXPECT_CALL(*mock_sub_dst, GetAttributeDataType())
+      .WillRepeatedly(ReturnRef(*mock_attr_type));
+  EXPECT_CALL(*mock_sub_dst, GetKeyPrefixes())
+      .WillRepeatedly(ReturnRef(prefixes_dst));
+
+  auto attr = StringInternStore::Intern("vec");
+  MockIndex mock_index_src(2, attr->Str(), 2);
+  mock_sub_src->vector_indexes_ = {&mock_index_src};
+
+  VMSDK_EXPECT_OK(keyspace_event_manager->InsertSubscription(
+      &fake_ctx_, mock_sub_src.get()));
+  VMSDK_EXPECT_OK(keyspace_event_manager->InsertSubscription(
+      &fake_ctx_, mock_sub_dst.get()));
+
+  std::vector<float> vec_data = {1.0f, 2.0f};
+  std::string vec_str(reinterpret_cast<const char *>(vec_data.data()),
+                      vec_data.size() * sizeof(float));
+  auto valkey_vec = vmsdk::MakeUniqueValkeyString(vec_str);
+  auto src_interned = StringInternStore::Intern("src:1");
+  registry.DedupOrConstruct(
+      src_interned, valkey_vec.get(),
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 2,
+      &mock_index_src);
+  ASSERT_EQ(registry.GetStats().entry_cnt, 1);
+
+  ValkeyModuleString *src_key =
+      TestValkeyModule_CreateStringPrintf(&fake_ctx_, "src:1");
+  ValkeyModuleString *dst_key =
+      TestValkeyModule_CreateStringPrintf(&fake_ctx_, "dst:1");
+
+  int selected_db = 2;
+  EXPECT_CALL(*kMockValkeyModule, GetSelectedDb(_))
+      .WillRepeatedly(
+          testing::Invoke([&](ValkeyModuleCtx *) { return selected_db; }));
+  EXPECT_CALL(*kMockValkeyModule, SelectDb(_, _))
+      .WillRepeatedly(
+          testing::Invoke([&](ValkeyModuleCtx *ctx, int new_db) -> int {
+            if (ctx == &fake_ctx_) {
+              selected_db = new_db;
+            }
+            return VALKEYMODULE_OK;
+          }));
+  EXPECT_CALL(*kMockValkeyModule, HashHasStringRef(_, _)).WillOnce(Return(1));
+
+  std::vector<std::string> call_order;
+  EXPECT_CALL(*kMockValkeyModule,
+              HashSet(_, VALKEYMODULE_HASH_NONE, _, _, nullptr))
+      .WillOnce([&](ValkeyModuleKey *key_obj, int, ValkeyModuleString *,
+                    ValkeyModuleString *, void *) {
+        EXPECT_EQ(key_obj->key, "dst:1");
+        // Simulate a synchronous keyspace notification emitted by Valkey inside
+        // MoveKey's unshare write while ProcessMoveNotification is on the
+        // stack.
+        keyspace_event_manager->NotifySubscribers(
+            &fake_ctx_, VALKEYMODULE_NOTIFY_HASH, "hset", dst_key);
+        return VALKEYMODULE_OK;
+      });
+  EXPECT_CALL(*mock_sub_dst,
+              OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_HASH,
+                                     testing::StrEq("hset"), dst_key))
+      .WillOnce(
+          [&](ValkeyModuleCtx *, int, const char *, ValkeyModuleString *) {
+            EXPECT_EQ(selected_db, 5);
+            call_order.push_back("nested_hset");
+          });
+  EXPECT_CALL(*mock_sub_src,
+              OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_GENERIC,
+                                     testing::StrEq("move_from"), _))
+      .WillOnce([&](ValkeyModuleCtx *, int, const char *,
+                    ValkeyModuleString *key_arg) {
+        EXPECT_EQ(selected_db, 2);
+        EXPECT_EQ(vmsdk::ToStringView(key_arg), "src:1");
+        call_order.push_back("src_move_from");
+      });
+  EXPECT_CALL(*mock_sub_dst,
+              OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_GENERIC,
+                                     testing::StrEq("move_to"), dst_key))
+      .WillOnce(
+          [&](ValkeyModuleCtx *, int, const char *, ValkeyModuleString *) {
+            EXPECT_EQ(selected_db, 5);
+            call_order.push_back("dst_move_to");
+          });
+
+  keyspace_event_manager->NotifySubscribers(
+      &fake_ctx_, VALKEYMODULE_NOTIFY_GENERIC, "move_from", src_key);
+  selected_db = 5;
+  keyspace_event_manager->NotifySubscribers(
+      &fake_ctx_, VALKEYMODULE_NOTIFY_GENERIC, "move_to", dst_key);
+
+  EXPECT_THAT(call_order, testing::ElementsAre("nested_hset", "src_move_from",
+                                               "dst_move_to"));
+  EXPECT_EQ(selected_db, 5);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 0);
+
+  TestValkeyModule_FreeString(nullptr, src_key);
+  TestValkeyModule_FreeString(nullptr, dst_key);
+  VMSDK_EXPECT_OK(
+      keyspace_event_manager->RemoveSubscription(mock_sub_src.get()));
+  VMSDK_EXPECT_OK(
+      keyspace_event_manager->RemoveSubscription(mock_sub_dst.get()));
 }
 }  // namespace
 

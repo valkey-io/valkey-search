@@ -214,8 +214,10 @@ struct SocketAddress {
 // ensuring the DB is selected back to the previous DB afterwards.
 class ValkeySelectDbGuard {
  public:
-  ValkeySelectDbGuard(ValkeyModuleCtx *ctx, int db_index) : ctx_(ctx) {
-    old_db_ = ValkeyModule_GetSelectedDb(ctx_);
+  ValkeySelectDbGuard(ValkeyModuleCtx *ctx, int db_index,
+                      std::optional<int> current_db = std::nullopt)
+      : ctx_(ctx) {
+    old_db_ = current_db.value_or(ValkeyModule_GetSelectedDb(ctx_));
     if (old_db_ != db_index) {
       if (ValkeyModule_SelectDb(ctx_, db_index) == VALKEYMODULE_OK) {
         switched_ = true;

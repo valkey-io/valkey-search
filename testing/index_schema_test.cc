@@ -3528,8 +3528,8 @@ TEST_F(IndexSchemaScoreFieldTest, KeyspaceNotificationDeletesRegistryEntry) {
       .WillOnce(Return(nullptr));
 
   // 3. Process the deletion notification
-  index_schema->OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_HASH,
-                                       "del", key_valkey_str.get());
+  KeyspaceEventManager::Instance().NotifySubscribers(
+      &fake_ctx_, VALKEYMODULE_NOTIFY_HASH, "del", key_valkey_str.get());
   WaitWorkerTasksAreCompleted(mutations_thread_pool);
   kMockValkeyModule->RunPendingOneShots();
 

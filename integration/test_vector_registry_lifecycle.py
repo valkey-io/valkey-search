@@ -1970,12 +1970,17 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         """GAP_KEYS shared keys under doc:*, index dropped with all but one
         still queued for unshare."""
         self.client.config_set("search.vector-unshare-batch-size", "1")
+        shared_before = self.registry_stat("shared_externally_cnt")
         index = self.build_index()
         index.create(self.client)
         # A second field keeps the key alive when the HDEL test removes the vector.
         self.write_distinct_keys("doc", other="x")
         self.wait_for_docs(index, self.GAP_KEYS)
         assert self.registry_stat("entry_cnt") == self.GAP_KEYS
+        assert (
+            self.registry_stat("shared_externally_cnt") - shared_before
+            == self.GAP_KEYS
+        )
         index.drop(self.client)
         waiters.wait_for_true(lambda: self.registry_stat("pending_unshare_cnt") > 0)
 
@@ -2013,28 +2018,49 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         """HDEL or logical field expiry of the vector field followed by RENAME
         out of the index prefix must not crash in MoveKey -> UnshareWithValkey."""
         self.client.execute_command("DEBUG", "SET-ACTIVE-EXPIRE", "0")
-        index = self.build_index()
-        index.create(self.client, wait_for_backfill=True)
+        try:
+            # Case 1: Explicit HDEL on pending-unshare keys without an active
+            # subscription (so HDEL leaves the registry records tracked while
+            # `other` keeps each hash alive), followed by INFO + RENAME in one
+            # atomic MULTI/EXEC batch so MoveKey runs on a missing vector field.
+            self.drop_index_leaving_pending_unshares()
+            pipe = self.client.pipeline(transaction=True)
+            for k in range(self.GAP_KEYS):
+                pipe.hdel(f"doc:{k}", "vec")
+            pipe.execute_command("INFO", "everything")
+            for k in range(self.GAP_KEYS):
+                pipe.rename(f"doc:{k}", f"outside:{k}")
+            res = pipe.execute()
+            info_before_rename = res[self.GAP_KEYS]
+            assert (
+                self._parse_registry_stat(
+                    info_before_rename, "pending_unshare_cnt"
+                )
+                > 0
+            )
+            assert self._parse_registry_stat(info_before_rename, "entry_cnt") > 0
+            assert self.client.ping()
+            self.wait_for_unshare_drain()
+            waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0)
 
-        # Case 1: Explicit HDEL followed by RENAME out of prefix
-        self.client.hset("doc:0", mapping={"vec": vector(0), "other": "x"})
-        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 1)
-        self.client.hdel("doc:0", "vec")
-        self.client.rename("doc:0", "outside:0")
-        assert self.client.ping()
-        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0)
-
-        # Case 2: Logically expired field (still live when HPEXPIRE's hexpire
-        # notification fires, then expires silently with active-expire off so
-        # VectorRegistry still holds the tracked record when MoveKey runs)
-        self.client.hset("doc:1", mapping={"vec": vector(1), "other": "x"})
-        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 1)
-        self.client.execute_command("HPEXPIRE", "doc:1", 80, "FIELDS", 1, "vec")
-        time.sleep(0.15)
-        assert self.registry_stat("entry_cnt") == 1
-        self.client.rename("doc:1", "outside:1")
-        assert self.client.ping()
-        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0)
+            # Case 2: Logically expired field (still live when HPEXPIRE's hexpire
+            # notification fires, then expires silently with active-expire off so
+            # VectorRegistry still holds the tracked record when MoveKey runs).
+            self.client.config_set("search.vector-unshare-batch-size", "1024")
+            index = self.build_index()
+            index.create(self.client, wait_for_backfill=True)
+            self.client.hset("doc:1", mapping={"vec": vector(1), "other": "x"})
+            waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 1)
+            self.client.execute_command(
+                "HPEXPIRE", "doc:1", 80, "FIELDS", 1, "vec"
+            )
+            waiters.wait_for_equal(lambda: self.client.hget("doc:1", "vec"), None)
+            assert self.registry_stat("entry_cnt") == 1
+            self.client.rename("doc:1", "outside:1")
+            assert self.client.ping()
+            waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0)
+        finally:
+            self.client.execute_command("DEBUG", "SET-ACTIVE-EXPIRE", "1")
 
     def test_rename_during_pending_unshare_keeps_vector(self):
         """A RENAME while the dropped index's keys are still queued
@@ -2049,10 +2075,12 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         Observed: it reads whatever now occupies the freed record.
         """
         self.drop_index_leaving_pending_unshares()
-        pipe = self.client.pipeline(transaction=False)
+        pipe = self.client.pipeline(transaction=True)
+        pipe.execute_command("INFO", "everything")
         for k in range(self.GAP_KEYS):
             pipe.rename(f"doc:{k}", f"moved:{k}")
-        pipe.execute()
+        info = pipe.execute()[0]
+        assert self._parse_registry_stat(info, "pending_unshare_cnt") > 0
         self.wait_for_unshare_drain()
         assert self.registry_stat("entry_cnt") == 0
 
@@ -2065,10 +2093,12 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         """A MOVE across databases while the dropped index's keys are still
         queued frees the moved hash's bytes."""
         self.drop_index_leaving_pending_unshares()
-        pipe = self.client.pipeline(transaction=False)
+        pipe = self.client.pipeline(transaction=True)
+        pipe.execute_command("INFO", "everything")
         for k in range(self.GAP_KEYS):
             pipe.move(f"doc:{k}", 1)
-        pipe.execute()
+        info = pipe.execute()[0]
+        assert self._parse_registry_stat(info, "pending_unshare_cnt") > 0
         self.wait_for_unshare_drain()
         assert self.registry_stat("entry_cnt") == 0
 
@@ -2078,6 +2108,131 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         client_db1.select(1)
         for k in range(self.GAP_KEYS):
             assert client_db1.hget(f"doc:{k}", "vec") == vector(k), f"doc:{k} in DB 1 reads freed memory"
+
+    def test_dropindex_keeps_expired_key_vector(self):
+        """Unsharing a logically expired key must retain its VectorRecord until
+        Valkey physically reclaims the key, even with zero indexes subscribed."""
+        self.client.execute_command("DEBUG", "SET-ACTIVE-EXPIRE", "0")
+        try:
+            shared_before = self.registry_stat("shared_externally_cnt")
+            index = self.build_index()
+            index.create(self.client, wait_for_backfill=True)
+            self.client.hset("doc:0", mapping={"vec": vector(0)})
+            self.wait_for_docs(index, 1)
+            assert (
+                self.registry_stat("shared_externally_cnt") - shared_before == 1
+            )
+            self.client.pexpire("doc:0", 1)
+            time.sleep(0.05)
+            before = self.client.execute_command("DEBUG", "DIGEST")
+
+            index.drop(self.client)
+            self.wait_for_unshare_drain()
+            assert self.registry_stat("entry_cnt") == 1
+
+            fill = self.reuse_freed_vector_memory()
+            self.client.delete(*[f"fill:{k}" for k in range(self.GAP_KEYS)])
+            fill.drop(self.client)
+            self.wait_for_unshare_drain()
+
+            assert self.client.info("keyspace")["db0"]["keys"] == 1
+            assert self.client.execute_command("DEBUG", "DIGEST") == before, (
+                "expired doc:0 reads different vector bytes: its field points at freed memory"
+            )
+
+            # With zero active indexes remaining, re-enabling active expiry fires
+            # ValkeyModuleEvent_Key (VALKEYMODULE_SUBEVENT_KEY_EXPIRED) and reclaims
+            # doc:0's retained VectorRecord.
+            self.client.execute_command("DEBUG", "SET-ACTIVE-EXPIRE", "1")
+            waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0)
+        finally:
+            self.client.execute_command("DEBUG", "SET-ACTIVE-EXPIRE", "1")
+
+    def test_overwrite_live_indexed_hash_cleans_up_registry(self):
+        """Overwriting a live indexed hash via SET fires KEY_OVERWRITTEN and
+        cleans up its tracked VectorRegistry entry even after index drop."""
+        index = self.build_index()
+        index.create(self.client, wait_for_backfill=True)
+        self.client.hset("doc:0", mapping={"vec": vector(0)})
+        self.wait_for_docs(index, 1)
+        assert self.registry_stat("entry_cnt") == 1
+
+        self.client.set("doc:0", "plain-string-value")
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0)
+        assert self.client.get("doc:0") == b"plain-string-value"
+        index.drop(self.client)
+
+    def test_backfill_revisit_of_logically_expired_tracked_key(self):
+        """Backfill visiting an already-tracked, logically expired key removes
+        it from search results while retaining its shared VectorRegistry entry
+        until physical expiration."""
+        self.client.execute_command("DEBUG", "SET-ACTIVE-EXPIRE", "0")
+        try:
+            # Pre-existing keys so backfill has work to scan.
+            for k in range(1, 6):
+                self.client.hset(f"doc:{k}", mapping={"vec": vector(k)})
+
+            self.client.execute_command(
+                "FT._DEBUG", "CONTROLLED_VARIABLE", "SET", "StopBackfill", "yes"
+            )
+            index = self.build_index()
+            index.create(self.client, wait_for_backfill=False)
+
+            # Write doc:0 while backfill is paused so it is indexed via keyspace
+            # notification, then logically expire it without physical deletion.
+            self.client.hset("doc:0", mapping={"vec": vector(0)})
+            self.wait_for_docs(index, 1)
+            assert self.registry_stat("entry_cnt") == 1
+            res = self.client.execute_command(
+                "FT.SEARCH",
+                index.name,
+                "*=>[KNN 1 @vec $q]",
+                "PARAMS",
+                "2",
+                "q",
+                vector(0),
+                "NOCONTENT",
+                "DIALECT",
+                "2",
+            )
+            assert b"doc:0" in res
+
+            self.client.pexpire("doc:0", 1)
+            time.sleep(0.05)
+
+            self.client.execute_command(
+                "FT._DEBUG", "CONTROLLED_VARIABLE", "SET", "StopBackfill", "no"
+            )
+            index.wait_for_backfill_complete(self.client)
+
+            # Backfill saw doc:0 as unopenable and removed it from the index,
+            # while VectorRegistry retains its record until physical expiration.
+            waiters.wait_for_equal(lambda: index.info(self.client).num_docs, 5)
+            res = self.client.execute_command(
+                "FT.SEARCH",
+                index.name,
+                "*=>[KNN 10 @vec $q]",
+                "PARAMS",
+                "2",
+                "q",
+                vector(0),
+                "NOCONTENT",
+                "DIALECT",
+                "2",
+            )
+            assert b"doc:0" not in res
+            assert self.registry_stat("entry_cnt") == 6
+
+            # Re-enabling active expire physically reclaims doc:0 and drops its
+            # retained registry record.
+            self.client.execute_command("DEBUG", "SET-ACTIVE-EXPIRE", "1")
+            waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 5)
+            assert index.info(self.client).num_docs == 5
+        finally:
+            self.client.execute_command(
+                "FT._DEBUG", "CONTROLLED_VARIABLE", "SET", "StopBackfill", "no"
+            )
+            self.client.execute_command("DEBUG", "SET-ACTIVE-EXPIRE", "1")
 
 
 class TestVectorRegistryPersistence(ValkeySearchTestCaseDebugMode):

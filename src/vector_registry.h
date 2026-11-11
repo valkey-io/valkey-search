@@ -97,6 +97,7 @@ class VectorRegistry {
   ValkeyModuleCtx *GetCtx() const { return ctx_.get(); }
 
   bool IsSharingActive() const { return hash_vector_sharing_; }
+  bool HasTrackedKeys() const { return !tracked_vectors_.empty(); }
 
   void OnFlushDB(const ValkeyModuleFlushInfo *flush_info);
   void OnSwapDB(const ValkeyModuleSwapDbInfo *swap_info);
@@ -203,9 +204,19 @@ class VectorRegistry {
   // tracked_vectors_ because BorrowedKeyStringHash dereferences Str().
   absl::flat_hash_map<int, PerDbTrackedKeysMap> tracked_keys_by_db_;
 
+  // Two-tier pending unshare queue per DB so busy/deferred records are moved
+  // to `deferred` instead of re-entering the active bucket and starving other
+  // pending keys in the same batch. Invariant: `ready` and `deferred` are
+  // disjoint.
+  struct PendingUnshareQueue {
+    vmsdk::HugeFlatHashSet<RegistryKey> ready;
+    vmsdk::HugeFlatHashSet<RegistryKey> deferred;
+    bool empty() const { return ready.empty() && deferred.empty(); }
+    size_t size() const { return ready.size() + deferred.size(); }
+  };
+
   // Maps db_num -> pending unshare keys queued for rate-limited processing.
-  absl::flat_hash_map<int, vmsdk::HugeFlatHashSet<RegistryKey>>
-      pending_unshares_;
+  absl::flat_hash_map<int, PendingUnshareQueue> pending_unshares_;
 
   void CancelPendingUnshare(int db_num, const RegistryKey &key);
   void RemoveFromTrackedKeysIndex(
@@ -214,6 +225,7 @@ class VectorRegistry {
 
   friend class VectorRegistryTest;
   bool hash_vector_sharing_{false};
+  bool in_process_pending_unshares_{false};
   mutable Stats stats_;
   vmsdk::UniqueValkeyDetachedThreadSafeContext ctx_;
 
@@ -243,9 +255,11 @@ class VectorRegistry {
                          absl::string_view attribute_identifier,
                          const indexes::VectorRecord &vector_record,
                          size_t vector_size);
+  bool ShouldRetainMissingVector(
+      int db_num, const RegistryKey &search_key,
+      const data_model::AttributeDataType &attribute_data_type);
   bool IsEraseTrackedRecordSafe(
-      int db_num, const InternedStringPtr &key, absl::string_view vector_str,
-      absl::string_view attribute_identifier,
+      int db_num, const RegistryKey &search_key, absl::string_view vector_str,
       const data_model::AttributeDataType &attribute_data_type);
 };
 

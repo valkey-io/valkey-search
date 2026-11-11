@@ -193,9 +193,9 @@ bool StringInternStore::Release(InternedString* str) {
   auto it = str_to_interned_.find(*ptr_ptr);
   CHECK(it != str_to_interned_.end()) << "Bad Map State";
   CHECK(str->RefCount() == 0);
-  str_to_interned_.erase(
-      it);  // Note this will also call the DecrementRefCount, but
-            // since refcount is already zero, it will be a no-op.
+  // Note this will also call the DecrementRefCount, but since refcount is
+  // already zero, it will be a no-op.
+  str_to_interned_.erase_and_migrate(it);
   return true;
 }
 

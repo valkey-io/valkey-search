@@ -8,7 +8,9 @@
 #include <chrono>
 #include <cstdint>
 #include <iostream>
+#include <iterator>
 #include <random>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -471,6 +473,51 @@ TEST_P(FlatHashMapNoRehashTest, IngestDuringShrink) {
   EXPECT_EQ(m.size(), static_cast<size_t>(2 * kPeak - erased));
   for (int64_t i = 0; i < 2 * kPeak; ++i) {
     ASSERT_EQ(m.contains(i), i >= erased) << i;
+  }
+}
+
+// erase_and_migrate() is erase(key) without the second lookup: each call
+// migrates a batch, so deletes alone drain a growth cycle and then shrink the
+// table, with no erase(key), insert or MigrateSome().
+TEST_P(FlatHashMapNoRehashTest, EraseAndMigrateDrainsAndShrinks) {
+  CountedMap m;
+  int64_t next = 0;
+  for (; next < 50000; ++next) {
+    m[next] = next;
+  }
+  NoRehashChecker checker(m, 64);
+  const size_t cycles = Peer::Cycles(m);
+  while (Peer::Cycles(m) == cycles) {
+    ASSERT_LT(next, 1000000);
+    m[next] = next;
+    ++next;
+    ASSERT_NO_FATAL_FAILURE(checker.Check()) << next;
+  }
+  ASSERT_FALSE(Peer::Bg(m).empty());
+  const size_t grown_capacity = Peer::Fg(m).capacity();
+  // The insert that started the cycle put its key in fg_; erasing it
+  // migrates one batch.
+  const int64_t last = next - 1;
+  size_t bg = Peer::Bg(m).size();
+  m.erase_and_migrate(m.find(last));
+  EXPECT_EQ(Peer::Bg(m).size(), bg - GetParam());
+  ASSERT_NO_FATAL_FAILURE(checker.Check());
+
+  // Keep 1 entry in 64.
+  for (int64_t i = 0; i < last; ++i) {
+    if (i % 64 == 0) {
+      continue;
+    }
+    auto it = m.find(i);
+    ASSERT_NE(it, m.end()) << i;
+    m.erase_and_migrate(it);
+    ASSERT_NO_FATAL_FAILURE(checker.Check()) << i;
+  }
+  // A later cycle can only start once the growth cycle's background drained.
+  EXPECT_GE(Peer::Cycles(m), cycles + 2);
+  EXPECT_LT(Peer::Fg(m).capacity(), grown_capacity / 4);
+  for (int64_t i = 0; i < next; ++i) {
+    ASSERT_EQ(m.contains(i), i < last && i % 64 == 0) << i;
   }
 }
 
@@ -1126,6 +1173,55 @@ TEST_F(FlatHashMapTest, EraseIteratorDefersShrinkToInsert) {
     --next;
   }
   EXPECT_EQ(m.size(), static_cast<size_t>(10 - next - 1));
+}
+
+// extract() moves an element out of either table into a node that owns it,
+// and migrates a batch like erase_and_migrate(). The nodes outlive every later
+// migration, shrink and free of the tables the elements came from.
+TEST_F(FlatHashMapTest, ExtractMovesTheElementOutAndMigrates) {
+  SetBatch(8);
+  Set s;
+  int64_t next = 0;
+  for (; next < 1000; ++next) {
+    s.insert(next);
+  }
+  const size_t cycles = Peer::Cycles(s);
+  while (Peer::Cycles(s) == cycles) {
+    ASSERT_LT(next, 1000000);
+    s.insert(next++);
+  }
+  ASSERT_GT(Peer::Bg(s).size(), 100);
+
+  // From bg_: the migration cursor's element, then another.
+  for (int i = 0; i < 2; ++i) {
+    auto bg_it = Peer::Bg(s).begin();
+    std::advance(bg_it, i);
+    const int64_t key = *bg_it;
+    const size_t bg = Peer::Bg(s).size();
+    auto node = s.extract(s.find(key));
+    EXPECT_EQ(node.value(), key);
+    EXPECT_FALSE(s.contains(key));
+    EXPECT_EQ(Peer::Bg(s).size(), bg - 1 - 8);
+  }
+  // From fg_: the key whose insert started the cycle.
+  const size_t bg = Peer::Bg(s).size();
+  auto node = s.extract(s.find(next - 1));
+  EXPECT_EQ(node.value(), next - 1);
+  EXPECT_EQ(Peer::Bg(s).size(), bg - 8);
+
+  std::vector<Set::node_type> nodes;
+  const size_t remaining = s.size();
+  while (!s.empty()) {
+    nodes.push_back(s.extract(s.begin()));
+  }
+  ASSERT_EQ(nodes.size(), remaining);
+  EXPECT_GT(Peer::Cycles(s), cycles + 1) << "extracting everything shrank it";
+  std::set<int64_t> values;
+  for (const auto &n : nodes) {
+    values.insert(n.value());
+  }
+  EXPECT_EQ(values.size(), remaining);
+  EXPECT_EQ(values.count(next - 1), 0);
 }
 
 // The direct check before every insert into fg_: a migration into a full

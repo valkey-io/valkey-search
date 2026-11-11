@@ -151,7 +151,7 @@ class BruteforceSearch
       return;
     }
     size_t cur_c = found->second;
-    dict_external_to_internal.erase(found);
+    dict_external_to_internal.erase_and_migrate(found);
     if (cur_element_count_ - 1 == cur_c) {
       std::destroy_at(GetDataPtrByInternalId(cur_c));
       cur_element_count_--;

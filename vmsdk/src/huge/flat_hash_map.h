@@ -177,8 +177,9 @@ struct PrehashedEq : Eq {
 // As with absl, lookups (find, contains, count, at) preserve iterators,
 // pointers and references, and erase(iterator) invalidates only the erased
 // element, so `m.erase(it++)` is safe. Unlike absl, every insertion
-// (including operator[] on an existing key), erase(key) and MigrateSome() may
-// move elements and so invalidate all of them. Moving the container also
+// (including operator[] on an existing key), erase(key),
+// erase_and_migrate(iterator), extract(iterator) and MigrateSome() may move
+// elements and so invalidate all of them. Moving the container also
 // invalidates its iterators; it moves no entries.
 //
 // Each operation hashes the caller's key once and probes both tables, and the
@@ -392,6 +393,45 @@ class HugeHashTable {
       shrink_pending_ = shrink_pending_ || ShouldShrink();
     }
     UpdateNeedsMigration();
+  }
+
+  // Erases the element at `pos`, then migrates and frees or shrinks as
+  // erase(key) does, without looking the key up again. Unlike
+  // erase(iterator), it invalidates every iterator, pointer and reference into
+  // the container: use it when nothing else into the container is held, as
+  // after a find().
+  void erase_and_migrate(iterator pos) {
+    if (pos.in_bg_) {
+      EraseFromBackground(pos.it_);
+    } else {
+      fg_.erase(pos.it_);
+      ErasedFromForeground();
+    }
+    Migrate(internal::g_huge_map_migrate_batch);
+    FinishDeferred();
+  }
+
+  using node_type = typename Table::node_type;
+  // Moves the element at `pos` out into a node handle that owns it, then
+  // migrates as erase_and_migrate() does, with the same invalidation. Unlike
+  // absl's extract(), other iterators do not survive; the node does.
+  node_type extract(iterator pos) {
+    node_type node;
+    if (pos.in_bg_) {
+      if (pos.it_ == bg_it_) {
+        ++bg_it_;
+      }
+      node = bg_.extract(pos.it_);
+      if (bg_.empty()) {
+        ResetBackground();
+      }
+    } else {
+      node = fg_.extract(pos.it_);
+      ErasedFromForeground();
+    }
+    Migrate(internal::g_huge_map_migrate_batch);
+    FinishDeferred();
+    return node;
   }
 
  protected:

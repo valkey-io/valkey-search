@@ -128,7 +128,7 @@ VectorRegistry::ExtractTrackedRecord(
     return std::nullopt;
   }
   auto record = it->second;
-  db_it->second.erase(it);
+  db_it->second.erase_and_migrate(it);
   if (db_it->second.empty()) {
     tracked_vectors_.erase(db_it);
   }
@@ -447,8 +447,8 @@ size_t VectorRegistry::ProcessPendingUnshares(uint32_t batch_size) {
     vmsdk::ValkeySelectDbGuard db_guard(ctx_.get(), db_num);
 
     while (!pending_keys.empty() && processed < batch_size) {
-      RegistryKey rk = *pending_keys.begin();
-      pending_keys.erase(pending_keys.begin());
+      auto node = pending_keys.extract(pending_keys.begin());
+      const auto &rk = node.value();
       ++processed;
 
       auto tracked_db_it = tracked_vectors_.find(db_num);
@@ -470,7 +470,7 @@ size_t VectorRegistry::ProcessPendingUnshares(uint32_t batch_size) {
         continue;
       }
       auto record = tracked_it->second;
-      tracked_db_it->second.erase(tracked_it);
+      tracked_db_it->second.erase_and_migrate(tracked_it);
       if (tracked_db_it->second.empty()) {
         tracked_vectors_.erase(tracked_db_it);
       }

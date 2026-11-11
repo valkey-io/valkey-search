@@ -57,6 +57,7 @@
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
+#include "src/metrics.h"
 #include "src/utils/string_interning.h"
 #include "testing/common.h"
 #include "third_party/hnswlib/space_ip.h"
@@ -762,6 +763,35 @@ void ExpectReject(ChunkStream golden, absl::string_view substr) {
 
 }  // namespace
 
+TEST_F(VectorIndexTest, HnswAddPointReplaceDeletedDoesNotDuplicateLabel) {
+  hnswlib::L2Space space{kDimensions};
+  hnswlib::HierarchicalNSW<float> algo(&space, /*max_elements=*/kGoldenMax, kM,
+                                       kEFConstruction, /*random_seed=*/100,
+                                       /*allow_replace_deleted=*/true);
+
+  // Labels 0,1 land at slots 0,1
+  auto vectors = DeterministicallyGenerateVectors(2, kDimensions, 10.0);
+  for (size_t i = 0; i < vectors.size(); ++i) {
+    algo.addPoint(vectors[i].data(), /*label=*/i);
+  }
+
+  // Delete the first entry
+  algo.markDelete(0);
+
+  // Add vector with label 1 again. Previously in the replace-deleted case, this
+  // would overwrite the tombstoned slot 0 and not re-use slot 1 with the same
+  // label.
+  algo.addPoint(vectors[0].data(), /*label=*/1, /*replace_deleted=*/true);
+
+  // Each label keeps its own slot: label 1 stays live on slot 1 and label 0
+  // stays on the still-tombstoned slot 0.
+  EXPECT_EQ(algo.label_lookup_.size(), 2u);
+  EXPECT_EQ(algo.label_lookup_[0], 0u);
+  EXPECT_EQ(algo.label_lookup_[1], 1u);
+  EXPECT_TRUE(algo.isMarkedDeleted(0));
+  EXPECT_FALSE(algo.isMarkedDeleted(1));
+}
+
 // ---- Happy path ----------------------------------------------------------
 
 TEST_F(VectorIndexTest, LoadValidatesEmptyIndex) {
@@ -771,6 +801,17 @@ TEST_F(VectorIndexTest, LoadValidatesEmptyIndex) {
 
 TEST_F(VectorIndexTest, LoadValidatesSingleVector) {
   auto golden = BuildGoldenChunks({0}, kGoldenMax);
+  VMSDK_EXPECT_OK(LoadGolden(golden, kGoldenMax, /*validate=*/true));
+}
+
+// Regression: a small index may legitimately have a max_level greater than its
+// element count, because HNSW draws each node's level from an independent
+// random distribution. A single element forced to level 2 (max_level == 2,
+// curr_element_count == 1) must load successfully. This previously failed the
+// (incorrect) "max_level exceeds the element count" validation, which crashed
+// the server on RDB restore of e.g. a single zero-length-key HNSW index.
+TEST_F(VectorIndexTest, LoadValidatesSingleVectorWithHighLevel) {
+  auto golden = BuildGoldenChunks({2}, kGoldenMax);
   VMSDK_EXPECT_OK(LoadGolden(golden, kGoldenMax, /*validate=*/true));
 }
 
@@ -822,7 +863,17 @@ TEST_F(VectorIndexTest, RejectHeaderMaxLevelTooLarge) {
   auto h = GetHeader(golden);
   h.set_max_level(1000);
   SetHeader(&golden, h);
-  ExpectReject(std::move(golden), "max_level exceeds the element count");
+  ExpectReject(std::move(golden), "max level above expected range");
+}
+
+TEST_F(VectorIndexTest, RejectHeaderMaxLevelEntryPointMismatch) {
+  auto golden = MultiLayerGolden();
+  auto h = GetHeader(golden);
+  h.set_max_level(100);
+  SetHeader(&golden, h);
+  // A max_level inconsistent with the actual per-element levels is caught by
+  // the global entry-point invariant (the entry point must be a tallest node).
+  ExpectReject(std::move(golden), "enterpoint node is not at max_level");
 }
 
 TEST_F(VectorIndexTest, RejectHeaderSerializeSizeMismatch) {
@@ -873,12 +924,68 @@ TEST_F(VectorIndexTest, RejectLevel0NeighborOutOfRange) {
   ExpectReject(std::move(golden), "level-0 neighbor id out of range");
 }
 
-TEST_F(VectorIndexTest, RejectDuplicateLabel) {
+TEST_F(VectorIndexTest, RejectDuplicateLiveLabel) {
   auto golden = MultiLayerGolden();
   auto label0 = PeekAt<hnswlib::labeltype>(golden.chunks[1], kLabelOff);
   PokeAt<hnswlib::labeltype>(&golden.chunks[3], kLabelOff,
                              label0);  // element 2 dup
-  ExpectReject(std::move(golden), "duplicate label in index");
+  ExpectReject(std::move(golden), "duplicate live label in index");
+}
+
+// Regression: RDBs written before the duplicate-label fix can carry the same
+// label on a tombstoned slot and on a live slot. Such an index must load, be
+// counted, and resolve the label to the live slot.
+TEST_F(VectorIndexTest, LoadToleratesTombstonedDuplicateLabel) {
+  // {tombstoned slot, live slot}: the stale slot may precede or follow the
+  // live one.
+  const std::pair<size_t, size_t> cases[] = {{0, 1}, {1, 0}};
+  for (const auto& [stale, live] : cases) {
+    SCOPED_TRACE(absl::StrCat("stale slot ", stale, ", live slot ", live));
+    auto golden = BuildGoldenChunks({0, 0}, kGoldenMax);
+    std::string& stale_chunk = golden.chunks[1 + stale];
+    const std::string& live_chunk = golden.chunks[1 + live];
+    auto label = PeekAt<hnswlib::labeltype>(live_chunk, kLabelOff);
+    PokeAt<hnswlib::labeltype>(&stale_chunk, kLabelOff, label);
+    // The delete mark lives in the third byte of the level-0 link-list header.
+    PokeAt<unsigned char>(&stale_chunk, 2,
+                          hnswlib::HierarchicalNSW<float>::DELETE_MARK);
+
+    hnswlib::L2Space space{kDimensions};
+    hnswlib::HierarchicalNSW<float> algo(&space);
+    BufTracker tracker;
+    uint64_t dup_before = Metrics::GetStats().hnsw_duplicate_label_on_load_cnt;
+    golden.Rewind();
+    auto status = algo.LoadIndex(golden, &space, kGoldenMax, &tracker, kM,
+                                 /*validate=*/true);
+    ASSERT_TRUE(status.ok()) << status.message();
+    EXPECT_EQ(Metrics::GetStats().hnsw_duplicate_label_on_load_cnt - dup_before,
+              1u);
+
+    // One live element remains and the label resolves to it, not the tombstone.
+    EXPECT_EQ(algo.cur_element_count_, 2u);
+    EXPECT_EQ(algo.getDeletedCount(), 1u);
+    ASSERT_EQ(algo.label_lookup_.size(), 1u);
+    EXPECT_EQ(algo.label_lookup_.at(label), live);
+    EXPECT_TRUE(algo.isMarkedDeleted(stale));
+    EXPECT_FALSE(algo.isMarkedDeleted(live));
+
+    // The survivor carries the live slot's vector.
+    const char* live_vector = live_chunk.data() + kLinks0;
+    const char* point = algo.getPoint(label);
+    ASSERT_NE(point, nullptr);
+    EXPECT_EQ(std::memcmp(point, live_vector, kVecBytes), 0);
+    auto result = algo.searchKnn(live_vector, 2);
+    ASSERT_EQ(result.size(), 1u);
+    EXPECT_EQ(result.top().second, label);
+
+    // Deleting the survivor must tombstone the live slot rather than fail on
+    // the already-deleted one.
+    EXPECT_NO_THROW(algo.markDelete(label));
+    EXPECT_TRUE(algo.isMarkedDeleted(live));
+    EXPECT_EQ(algo.getDeletedCount(), 2u);
+    EXPECT_EQ(algo.getPoint(label), nullptr);
+    EXPECT_TRUE(algo.searchKnn(live_vector, 2).empty());
+  }
 }
 
 // ---- Upper-level record corruption ---------------------------------------

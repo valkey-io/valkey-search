@@ -109,6 +109,14 @@ class HashAttributeDataType : public AttributeDataType {
     return RedisModule_KeyType(key) == REDISMODULE_KEYTYPE_HASH;
   }
   bool RecordsProvidedAsString() const override { return false; }
+
+ private:
+  RecordsMap FetchAllFields(
+      RedisModuleKey *open_key,
+      const absl::flat_hash_set<absl::string_view> &identifiers) const;
+  RecordsMap FetchSpecificFields(
+      RedisModuleKey *open_key,
+      const absl::flat_hash_set<absl::string_view> &identifiers) const;
 };
 
 inline constexpr absl::string_view kJsonCmd = "JSON.GET";

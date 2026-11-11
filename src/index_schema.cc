@@ -1993,6 +1993,10 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
       }
     }
   }
+  if (!key_labels_by_alias.empty()) {
+    return absl::InternalError(
+        "Key labels found for an attribute without vector index content");
+  }
   // Idempotent: covers a stream that carried no INDEX_EXTENSION section, so
   // the index still has its filter for everything ingested after the load.
   VMSDK_RETURN_IF_ERROR(index_schema->CompileFilter());

@@ -39,6 +39,13 @@ absl::Status GRPCSearchRequestToParameters(
     const SearchIndexPartitionRequest& request,
     grpc::CallbackServerContext* context, query::SearchParameters* parameters);
 
+// FAILED_PRECONDITION unless `schema` is the index the request was built for:
+// an index dropped and recreated under the same name has a new fingerprint or
+// version.
+absl::Status CheckIndexConsistency(
+    const IndexFingerprintVersion& expected_fingerprint_version,
+    const IndexSchema& schema);
+
 std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
     const query::SearchParameters& parameters);
 

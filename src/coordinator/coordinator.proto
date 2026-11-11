@@ -228,6 +228,11 @@ message NeighborEntry {
   // from a shard predating content_limit, which never sets it, reads as
   // carrying content.
   bool content_omitted = 5;
+  // Bounded content fan-out: the document's mutation sequence number when the
+  // shard searched it. Sent back with a FetchContent candidate, so the shard
+  // revalidates and rescores only a document that changed since, as it does
+  // for its own search results.
+  uint64 sequence_number = 6;
 }
 
 message SearchIndexPartitionResponse {
@@ -278,9 +283,11 @@ message FetchContentRequest {
   // fingerprints, the projection, and the filter each key is revalidated
   // against.
   SearchIndexPartitionRequest query = 1;
-  // Keys of global winners owned by the target shard that arrived without
-  // content.
-  repeated string keys = 2;
+  // Global winners owned by the target shard that arrived without content:
+  // key, score and distance from the first round, content_omitted set. The
+  // shard returns each one that still matches, with its content and, if the
+  // document changed, its recomputed score and distance.
+  repeated NeighborEntry candidates = 2;
 }
 
 message GlobalMetadataVersionHeader {

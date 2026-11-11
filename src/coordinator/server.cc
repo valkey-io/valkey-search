@@ -34,6 +34,7 @@
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
 #include "src/query/content_resolution.h"
+#include "src/query/fanout_merge.h"
 #include "src/query/search.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
@@ -113,6 +114,9 @@ void SerializeNeighbors(SearchIndexPartitionResponse *response,
     neighbor_proto->set_key(std::move(*neighbor.external_id));
     neighbor_proto->set_score(neighbor.score);
     neighbor_proto->set_distance(neighbor.distance);
+    if (bounded_content) {
+      neighbor_proto->set_sequence_number(neighbor.sequence_number);
+    }
     if (!neighbor.attribute_contents) {
       neighbor_proto->set_content_omitted(bounded_content);
     } else {
@@ -170,9 +174,16 @@ class RemoteResponderSearch : public query::SearchParameters {
     RecordSearchMetrics(failure, std::move(latency_sample));
   }
 
+  // Whether a failed operation still replies with what it has. A search does
+  // under partial results (the coordinator tolerates losing a shard), except
+  // for one arm of a multi-arm request (see multi_arm).
+  virtual bool AllowsPartialResults() const {
+    return enable_partial_results && !multi_arm;
+  }
+
  private:
   void QueryCompleteImpl() {
-    if (!search_result.status.ok() && (!enable_partial_results || multi_arm)) {
+    if (!search_result.status.ok() && !AllowsPartialResults()) {
       (*on_done)(ToGrpcStatus(search_result.status));
       RecordMetrics(true);
       return;
@@ -197,6 +208,10 @@ class RemoteResponderSearch : public query::SearchParameters {
 class RemoteContentFetch final : public RemoteResponderSearch {
  protected:
   void RecordMetrics(bool) override {}
+  // A failed fetch still holds its seeded candidates, which have no content;
+  // returned, they would read as resolved. Fail the RPC instead: the
+  // coordinator handles a failed fetch like any failed shard.
+  bool AllowsPartialResults() const override { return false; }
 };
 
 grpc::Status Service::PerformSlotConsistencyCheck(
@@ -219,11 +234,8 @@ grpc::Status Service::PerformSlotConsistencyCheck(
 grpc::Status Service::PerformIndexConsistencyCheck(
     const IndexFingerprintVersion &expected_fingerprint_version,
     const std::shared_ptr<IndexSchema> &schema) {
-  if (schema->GetFingerprint() != expected_fingerprint_version.fingerprint() ||
-      schema->GetVersion() != expected_fingerprint_version.version()) {
-    return {grpc::StatusCode::FAILED_PRECONDITION, "Slot fingerprint mismatch"};
-  }
-  return grpc::Status::OK;
+  return ToGrpcStatus(
+      CheckIndexConsistency(expected_fingerprint_version, *schema));
 }
 
 void Service::EnqueueSearchRequest(
@@ -364,7 +376,8 @@ grpc::ServerUnaryReactor *Service::FetchContent(
   fetch->response = response;
   fetch->on_done = std::make_shared<ArmCompletionCallback>(
       [reactor](grpc::Status s) { reactor->Finish(s); });
-  query::SeedContentFetch(*fetch, request->keys());
+  query::SeedContentFetch(
+      *fetch, query::fanout::DecodeNeighborEntries(request->candidates()));
   // Lets tests change the keys between the two rounds.
   BACKGROUND_PAUSEPOINT("fetch_content");
   vmsdk::RunByMain([fetch = std::move(fetch)]() mutable {

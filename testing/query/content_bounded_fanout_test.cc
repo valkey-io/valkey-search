@@ -21,6 +21,7 @@
 #include "src/coordinator/util.h"
 #include "src/query/fanout_content_limit.h"
 #include "src/query/search.h"
+#include "src/valkey_search_options.h"
 #include "testing/common.h"
 #include "testing/coordinator/common.h"
 #include "vmsdk/src/cluster_map.h"
@@ -51,10 +52,13 @@ class CapturingSearch : public UnitTestSearchParameters {
 };
 
 void AddResult(coordinator::SearchIndexPartitionResponse &response,
-               const std::string &key, float score, bool with_content) {
+               const std::string &key, float score, bool with_content,
+               float distance = 0.0f, uint64_t sequence_number = 0) {
   auto *entry = response.add_neighbors();
   entry->set_key(key);
   entry->set_score(score);
+  entry->set_distance(distance);
+  entry->set_sequence_number(sequence_number);
   if (with_content) {
     auto *content = entry->add_attribute_contents();
     content->set_identifier("f");
@@ -62,6 +66,15 @@ void AddResult(coordinator::SearchIndexPartitionResponse &response,
   } else {
     entry->set_content_omitted(true);
   }
+}
+
+// The keys a fetch request asks for.
+std::vector<std::string> FetchKeys(const coordinator::FetchContentRequest &r) {
+  std::vector<std::string> keys;
+  for (const auto &candidate : r.candidates()) {
+    keys.push_back(candidate.key());
+  }
+  return keys;
 }
 
 std::vector<std::string> Keys(const SearchResult &result) {
@@ -107,6 +120,18 @@ class BoundedContentFanoutTest : public ValkeySearchTest {
     search->limit = LimitParameter{offset, count};
     search->enable_partial_results = partial_results;
     BoundedContentPlan plan{offset + count,
+                            ShardLimits(kShards, content_limit)};
+    VMSDK_EXPECT_OK(PerformBoundedContentFanoutAsync(
+        targets_, &pool_, std::move(search), std::move(plan), nullptr));
+  }
+
+  // KNN `k`, every shard bounded to `content_limit`.
+  void StartKnn(int k, uint64_t content_limit) {
+    auto search = std::make_unique<CapturingSearch>(&completed_);
+    search->attribute_alias = "vec";
+    search->k = k;
+    search->limit = LimitParameter{0, static_cast<uint64_t>(k)};
+    BoundedContentPlan plan{static_cast<uint64_t>(k),
                             ShardLimits(kShards, content_limit)};
     VMSDK_EXPECT_OK(PerformBoundedContentFanoutAsync(
         targets_, &pool_, std::move(search), std::move(plan), nullptr));
@@ -166,7 +191,8 @@ TEST_F(BoundedContentFanoutTest, SkewFetchesOnlyMissingWinnersFromTheirShard) {
   Start(0, 2, 1);
   coordinator::SearchIndexPartitionResponse r0, r1;
   AddResult(r0, "a", 9, true);
-  AddResult(r0, "b", 8, false);  // A winner without content.
+  AddResult(r0, "b", 8, false, /*distance=*/0.25f,  // Winner, no content.
+            /*sequence_number=*/42);
   AddResult(r1, "x", 1, true);
   Reply(searches_[0], r0);
   Reply(searches_[1], r1);
@@ -175,8 +201,14 @@ TEST_F(BoundedContentFanoutTest, SkewFetchesOnlyMissingWinnersFromTheirShard) {
   EXPECT_TRUE(fetches_[1].empty());
   ASSERT_EQ(fetches_[0].size(), 1u);
   const auto &fetch = *fetches_[0][0].request;
-  EXPECT_THAT(fetch.keys(), ElementsAre("b"));
+  EXPECT_THAT(FetchKeys(fetch), ElementsAre("b"));
   EXPECT_FALSE(fetch.query().has_content_limit());
+  // The shard keeps the carried score unless the document changed since the
+  // first round, which it tells by the carried sequence number.
+  EXPECT_EQ(fetch.candidates(0).score(), 8.0f);
+  EXPECT_EQ(fetch.candidates(0).distance(), 0.25f);
+  EXPECT_EQ(fetch.candidates(0).sequence_number(), 42u);
+  EXPECT_TRUE(fetch.candidates(0).content_omitted());
 
   coordinator::SearchIndexPartitionResponse fetched;
   AddResult(fetched, "b", 8, true);
@@ -204,7 +236,7 @@ TEST_F(BoundedContentFanoutTest, KeyOnlyCandidatesPastTheWindowAreDropped) {
   Reply(searches_[0], r0);
   Reply(searches_[1], r1);
   ASSERT_EQ(fetches_[0].size(), 1u);
-  EXPECT_THAT(fetches_[0][0].request->keys(), ElementsAre("b"));
+  EXPECT_THAT(FetchKeys(*fetches_[0][0].request), ElementsAre("b"));
   coordinator::SearchIndexPartitionResponse fetched;
   AddResult(fetched, "b", 8, true);
   Reply(fetches_[0], fetched);
@@ -214,17 +246,29 @@ TEST_F(BoundedContentFanoutTest, KeyOnlyCandidatesPastTheWindowAreDropped) {
   EXPECT_EQ(completed_->search_result.total_count, 4u);
 }
 
-TEST_F(BoundedContentFanoutTest, OnlyWinnersInTheReplyWindowAreFetched) {
-  // LIMIT 1 1: only the second-ranked candidate is sent to the client.
+TEST_F(BoundedContentFanoutTest, CandidatesInsideTheOffsetAreValidated) {
+  // LIMIT 1 1: "a" is skipped by the offset, but must still be valid to
+  // take up its place.
   Start(/*offset=*/1, /*count=*/1, /*content_limit=*/1);
   coordinator::SearchIndexPartitionResponse r0, r1;
-  AddResult(r0, "a", 9, false);  // Skipped by the offset: not fetched.
+  AddResult(r0, "a", 9, false);
   AddResult(r0, "b", 8, false);
-  AddResult(r1, "x", 1, true);
+  r0.set_total_count(2);
+  AddResult(r1, "c", 7, true);
+  r1.set_total_count(1);
   Reply(searches_[0], r0);
   Reply(searches_[1], r1);
   ASSERT_EQ(fetches_[0].size(), 1u);
-  EXPECT_THAT(fetches_[0][0].request->keys(), ElementsAre("b"));
+  EXPECT_THAT(FetchKeys(*fetches_[0][0].request), ElementsAre("a", "b"));
+
+  // "a" no longer matches: "b" is now the one the offset skips, and "c" is
+  // the reply.
+  coordinator::SearchIndexPartitionResponse fetched;
+  AddResult(fetched, "b", 8, true);
+  Reply(fetches_[0], fetched);
+  ASSERT_NE(completed_, nullptr);
+  EXPECT_THAT(Keys(completed_->search_result), ElementsAre("c"));
+  EXPECT_EQ(completed_->search_result.total_count, 2u);  // 3 less "a".
 }
 
 TEST_F(BoundedContentFanoutTest, WinnerThatNoLongerMatchesIsReplacedByTheNext) {
@@ -239,13 +283,13 @@ TEST_F(BoundedContentFanoutTest, WinnerThatNoLongerMatchesIsReplacedByTheNext) {
   Reply(searches_[0], r0);
   Reply(searches_[1], r1);
   ASSERT_EQ(fetches_[0].size(), 1u);
-  EXPECT_THAT(fetches_[0][0].request->keys(), ElementsAre("b"));
+  EXPECT_THAT(FetchKeys(*fetches_[0][0].request), ElementsAre("b"));
   Reply(fetches_[0], {});  // "b" no longer matches.
 
   // "c" moved into the window without content: a second fetch round.
   EXPECT_EQ(completed_, nullptr);
   ASSERT_EQ(fetches_[0].size(), 1u);
-  EXPECT_THAT(fetches_[0][0].request->keys(), ElementsAre("c"));
+  EXPECT_THAT(FetchKeys(*fetches_[0][0].request), ElementsAre("c"));
   coordinator::SearchIndexPartitionResponse fetched;
   AddResult(fetched, "c", 7, true);
   Reply(fetches_[0], fetched);
@@ -314,6 +358,63 @@ TEST_F(BoundedContentFanoutTest, FailedFetchMovesOnToOtherShardsUnderPartial) {
   EXPECT_TRUE(completed_->search_result.status.ok());
   EXPECT_THAT(Keys(completed_->search_result), ElementsAre("a", "x"));
   EXPECT_EQ(completed_->search_result.total_count, 4u);  // 5 less "b".
+}
+
+TEST_F(BoundedContentFanoutTest, RecomputedScoreReranksAndFetchesTheNext) {
+  Start(0, 2, 1);
+  coordinator::SearchIndexPartitionResponse r0, r1;
+  AddResult(r0, "a", 9, true);
+  AddResult(r0, "b", 8, false);
+  AddResult(r0, "c", 7, false);
+  AddResult(r1, "x", 1, true);
+  Reply(searches_[0], r0);
+  Reply(searches_[1], r1);
+  ASSERT_THAT(FetchKeys(*fetches_[0][0].request), ElementsAre("b"));
+
+  // "b" changed and still matches, but now scores below "c".
+  coordinator::SearchIndexPartitionResponse fetched;
+  AddResult(fetched, "b", 0.5f, true);
+  Reply(fetches_[0], fetched);
+  EXPECT_EQ(completed_, nullptr);
+  ASSERT_EQ(fetches_[0].size(), 1u);
+  EXPECT_THAT(FetchKeys(*fetches_[0][0].request), ElementsAre("c"));
+
+  coordinator::SearchIndexPartitionResponse fetched_c;
+  AddResult(fetched_c, "c", 7, true);
+  Reply(fetches_[0], fetched_c);
+  ASSERT_NE(completed_, nullptr);
+  const auto &neighbors = completed_->search_result.neighbors;
+  ASSERT_GE(neighbors.size(), 2u);
+  EXPECT_EQ(neighbors[0].external_id->Str(), "a");
+  EXPECT_EQ(neighbors[1].external_id->Str(), "c");
+}
+
+TEST_F(BoundedContentFanoutTest, KnnReplacesADroppedWinnerWithTheNextNearest) {
+  StartKnn(/*k=*/2, /*content_limit=*/1);
+  coordinator::SearchIndexPartitionResponse r0, r1;
+  AddResult(r0, "near", 0, true, /*distance=*/0.1f);
+  AddResult(r0, "mid", 0, false, /*distance=*/0.5f);
+  AddResult(r1, "far", 0, true, /*distance=*/0.9f);
+  Reply(searches_[0], r0);
+  Reply(searches_[1], r1);
+  ASSERT_THAT(FetchKeys(*fetches_[0][0].request), ElementsAre("mid"));
+
+  Reply(fetches_[0], {});  // "mid" no longer matches.
+  ASSERT_NE(completed_, nullptr);
+  EXPECT_THAT(Keys(completed_->search_result), ElementsAre("near", "far"));
+}
+
+TEST_F(BoundedContentFanoutTest, PlanningSkipsBoundsBeyondTheResultsCap) {
+  auto &enabled =
+      const_cast<vmsdk::config::Boolean &>(options::GetFanoutBoundedContent());
+  VMSDK_EXPECT_OK(enabled.SetValue(true));
+  CapturingSearch search(&completed_);
+  search.limit = LimitParameter{0, 10};
+  EXPECT_TRUE(PlanBoundedContentFanout(search, targets_).has_value());
+  search.limit = LimitParameter{
+      0, options::GetMaxNonVectorSearchResultsFetched().GetValue() + 1ull};
+  EXPECT_FALSE(PlanBoundedContentFanout(search, targets_).has_value());
+  VMSDK_EXPECT_OK(enabled.SetValue(false));
 }
 
 TEST_F(BoundedContentFanoutTest, FailedSearchSkipsTheFetchRound) {

@@ -34,6 +34,16 @@
 
 namespace valkey_search::coordinator {
 
+absl::Status CheckIndexConsistency(
+    const IndexFingerprintVersion& expected_fingerprint_version,
+    const IndexSchema& schema) {
+  if (schema.GetFingerprint() != expected_fingerprint_version.fingerprint() ||
+      schema.GetVersion() != expected_fingerprint_version.version()) {
+    return absl::FailedPreconditionError("Slot fingerprint mismatch");
+  }
+  return absl::OkStatus();
+}
+
 namespace {
 
 absl::Status ValidateVectorRangeRadius(double radius) {

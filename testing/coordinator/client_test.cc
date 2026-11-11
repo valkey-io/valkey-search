@@ -305,8 +305,8 @@ TEST_F(ClientByteCountingTest, CountsResponseBytesBeforeCallbackMutation) {
 TEST_F(ClientByteCountingTest, FetchContentDeliversResponseAndCountsBytes) {
   auto request = std::make_unique<FetchContentRequest>();
   request->mutable_query()->set_index_schema_name("test_index_schema");
-  request->add_keys("key1");
-  request->add_keys("key2");
+  request->add_candidates()->set_key("key1");
+  request->add_candidates()->set_key("key2");
   const size_t request_size = request->ByteSizeLong();
 
   SearchIndexPartitionResponse response;
@@ -337,7 +337,7 @@ TEST_F(ClientByteCountingTest, FetchContentDeliversResponseAndCountsBytes) {
 
 TEST_F(ClientByteCountingTest, FetchContentFailureCountsNoResponseBytes) {
   auto request = std::make_unique<FetchContentRequest>();
-  request->add_keys("key1");
+  request->add_candidates()->set_key("key1");
   auto stub = std::make_unique<FakeCoordinatorStub>();
   stub->async_stub()->fetch_content_status =
       grpc::Status(grpc::StatusCode::UNAVAILABLE, "down");

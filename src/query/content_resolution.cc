@@ -22,6 +22,14 @@
 
 namespace valkey_search::query {
 
+void SeedContentFetch(SearchParameters &params,
+                      std::vector<indexes::Neighbor> candidates) {
+  // Every candidate is a global winner: resolve content for all of them.
+  params.content_limit.reset();
+  params.search_result.neighbors = std::move(candidates);
+  params.search_result.total_count = params.search_result.neighbors.size();
+}
+
 void ResolveContent(std::unique_ptr<SearchParameters> params) {
   vmsdk::VerifyMainThread();
   // 1. Check cancellation
@@ -77,7 +85,7 @@ void ResolveContent(std::unique_ptr<SearchParameters> params) {
     return;
   }
   auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
-  const auto& attribute_data_type =
+  const auto &attribute_data_type =
       params->index_schema->GetAttributeDataType();
   size_t original_size = params->search_result.neighbors.size();
 

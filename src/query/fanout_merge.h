@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <optional>
 #include <utility>
+#include <vector>
 
 #include "src/coordinator/coordinator.pb.h"
 #include "src/indexes/scoring/scorer.h"
@@ -54,7 +55,7 @@ struct NeighborComparator {
 // marked content_omitted (bounded content fan-out) has no attribute_contents;
 // any other entry has them, possibly empty.
 inline indexes::Neighbor DecodeNeighborEntry(
-    coordinator::NeighborEntry &neighbor_entry) {
+    const coordinator::NeighborEntry &neighbor_entry) {
   std::optional<RecordsMap> attribute_contents;
   if (!neighbor_entry.content_omitted()) {
     auto &contents = attribute_contents.emplace();
@@ -84,7 +85,19 @@ inline indexes::Neighbor DecodeNeighborEntry(
       std::bit_cast<uint32_t>(neighbor_entry.distance()) !=
       std::bit_cast<uint32_t>(indexes::scoring::PositiveInf());
   neighbor.score = neighbor_entry.score();
+  neighbor.sequence_number = neighbor_entry.sequence_number();
   return neighbor;
+}
+
+// Decodes every entry of a repeated NeighborEntry field.
+template <typename Entries>
+std::vector<indexes::Neighbor> DecodeNeighborEntries(const Entries &entries) {
+  std::vector<indexes::Neighbor> neighbors;
+  neighbors.reserve(entries.size());
+  for (const auto &entry : entries) {
+    neighbors.push_back(DecodeNeighborEntry(entry));
+  }
+  return neighbors;
 }
 
 }  // namespace valkey_search::query::fanout

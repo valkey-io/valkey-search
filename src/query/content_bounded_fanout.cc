@@ -8,6 +8,7 @@
 #include "src/query/content_bounded_fanout.h"
 
 #include <algorithm>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -133,8 +134,8 @@ void CompleteQuery(std::unique_ptr<SearchParameters> parameters) {
 // candidate without content, a fetch round asks the owning shards for those
 // candidates' content. A requested candidate that comes back without content
 // no longer matches and is removed, which moves the window on to the next
-// candidates; so is every candidate of a shard whose fetch failed. Each fetch
-// round after the first follows such a removal, so the rounds end.
+// candidates; so is every candidate of a shard whose fetch failed. Each
+// candidate is fetched at most once, so the rounds end.
 class BoundedContentFanout
     : public std::enable_shared_from_this<BoundedContentFanout> {
  public:
@@ -194,7 +195,12 @@ class BoundedContentFanout
   // Starts the next fetch round, or completes the query when none is needed.
   void ContinueRecovery();
   void RankCandidates() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
-  void RemoveUnresolvableCandidates() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+  // The leading candidates a reply may draw from: the k nearest for a vector
+  // query (the rest are kept to replace winners that drop out), all of them
+  // otherwise.
+  size_t EligibleCount() const ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+  // Returns true if any candidate was removed.
+  bool RemoveUnresolvableCandidates() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
   // Builds the next fetch round; returns its request count (0: none needed).
   size_t PlanFetchRound() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
   void DropKeyOnlyCandidatesPastTheWindow()
@@ -220,6 +226,8 @@ class BoundedContentFanout
   size_t total_count_ ABSL_GUARDED_BY(mutex_){0};
   size_t outstanding_ ABSL_GUARDED_BY(mutex_);
   bool recovered_ ABSL_GUARDED_BY(mutex_){false};
+  // A fetch returned a recomputed score or distance, so the ranking is stale.
+  bool ranking_stale_ ABSL_GUARDED_BY(mutex_){false};
   // The current fetch round: the candidate each requested key belongs to.
   absl::flat_hash_map<absl::string_view, size_t> fetched_candidate_
       ABSL_GUARDED_BY(mutex_);
@@ -414,14 +422,17 @@ void BoundedContentFanout::OnSearchRoundComplete() {
 
 void BoundedContentFanout::RankCandidates() {
   std::sort(candidates_.begin(), candidates_.end(), MergesBefore);
-  const auto k = static_cast<size_t>(parameters_->k);
-  if (parameters_->IsVectorQuery() && candidates_.size() > k) {
-    candidates_.erase(candidates_.begin() + k, candidates_.end());
-  }
   if (parameters_->ScoreIsRelevance()) {
-    std::stable_sort(candidates_.begin(), candidates_.end(),
+    std::stable_sort(candidates_.begin(), candidates_.begin() + EligibleCount(),
                      RanksHigherByScore);
   }
+  ranking_stale_ = false;
+}
+
+size_t BoundedContentFanout::EligibleCount() const {
+  return parameters_->IsVectorQuery()
+             ? std::min(candidates_.size(), static_cast<size_t>(parameters_->k))
+             : candidates_.size();
 }
 
 size_t BoundedContentFanout::WindowEnd() const {
@@ -432,11 +443,12 @@ size_t BoundedContentFanout::WindowEnd() const {
       .end_index;
 }
 
-void BoundedContentFanout::RemoveUnresolvableCandidates() {
+bool BoundedContentFanout::RemoveUnresolvableCandidates() {
   // A requested candidate still without content no longer matches (or its
   // shard failed): like a result the reply path cannot resolve, it is dropped
   // and no longer counted. A failed shard's other key-only candidates cannot
   // be resolved either; they were never returned, so they are not counted.
+  const size_t before = candidates_.size();
   size_t dropped = 0;
   candidates_.erase(
       std::remove_if(candidates_.begin(), candidates_.end(),
@@ -450,10 +462,15 @@ void BoundedContentFanout::RemoveUnresolvableCandidates() {
                      }),
       candidates_.end());
   total_count_ -= std::min(dropped, total_count_);
+  return candidates_.size() != before;
 }
 
 size_t BoundedContentFanout::PlanFetchRound() {
-  RemoveUnresolvableCandidates();
+  // A removal moves the next candidates up; for a vector query it can also
+  // change which ones are eligible. A recomputed score can reorder them.
+  if (RemoveUnresolvableCandidates() || ranking_stale_) {
+    RankCandidates();
+  }
   pending_fetches_.clear();
   fetched_candidate_.clear();
   if (outcomes_.Failed() || cancellation_token_->IsCancelled()) {
@@ -461,9 +478,11 @@ size_t BoundedContentFanout::PlanFetchRound() {
   }
   std::vector<size_t> fetch_of_shard(targets_.size(), SIZE_MAX);
   size_t missing = 0;
-  const auto window =
-      SearchResult().GetSerializationRange(*parameters_, candidates_.size());
-  for (size_t i = window.start_index; i < window.end_index; ++i) {
+  // Every candidate up to the end of the reply window, not only those in it:
+  // a candidate inside the offset that no longer matches must not take up a
+  // place, as a shard's own revalidation would have kept it from doing.
+  const size_t window_end = WindowEnd();
+  for (size_t i = 0; i < window_end; ++i) {
     auto &candidate = candidates_[i];
     if (candidate.neighbor.attribute_contents.has_value()) {
       continue;
@@ -479,7 +498,12 @@ size_t BoundedContentFanout::PlanFetchRound() {
       pending_fetches_.push_back({candidate.shard, std::move(request)});
     }
     const absl::string_view key = candidate.neighbor.external_id->Str();
-    pending_fetches_[fetch].request->add_keys(key);
+    auto *entry = pending_fetches_[fetch].request->add_candidates();
+    entry->set_key(key);
+    entry->set_score(candidate.neighbor.score);
+    entry->set_distance(candidate.neighbor.distance);
+    entry->set_sequence_number(candidate.neighbor.sequence_number);
+    entry->set_content_omitted(true);
     fetched_candidate_.try_emplace(key, i);
     candidate.requested = true;
     ++missing;
@@ -566,13 +590,19 @@ void BoundedContentFanout::FetchLocally(
   auto fetch = std::make_unique<LocalContentFetch>(shared_from_this(), shard);
   auto status = coordinator::GRPCSearchRequestToParameters(
       request->query(), nullptr, fetch.get());
+  if (status.ok()) {
+    // The index is looked up by name: it must still be the one searched in
+    // the first round, as the remote fetch checks.
+    status = coordinator::CheckIndexConsistency(
+        request->query().index_fingerprint_version(), *fetch->index_schema);
+  }
   if (!status.ok()) {
     if (RecordFetchResult(shard, status, {}, nullptr)) {
       ContinueRecovery();
     }
     return;
   }
-  SeedContentFetch(*fetch, request->keys());
+  SeedContentFetch(*fetch, DecodeNeighborEntries(request->candidates()));
   ResolveContent(std::move(fetch));
 }
 
@@ -600,10 +630,20 @@ bool BoundedContentFanout::RecordFetchResult(
   }
   for (auto &neighbor : fetched) {
     auto it = fetched_candidate_.find(neighbor.external_id->Str());
-    if (it != fetched_candidate_.end()) {
-      candidates_[it->second].neighbor.attribute_contents =
-          std::move(neighbor.attribute_contents);
+    if (it == fetched_candidate_.end()) {
+      continue;
     }
+    auto &candidate = candidates_[it->second].neighbor;
+    // The shard recomputes a changed document's score or distance; keep it,
+    // as a shard's own revalidation would, and re-rank before the next round.
+    ranking_stale_ |= std::bit_cast<uint32_t>(candidate.score) !=
+                          std::bit_cast<uint32_t>(neighbor.score) ||
+                      std::bit_cast<uint32_t>(candidate.distance) !=
+                          std::bit_cast<uint32_t>(neighbor.distance);
+    candidate.score = neighbor.score;
+    candidate.distance = neighbor.distance;
+    candidate.has_vr_distance = neighbor.has_vr_distance;
+    candidate.attribute_contents = std::move(neighbor.attribute_contents);
   }
   CHECK_GT(outstanding_, 0u);
   return --outstanding_ == 0;
@@ -636,6 +676,8 @@ void BoundedContentFanout::Complete() {
     absl::MutexLock lock(&mutex_);
     const absl::Status status = outcomes_.Resolve();
     if (status.ok()) {
+      candidates_.erase(candidates_.begin() + EligibleCount(),
+                        candidates_.end());
       DropKeyOnlyCandidatesPastTheWindow();
       std::vector<indexes::Neighbor> neighbors;
       neighbors.reserve(candidates_.size());
@@ -661,6 +703,12 @@ std::optional<BoundedContentPlan> PlanBoundedContentFanout(
     const SearchParameters &parameters,
     const std::vector<vmsdk::cluster_map::NodeInfo> &targets) {
   if (!options::GetFanoutBoundedContent().GetValue()) {
+    return std::nullopt;
+  }
+  // A shard keeps at most this many results for content resolution, so a
+  // larger bound saves nothing; it would only grow the estimator's work.
+  if (FanoutContentPlanner::CandidateLimit(parameters) >
+      options::GetMaxNonVectorSearchResultsFetched().GetValue()) {
     return std::nullopt;
   }
   const RecoveryRateEstimator estimator(

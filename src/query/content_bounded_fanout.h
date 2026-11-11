@@ -20,8 +20,9 @@
 // longer counted, and the next candidate moves into the window, to be fetched
 // in turn if it has no content. A shard whose fetch fails (under partial
 // results) has its key-only candidates removed. So the reply is the window of
-// candidates that still match, as the single-round fan-out returns it, and
-// every round after the first follows a removal, which bounds the rounds.
+// candidates that still match, as the single-round fan-out returns it. A
+// fetched candidate keeps its recomputed score or distance and the ranking is
+// redone. Each candidate is fetched at most once, which bounds the rounds.
 //
 // Shard failures follow the single-round rules.
 

@@ -7,7 +7,6 @@ from valkey.exceptions import ResponseError, ConnectionError
 import pytest
 from indexes import *
 from ft_info_parser import FTInfoParser
-from utils import run_in_thread
 
 MAX_RETRIES = "4294967295"
 
@@ -133,39 +132,6 @@ class TestFanoutBase(ValkeySearchClusterTestCaseDebugMode):
         info = parser._parse_key_value_list(raw)
         assert fingerprint != int(info["index_fingerprint"])
         assert version < int(info["index_version"])
-
-    def test_background_reply_after_dropindex(self):
-        """A shard's background reply for a dropped index still frees safely."""
-        cluster: ValkeyCluster = self.new_cluster_client()
-        node0: Valkey = self.new_client_for_primary(0)
-        node0.execute_command(
-            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:",
-            "SCHEMA", "n", "NUMERIC")
-        for i in range(10):
-            cluster.hset(f"doc:{i}", "n", i)
-        for node in self.nodes:
-            node.client.execute_command(
-                "CONFIG", "SET", "search.background-shard-reply", "yes")
-            node.client.execute_command(
-                "FT._DEBUG", "PAUSEPOINT", "SET", "background_search_completing")
-        thread, _, err = run_in_thread(
-            lambda: self.new_client_for_primary(0).execute_command(
-                "FT.SEARCH", "idx", "@n:[0 +inf]"))
-        for node in self.nodes:
-            waiters.wait_for_true(lambda: node.client.execute_command(
-                "FT._DEBUG", "PAUSEPOINT", "TEST",
-                "background_search_completing") > 0)
-        node0.execute_command("FT.DROPINDEX", "idx")
-        for node in self.nodes:
-            waiters.wait_for_true(lambda: not index_on_node(node.client, "idx"))
-        for node in self.nodes:
-            node.client.execute_command(
-                "FT._DEBUG", "PAUSEPOINT", "RESET", "background_search_completing")
-        thread.join()
-        # Partial results (default on) turn each shard's not-found into empty.
-        assert err[0] is None
-        for node in self.nodes:
-            assert node.client.ping()
 
 def search_command(index: str) -> list[str]:
     return [

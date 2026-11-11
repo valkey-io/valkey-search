@@ -380,6 +380,100 @@ TEST_P(FlatHashMapNoRehashTest, TombstoneChurn) {
   }
 }
 
+// Deletes during a growth cycle leave the table nearly empty, then stop.
+// Whatever finishes the drain -- server cron's MigrateSome() or inserts alone
+// -- still shrinks the table, though no later erase tests for it.
+TEST_P(FlatHashMapNoRehashTest, ShrinksWhenGrowthDrainsNearlyEmpty) {
+  for (bool by_inserts : {false, true}) {
+    SCOPED_TRACE(by_inserts ? "drained by inserts" : "drained by MigrateSome");
+    CountedMap m;
+    int64_t next = 0;
+    for (; next < 50000; ++next) {
+      m[next] = next;
+    }
+    NoRehashChecker checker(m, 64);
+    // Insert until the next growth cycle starts, so bg_ is nearly full.
+    size_t cycles = Peer::Cycles(m);
+    while (Peer::Cycles(m) == cycles) {
+      ASSERT_LT(next, 1000000);
+      m[next] = next;
+      ++next;
+      ASSERT_NO_FATAL_FAILURE(checker.Check()) << next;
+    }
+    ASSERT_FALSE(Peer::Bg(m).empty());
+    const size_t grown_capacity = Peer::Fg(m).capacity();
+    // Keep 1 entry in 64. erase(iterator) migrates nothing, so the growth
+    // cycle is still draining.
+    const int64_t ingested = next;
+    for (auto it = m.begin(); it != m.end();) {
+      if (it->first % 64 != 0) {
+        m.erase(it++);
+      } else {
+        ++it;
+      }
+    }
+    ASSERT_FALSE(Peer::Bg(m).empty());
+    ASSERT_NO_FATAL_FAILURE(checker.Check());
+    const size_t kept = m.size();
+
+    // No erase from here on.
+    while (m.NeedsMigration()) {
+      ASSERT_LT(next, ingested + 100000);
+      if (by_inserts) {
+        m[next] = next;
+        ++next;
+      } else {
+        m.MigrateSome(1);
+      }
+      ASSERT_NO_FATAL_FAILURE(checker.Check());
+    }
+    // The growth cycle, then a shrink.
+    EXPECT_EQ(Peer::Cycles(m), cycles + 2);
+    EXPECT_LT(Peer::Fg(m).capacity(), grown_capacity / 4);
+    EXPECT_EQ(m.size(), kept + static_cast<size_t>(next - ingested));
+    for (int64_t i = 0; i < next; ++i) {
+      ASSERT_EQ(m.contains(i), i >= ingested || i % 64 == 0) << i;
+    }
+  }
+}
+
+// The reverse: deletes start a shrink, then ingest resumes. The shrink's
+// fg_ is reserved for twice the live entries, so inserts drain bg_ before
+// absl would have to rehash, and then grow the table again.
+TEST_P(FlatHashMapNoRehashTest, IngestDuringShrink) {
+  CountedMap m;
+  constexpr int64_t kPeak = 50000;
+  for (int64_t i = 0; i < kPeak; ++i) {
+    m[i] = i;
+  }
+  m.MigrateSome(SIZE_MAX);
+  NoRehashChecker checker(m, 64);
+  const size_t peak_capacity = Peer::Fg(m).capacity();
+  const size_t cycles = Peer::Cycles(m);
+  int64_t erased = 0;
+  while (Peer::Cycles(m) == cycles) {
+    ASSERT_LT(erased, kPeak);
+    EXPECT_EQ(m.erase(erased++), 1);
+    ASSERT_NO_FATAL_FAILURE(checker.Check()) << erased;
+  }
+  // A shrink started, and bg_ holds nearly every live entry.
+  ASSERT_FALSE(Peer::Bg(m).empty());
+  const size_t shrunk_capacity = Peer::Fg(m).capacity();
+  ASSERT_LT(shrunk_capacity, peak_capacity / 2);
+
+  // Ingest only, well past the shrunken table's capacity.
+  for (int64_t i = kPeak; i < 2 * kPeak; ++i) {
+    m[i] = i;
+    ASSERT_NO_FATAL_FAILURE(checker.Check()) << i;
+  }
+  EXPECT_GT(Peer::Cycles(m), cycles + 1);
+  EXPECT_GT(Peer::Fg(m).capacity(), shrunk_capacity);
+  EXPECT_EQ(m.size(), static_cast<size_t>(2 * kPeak - erased));
+  for (int64_t i = 0; i < 2 * kPeak; ++i) {
+    ASSERT_EQ(m.contains(i), i >= erased) << i;
+  }
+}
+
 TEST_P(FlatHashMapNoRehashTest, MoveMidCycle) {
   CountedMap a;
   for (int64_t i = 0; i < 100000; ++i) {

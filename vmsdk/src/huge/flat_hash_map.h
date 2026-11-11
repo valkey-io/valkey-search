@@ -611,11 +611,15 @@ class HugeHashTable {
                         " bg=", bg_.size());
   }
 
-  // Frees the drained background table.
+  // Frees the drained background table. Entries erased while it drained may
+  // have left the table eligible to shrink; only an erase from fg_ tests for
+  // that, so it is tested here too, and the shrink starts at the next insert,
+  // erase(key) or MigrateSome().
   void ResetBackground() {
     bg_ = Table();
     bg_it_ = bg_.end();
     bg_drained_ = false;
+    shrink_pending_ = shrink_pending_ || ShouldShrink();
     UpdateNeedsMigration();
   }
 
@@ -637,7 +641,8 @@ class HugeHashTable {
   size_t cycles_ = 0;
   // erase(iterator) emptied bg_ but left it allocated.
   bool bg_drained_ = false;
-  // erase(iterator) made the table eligible to shrink.
+  // The table became eligible to shrink while no erase(key) could start the
+  // shrink: in erase(iterator), or when a background drained.
   bool shrink_pending_ = false;
   // Mirrors !bg_.empty() || bg_drained_ || shrink_pending_ for other threads.
   std::atomic<bool> needs_migration_{false};

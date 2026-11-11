@@ -357,6 +357,8 @@ struct SearchParameters {
   // caller. Paranoid implementations of these functions could start with
   // the code: CHECK(this == self.get());
   //
+  // Before handing `self` to another thread, release main-only state.
+  //
   virtual void QueryCompleteBackground(
       std::unique_ptr<SearchParameters> self) = 0;
   virtual void QueryCompleteMainThread(

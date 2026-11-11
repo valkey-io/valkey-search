@@ -143,6 +143,40 @@ TEST_P(ThreadPoolTest, GracefulMarkForStop) {
   EXPECT_FALSE(thread_pool.MarkForStop(ThreadPool::StopMode::kGraceful).ok());
 }
 
+TEST_P(ThreadPoolTest, ScheduleOrReturn) {
+  auto priority = GetParam();
+  ThreadPool thread_pool("test-pool", 1);
+  thread_pool.StartWorkers();
+
+  // Accepted: the task runs on the pool.
+  absl::Notification ran;
+  auto refused = ScheduleOrReturn(
+      thread_pool,
+      [owned = std::make_unique<int>(7), &ran]() {
+        EXPECT_EQ(*owned, 7);
+        ran.Notify();
+      },
+      priority);
+  EXPECT_FALSE(refused.has_value());
+  ran.WaitForNotification();
+
+  // Refused: the task comes back intact and unrun.
+  VMSDK_EXPECT_OK(thread_pool.MarkForStop(ThreadPool::StopMode::kGraceful));
+  bool ran_after_stop = false;
+  auto returned = ScheduleOrReturn(
+      thread_pool,
+      [owned = std::make_unique<int>(8), &ran_after_stop]() {
+        EXPECT_EQ(*owned, 8);
+        ran_after_stop = true;
+      },
+      priority);
+  ASSERT_TRUE(returned.has_value());
+  EXPECT_FALSE(ran_after_stop);
+  (*returned)();
+  EXPECT_TRUE(ran_after_stop);
+  thread_pool.JoinWorkers();
+}
+
 TEST_P(ThreadPoolTest, SuspendAndResumeLongTask) {
   auto test = [](bool with_delay, ThreadPool::Priority priority) {
     ThreadPool thread_pool("test-pool", 3);

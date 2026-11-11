@@ -2037,18 +2037,10 @@ absl::Status ForcedMultiArmFailure(size_t arm_index) {
 absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
                          vmsdk::ThreadPool *thread_pool,
                          SearchMode search_mode) {
-  // The parameters are parked in a holder shared between this frame and the
-  // scheduled task. ThreadPool::Schedule refuses -- and destroys -- the task
-  // once the pool is in stop mode; because the holder outlives the task, a
-  // refusal hands the parameters back here instead of dropping them (and the
-  // completion callback they carry) inside a task that never runs. On the
-  // accepted path the task moves them out of the holder on its single run, so
-  // they are owned in exactly one place at any time.
-  auto holder = std::make_shared<std::unique_ptr<SearchParameters>>(
-      std::move(parameters));
-  const bool scheduled = thread_pool->Schedule(
-      [holder, search_mode]() mutable {
-        std::unique_ptr<SearchParameters> parameters = std::move(*holder);
+  // ScheduleOrReturn hands a refused task back so it is freed here.
+  auto refused = vmsdk::ScheduleOrReturn(
+      *thread_pool,
+      [parameters = std::move(parameters), search_mode]() mutable {
         auto res = Search(*parameters, search_mode);
         BACKGROUND_PAUSEPOINT("background_search_completing");
         parameters->search_result.status = res;
@@ -2067,13 +2059,9 @@ absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
         }
       },
       vmsdk::ThreadPool::Priority::kHigh);
-  if (!scheduled) {
-    // Reclaim and destroy the parameters here; the caller is told the search
-    // will never run so it can terminate whatever is waiting on it. Unavailable
-    // is deliberate: the only way Schedule refuses is a pool in stop mode, i.e.
-    // this node is shutting down, which the coordinator maps to gRPC
-    // UNAVAILABLE ("retry elsewhere") rather than a query defect.
-    parameters = std::move(*holder);
+  if (refused) {
+    // Refused: the pool is stopping (node shutdown), so the search won't run.
+    // Unavailable maps to gRPC UNAVAILABLE ("retry elsewhere"), not a defect.
     return absl::UnavailableError(kShuttingDownMsg);
   }
   return absl::OkStatus();

@@ -9,6 +9,7 @@
 
 #include <cstring>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "absl/cleanup/cleanup.h"
@@ -228,6 +229,44 @@ HashFieldRefState GetHashFieldRefState(ValkeyModuleKey *key_obj,
              : HashFieldRefState::kUnshared;
 }
 
+std::optional<long long> ExtractSingleIntegerArrayReply(
+    ValkeyModuleCallReply *reply) {
+  if (!reply || ValkeyModule_CallReplyType(reply) != VALKEYMODULE_REPLY_ARRAY) {
+    return std::nullopt;
+  }
+  ValkeyModuleCallReply *elem = ValkeyModule_CallReplyArrayElement(reply, 0);
+  if (!elem || ValkeyModule_CallReplyType(elem) != VALKEYMODULE_REPLY_INTEGER) {
+    return std::nullopt;
+  }
+  return ValkeyModule_CallReplyInteger(elem);
+}
+
+long long GetHashFieldExpiryMs(ValkeyModuleCtx *ctx,
+                               ValkeyModuleString *key_str,
+                               ValkeyModuleString *attr_str) {
+  if (!key_str) {
+    return -1;
+  }
+  auto reply = vmsdk::UniquePtrValkeyCallReply(ValkeyModule_Call(
+      ctx, "HPEXPIRETIME", "sccs", key_str, "FIELDS", "1", attr_str));
+  return ExtractSingleIntegerArrayReply(reply.get()).value_or(-1);
+}
+
+bool RestoreHashFieldExpiryMs(ValkeyModuleCtx *ctx, ValkeyModuleString *key_str,
+                              ValkeyModuleString *attr_str,
+                              long long expiry_ms) {
+  if (expiry_ms <= 0) {
+    return true;
+  }
+  KeyspaceEventManager::Instance().SetSuppressHexpireNotifications(true);
+  auto suppress_guard = absl::MakeCleanup([]() {
+    KeyspaceEventManager::Instance().SetSuppressHexpireNotifications(false);
+  });
+  auto expire_reply = vmsdk::UniquePtrValkeyCallReply(ValkeyModule_Call(
+      ctx, "HPEXPIREAT", "slccs", key_str, expiry_ms, "FIELDS", "1", attr_str));
+  return ExtractSingleIntegerArrayReply(expire_reply.get()).value_or(0) >= 1;
+}
+
 }  // namespace
 
 bool VectorRegistry::ShouldRetainMissingVector(
@@ -367,22 +406,34 @@ void VectorRegistry::OnSwapDB(const ValkeyModuleSwapDbInfo *swap_info) {
 }
 
 bool VectorRegistry::UnshareWithValkey(
-    ValkeyModuleKey *key_obj, absl::string_view attribute_identifier,
+    int db_num, ValkeyModuleString *key_str,
+    absl::string_view attribute_identifier,
     const indexes::VectorRecord &vector_record, size_t vector_size) {
   vmsdk::VerifyMainThread();
-  if (!hash_vector_sharing_ || !key_obj) {
+  if (!hash_vector_sharing_ || !key_str) {
     return false;
   }
+  vmsdk::ValkeySelectDbGuard db_guard(ctx_.get(), db_num);
   auto attr_str = vmsdk::MakeUniqueValkeyString(attribute_identifier);
-  if (GetHashFieldRefState(key_obj, attr_str.get()) !=
-      HashFieldRefState::kShared) {
+  const long long expiry_ms =
+      GetHashFieldExpiryMs(ctx_.get(), key_str, attr_str.get());
+  auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
+      ctx_.get(), key_str,
+      VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_WRITE);
+  if (!key_obj ||
+      ValkeyModule_KeyType(key_obj.get()) != VALKEYMODULE_KEYTYPE_HASH ||
+      GetHashFieldRefState(key_obj.get(), attr_str.get()) !=
+          HashFieldRefState::kShared) {
     return false;
   }
   auto raw_vec = vector_record.GetRawVector();
   auto val_str =
       vmsdk::MakeUniqueValkeyString(absl::string_view(raw_vec, vector_size));
-  return ValkeyModule_HashSet(key_obj, VALKEYMODULE_HASH_NONE, attr_str.get(),
-                              val_str.get(), nullptr) == VALKEYMODULE_OK;
+  ValkeyModule_HashSet(key_obj.get(), VALKEYMODULE_HASH_NONE, attr_str.get(),
+                       val_str.get(), nullptr);
+  key_obj.reset();
+  return RestoreHashFieldExpiryMs(ctx_.get(), key_str, attr_str.get(),
+                                  expiry_ms);
 }
 
 void VectorRegistry::OnKeyDeleted(int db_num, absl::string_view key) {
@@ -432,7 +483,6 @@ void VectorRegistry::MoveKey(
   }
 
   InternedStringPtr interned_dst_key;
-  vmsdk::UniqueValkeyOpenKey key_obj;
   for (const auto &[attr, action] : actions) {
     RegistryKey src_search_key{
         .key = src_key,
@@ -467,17 +517,8 @@ void VectorRegistry::MoveKey(
     } else if (hash_vector_sharing_) {
       // The attribute is no longer indexed at destination; materialize the
       // vector payload back to Valkey before untracking it.
-      if (!key_obj) {
-        vmsdk::ValkeySelectDbGuard db_guard(ctx_.get(), dst_db_num);
-        key_obj = vmsdk::MakeUniqueValkeyOpenKey(
-            ctx_.get(), dst_key,
-            VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_WRITE);
-      }
-      if (key_obj &&
-          ValkeyModule_KeyType(key_obj.get()) == VALKEYMODULE_KEYTYPE_HASH) {
-        UnshareWithValkey(key_obj.get(), attr->Str(), record->vector_record,
-                          record->size);
-      }
+      UnshareWithValkey(dst_db_num, dst_key, attr->Str(), record->vector_record,
+                        record->size);
     }
   }
 }
@@ -644,14 +685,21 @@ size_t VectorRegistry::ProcessPendingUnshares(uint32_t batch_size) {
       if (key_type == VALKEYMODULE_KEYTYPE_EMPTY) {
         continue;
       }
+      auto attr_str =
+          vmsdk::MakeUniqueValkeyString(rk.attribute_identifier->Str());
+      const bool is_shared =
+          key_type == VALKEYMODULE_KEYTYPE_HASH &&
+          GetHashFieldRefState(key_obj.get(), attr_str.get()) ==
+              HashFieldRefState::kShared;
+      key_obj.reset();
       auto record = tracked_it->second;
       RemoveFromTrackedKeysIndex(db_num, rk.key, rk.attribute_identifier);
       tracked_db_it->second.erase(tracked_it);
       if (tracked_db_it->second.empty()) {
         tracked_vectors_.erase(tracked_db_it);
       }
-      if (key_type == VALKEYMODULE_KEYTYPE_HASH) {
-        UnshareWithValkey(key_obj.get(), rk.attribute_identifier->Str(),
+      if (is_shared) {
+        UnshareWithValkey(db_num, key_str.get(), rk.attribute_identifier->Str(),
                           record.vector_record, record.size);
       }
       continue;

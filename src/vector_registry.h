@@ -238,7 +238,7 @@ class VectorRegistry {
   void EraseTrackedRecordsForKey(int db_num, absl::string_view key);
   // Replaces a shared string memory reference in the Valkey Hash data model
   // with an independent owned copy.
-  bool UnshareWithValkey(ValkeyModuleKey *key_obj,
+  bool UnshareWithValkey(int db_num, ValkeyModuleString *key_str,
                          absl::string_view attribute_identifier,
                          const indexes::VectorRecord &vector_record,
                          size_t vector_size);

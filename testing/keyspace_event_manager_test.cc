@@ -1077,6 +1077,56 @@ TEST_F(KeyspaceEventManagerTest,
     EXPECT_EQ(registry.GetStats().entry_cnt, remaining);
   }
 }
+
+TEST_F(KeyspaceEventManagerTest,
+       SetSuppressHexpireNotificationsSuppressesOnlyHexpireEvents) {
+  auto keyspace_event_manager =
+      std::make_unique<TestableKeyspaceEventManager>();
+  auto mock_sub = std::make_unique<MockKeyspaceEventSubscription>();
+  auto mock_attr_type = std::make_unique<MockAttributeDataType>();
+  std::vector<std::string> prefixes = {"doc:"};
+
+  EXPECT_CALL(*mock_attr_type, GetValkeyEventTypes())
+      .WillRepeatedly(Return(VALKEYMODULE_NOTIFY_ALL));
+  EXPECT_CALL(*mock_sub, GetAttributeDataType())
+      .WillRepeatedly(ReturnRef(*mock_attr_type));
+  EXPECT_CALL(*mock_sub, GetKeyPrefixes()).WillRepeatedly(ReturnRef(prefixes));
+  VMSDK_EXPECT_OK(
+      keyspace_event_manager->InsertSubscription(&fake_ctx_, mock_sub.get()));
+
+  auto key_str = vmsdk::MakeUniqueValkeyString("doc:1");
+  keyspace_event_manager->SetSuppressHexpireNotifications(true);
+
+  EXPECT_CALL(*mock_sub,
+              OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_HASH,
+                                     testing::StrEq("hexpire"), key_str.get()))
+      .Times(0);
+  EXPECT_CALL(*mock_sub,
+              OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_HASH,
+                                     testing::StrEq("hexpired"), key_str.get()))
+      .Times(1);
+  EXPECT_CALL(*mock_sub,
+              OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_GENERIC,
+                                     testing::StrEq("del"), key_str.get()))
+      .Times(1);
+
+  keyspace_event_manager->NotifySubscribers(
+      &fake_ctx_, VALKEYMODULE_NOTIFY_HASH, "hexpire", key_str.get());
+  keyspace_event_manager->NotifySubscribers(
+      &fake_ctx_, VALKEYMODULE_NOTIFY_HASH, "hexpired", key_str.get());
+  keyspace_event_manager->NotifySubscribers(
+      &fake_ctx_, VALKEYMODULE_NOTIFY_GENERIC, "del", key_str.get());
+
+  keyspace_event_manager->SetSuppressHexpireNotifications(false);
+  EXPECT_CALL(*mock_sub,
+              OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_HASH,
+                                     testing::StrEq("hexpire"), key_str.get()))
+      .Times(1);
+  keyspace_event_manager->NotifySubscribers(
+      &fake_ctx_, VALKEYMODULE_NOTIFY_HASH, "hexpire", key_str.get());
+
+  VMSDK_EXPECT_OK(keyspace_event_manager->RemoveSubscription(mock_sub.get()));
+}
 }  // namespace
 
 }  // namespace valkey_search

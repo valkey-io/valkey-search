@@ -2021,8 +2021,8 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         # VectorRegistry still holds the tracked record when MoveKey runs)
         self.client.hset("doc:1", mapping={"vec": vector(1), "other": "x"})
         waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 1)
-        self.client.execute_command("HPEXPIRE", "doc:1", 80, "FIELDS", 1, "vec")
-        time.sleep(0.15)
+        self.client.execute_command("HPEXPIRE", "doc:1", 400, "FIELDS", 1, "vec")
+        time.sleep(0.5)
         assert self.registry_stat("entry_cnt") == 1
         self.client.rename("doc:1", "outside:1")
         assert self.client.ping()
@@ -2115,6 +2115,48 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0)
         assert self.client.get("doc:0") == b"plain-string-value"
         index.drop(self.client)
+
+    def test_unshare_keeps_field_ttl(self):
+        """Unsharing a vector field must preserve its HEXPIRE TTL.
+
+        Stimulus: index a hash key, set a field TTL on the vector with HEXPIRE,
+        then drop the index. UnshareWithValkey rewrites the field with
+        ValkeyModule_HashSet(..., VALKEYMODULE_HASH_NONE, ...), which passes
+        EXPIRY_NONE to hashTypeSet and overwrites the entry's expiry metadata.
+
+        Expected: the field's value and its TTL both survive the unshare.
+        """
+        index = self.build_index()
+        index.create(self.client)
+        self.client.hset("doc:0", mapping={"vec": vector(0)})
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 1)
+        self.client.execute_command("HEXPIRE", "doc:0", 3600, "FIELDS", 1, "vec")
+        assert 3590 <= self.client.execute_command("HTTL", "doc:0", "FIELDS", 1, "vec")[0] <= 3600
+
+        index.drop(self.client)
+        self.wait_for_unshare_drain()
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0)
+
+        assert self.client.hget("doc:0", "vec") == vector(0)
+        ttl = self.client.execute_command("HTTL", "doc:0", "FIELDS", 1, "vec")[0]
+        assert ttl > 0, f"unshare cleared the field TTL (HTTL={ttl})"
+
+    def test_rename_out_of_prefix_keeps_field_ttl(self):
+        """RENAME of an indexed key out of the index prefix unshares the field
+        without dropping its per-field TTL."""
+        index = self.build_index()
+        index.create(self.client)
+        self.client.hset("doc:0", mapping={"vec": vector(0)})
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 1)
+        self.client.execute_command("HEXPIRE", "doc:0", 3600, "FIELDS", 1, "vec")
+        assert 3590 <= self.client.execute_command("HTTL", "doc:0", "FIELDS", 1, "vec")[0] <= 3600
+
+        self.client.rename("doc:0", "outside:0")
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0)
+
+        assert self.client.hget("outside:0", "vec") == vector(0)
+        ttl = self.client.execute_command("HTTL", "outside:0", "FIELDS", 1, "vec")[0]
+        assert ttl > 0, f"rename unshare cleared the field TTL (HTTL={ttl})"
 
 
 class TestVectorRegistryPersistence(ValkeySearchTestCaseDebugMode):

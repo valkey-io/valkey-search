@@ -35,6 +35,7 @@ constexpr absl::string_view kExpiredEvent = "expired";
 constexpr absl::string_view kEvictedEvent = "evicted";
 constexpr absl::string_view kRestoreEvent = "restore";
 constexpr absl::string_view kCopyToEvent = "copy_to";
+constexpr absl::string_view kHexpireEvent = "hexpire";
 
 inline bool IsMoveFromEvent(const char *event) {
   return event && (event == kRenameFromEvent || event == kMoveFromEvent);
@@ -164,6 +165,9 @@ void KeyspaceEventManager::ProcessMoveNotification(ValkeyModuleCtx *ctx,
 void KeyspaceEventManager::NotifySubscribers(ValkeyModuleCtx *ctx, int type,
                                              const char *event,
                                              ValkeyModuleString *key) {
+  if (suppress_hexpire_notifications_ && event && event == kHexpireEvent) {
+    return;
+  }
   if (IsMoveFromEvent(event)) {
     moved_src_key_ = vmsdk::RetainUniqueValkeyString(key);
     src_db_num_ = ValkeyModule_GetSelectedDb(ctx);

@@ -115,6 +115,9 @@ std::vector<vmsdk::cluster_map::NodeInfo> Targets(size_t n) {
   return std::vector<vmsdk::cluster_map::NodeInfo>(n);
 }
 
+// The planner tests build search parameters, which use the module mock.
+class FanoutContentPlannerTest : public ValkeySearchTest {};
+
 // Always estimates `value`, to test the planner apart from the estimator.
 class FixedEstimator : public ContentLimitEstimator {
  public:
@@ -130,7 +133,7 @@ class FixedEstimator : public ContentLimitEstimator {
   uint64_t value_;
 };
 
-TEST(FanoutContentPlannerTest, PlansKCandidatesAndEstimatedContent) {
+TEST_F(FanoutContentPlannerTest, PlansKCandidatesAndEstimatedContent) {
   RecoveryRateEstimator estimator(0.10);
   auto parameters = TextSearch(0, 10);
   auto targets = Targets(4);
@@ -140,7 +143,7 @@ TEST(FanoutContentPlannerTest, PlansKCandidatesAndEstimatedContent) {
   EXPECT_THAT(plan->content_limits, ElementsAre(5, 5, 5, 5));
 }
 
-TEST(FanoutContentPlannerTest, CandidateLimitIsOffsetPlusCount) {
+TEST_F(FanoutContentPlannerTest, CandidateLimitIsOffsetPlusCount) {
   FixedEstimator estimator(1);
   auto parameters = TextSearch(5, 10);
   auto targets = Targets(2);
@@ -149,7 +152,7 @@ TEST(FanoutContentPlannerTest, CandidateLimitIsOffsetPlusCount) {
   EXPECT_EQ(plan->candidate_limit, 15u);
 }
 
-TEST(FanoutContentPlannerTest, VectorQueryUsesK) {
+TEST_F(FanoutContentPlannerTest, VectorQueryUsesK) {
   FixedEstimator estimator(1);
   BoundableSearchParameters parameters;
   parameters.attribute_alias = "vec";
@@ -161,21 +164,21 @@ TEST(FanoutContentPlannerTest, VectorQueryUsesK) {
   EXPECT_EQ(plan->candidate_limit, 20u);
 }
 
-TEST(FanoutContentPlannerTest, NoPlanWhenNothingIsSaved) {
+TEST_F(FanoutContentPlannerTest, NoPlanWhenNothingIsSaved) {
   FixedEstimator estimator(10);
   auto parameters = TextSearch(0, 10);
   auto targets = Targets(4);
   EXPECT_FALSE(FanoutContentPlanner(estimator).Plan(parameters, targets));
 }
 
-TEST(FanoutContentPlannerTest, NoPlanForASingleTarget) {
+TEST_F(FanoutContentPlannerTest, NoPlanForASingleTarget) {
   FixedEstimator estimator(1);
   auto parameters = TextSearch(0, 10);
   auto targets = Targets(1);
   EXPECT_FALSE(FanoutContentPlanner(estimator).Plan(parameters, targets));
 }
 
-TEST(FanoutContentPlannerTest, IneligibleShapes) {
+TEST_F(FanoutContentPlannerTest, IneligibleShapes) {
   auto no_content = TextSearch(0, 10);
   no_content.no_content = true;
   EXPECT_FALSE(FanoutContentPlanner::IsEligible(no_content));
@@ -203,7 +206,7 @@ TEST(FanoutContentPlannerTest, IneligibleShapes) {
   EXPECT_TRUE(FanoutContentPlanner::IsEligible(TextSearch(0, 10)));
 }
 
-TEST(FanoutContentPlannerTest, SharesFollowSlotOwnership) {
+TEST_F(FanoutContentPlannerTest, SharesFollowSlotOwnership) {
   // 3/4 of the slots on one shard, 1/4 on the other.
   vmsdk::cluster_map::ShardInfo big;
   big.owned_slots = {{0, 12287}};
@@ -223,7 +226,7 @@ TEST(FanoutContentPlannerTest, SharesFollowSlotOwnership) {
   EXPECT_GT(plan->content_limits[0], plan->content_limits[1]);
 }
 
-TEST(FanoutContentPlannerTest, UnknownSlotOwnershipFallsBackToEqualShares) {
+TEST_F(FanoutContentPlannerTest, UnknownSlotOwnershipFallsBackToEqualShares) {
   vmsdk::cluster_map::ShardInfo known;
   known.owned_slots = {{0, 12287}};
   auto targets = Targets(2);

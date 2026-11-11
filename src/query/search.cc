@@ -57,7 +57,6 @@
 #include "src/valkey_search_options.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/debug.h"
-#include "vmsdk/src/huge/flat_hash_map.h"
 #include "vmsdk/src/info.h"
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
@@ -1979,9 +1978,6 @@ absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
   auto &time_sliced_mutex = parameters.index_schema->GetTimeSlicedMutex();
   vmsdk::ReaderMutexLock lock(&time_sliced_mutex);
   ++Metrics::GetStats().time_slice_queries;
-  // Every query, local or remote, drains hash-table backgrounds from here, so
-  // they finish even while traffic is read-only. The tests are lock-free.
-  parameters.index_schema->ScheduleMigration(vmsdk::HugeMapQueryMigrateBatch());
   // Handle OOM for search requests, defends against request
   // coming from the coordinator
   if (search_mode == SearchMode::kRemote) {

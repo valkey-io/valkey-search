@@ -50,9 +50,9 @@ void UnreserveRegion(char *base, size_t bytes);
 // is materialized and no memory is reported.
 absl::Status Materialize(char *p, size_t len);
 
-// Drops the pages of a materialized [p, p + len) and makes it inaccessible.
-// The range keeps its placement policy for later re-materialization.
-void Release(char *p, size_t len);
+// Unmaps a region returned by ReserveRegion whose whole length is
+// materialized, and stops reporting its memory.
+void ReleaseRegion(char *base, size_t bytes);
 
 // Bytes currently materialized by all regions (the "huge_page_region_bytes"
 // dev info field).

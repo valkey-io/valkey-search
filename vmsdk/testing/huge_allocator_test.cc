@@ -18,37 +18,30 @@
 namespace vmsdk {
 namespace {
 
-using ::testing::_;
-
 constexpr size_t kHugePage = huge_page_slab::kHugePageBytes;
 
 class HugeAllocatorTest : public ValkeyTest {
  protected:
   void SetUp() override {
     ValkeyTest::SetUp();
-    ON_CALL(*kMockValkeyModule, IncrExternalMemory(_))
-        .WillByDefault([this](size_t bytes) {
-          external_ += bytes;
-          return VALKEYMODULE_OK;
-        });
-    ON_CALL(*kMockValkeyModule, DecrExternalMemory(_))
-        .WillByDefault([this](size_t bytes) {
-          external_ -= bytes;
-          return VALKEYMODULE_OK;
-        });
+    external_baseline_ = test_external_memory_bytes.load();
   }
 
-  int64_t external_{0};
+  // Bytes reported through Incr/DecrExternalMemory since SetUp.
+  int64_t external() const {
+    return test_external_memory_bytes.load() - external_baseline_;
+  }
+  int64_t external_baseline_{0};
 };
 
 TEST_F(HugeAllocatorTest, SmallRequestsUseHeap) {
   HugeAllocator<uint64_t> alloc;
   constexpr size_t kN = kHugePage / sizeof(uint64_t) - 1;
   uint64_t *p = alloc.allocate(kN);
-  EXPECT_EQ(external_, 0);
+  EXPECT_EQ(external(), 0);
   p[kN - 1] = 1;
   alloc.deallocate(p, kN);
-  EXPECT_EQ(external_, 0);
+  EXPECT_EQ(external(), 0);
 }
 
 TEST_F(HugeAllocatorTest, LargeRequestsUseHugeRegions) {
@@ -56,11 +49,11 @@ TEST_F(HugeAllocatorTest, LargeRequestsUseHugeRegions) {
   for (size_t bytes : {kHugePage, kHugePage + 1, 5 * kHugePage - 3}) {
     char *p = alloc.allocate(bytes);
     EXPECT_EQ(reinterpret_cast<uintptr_t>(p) % kHugePage, 0);
-    EXPECT_EQ(external_, huge_page_slab::RoundUpToPage(bytes));
+    EXPECT_EQ(external(), huge_page_slab::RoundUpToPage(bytes));
     p[0] = 1;
     p[bytes - 1] = 1;
     alloc.deallocate(p, bytes);
-    EXPECT_EQ(external_, 0);
+    EXPECT_EQ(external(), 0);
   }
 }
 
@@ -87,7 +80,7 @@ TEST_F(HugeAllocatorTest, LargeRequestsUseHeapWithoutExternalMemoryApi) {
   ValkeyModule_DecrExternalMemory = decr;
   EXPECT_TRUE(HugeAllocator<char>::UsesHugeRegion(kHugePage));
   EXPECT_FALSE(HugeAllocator<char>::UsesHugeRegion(kHugePage - 1));
-  EXPECT_EQ(external_, 0);
+  EXPECT_EQ(external(), 0);
 }
 
 TEST_F(HugeAllocatorTest, VectorGrowsAcrossThreshold) {
@@ -96,12 +89,12 @@ TEST_F(HugeAllocatorTest, VectorGrowsAcrossThreshold) {
     for (int i = 0; i < 2 * int(kHugePage / sizeof(int)); ++i) {
       v.push_back(i);
     }
-    EXPECT_GT(external_, 0);
+    EXPECT_GT(external(), 0);
     for (int i = 0; i < int(v.size()); ++i) {
       ASSERT_EQ(v[i], i);
     }
   }
-  EXPECT_EQ(external_, 0);
+  EXPECT_EQ(external(), 0);
 }
 
 TEST_F(HugeAllocatorTest, RebindAndEquality) {
@@ -118,7 +111,7 @@ TEST_F(HugeAllocatorTest, OversizedRequestThrows) {
   EXPECT_THROW(alloc.allocate(alloc.max_size() + 1), std::bad_array_new_length);
   // Passes max_size() but exceeds the address space.
   EXPECT_THROW(alloc.allocate(size_t{1} << 59), std::bad_alloc);
-  EXPECT_EQ(external_, 0);
+  EXPECT_EQ(external(), 0);
 }
 
 }  // namespace

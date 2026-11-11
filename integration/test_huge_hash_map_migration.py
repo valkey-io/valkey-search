@@ -2,12 +2,12 @@
 Advisory HugeFlatHashMap migration (vmsdk/src/huge/flat_hash_map.h).
 
 While a table grows it keeps its old table (the background) and moves entries
-out of it a few at a time. Besides each mutation's own moves, "advisory"
-callers -- ingest, queries and server cron -- move more, so backgrounds finish
-even when traffic stops. The controlled variable HugeMapAdvisoryMigration turns
-all of those off, which lets a test leave backgrounds in place and then turn
-one source back on at a time. The dev INFO field huge_hash_maps_migrating
-counts the tables that still have a background.
+out of it a few at a time. Besides each mutation's own moves, server cron moves
+more for the main-thread tables it owns, so their backgrounds finish even when
+traffic stops. The controlled variable HugeMapAdvisoryMigration turns cron's
+moves off, which lets a test leave backgrounds in place and then turn them back
+on. The dev INFO field huge_hash_maps_migrating counts the tables that still
+have a background.
 """
 
 import time
@@ -44,10 +44,10 @@ class TestHugeHashMapMigration(ValkeySearchTestCaseDebugMode):
 
     def test_server_cron_drains_main_thread_maps(self):
         """
-        With every advisory caller off, ingest leaves backgrounds behind and
-        they stay. Turned back on with no traffic at all, only server cron
-        runs, and it drains the main-thread maps it owns (the string intern
-        store, and the vector registry's tables).
+        With cron's migration off, ingest leaves backgrounds behind and they
+        stay. Turned back on with no traffic at all, server cron drains the
+        main-thread maps it owns (the string intern store, and the vector
+        registry's tables).
         """
         client: Valkey = self.server.get_new_client()
         _advisory_migration(client, "no")

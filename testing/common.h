@@ -527,7 +527,7 @@ inline void SetDebugMode(bool enabled) {
 }
 
 // While alive, every HugeFlatHashMap/Set migration batch is 1, so hash-table
-// backgrounds linger for tests of the advisory drains. Restores the defaults
+// backgrounds linger for tests of the server cron drain. Restores the defaults
 // and turns debug mode off when destroyed.
 class MinimalHugeMapMigration {
  public:
@@ -547,10 +547,6 @@ class MinimalHugeMapMigration {
  private:
   static std::vector<vmsdk::config::Number *> Configs() {
     return {&vmsdk::GetHugeFlatHashMapMigrateBatch(),
-            &vmsdk::GetHugeFlatHashMapAdvisoryMigrateBatch(),
-            &vmsdk::GetHugeFlatHashMapKeyInfoMigrateBatch(),
-            &vmsdk::GetHugeFlatHashMapIngestMigrateBatch(),
-            &vmsdk::GetHugeFlatHashMapQueryMigrateBatch(),
             &vmsdk::GetHugeFlatHashMapCronMigrateBatch()};
   }
 };

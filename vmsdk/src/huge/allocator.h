@@ -94,8 +94,7 @@ class HugeAllocator {
              0u);
     size_t region = huge_page_slab::RoundUpToPage(bytes);
     auto base = reinterpret_cast<char *>(p);
-    huge_page_slab::Release(base, region);
-    huge_page_slab::UnreserveRegion(base, region);
+    huge_page_slab::ReleaseRegion(base, region);
   }
 };
 

@@ -195,21 +195,14 @@ absl::Status Materialize(char *p, size_t len) {
   return absl::OkStatus();
 }
 
-void Release(char *p, size_t len) {
-#ifdef __linux__
-  // Drop the pages but keep the mapping, so the placement policy still holds
-  // if the range is materialized again.
-  madvise(p, len, MADV_DONTNEED);
-  mprotect(p, len, PROT_NONE);
-#else
-  mmap(p, len, PROT_NONE,
-       MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED, -1, 0);
-#endif
+void ReleaseRegion(char *base, size_t bytes) {
+  // munmap drops the pages and the mapping in one call.
+  munmap(base, bytes);
   if (ValkeyModule_DecrExternalMemory) {
-    ValkeyModule_DecrExternalMemory(len);
+    ValkeyModule_DecrExternalMemory(bytes);
   }
-  ReportFreeMemorySize(len);
-  materialized_bytes.fetch_sub(len, std::memory_order_relaxed);
+  ReportFreeMemorySize(bytes);
+  materialized_bytes.fetch_sub(bytes, std::memory_order_relaxed);
 }
 
 }  // namespace vmsdk::huge_page_slab

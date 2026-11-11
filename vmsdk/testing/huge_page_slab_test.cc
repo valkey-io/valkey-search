@@ -20,27 +20,20 @@
 namespace vmsdk::huge_page_slab {
 namespace {
 
-using ::testing::_;
-
 constexpr size_t kHugePage = kHugePageBytes;
 
 class HugePageSlabTest : public ValkeyTest {
  protected:
   void SetUp() override {
     ValkeyTest::SetUp();
-    ON_CALL(*kMockValkeyModule, IncrExternalMemory(_))
-        .WillByDefault([this](size_t bytes) {
-          external_ += bytes;
-          return VALKEYMODULE_OK;
-        });
-    ON_CALL(*kMockValkeyModule, DecrExternalMemory(_))
-        .WillByDefault([this](size_t bytes) {
-          external_ -= bytes;
-          return VALKEYMODULE_OK;
-        });
+    external_baseline_ = test_external_memory_bytes.load();
   }
 
-  int64_t external_{0};
+  // Bytes reported through Incr/DecrExternalMemory since SetUp.
+  int64_t external() const {
+    return test_external_memory_bytes.load() - external_baseline_;
+  }
+  int64_t external_baseline_{0};
 };
 
 TEST_F(HugePageSlabTest, RoundUpToPage) {
@@ -71,9 +64,8 @@ TEST_F(HugePageSlabTest, MaterializedBytesTracksRegions) {
   EXPECT_EQ(MaterializedBytes(), before);
   VMSDK_EXPECT_OK(Materialize(*base, bytes));
   EXPECT_EQ(MaterializedBytes(), before + static_cast<int64_t>(bytes));
-  Release(*base, bytes);
+  ReleaseRegion(*base, bytes);
   EXPECT_EQ(MaterializedBytes(), before);
-  UnreserveRegion(*base, bytes);
 }
 
 TEST_F(HugePageSlabTest, ActiveThpMode) {
@@ -88,7 +80,7 @@ TEST_F(HugePageSlabTest, ReserveIsAlignedAndReportsNothing) {
   auto base = ReserveRegion(4 * kHugePage);
   ASSERT_TRUE(base.ok()) << base.status();
   EXPECT_EQ(reinterpret_cast<uintptr_t>(*base) % kHugePage, 0);
-  EXPECT_EQ(external_, 0);
+  EXPECT_EQ(external(), 0);
   UnreserveRegion(*base, 4 * kHugePage);
 }
 
@@ -97,12 +89,11 @@ TEST_F(HugePageSlabTest, MaterializeAndReleaseReportExactly) {
   auto base = ReserveRegion(kBytes);
   ASSERT_TRUE(base.ok()) << base.status();
   VMSDK_EXPECT_OK(Materialize(*base, kBytes));
-  EXPECT_EQ(external_, kBytes);
+  EXPECT_EQ(external(), kBytes);
   std::memset(*base, 0x5a, kBytes);
   EXPECT_EQ((*base)[kBytes - 1], 0x5a);
-  Release(*base, kBytes);
-  EXPECT_EQ(external_, 0);
-  UnreserveRegion(*base, kBytes);
+  ReleaseRegion(*base, kBytes);
+  EXPECT_EQ(external(), 0);
 }
 
 // A region whose length is not a whole number of huge pages.
@@ -112,35 +103,17 @@ TEST_F(HugePageSlabTest, PageRoundedRegion) {
   ASSERT_TRUE(base.ok()) << base.status();
   EXPECT_EQ(reinterpret_cast<uintptr_t>(*base) % kHugePage, 0);
   VMSDK_EXPECT_OK(Materialize(*base, bytes));
-  EXPECT_EQ(external_, bytes);
+  EXPECT_EQ(external(), bytes);
   std::memset(*base, 0x5a, bytes);
   EXPECT_EQ((*base)[bytes - 1], 0x5a);
-  Release(*base, bytes);
-  EXPECT_EQ(external_, 0);
-  UnreserveRegion(*base, bytes);
-}
-
-TEST_F(HugePageSlabTest, ReleaseThenRematerialize) {
-  constexpr size_t kBytes = 2 * kHugePage;
-  auto base = ReserveRegion(kBytes);
-  ASSERT_TRUE(base.ok()) << base.status();
-  VMSDK_EXPECT_OK(Materialize(*base + kHugePage, kHugePage));
-  (*base)[kHugePage] = 1;
-  Release(*base + kHugePage, kHugePage);
-  VMSDK_EXPECT_OK(Materialize(*base, kBytes));
-  EXPECT_EQ(external_, kBytes);
-  // Released pages come back zero-filled.
-  EXPECT_EQ((*base)[kHugePage], 0);
-  (*base)[kBytes - 1] = 7;
-  Release(*base, kBytes);
-  EXPECT_EQ(external_, 0);
-  UnreserveRegion(*base, kBytes);
+  ReleaseRegion(*base, bytes);
+  EXPECT_EQ(external(), 0);
 }
 
 TEST_F(HugePageSlabTest, ImpossibleReserveReturnsError) {
   auto base = ReserveRegion(size_t{1} << 62);
   EXPECT_EQ(base.status().code(), absl::StatusCode::kResourceExhausted);
-  EXPECT_EQ(external_, 0);
+  EXPECT_EQ(external(), 0);
 }
 
 TEST_F(HugePageSlabTest, NullExternalMemoryApiIsTolerated) {
@@ -150,8 +123,7 @@ TEST_F(HugePageSlabTest, NullExternalMemoryApiIsTolerated) {
   ASSERT_TRUE(base.ok()) << base.status();
   VMSDK_EXPECT_OK(Materialize(*base, kHugePage));
   (*base)[0] = 1;
-  Release(*base, kHugePage);
-  UnreserveRegion(*base, kHugePage);
+  ReleaseRegion(*base, kHugePage);
 }
 
 }  // namespace

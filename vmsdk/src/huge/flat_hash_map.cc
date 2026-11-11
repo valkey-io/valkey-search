@@ -21,11 +21,7 @@ namespace {
 
 constexpr long long kDefaultMigrateBatch = 8;
 constexpr long long kDefaultStartJitterPercent = 10;
-constexpr long long kDefaultAdvisoryMigrateBatch = 32;
 constexpr long long kDefaultCronMigrateBatch = 4096;
-constexpr long long kDefaultKeyInfoMigrateBatch = 512;
-constexpr long long kDefaultIngestMigrateBatch = 512;
-constexpr long long kDefaultQueryMigrateBatch = 4096;
 
 /// Register the "huge-hash-map-migrate-batch" config: the minimum number of
 /// entries a vmsdk::HugeFlatHashMap migrates per insertion or erase.
@@ -53,22 +49,8 @@ auto start_jitter_percent =
         })
         .Build();
 
-/// Register the "huge-hash-map-advisory-migrate-batch" config: the number of
-/// entries each advisory MigrateSome() call on the ingest and query paths
-/// moves: on the main thread, and at the start of each writer mutation task.
-auto advisory_migrate_batch =
-    config::NumberBuilder("huge-hash-map-advisory-migrate-batch",  // name
-                          kDefaultAdvisoryMigrateBatch,            // default
-                          1,                                       // min
-                          1 << 20)                                 // max
-        .Dev()
-        .WithModifyCallback([](long long value) {
-          internal::g_huge_map_advisory_migrate_batch = value;
-        })
-        .Build();
-
 /// Register the "huge-hash-map-cron-migrate-batch" config: the number of
-/// entries each server cron tick's advisory MigrateSome() call moves.
+/// entries each server cron tick's MigrateSome() call moves, per table.
 auto cron_migrate_batch =
     config::NumberBuilder("huge-hash-map-cron-migrate-batch",  // name
                           kDefaultCronMigrateBatch,            // default
@@ -80,53 +62,9 @@ auto cron_migrate_batch =
         })
         .Build();
 
-/// Register the "huge-hash-map-key-info-migrate-batch" config: the number of
-/// entries each advisory MigrateSome() call on a schema's db_key_info_ moves.
-/// Only the ingest and query paths drain that map, so it gets a bigger batch
-/// than the other main-thread maps.
-auto key_info_migrate_batch =
-    config::NumberBuilder("huge-hash-map-key-info-migrate-batch",  // name
-                          kDefaultKeyInfoMigrateBatch,             // default
-                          1,                                       // min
-                          1 << 20)                                 // max
-        .Dev()
-        .WithModifyCallback([](long long value) {
-          internal::g_huge_map_key_info_migrate_batch = value;
-        })
-        .Build();
-
-/// Register the "huge-hash-map-ingest-migrate-batch" config: the number of
-/// entries per map the writer task that ingest schedules moves. Smaller than
-/// the batch a query's task moves: during heavy ingest such tasks run back
-/// to back, holding the mutex the main thread takes for every mutation.
-auto ingest_migrate_batch =
-    config::NumberBuilder("huge-hash-map-ingest-migrate-batch",  // name
-                          kDefaultIngestMigrateBatch,            // default
-                          1,                                     // min
-                          1 << 20)                               // max
-        .Dev()
-        .WithModifyCallback([](long long value) {
-          internal::g_huge_map_ingest_migrate_batch = value;
-        })
-        .Build();
-
-/// Register the "huge-hash-map-query-migrate-batch" config: the number of
-/// entries per map the writer task that a query schedules moves.
-auto query_migrate_batch =
-    config::NumberBuilder("huge-hash-map-query-migrate-batch",  // name
-                          kDefaultQueryMigrateBatch,            // default
-                          1,                                    // min
-                          1 << 20)                              // max
-        .Dev()
-        .WithModifyCallback([](long long value) {
-          internal::g_huge_map_query_migrate_batch = value;
-        })
-        .Build();
-
-// When off, no advisory MigrateSome() runs (the ingest, query and server cron
-// callers); each mutation's own migration still does. For tests that need
-// backgrounds to stay put: FT._DEBUG CONTROLLED_VARIABLE SET
-// HugeMapAdvisoryMigration no.
+// When off, server cron runs no MigrateSome(); each mutation's own migration
+// still does. For tests that need backgrounds to stay put: FT._DEBUG
+// CONTROLLED_VARIABLE SET HugeMapAdvisoryMigration no.
 CONTROLLED_BOOLEAN(HugeMapAdvisoryMigration, true);
 
 DEV_INTEGER_COUNTER(huge, huge_hash_map_rehashes);
@@ -147,11 +85,7 @@ namespace internal {
 
 size_t g_huge_map_migrate_batch = kDefaultMigrateBatch;
 size_t g_huge_map_start_jitter_percent = kDefaultStartJitterPercent;
-size_t g_huge_map_advisory_migrate_batch = kDefaultAdvisoryMigrateBatch;
 size_t g_huge_map_cron_migrate_batch = kDefaultCronMigrateBatch;
-size_t g_huge_map_key_info_migrate_batch = kDefaultKeyInfoMigrateBatch;
-size_t g_huge_map_ingest_migrate_batch = kDefaultIngestMigrateBatch;
-size_t g_huge_map_query_migrate_batch = kDefaultQueryMigrateBatch;
 
 size_t HugeMapEarlyStart(size_t growth) {
   constexpr double kGoldenRatioFraction = 0.6180339887498949;
@@ -183,28 +117,12 @@ config::Number &GetHugeFlatHashMapStartJitterPercent() {
   return dynamic_cast<config::Number &>(*start_jitter_percent);
 }
 
-config::Number &GetHugeFlatHashMapAdvisoryMigrateBatch() {
-  return dynamic_cast<config::Number &>(*advisory_migrate_batch);
-}
-
 config::Number &GetHugeFlatHashMapCronMigrateBatch() {
   return dynamic_cast<config::Number &>(*cron_migrate_batch);
 }
 
-config::Number &GetHugeFlatHashMapKeyInfoMigrateBatch() {
-  return dynamic_cast<config::Number &>(*key_info_migrate_batch);
-}
-
-config::Number &GetHugeFlatHashMapIngestMigrateBatch() {
-  return dynamic_cast<config::Number &>(*ingest_migrate_batch);
-}
-
 bool HugeMapAdvisoryMigrationEnabled() {
   return HugeMapAdvisoryMigration.GetValue();
-}
-
-config::Number &GetHugeFlatHashMapQueryMigrateBatch() {
-  return dynamic_cast<config::Number &>(*query_migrate_batch);
 }
 
 }  // namespace vmsdk

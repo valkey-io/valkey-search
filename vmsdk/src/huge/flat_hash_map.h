@@ -41,17 +41,9 @@ extern size_t g_huge_map_migrate_batch;
 // without synchronization since it is only a tuning knob.
 extern size_t g_huge_map_start_jitter_percent;
 
-// Entries the advisory MigrateSome() callers move per call: on the ingest and
-// query paths, for an IndexSchema's db_key_info_ on those paths, in the writer
-// tasks that ingest and queries schedule, and in server cron. Written by
-// the "huge-hash-map-advisory-migrate-batch",
-// "huge-hash-map-key-info-migrate-batch", "huge-hash-map-ingest-migrate-batch",
-// "huge-hash-map-query-migrate-batch" and "huge-hash-map-cron-migrate-batch"
-// configs; read without synchronization since they are only tuning knobs.
-extern size_t g_huge_map_advisory_migrate_batch;
-extern size_t g_huge_map_key_info_migrate_batch;
-extern size_t g_huge_map_ingest_migrate_batch;
-extern size_t g_huge_map_query_migrate_batch;
+// Entries each server cron tick's MigrateSome() call moves. Written by the
+// "huge-hash-map-cron-migrate-batch" config; read without synchronization since
+// it is only a tuning knob.
 extern size_t g_huge_map_cron_migrate_batch;
 
 // Bumps the "huge_hash_map_rehashes" developer info field.
@@ -84,42 +76,14 @@ inline size_t HugeMapCapacityFor(size_t n) {
 
 config::Number &GetHugeFlatHashMapMigrateBatch();
 config::Number &GetHugeFlatHashMapStartJitterPercent();
-config::Number &GetHugeFlatHashMapAdvisoryMigrateBatch();
 config::Number &GetHugeFlatHashMapCronMigrateBatch();
-config::Number &GetHugeFlatHashMapKeyInfoMigrateBatch();
-config::Number &GetHugeFlatHashMapIngestMigrateBatch();
-config::Number &GetHugeFlatHashMapQueryMigrateBatch();
 
-// The number of entries an advisory MigrateSome() call on the ingest or query
-// path should move.
-inline size_t HugeMapAdvisoryMigrateBatch() {
-  return internal::g_huge_map_advisory_migrate_batch;
-}
-
-// The number of entries an advisory MigrateSome() call on an IndexSchema's
-// db_key_info_ should move.
-inline size_t HugeMapKeyInfoMigrateBatch() {
-  return internal::g_huge_map_key_info_migrate_batch;
-}
-
-// The number of entries per map the writer task that ingest schedules should
-// move.
-inline size_t HugeMapIngestMigrateBatch() {
-  return internal::g_huge_map_ingest_migrate_batch;
-}
-
-// Whether the advisory MigrateSome() callers (ingest, queries, server cron)
-// should run at all: the HugeMapAdvisoryMigration controlled variable.
+// Whether server cron's MigrateSome() calls should run at all: the
+// HugeMapAdvisoryMigration controlled variable.
 bool HugeMapAdvisoryMigrationEnabled();
 
-// The number of entries per map the writer task that a query schedules should
+// The number of entries each server cron tick's MigrateSome() call should
 // move.
-inline size_t HugeMapQueryMigrateBatch() {
-  return internal::g_huge_map_query_migrate_batch;
-}
-
-// The number of entries each server cron tick's advisory MigrateSome() call
-// should move.
 inline size_t HugeMapCronMigrateBatch() {
   return internal::g_huge_map_cron_migrate_batch;
 }
@@ -490,10 +454,12 @@ class HugeHashTable {
 
   // Called before an insertion of `key` into fg_.
   void PrepareInsert(const internal::Prehashed<key_type> &key) {
+    // Finish what erase(iterator) deferred; a shrink it starts leaves bg_
+    // non-empty, and `key` may now be there.
+    if (bg_.empty() && (bg_drained_ || shrink_pending_)) {
+      FinishDeferred();
+    }
     if (bg_.empty()) {
-      if (bg_drained_) {
-        ResetBackground();
-      }
       if (Budget() > early_start_ || fg_.contains(key)) {
         return;
       }

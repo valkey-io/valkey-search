@@ -26,7 +26,6 @@
 #include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
-#include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "absl/strings/strip.h"
 #include "absl/synchronization/notification.h"
@@ -46,7 +45,6 @@
 #include "src/indexes/vector_hnsw.h"
 #include "src/keyspace_event_manager.h"
 #include "src/metrics.h"
-#include "src/query/search.h"
 #include "src/schema_manager.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
@@ -1870,9 +1868,7 @@ class IndexSchemaFriendTest : public ValkeySearchTest {
   const std::string attribute_identifier{"hnsw_id"};
   InternedStringPtr key = StringInternStore::Intern("my_key_");
 
-  void MutateKey(const std::vector<float> &vector) { MutateKey(key, vector); }
-  void MutateKey(const InternedStringPtr &key,
-                 const std::vector<float> &vector) {
+  void MutateKey(const std::vector<float> &vector) {
     IndexSchema::MutatedAttributes mutated;
     mutated[attribute_identifier] = testing_infra::MakeAttributeData(
         *hnsw_index, key,
@@ -1892,13 +1888,6 @@ class IndexSchemaFriendTest : public ValkeySearchTest {
         index_schema->GetDbMutationSequenceNumber(key);
     return neighbors;
   }
-  bool IndexMigrationScheduled() const {
-    return index_schema->index_migration_scheduled_.load();
-  }
-  bool DbKeyInfoNeedsMigration() const {
-    return index_schema->db_key_info_.Get().NeedsMigration();
-  }
-  void QueriesDrainBackgrounds(bool reader_thread);
   void ExpectWriterQueueDrained() {
     WaitWorkerTasksAreCompleted(mutations_thread_pool);
     EXPECT_EQ(mutations_thread_pool.QueueSize(), 0);
@@ -3922,107 +3911,6 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   FakeSafeRDB rdb;
   EXPECT_TRUE(
       index_schema->SaveIndexExtension(RDBChunkOutputStream(&rdb)).ok());
-}
-
-// After ingest leaves backgrounds behind, queries alone drain them: each query
-// that finds work schedules one writer task for the per-index maps, whose dedup
-// flag is clear again once it has run, and migrates db_key_info_ -- inline when
-// the query runs on the main thread, through one RunByMain task at a time when
-// it runs on a reader thread. No new growth cycle starts.
-void IndexSchemaFriendTest::QueriesDrainBackgrounds(bool reader_thread) {
-  MinimalHugeMapMigration minimal_migration;
-  std::vector<float> vector(dimensions, 1.0f);
-  absl::string_view vector_bytes(reinterpret_cast<const char *>(vector.data()),
-                                 dimensions * sizeof(float));
-  int keys = 0;
-  while (keys < 64 || !index_schema->IndexMapsNeedMigration() ||
-         !DbKeyInfoNeedsMigration()) {
-    ASSERT_LT(keys, 100000);
-    vector[0] = keys;
-    MutateKey(StringInternStore::Intern(absl::StrCat("prefix1:", keys++)),
-              vector);
-    WaitWorkerTasksAreCompleted(mutations_thread_pool);
-  }
-  const auto rehashes = vmsdk::internal::GetHugeMapRehashCount();
-
-  std::vector<std::pair<ValkeyModuleEventLoopOneShotFunc, void *>> oneshots;
-  EXPECT_CALL(*kMockValkeyModule, EventLoopAddOneShot(testing::_, testing::_))
-      .WillRepeatedly(
-          [&](ValkeyModuleEventLoopOneShotFunc fn, void *data) -> int {
-            oneshots.push_back({fn, data});
-            return 0;
-          });
-  UnitTestSearchParameters params;
-  params.index_schema_name = index_schema_name_str;
-  params.index_schema = index_schema;
-  params.attribute_alias = attribute_identifier;
-  params.score_as = vmsdk::MakeUniqueValkeyString("__score");
-  params.dialect = 2;
-  params.k = 1;
-  params.ef = ef_runtime;
-  params.query = vector_bytes;
-  int queries = 0;
-  while (index_schema->IndexMapsNeedMigration() || DbKeyInfoNeedsMigration()) {
-    ASSERT_LT(queries++, 100000);
-    auto search = [&]() {
-      VMSDK_EXPECT_OK(query::Search(params, query::SearchMode::kLocal));
-    };
-    if (reader_thread) {
-      // Two queries before the main thread runs: the second finds the first's
-      // task still queued and posts no other.
-      std::thread([&]() {
-        search();
-        search();
-      }).join();
-      ASSERT_LE(oneshots.size(), 1u);
-    } else {
-      search();
-      ASSERT_TRUE(oneshots.empty());
-    }
-    for (auto [fn, data] : std::exchange(oneshots, {})) {
-      fn(data);
-    }
-    WaitWorkerTasksAreCompleted(mutations_thread_pool);
-    ASSERT_FALSE(IndexMigrationScheduled());
-  }
-  // With a batch of 1, draining took many tasks, so the flags were reset and
-  // set again between them.
-  EXPECT_GT(queries, 1);
-  EXPECT_EQ(vmsdk::internal::GetHugeMapRehashCount(), rehashes);
-}
-
-TEST_F(IndexSchemaFriendTest, MainThreadQueriesDrainBackgrounds) {
-  QueriesDrainBackgrounds(false);
-}
-
-TEST_F(IndexSchemaFriendTest, ReaderThreadQueriesDrainBackgrounds) {
-  QueriesDrainBackgrounds(true);
-}
-
-// A migration task still queued when its index is dropped finds the index gone
-// and does nothing.
-TEST_F(ValkeySearchTest, IndexMapMigrationAfterDropIsNoOp) {
-  vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
-  mutations_thread_pool.StartWorkers();
-  ValkeyModuleCtx fake_ctx;
-  std::vector<absl::string_view> key_prefixes = {"prefix:"};
-  auto index_schema =
-      MockIndexSchema::Create(&fake_ctx, "index_schema_name", key_prefixes,
-                              std::make_unique<HashAttributeDataType>(),
-                              &mutations_thread_pool)
-          .value();
-  absl::Notification release_writer;
-  mutations_thread_pool.Schedule(
-      [&release_writer]() { release_writer.WaitForNotification(); },
-      vmsdk::ThreadPool::Priority::kHigh);
-  index_schema->ScheduleIndexMapMigration(vmsdk::HugeMapQueryMigrateBatch());
-  std::weak_ptr<IndexSchema> weak_index_schema = index_schema;
-  index_schema.reset();
-  EXPECT_TRUE(weak_index_schema.expired());
-  release_writer.Notify();
-  WaitWorkerTasksAreCompleted(mutations_thread_pool);
-  EXPECT_EQ(mutations_thread_pool.QueueSize(), 0);
-  mutations_thread_pool.JoinWorkers();
 }
 
 }  // namespace valkey_search

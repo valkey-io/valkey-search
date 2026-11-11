@@ -96,23 +96,6 @@ uint64_t VectorFlat<T>::GetMaxLoadedLabel() const {
 }
 
 template <typename T>
-bool VectorFlat<T>::HashMapsNeedMigration() const {
-  return VectorBase::HashMapsNeedMigration() ||
-         algo_->dict_external_to_internal.NeedsMigration();
-}
-
-template <typename T>
-void VectorFlat<T>::MigrateHashMaps(size_t n) {
-  VectorBase::MigrateHashMaps(n);
-  absl::ReaderMutexLock lock(&resize_mutex_);
-  if (!algo_->dict_external_to_internal.NeedsMigration()) {
-    return;
-  }
-  std::unique_lock<std::mutex> index_lock(algo_->index_lock);
-  algo_->dict_external_to_internal.MigrateSome(n);
-}
-
-template <typename T>
 absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::LoadFromRDB(
     ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
     const data_model::VectorIndex &vector_index_proto,

@@ -135,4 +135,6 @@ if("${SAN_BUILD_LOWER}" STREQUAL "no")
     target_link_libraries(sharded_atomic_benchmark PUBLIC benchmark::benchmark)
     target_link_libraries(sharded_atomic_benchmark PUBLIC benchmark::benchmark_main)
     finalize_test_flags(sharded_atomic_benchmark)
+    # A benchmark, not a test: no assertions, and it saturates every core.
+    set_tests_properties(sharded_atomic_benchmark PROPERTIES DISABLED TRUE)
 endif()

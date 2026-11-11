@@ -53,7 +53,6 @@ struct HugeFlatHashMapTestPeer {
 
 namespace {
 
-using ::testing::_;
 using Peer = HugeFlatHashMapTestPeer;
 
 // Counts backing-array allocations, so an absl-initiated grow is visible.
@@ -91,16 +90,7 @@ class FlatHashMapTest : public ValkeyTest {
  protected:
   void SetUp() override {
     ValkeyTest::SetUp();
-    ON_CALL(*kMockValkeyModule, IncrExternalMemory(_))
-        .WillByDefault([this](size_t bytes) {
-          external_ += bytes;
-          return VALKEYMODULE_OK;
-        });
-    ON_CALL(*kMockValkeyModule, DecrExternalMemory(_))
-        .WillByDefault([this](size_t bytes) {
-          external_ -= bytes;
-          return VALKEYMODULE_OK;
-        });
+    external_baseline_ = test_external_memory_bytes.load();
     // The tuning configs are Dev() configs.
     SetDebugMode(true);
   }
@@ -126,7 +116,11 @@ class FlatHashMapTest : public ValkeyTest {
     VMSDK_EXPECT_OK(GetHugeFlatHashMapStartJitterPercent().SetValue(percent));
   }
 
-  int64_t external_{0};
+  // Bytes reported through Incr/DecrExternalMemory since SetUp.
+  int64_t external() const {
+    return test_external_memory_bytes.load() - external_baseline_;
+  }
+  int64_t external_baseline_{0};
 };
 
 // Inserts until a cycle leaves a non-empty background.
@@ -649,6 +643,9 @@ TEST_F(FlatHashMapTest, EveryInsertHashesOnce) {
 // A cycle start hashes nothing beyond the inserted key, and draining hashes
 // each migrated entry once, for its slot in the new table.
 TEST_F(FlatHashMapTest, MigrationHashesEachEntryOnce) {
+  if (absl::container_internal::SwisstableGenerationsEnabled()) {
+    GTEST_SKIP() << "absl rehashes randomly in sanitizer builds";
+  }
   SetBatch(8);
   HashCountedMap m;
   int64_t next = 0;
@@ -861,9 +858,9 @@ TEST_F(FlatHashMapTest, LargeMapUsesHugePages) {
     for (int64_t i = 0; i < 300000; ++i) {
       m[i] = i;
     }
-    EXPECT_GT(external_, 0);
+    EXPECT_GT(external(), 0);
   }
-  EXPECT_EQ(external_, 0);
+  EXPECT_EQ(external(), 0);
 }
 
 TEST_F(FlatHashMapTest, NeedsMigrationLifecycle) {
@@ -1008,6 +1005,33 @@ TEST_F(FlatHashMapTest, EraseIteratorDefersShrinkToMigrateSome) {
   m.MigrateSome(SIZE_MAX);
   EXPECT_FALSE(m.NeedsMigration());
   EXPECT_EQ(m.size(), 10);
+}
+
+// An insert, too, starts the shrink that erase(iterator) deferred, so the
+// table stops reporting NeedsMigration() without any MigrateSome() call.
+TEST_F(FlatHashMapTest, EraseIteratorDefersShrinkToInsert) {
+  Map m;
+  for (int64_t i = 0; i < 50000; ++i) {
+    m[i] = i;
+  }
+  m.MigrateSome(SIZE_MAX);
+  size_t capacity = Peer::Fg(m).capacity();
+  size_t cycles = Peer::Cycles(m);
+  while (m.size() > 10) {
+    m.erase(m.begin());
+  }
+  ASSERT_TRUE(m.NeedsMigration());
+  ASSERT_EQ(Peer::Cycles(m), cycles);
+  m[-1] = -1;
+  EXPECT_EQ(Peer::Cycles(m), cycles + 1);
+  EXPECT_LT(Peer::Fg(m).capacity(), capacity / 16);
+  int64_t next = -2;
+  while (m.NeedsMigration()) {
+    ASSERT_GT(next, -100) << "inserts never finished the shrink";
+    m[next] = next;
+    --next;
+  }
+  EXPECT_EQ(m.size(), static_cast<size_t>(10 - next - 1));
 }
 
 // The direct check before every insert into fg_: a migration into a full

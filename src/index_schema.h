@@ -312,32 +312,6 @@ class IndexSchema : public KeyspaceEventSubscription,
   void MarkAsDestructing();
   bool IsMarkedDestructing() const { return is_destructing_.load(); }
   void ProcessMultiQueue();
-
-  // Advisory HugeFlatHashMap/Set migration (see
-  // vmsdk/src/huge/flat_hash_map.h), so backgrounds drain even while traffic is
-  // read-only or a trickle.
-  //
-  // The one entry point, called for every ingested key (main thread) and at
-  // the start of every query's search (reader thread, or the main thread inside
-  // MULTI/Lua). The per-index maps get a ScheduleIndexMapMigration() task that
-  // moves `index_map_batch` entries per map: ingest passes the smaller ingest
-  // batch, since during heavy ingest those tasks run back to back. The
-  // main-thread maps are migrated inline on the main thread; from a reader
-  // thread, one RunByMain task is posted at a time. Server cron also drains the
-  // VectorRegistry and the intern store.
-  void ScheduleMigration(size_t index_map_batch);
-  // Main-thread maps: db_key_info_, this db's VectorRegistry tables and the
-  // string intern store.
-  void MigrateMainThreadMaps();
-  // Per-index maps: index_key_info_ and the vector indexes' maps. The test is
-  // lock-free and safe from any thread.
-  bool IndexMapsNeedMigration() const ABSL_NO_THREAD_SAFETY_ANALYSIS;
-  // Runs on a writer, in the time-sliced write phase; moves up to `n` entries
-  // per map.
-  void MigrateIndexMaps(size_t n) ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_)
-      ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
-  // Schedules MigrateIndexMaps() on the writer pool, at most one at a time.
-  void ScheduleIndexMapMigration(size_t n);
   uint64_t GetBackfillScannedKeyCount() const;
   uint64_t GetBackfillDbSize() const;
   InfoIndexPartitionData GetInfoIndexPartitionData() const;
@@ -564,11 +538,6 @@ class IndexSchema : public KeyspaceEventSubscription,
   // the corresponding time slice mutex phases. Within the write phase,
   // exclusion is provided by mutated_records_mutex_.
   IndexKeyInfoMap index_key_info_ ABSL_GUARDED_BY(mutated_records_mutex_);
-
-  // A ScheduleIndexMapMigration() task is queued and has not finished.
-  std::atomic<bool> index_migration_scheduled_{false};
-  // A ScheduleMigration() RunByMain task is queued and has not started.
-  std::atomic<bool> main_thread_migration_scheduled_{false};
 
   struct BackfillJob {
     BackfillJob() = delete;

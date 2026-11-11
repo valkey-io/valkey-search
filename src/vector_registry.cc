@@ -492,18 +492,6 @@ size_t VectorRegistry::ProcessPendingUnshares(uint32_t batch_size) {
   return processed;
 }
 
-void VectorRegistry::MigrateSome(int db_num, size_t n) {
-  vmsdk::VerifyMainThread();
-  if (auto it = tracked_vectors_.find(db_num);
-      it != tracked_vectors_.end() && it->second.NeedsMigration()) {
-    it->second.MigrateSome(n);
-  }
-  if (auto it = pending_unshares_.find(db_num);
-      it != pending_unshares_.end() && it->second.NeedsMigration()) {
-    it->second.MigrateSome(n);
-  }
-}
-
 size_t VectorRegistry::GetPendingUnsharesCount() const {
   vmsdk::VerifyMainThread();
   size_t count = 0;
@@ -517,7 +505,7 @@ void VectorRegistry::OnServerCronCallback(ValkeyModuleCtx *ctx,
                                           ValkeyModuleEvent eid,
                                           uint64_t subevent, void *data) {
   vmsdk::VerifyMainThread();
-  // Drain every db's tables, even when no query or ingest on this node would.
+  // Drain every db's tables, so they finish even without traffic.
   if (vmsdk::HugeMapAdvisoryMigrationEnabled()) {
     size_t n = vmsdk::HugeMapCronMigrateBatch();
     for (auto &[_, tracked] : tracked_vectors_) {

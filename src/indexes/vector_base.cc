@@ -558,6 +558,7 @@ void VectorBase::AdoptTrackedKeys(TrackedKeys &&tracked_keys) {
   absl::WriterMutexLock lock(&key_to_metadata_mutex_);
   tracked_metadata_by_key_ = std::move(tracked_keys.metadata_by_key);
   key_by_internal_id_ = std::move(tracked_keys.key_by_internal_id);
+  inc_id_ = GetMaxLoadedLabel() + 1;
 }
 
 std::optional<VectorRecord> VectorBase::ShareIfUnchangedSinceSave(

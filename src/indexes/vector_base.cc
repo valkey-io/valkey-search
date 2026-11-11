@@ -236,8 +236,11 @@ VectorBase::ComputeDistanceFromRecord(const InternedStringPtr &key,
 
 VectorBase::~VectorBase() {
   vmsdk::VerifyMainThread();
-  VectorRegistry::Instance().RemoveIndexKeys(
-      db_num_, interned_attribute_identifier_, std::move(key_by_internal_id_));
+  if (!pending_vector_population_) {
+    VectorRegistry::Instance().RemoveIndexKeys(db_num_,
+                                               interned_attribute_identifier_,
+                                               std::move(key_by_internal_id_));
+  }
 }
 
 absl::StatusOr<RecordResult> VectorBase::AddRecord(const InternedStringPtr &key,
@@ -489,8 +492,9 @@ absl::Status VectorBase::SaveTrackedKeys(
 
 absl::Status VectorBase::LoadTrackedKeys(
     ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
-    SupplementalContentChunkIter &&iter) {
+    SupplementalContentChunkIter &&iter, bool defer_keyspace_load) {
   absl::WriterMutexLock lock(&key_to_metadata_mutex_);
+  pending_vector_population_ = true;
 
   while (iter.HasNext()) {
     VMSDK_ASSIGN_OR_RETURN(auto metadata_str, iter.Next(),
@@ -506,7 +510,27 @@ absl::Status VectorBase::LoadTrackedKeys(
           .magnitude = tracked_key_metadata.magnitude()}});
     key_by_internal_id_.insert(
         {tracked_key_metadata.internal_id(), interned_key});
+  }
+  inc_id_ = GetMaxLoadedLabel() + 1;
+  if (defer_keyspace_load) {
+    return absl::OkStatus();
+  }
+  return PopulateVectorsFromDb(ctx, attribute_data_type);
+}
 
+absl::Status VectorBase::OnLoadingEnded(
+    ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type) {
+  absl::WriterMutexLock lock(&key_to_metadata_mutex_);
+  if (!pending_vector_population_) {
+    return absl::OkStatus();
+  }
+  return PopulateVectorsFromDb(ctx, attribute_data_type);
+}
+
+absl::Status VectorBase::PopulateVectorsFromDb(
+    ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type) {
+  pending_vector_population_ = false;
+  for (const auto &[interned_key, metadata] : tracked_metadata_by_key_) {
     auto key = vmsdk::MakeUniqueValkeyString(interned_key->Str());
     auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
         ctx, key.get(), VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
@@ -522,10 +546,9 @@ absl::Status VectorBase::LoadTrackedKeys(
     auto vector_record_with_size = VectorRegistry::Instance().DedupOrConstruct(
         interned_key, attribute_val.get(), attribute_data_type->ToProto(),
         db_num_, this);
-    auto &save_vector = GetVectorLockFree(tracked_key_metadata.internal_id());
+    auto &save_vector = GetVectorLockFree(metadata.internal_id);
     save_vector = std::move(vector_record_with_size.vector_record);
   }
-  inc_id_ = GetMaxLoadedLabel() + 1;
   return absl::OkStatus();
 }
 

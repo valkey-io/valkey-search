@@ -463,7 +463,12 @@ class VectorBase : public IndexBase {
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   absl::Status LoadTrackedKeys(ValkeyModuleCtx *ctx,
                                const AttributeDataType *attribute_data_type,
-                               SupplementalContentChunkIter &&iter);
+                               SupplementalContentChunkIter &&iter,
+                               bool defer_keyspace_load = false)
+      ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
+  absl::Status OnLoadingEnded(ValkeyModuleCtx *ctx,
+                              const AttributeDataType *attribute_data_type)
+      ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
 
   uint32_t GetMutationWeight() const override;
 
@@ -766,11 +771,15 @@ class VectorBase : public IndexBase {
       ABSL_GUARDED_BY(key_to_metadata_mutex_);
   uint64_t inc_id_ ABSL_GUARDED_BY(key_to_metadata_mutex_){0};
   mutable absl::Mutex key_to_metadata_mutex_;
+  absl::Status PopulateVectorsFromDb(
+      ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(key_to_metadata_mutex_);
   absl::StatusOr<std::pair<float, hnswlib::labeltype>>
   ComputeDistanceFromRecord(const InternedStringPtr &key,
                             absl::string_view query,
                             float query_magnitude) const;
   UniqueFixedSizeAllocatorPtr vector_allocator_{nullptr, nullptr};
+  bool pending_vector_population_{false};
 };
 
 class PrefilterEvaluator : public query::Evaluator {

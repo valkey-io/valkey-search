@@ -15,6 +15,7 @@ pass and guard behaviour that is currently correct.
 
 import os
 import shutil
+import time
 import pytest
 import valkey
 from valkey import Valkey
@@ -31,6 +32,11 @@ VALID = [float(i) for i in range(DIM)]
 SHORT = [1.0, 2.0]
 
 
+def vector(seed: int, salt: float = 0.0) -> bytes:
+    """A vector distinct per seed, so a key can be told apart by its bytes."""
+    return float_to_bytes([seed + salt + i / DIM for i in range(DIM)])
+
+
 class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
     """One server per test -- setup_test is function scoped, which matters
     because test_fm1_* crashes the server it runs against."""
@@ -44,9 +50,7 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
 
     # ---- observation -----------------------------------------------------
 
-    def registry_stat(self, name: str) -> int:
-        """One `search_vector_registry_*` INFO field."""
-        info = self.client.execute_command("INFO", "everything")
+    def _parse_registry_stat(self, info, name: str) -> int:
         key = f"search_vector_registry_{name}"
         if isinstance(info, dict):
             return int(info[key])
@@ -54,6 +58,12 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
             if line.startswith(key + ":"):
                 return int(line.split(":", 1)[1])
         raise KeyError(key)
+
+    def registry_stat(self, name: str) -> int:
+        """One `search_vector_registry_*` INFO field."""
+        return self._parse_registry_stat(
+            self.client.execute_command("INFO", "everything"), name
+        )
 
     def assert_sharing_active(self):
         """The feature is a no-op unless the engine exposes the sharing API and
@@ -85,13 +95,14 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         algo: str = "HNSW",
         mixed: bool = False,
         name: str = "idx",
+        prefix: str = "doc",
     ) -> Index:
         self.assert_sharing_active()
         fields = [Vector("vec", DIM, type=algo, distance="L2")]
         if mixed:
             fields += [Numeric("num"), Tag("tag")]
         return Index(
-            name, fields, prefixes=["doc"], type=key_type
+            name, fields, prefixes=[prefix], type=key_type
         )
 
     def write_key(self, index: Index, suffix: str, vec, mixed: bool = False, client=None):
@@ -126,8 +137,9 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
             self.write_key(index, "missing", None, mixed),
         )
 
-    def wait_for_docs(self, index: Index, count: int):
-        waiters.wait_for_equal(lambda: index.info(self.client).num_docs, count)
+    def wait_for_docs(self, index: Index, count: int, client=None):
+        client = client or self.client
+        waiters.wait_for_equal(lambda: index.info(client).num_docs, count)
 
     def knn_hits(self, index: Index, query=VALID) -> int:
         """Documents returned by a KNN scan. Uses FT.SEARCH directly rather
@@ -1924,6 +1936,165 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         r.execute_command("SELECT", 5)
         r.execute_command("FLUSHDB")
         r.execute_command("SELECT", 0)
+
+    # ---- unshare and load gaps -------------------------------------------
+    #
+    # The engine never copies or frees a string-ref field's bytes; the registry
+    # entry is their only owner. A path that drops the entry while the hash
+    # still points at the record leaves the hash reading freed memory. The
+    # expired-key and rename tests expose that by letting the next index's
+    # vectors reuse the freed chunk before reading the hash; under ASan they
+    # fail on the read itself.
+
+    GAP_KEYS = 40
+
+    def write_distinct_keys(self, prefix: str, salt: float = 0.0, client=None, count=None, **fields):
+        client = client or self.client
+        for k in range(count or self.GAP_KEYS):
+            client.hset(f"{prefix}:{k}", mapping={"vec": vector(k, salt), **fields})
+
+    def wait_for_unshare_drain(self):
+        waiters.wait_for_equal(
+            lambda: self.registry_stat("pending_unshare_cnt"), 0, timeout=60
+        )
+
+    def drop_index_leaving_pending_unshares(self):
+        """GAP_KEYS shared keys under doc:*, index dropped with all but one
+        still queued for unshare."""
+        self.client.config_set("search.vector-unshare-batch-size", "1")
+        index = self.build_index()
+        index.create(self.client)
+        # A second field keeps the key alive when the HDEL test removes the vector.
+        self.write_distinct_keys("doc", other="x")
+        self.wait_for_docs(index, self.GAP_KEYS)
+        assert self.registry_stat("entry_cnt") == self.GAP_KEYS
+        index.drop(self.client)
+        waiters.wait_for_true(lambda: self.registry_stat("pending_unshare_cnt") > 0)
+
+    def reuse_freed_vector_memory(self) -> Index:
+        """Allocate GAP_KEYS new shared vectors; relies on the allocator
+        handing back the chunk the dropped index just released."""
+        fill = self.build_index(name="fill", prefix="fill")
+        fill.create(self.client)
+        self.write_distinct_keys("fill", salt=0.5)
+        return fill
+
+    def test_hdel_during_pending_unshare_does_not_crash(self):
+        """Removing a queued key's vector field crashes the server.
+
+        Stimulus: drop an index with keys pending unshare, then HDEL the vector
+        field. The cron's UnshareWithValkey asks the engine whether the field
+        is a string ref, and hashTypeHasStringRef dereferences the missing
+        field's lookup result.
+
+        Expected: the unshare is a no-op for a field that no longer exists.
+        Observed: SIGSEGV on a NULL entry.
+        """
+        self.drop_index_leaving_pending_unshares()
+        pipe = self.client.pipeline(transaction=True)
+        for k in range(self.GAP_KEYS):
+            pipe.hdel(f"doc:{k}", "vec")
+        pipe.execute_command("INFO", "everything")
+        info = pipe.execute()[-1]
+        assert self._parse_registry_stat(info, "pending_unshare_cnt") > 0
+
+        self.wait_for_unshare_drain()
+        assert self.client.ping()
+
+    def test_hdel_then_rename_out_of_prefix_does_not_crash(self):
+        """HDEL or logical field expiry of the vector field followed by RENAME
+        out of the index prefix must not crash in MoveKey -> UnshareWithValkey."""
+        self.client.execute_command("DEBUG", "SET-ACTIVE-EXPIRE", "0")
+        index = self.build_index()
+        index.create(self.client)
+
+        # Case 1: Explicit HDEL followed by RENAME out of prefix
+        self.client.hset("doc:0", mapping={"vec": vector(0), "other": "x"})
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 1)
+        self.client.hdel("doc:0", "vec")
+        self.client.rename("doc:0", "outside:0")
+        assert self.client.ping()
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0)
+
+        # Case 2: Logically expired field (still live when HPEXPIRE's hexpire
+        # notification fires, then expires silently with active-expire off so
+        # VectorRegistry still holds the tracked record when MoveKey runs)
+        self.client.hset("doc:1", mapping={"vec": vector(1), "other": "x"})
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 1)
+        self.client.execute_command("HPEXPIRE", "doc:1", 80, "FIELDS", 1, "vec")
+        time.sleep(0.15)
+        assert self.registry_stat("entry_cnt") == 1
+        self.client.rename("doc:1", "outside:1")
+        assert self.client.ping()
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0)
+
+    @pytest.mark.parametrize(
+        "old_keys", [2 * GAP_KEYS, GAP_KEYS], ids=["stale_vectors", "missing_keys"]
+    )
+    def test_swapdb_full_sync_indexes_primary_dataset(self, old_keys: int):
+        """A `repl-diskless-load swapdb` full sync rebuilds the index from the
+        primary's dataset rather than the replica's old dataset.
+
+        Stimulus: replica has `repl-diskless-load swapdb`, pre-existing keys
+        `doc:0..old_keys-1`, and an existing index. A primary with a different
+        dataset `doc:0..2*GAP_KEYS-1` and an index is attached via SLAVEOF.
+        During RDB load the engine keeps the incoming dataset in a temporary
+        database and swaps it into `server.db` only after
+        `rdbLoadRioWithLoadingCtx` returns, so `LoadTrackedKeys` and
+        `LoadIndexExtension` must defer keyspace reads to `OnLoadingEnded`.
+        """
+        index = self.build_index(mixed=True)
+        self.write_distinct_keys("doc", count=old_keys, tag="replica_old")
+        index.create(self.client, wait_for_backfill=True)
+        assert self.registry_stat("entry_cnt") == old_keys
+        self.client.config_set("repl-diskless-load", "swapdb")
+
+        primary_server, primary, _ = self.start_server(
+            self.get_bind_port(), f"{self.test_name}_primary", False, True
+        )
+        try:
+            self.write_distinct_keys(
+                "doc",
+                salt=10.0,
+                client=primary,
+                count=2 * self.GAP_KEYS,
+                tag="primary_new",
+            )
+            index.create(primary, wait_for_backfill=True)
+
+            self.client.slaveof(
+                "127.0.0.1", primary.connection_pool.connection_kwargs["port"]
+            )
+            waiters.wait_for_true(
+                lambda: self.client.info("replication")["master_link_status"] == "up",
+                timeout=30,
+            )
+            self.wait_for_docs(index, 2 * self.GAP_KEYS)
+
+            assert self.client.hget("doc:0", "vec") == vector(0, salt=10.0)
+            assert self.search_count(index, "@tag:{primary_new}") == 2 * self.GAP_KEYS
+            assert self.search_count(index, "@tag:{replica_old}") == 0
+            top = self.client.execute_command(
+                "FT.SEARCH",
+                index.name,
+                "*=>[KNN 1 @vec $q]",
+                "PARAMS",
+                "2",
+                "q",
+                vector(0, salt=10.0),
+                "RETURN",
+                "1",
+                "__vec_score",
+                "DIALECT",
+                "2",
+            )
+            assert top[1] == b"doc:0"
+            assert float(top[2][1]) == pytest.approx(0.0)
+            assert self.registry_stat("entry_cnt") == 2 * self.GAP_KEYS
+            assert self.registry_stat("pending_unshare_cnt") == 0
+        finally:
+            primary_server.exit()
+
 
 class TestVectorRegistryPersistence(ValkeySearchTestCaseDebugMode):
     """Save on one server, load on another.

@@ -12,13 +12,21 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
+#include "absl/cleanup/cleanup.h"
 #include "absl/status/status.h"
 #include "absl/strings/str_format.h"
 #include "gmock/gmock.h"
 #include "google/protobuf/text_format.h"
 #include "gtest/gtest.h"
+#include "src/attribute_data.h"
 #include "src/coordinator/metadata_manager.h"
+#include "src/indexes/vector_base.h"
+#include "src/keyspace_event_manager.h"
+#include "src/utils/string_interning.h"
+#include "src/valkey_search_options.h"
+#include "src/vector_registry.h"
 #include "testing/common.h"
 #include "testing/coordinator/common.h"
 #include "vmsdk/src/testing_infra/module.h"
@@ -403,6 +411,152 @@ TEST_F(SchemaManagerTest, TestLoadIndexDuringReplication) {
             absl::StatusCode::kNotFound);
   VMSDK_EXPECT_OK(
       SchemaManager::Instance().GetIndexSchema(db_num_, index_name_));
+}
+
+TEST_F(SchemaManagerTest,
+       TestLoadIndexDuringReplicationFlushesVectorRegistryBeforeRemoveAll) {
+  auto &enable_sharing =
+      const_cast<vmsdk::config::Boolean &>(options::GetEnableVectorSharing());
+  VMSDK_EXPECT_OK(enable_sharing.SetValue(true));
+  VectorRegistry::Construct(&registry_ctx_);
+  auto cleanup_sharing = absl::MakeCleanup([&]() {
+    VMSDK_EXPECT_OK(enable_sharing.SetValue(false));
+    VectorRegistry::Construct(&registry_ctx_);
+  });
+
+  SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
+      &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/false));
+  VMSDK_EXPECT_OK(SchemaManager::Instance()
+                      .CreateIndexSchema(&fake_ctx_, test_index_schema_proto_)
+                      .status());
+  auto existing_schema =
+      SchemaManager::Instance().GetIndexSchema(db_num_, index_name_).value();
+  auto *vector_index = dynamic_cast<indexes::VectorBase *>(
+      existing_schema->GetIndex("test_attribute_1").value().get());
+  ASSERT_THAT(vector_index, testing::NotNull());
+
+  auto key = StringInternStore::Intern("prefix_1:doc0");
+  std::vector<float> vec_data(10, 1.0f);
+  std::string vec_str(reinterpret_cast<const char *>(vec_data.data()),
+                      vec_data.size() * sizeof(float));
+  auto valkey_vec = vmsdk::MakeUniqueValkeyString(vec_str);
+  auto vec = VectorRegistry::Instance().DedupOrConstruct(
+      key, valkey_vec.get(),
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, db_num_,
+      vector_index);
+  VMSDK_EXPECT_OK(vector_index->AddRecord(key, AttributeData(std::move(vec))));
+  EXPECT_EQ(VectorRegistry::Instance().GetStats().entry_cnt, 1);
+
+  ValkeyModuleEvent eid{};
+  ON_CALL(*kMockValkeyModule, GetContextFromIO(testing::_))
+      .WillByDefault(testing::Return(&fake_ctx_));
+  SchemaManager::Instance().OnLoadingCallback(
+      &fake_ctx_, eid, VALKEYMODULE_SUBEVENT_LOADING_REPL_START, nullptr);
+
+  FakeSafeRDB fake_rdb;
+  auto section = std::make_unique<data_model::RDBSection>();
+  section->set_type(data_model::RDB_SECTION_INDEX_SCHEMA);
+  auto staged_proto = test_index_schema_proto_;
+  staged_proto.set_name("staged_idx");
+  section->mutable_index_schema_contents()->CopyFrom(staged_proto);
+  section->set_supplemental_count(0);
+
+  VMSDK_EXPECT_OK(SchemaManager::Instance().LoadIndex(
+      &fake_ctx_, std::move(section), SupplementalContentIter(&fake_rdb, 0)));
+  existing_schema.reset();
+
+  // VectorRegistry must be flushed BEFORE RemoveAll() destroys the old schema's
+  // VectorBase, so old tracked keys that collide with newly swapped-in keys are
+  // never enqueued for unsharing against the new DB.
+  EXPECT_CALL(*kMockValkeyModule, OpenKey(testing::_, testing::_, testing::_))
+      .Times(0);
+  EXPECT_CALL(*kMockValkeyModule, HashSet(testing::_, testing::_, testing::_,
+                                          testing::_, testing::_))
+      .Times(0);
+
+  SchemaManager::Instance().OnLoadingCallback(
+      &fake_ctx_, eid, VALKEYMODULE_SUBEVENT_LOADING_ENDED, nullptr);
+  VectorRegistry::Instance().ProcessPendingUnshares(10);
+
+  EXPECT_EQ(VectorRegistry::Instance().GetStats().entry_cnt, 0);
+  EXPECT_EQ(VectorRegistry::Instance().GetPendingUnsharesCount(), 0);
+  EXPECT_EQ(SchemaManager::Instance()
+                .GetIndexSchema(db_num_, index_name_)
+                .status()
+                .code(),
+            absl::StatusCode::kNotFound);
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().GetIndexSchema(db_num_, "staged_idx"));
+}
+
+TEST_F(SchemaManagerTest,
+       TestLoadIndexDuringReplicationFailedCleansUpStagedSchemas) {
+  ValkeyModuleEvent eid{};
+  std::string existing_index_name = "existing_key";
+  std::vector<absl::string_view> existing_prefixes = {"existing_prefix:"};
+  auto existing_schema_or = CreateVectorHNSWSchema(
+      existing_index_name, &fake_ctx_, nullptr, &existing_prefixes, db_num_);
+  VMSDK_EXPECT_OK(existing_schema_or);
+
+  ON_CALL(*kMockValkeyModule, GetContextFromIO(testing::_))
+      .WillByDefault(testing::Return(&fake_ctx_));
+  SchemaManager::Instance().OnLoadingCallback(
+      &fake_ctx_, eid, VALKEYMODULE_SUBEVENT_LOADING_REPL_START, nullptr);
+
+  FakeSafeRDB fake_rdb;
+  auto section = std::make_unique<data_model::RDBSection>();
+  section->set_type(data_model::RDB_SECTION_INDEX_SCHEMA);
+  auto staged_proto = test_index_schema_proto_;
+  staged_proto.set_name("staged_failed_idx");
+  staged_proto.clear_subscribed_key_prefixes();
+  staged_proto.add_subscribed_key_prefixes("staged_prefix:");
+  section->mutable_index_schema_contents()->CopyFrom(staged_proto);
+  section->set_supplemental_count(0);
+
+  VMSDK_EXPECT_OK(SchemaManager::Instance().LoadIndex(
+      &fake_ctx_, std::move(section), SupplementalContentIter(&fake_rdb, 0)));
+
+  // Staged schema subscribed during Init, but is not yet live.
+  EXPECT_EQ(KeyspaceEventManager::Instance()
+                .GetMatchingSubscriptions("staged_prefix:k1",
+                                          VALKEYMODULE_NOTIFY_HASH, db_num_)
+                .size(),
+            1);
+  EXPECT_EQ(SchemaManager::Instance()
+                .GetIndexSchema(db_num_, "staged_failed_idx")
+                .status()
+                .code(),
+            absl::StatusCode::kNotFound);
+
+  // When loading fails, staged schemas must be marked destructing
+  // (unregistering keyspace subscriptions), discarded, and staging mode reset.
+  SchemaManager::Instance().OnLoadingCallback(
+      &fake_ctx_, eid, VALKEYMODULE_SUBEVENT_LOADING_FAILED, nullptr);
+
+  EXPECT_THAT(KeyspaceEventManager::Instance().GetMatchingSubscriptions(
+                  "staged_prefix:k1", VALKEYMODULE_NOTIFY_HASH, db_num_),
+              testing::IsEmpty());
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().GetIndexSchema(db_num_, existing_index_name));
+  EXPECT_EQ(SchemaManager::Instance()
+                .GetIndexSchema(db_num_, "staged_failed_idx")
+                .status()
+                .code(),
+            absl::StatusCode::kNotFound);
+
+  // Subsequent non-replication LoadIndex must apply directly rather than stage.
+  auto next_section = std::make_unique<data_model::RDBSection>();
+  next_section->set_type(data_model::RDB_SECTION_INDEX_SCHEMA);
+  auto after_proto = test_index_schema_proto_;
+  after_proto.set_name("after_failure_idx");
+  next_section->mutable_index_schema_contents()->CopyFrom(after_proto);
+  next_section->set_supplemental_count(0);
+
+  VMSDK_EXPECT_OK(SchemaManager::Instance().LoadIndex(
+      &fake_ctx_, std::move(next_section),
+      SupplementalContentIter(&fake_rdb, 0)));
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().GetIndexSchema(db_num_, "after_failure_idx"));
 }
 
 TEST_F(SchemaManagerTest, TestLoadIndexNoReplication) {

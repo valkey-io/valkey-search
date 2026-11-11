@@ -269,7 +269,8 @@ class IndexSchema : public KeyspaceEventSubscription,
   virtual absl::Status RDBSave(SafeRDB *rdb) const;
   absl::Status SaveIndexExtension(RDBChunkOutputStream output) const;
   absl::Status LoadIndexExtension(ValkeyModuleCtx *ctx,
-                                  RDBChunkInputStream input);
+                                  RDBChunkInputStream input,
+                                  bool defer_keyspace_load = false);
   static absl::StatusOr<vmsdk::ValkeyVersion> GetMinVersion(
       const google::protobuf::Any &metadata);
   absl::Status ValidateIndex() const;
@@ -277,7 +278,8 @@ class IndexSchema : public KeyspaceEventSubscription,
   static absl::StatusOr<std::shared_ptr<IndexSchema>> LoadFromRDB(
       ValkeyModuleCtx *ctx, vmsdk::ThreadPool *mutations_thread_pool,
       std::unique_ptr<data_model::IndexSchema> index_schema_proto,
-      SupplementalContentIter &&supplemental_iter);
+      SupplementalContentIter &&supplemental_iter,
+      bool defer_keyspace_load = false);
 
   bool IsInDB(int db_num) const override { return db_num_ == db_num; }
   bool IsInCurrentDB(ValkeyModuleCtx *ctx) const override;
@@ -513,6 +515,23 @@ class IndexSchema : public KeyspaceEventSubscription,
   uint64_t stem_text_field_mask_{0ULL};  // Tracks fields with stemming enabled
   absl::flat_hash_set<std::string> all_text_identifiers_;
   absl::flat_hash_set<std::string> suffix_text_identifiers_;
+  struct PendingIndexExtension {
+    struct MutationEntry {
+      std::string key;
+      bool from_backfill;
+    };
+    std::vector<std::string> keys;
+    std::vector<MutationEntry> mutation_entries;
+    std::vector<std::string> multi_exec_keys;
+  };
+  void IngestKeyWithBackpressure(ValkeyModuleCtx *ctx,
+                                 absl::string_view keyname_str, size_t index,
+                                 size_t key_count, size_t max_queue_size,
+                                 size_t &keys_since_last_check,
+                                 size_t &current_queue_size);
+  absl::Status ReplayIndexExtension(ValkeyModuleCtx *ctx,
+                                    const PendingIndexExtension &pending);
+  std::unique_ptr<PendingIndexExtension> pending_index_extension_;
   bool loaded_v2_{false};
   uint64_t fingerprint_{0};
   uint32_t version_{0};
@@ -664,6 +683,7 @@ class IndexSchema : public KeyspaceEventSubscription,
 
   FRIEND_TEST(IndexSchemaRDBTest, SaveAndLoad);
   FRIEND_TEST(IndexSchemaRDBTest, SaveAndLoadWithVectorSharing);
+  FRIEND_TEST(IndexSchemaRDBTest, SaveAndDeferredLoadWithVectorSharing);
   FRIEND_TEST(IndexSchemaRDBTest, ComprehensiveSkipLoadTest);
   friend class IndexSchemaFriendTest;
   FRIEND_TEST(IndexSchemaFriendTest, ConsistencyTest);

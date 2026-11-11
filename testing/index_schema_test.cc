@@ -1612,6 +1612,123 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   VectorRegistry::Construct(&fake_ctx_);
 }
 
+TEST_F(IndexSchemaRDBTest, SaveAndDeferredLoadWithVectorSharing)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  ValkeyModuleCtx parent_ctx;
+  ValkeyModuleCtx scan_ctx;
+  EXPECT_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
+      .WillRepeatedly(Return(&scan_ctx));
+
+  auto &enable_sharing =
+      const_cast<vmsdk::config::Boolean &>(options::GetEnableVectorSharing());
+  VMSDK_EXPECT_OK(enable_sharing.SetValue(true));
+  VectorRegistry::Construct(&fake_ctx_);
+
+  std::vector<absl::string_view> key_prefixes = {"prefix1:"};
+  std::string index_schema_name_str("index_schema_deferred_sharing");
+  const int dimensions = 4;
+  auto distance_metric = data_model::DISTANCE_METRIC_L2;
+  int initial_cap = 10;
+  int m = 16;
+  int ef_construction = 100;
+  int ef_runtime = 5;
+  const int num_vectors = 5;
+
+  FakeSafeRDB rdb_stream;
+  auto vectors = DeterministicallyGenerateVectors(num_vectors, dimensions, 2);
+  {
+    auto index_schema = MockIndexSchema::Create(
+                            &fake_ctx_, index_schema_name_str, key_prefixes,
+                            std::make_unique<HashAttributeDataType>(), nullptr)
+                            .value();
+
+    auto hnsw_index =
+        indexes::VectorHNSW<float>::Create(
+            CreateHNSWVectorIndexProto(dimensions, distance_metric, initial_cap,
+                                       m, ef_construction, ef_runtime),
+            "vec", data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
+            .value();
+    VMSDK_EXPECT_OK(index_schema->AddIndex("vec", "vec", hnsw_index));
+    auto itr = index_schema->attributes_.find("vec");
+    ASSERT_FALSE(itr == index_schema->attributes_.end());
+
+    for (size_t i = 0; i < vectors.size(); ++i) {
+      auto interned_key =
+          StringInternStore::Intern("prefix1:key" + std::to_string(i));
+      auto data = testing_infra::MakeAttributeData(
+          *hnsw_index, interned_key,
+          absl::string_view((char *)&vectors[i][0],
+                            dimensions * sizeof(float)));
+      index_schema->ProcessAttributeMutation(&fake_ctx_, itr->second,
+                                             interned_key, std::move(data));
+    }
+
+    VMSDK_EXPECT_OK(index_schema->RDBSave(&rdb_stream));
+  }
+  VectorRegistry::Instance().OnFlushDB(nullptr);
+  EXPECT_EQ(VectorRegistry::Instance().GetStats().entry_cnt, 0);
+
+  RDBSectionIter iter(&rdb_stream, 1);
+  auto section = iter.Next();
+  VMSDK_EXPECT_OK_STATUSOR(section);
+
+  // During deferred LoadFromRDB (as in swapdb replication aux_load), OpenKey
+  // must NOT be called because the target keyspace has not been swapped in yet.
+  EXPECT_CALL(*kMockValkeyModule, OpenKey(testing::_, testing::_, testing::_))
+      .Times(0);
+
+  auto index_schema_or =
+      IndexSchema::LoadFromRDB(&parent_ctx,
+                               /*mutations_thread_pool=*/nullptr,
+                               std::make_unique<data_model::IndexSchema>(
+                                   (*section)->index_schema_contents()),
+                               iter.IterateSupplementalContent(),
+                               /*defer_keyspace_load=*/true);
+  VMSDK_EXPECT_OK_STATUSOR(index_schema_or);
+  auto index_schema = std::move(index_schema_or.value());
+  EXPECT_EQ(VectorRegistry::Instance().GetStats().entry_cnt, 0);
+
+  // Now simulate OnLoadingEnded after swapMainDbWithTempDb has swapped in the
+  // new keyspace.
+  EXPECT_CALL(*kMockValkeyModule, OpenKey(testing::_, testing::_, testing::_))
+      .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
+
+  std::vector<ValkeyModuleString *> records(num_vectors);
+  for (size_t i = 0; i < vectors.size(); ++i) {
+    records[i] = new ValkeyModuleString{
+        .data = std::string(reinterpret_cast<char *>(vectors[i].data()),
+                            dimensions * sizeof(float)),
+    };
+  }
+
+  EXPECT_CALL(*kMockValkeyModule,
+              HashGet(testing::_, VALKEYMODULE_HASH_CFIELDS, testing::_,
+                      testing::An<ValkeyModuleString **>(),
+                      testing::TypedEq<void *>(nullptr)))
+      .WillRepeatedly([records](ValkeyModuleKey *key, int, const char *,
+                                ValkeyModuleString **value_out, void *) {
+        absl::string_view key_str = key->key;
+        CHECK(absl::ConsumePrefix(&key_str, "prefix1:key"));
+        int index;
+        CHECK(absl::SimpleAtoi(key_str, &index));
+        *value_out = records[index];
+        ValkeyModule_RetainString(nullptr, records[index]);
+        return VALKEYMODULE_OK;
+      });
+
+  EXPECT_CALL(*kMockValkeyModule, KeyExists(&parent_ctx, testing::_))
+      .WillRepeatedly(Return(1));
+  index_schema->OnLoadingEnded(&parent_ctx);
+  EXPECT_EQ(index_schema->CountRecords(), num_vectors);
+  EXPECT_EQ(VectorRegistry::Instance().GetStats().entry_cnt, num_vectors);
+
+  for (size_t i = 0; i < vectors.size(); ++i) {
+    delete records[i];
+  }
+  VMSDK_EXPECT_OK(enable_sharing.SetValue(false));
+  VectorRegistry::Construct(&fake_ctx_);
+}
+
 TEST_F(IndexSchemaRDBTest, SaveAndLoadTextIndex)
 ABSL_NO_THREAD_SAFETY_ANALYSIS {
   std::vector<absl::string_view> key_prefixes = {"doc:"};

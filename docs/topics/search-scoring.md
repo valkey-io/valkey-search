@@ -232,9 +232,9 @@ To sort its records by score, use `ADDSCORES` and `SORTBY 2 @__score DESC`.
 The final score is the score of the whole query tree, multiplied by the document score of the key.
 The document score is a number for each key that does not depend on the query:
 
-$$
-\text{score} = \text{document score} \cdot \text{query score}
-$$
+```
+score = document score * query score
+```
 
 The query score combines the scores of the clauses in the query.
 See [How Scores Combine](#how-scores-combine).
@@ -244,9 +244,9 @@ See [How Scores Combine](#how-scores-combine).
 The query `jacket (@color:{red}) => {$weight: 2.0}` gives this score.
 In this formula, the jacket score is the score of `jacket`, and the red score is the score of `@color:{red}`:
 
-$$
-\text{score} = \text{document score} \cdot \left(\text{jacket score} + 2 \cdot \text{red score}\right)
-$$
+```
+score = document score * (jacket score + 2 * red score)
+```
 
 The `$weight` attribute multiplies the score of the clause that it is attached to.
 The weight must be 0 or greater. A clause with a weight of 0 still filters keys, but adds 0 to the score.
@@ -305,13 +305,10 @@ The results from all shards are then sorted together by these scores, so the mer
 
 The `BM25STD` scorer gives each matched text term this score:
 
-$$
-\text{term score} = \text{weight} \cdot \text{IDF} \cdot \frac{f \cdot (k1 + 1)}{f + k1 \cdot \left(1 - b + b \cdot \frac{dl}{avgdl}\right)}
-$$
-
-$$
-\text{IDF} = \ln\left(1 + \frac{N - n + 0.5}{n + 0.5}\right)
-$$
+```
+term score = weight * IDF * (f * (k1 + 1)) / (f + k1 * (1 - b + b * dl / avgdl))
+IDF        = ln(1 + (N - n + 0.5) / (n + 0.5))
+```
 
 | Symbol | Value |
 | :--- | :--- |

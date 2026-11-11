@@ -45,6 +45,7 @@
 #include "src/utils/cancel.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
+#include "src/vector_registry.h"
 #include "testing/common.h"
 #include "third_party/hnswlib/index.pb.h"
 #include "third_party/hnswlib/iostream.h"
@@ -2786,6 +2787,8 @@ TEST_F(VectorIndexTest, LoadTrackedKeysWithoutKeyspaceVector) {
       SCOPED_TRACE(testing::Message()
                    << "distance_metric: " << distance_metric
                    << ", hnsw: " << hnsw << ", key_labels: " << key_labels);
+      // Each run reuses the same keys; start with no shared vectors.
+      VectorRegistry::Instance().OnFlushDB(nullptr);
       FakeSafeRDB rdb;
       FakeSafeRDB labels_rdb;
       // Scaled basis vectors: every vector's nearest neighbor is itself, under
@@ -2891,6 +2894,9 @@ TEST_F(VectorIndexTest, LoadTrackedKeysWithoutKeyspaceVector) {
                                  SupplementalContentChunkIter(&rdb)));
       EXPECT_EQ(keyspace_reads, kLoaded - 1);
       EXPECT_EQ(index->GetTrackedKeyCount(), kLoaded);
+      // Every key whose vector is unchanged since the save shares it with the
+      // keyspace; the missing, invalid and changed keys keep saved copies.
+      EXPECT_EQ(VectorRegistry::Instance().GetStats().entry_cnt, kLoaded - 3);
 
       auto keys_of = [](const std::vector<Neighbor> &neighbors) {
         std::vector<std::string> keys;

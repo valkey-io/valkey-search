@@ -59,30 +59,24 @@ struct SortByParameter {
   SortOrder order{SortOrder::kAscending};
 };
 
-// Stores both original hash field and alias names for target field specified by
-// SORTBY
+// HASH files the SORTBY value under the hash field, since the alias may be
+// another attribute's field; JSON under the alias, as a whole record shows it.
+// Gotcha: a JSON path without `$` equal to the alias then shows it in RETURN.
 struct SortByKey {
   SortByKey(const IndexSchema &schema, absl::string_view sortby_alias);
-  // Build a key using the query name for pre-1.3 behavior.
-  static SortByKey Legacy(absl::string_view sortby_alias);
 
-  std::string identifier;
-  std::string alias;
-  bool is_json{false};
+  std::string lookup_key;
 
   RecordsMap::const_iterator Find(const RecordsMap &contents) const {
-    auto it = contents.find(identifier);
-    // A JSON whole-record fetch, and older cluster nodes (#1597), key it by
-    // alias.
-    if (it == contents.end() && is_json) {
-      it = contents.find(alias);
-    }
-    return it;
+    return contents.find(lookup_key);
   }
-
- private:
-  SortByKey() = default;
 };
+
+// Copies a row's SORTBY value from the alias to lookup_key, for rows from a
+// shard that predates sortby_keyed_by_lookup_key.
+// TODO: remove once every node sets sortby_keyed_by_lookup_key.
+void RefileAliasSortByValue(RecordsMap &contents, absl::string_view lookup_key,
+                            absl::string_view alias);
 
 constexpr int64_t kTimeoutMS{50000};
 constexpr size_t kMaxTimeoutMs{60000};
@@ -289,6 +283,8 @@ struct SearchParameters {
   // Set on deserialized fanout requests when the originating command's
   // derived parameters require content processing despite no_content.
   bool force_content_processing{false};
+  // False when the coordinator predates accepts_sortby_lookup_key.
+  bool sortby_by_lookup_key{true};
   FilterParseResults filter_parse_results;
   // True when the filter tree contains a (single) VectorRangePredicate. In the
   // single-VR model the matched distance is carried in Neighbor::distance;
@@ -491,10 +487,11 @@ const VectorRangePredicate *GetVectorRangePredicate(
 // returns "" when the query has no VR predicate.
 std::string GetVrScoreFieldName(const SearchParameters &parameters);
 
-// From 1.3.0 a KNN query reads the SORTBY value from its index when RETURN
-// does not name it.
-bool KnnPrefillAddsSortKey(const SearchParameters &parameters,
-                           const SortByKey &key);
+// The name to re-file an older shard's SORTBY values under, or nullopt. A whole
+// hash already has the field, and an alias-named entry there is a real field.
+// TODO: remove once every node sets sortby_keyed_by_lookup_key.
+std::optional<std::string> OldShardSortByRefileKey(
+    const SearchParameters &parameters);
 
 // Count the number of VectorRangePredicate nodes in the predicate tree. Used
 // at parse time to reject unsupported multi-VR queries (single-VR only).

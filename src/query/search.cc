@@ -901,27 +901,64 @@ CalcBestMatchingInkeys(const SearchParameters &parameters,
   return results;
 }
 
-SortByKey::SortByKey(const IndexSchema &schema, absl::string_view sortby_alias)
-    : alias(sortby_alias) {
-  auto resolved = schema.GetIdentifier(alias);
-  // A non-attribute name (KNN score, VR distance) is never read from the map.
-  identifier = resolved.ok() ? *std::move(resolved) : alias;
-  is_json = schema.GetAttributeDataType().ToProto() ==
-            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON;
+SortByKey::SortByKey(const IndexSchema &schema,
+                     absl::string_view sortby_alias) {
+  if (schema.GetAttributeDataType().ToProto() ==
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON) {
+    lookup_key = std::string(sortby_alias);
+  } else {
+    auto resolved = schema.GetIdentifier(sortby_alias);
+    // A non-attribute name (KNN score, VR distance) is never read from the map.
+    lookup_key =
+        resolved.ok() ? *std::move(resolved) : std::string(sortby_alias);
+  }
 }
 
-SortByKey SortByKey::Legacy(absl::string_view sortby_alias) {
-  SortByKey key;
-  key.alias = std::string(sortby_alias);
-  key.identifier = key.alias;
-  return key;
+void RefileAliasSortByValue(RecordsMap &contents, absl::string_view lookup_key,
+                            absl::string_view alias) {
+  if (contents.contains(lookup_key)) {
+    return;
+  }
+  auto alias_it = contents.find(alias);
+  if (alias_it == contents.end()) {
+    return;
+  }
+  // Copied, not retained: the coordinator runs this off the main thread.
+  auto owned_key = vmsdk::MakeUniqueValkeyString(lookup_key);
+  auto key_view = vmsdk::ToStringView(owned_key.get());
+  contents.emplace(
+      key_view,
+      RecordsMapValue(std::move(owned_key),
+                      vmsdk::MakeUniqueValkeyString(
+                          vmsdk::ToStringView(alias_it->second.value.get()))));
 }
 
+std::optional<std::string> OldShardSortByRefileKey(
+    const SearchParameters &parameters) {
+  if (!parameters.sortby_parameter.has_value() || parameters.all_content) {
+    return std::nullopt;
+  }
+  // JSON uses the alias on every version.
+  SortByKey key(*parameters.index_schema, parameters.sortby_parameter->field);
+  if (key.lookup_key == parameters.sortby_parameter->field) {
+    return std::nullopt;
+  }
+  return std::move(key.lookup_key);
+}
+
+namespace {
+
+// Whether the KNN index pre-fill adds the SORTBY value to each row.
 bool KnnPrefillAddsSortKey(const SearchParameters &parameters,
                            const SortByKey &key) {
   if (parameters.IsNonVectorQuery() || parameters.no_content ||
       parameters.all_content || parameters.return_attributes.empty() ||
       !parameters.sortby_parameter.has_value()) {
+    return false;
+  }
+  // An older coordinator cannot read this value, and under the alias it could
+  // take another RETURN attribute's slot.
+  if (!parameters.sortby_by_lookup_key) {
     return false;
   }
   // Sorted from Neighbor::distance, not from attribute_contents.
@@ -935,9 +972,11 @@ bool KnnPrefillAddsSortKey(const SearchParameters &parameters,
       parameters.return_attributes.begin(), parameters.return_attributes.end(),
       [&](const ReturnAttribute &attr) {
         return attr.identifier.get() &&
-               vmsdk::ToStringView(attr.identifier.get()) == key.identifier;
+               vmsdk::ToStringView(attr.identifier.get()) == key.lookup_key;
       });
 }
+
+}  // namespace
 
 absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
     absl::StatusOr<std::vector<indexes::Neighbor>> results,
@@ -957,26 +996,25 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
   struct AttributeInfo {
     absl::string_view identifier;
     indexes::IndexBase *index;
+    // A missing sort value leaves the row unsorted rather than sending it to
+    // the key fetch, which would change its RETURN numbers.
+    bool sort_only{false};
   };
   std::vector<AttributeInfo> attributes;
-  // Gated: for 1.3.0 and later, fetch the document on the main thread when
-  // SORTBY cannot be served by the index, such as for TEXT or a missing value.
-  // This also returns stored bytes for other RETURN fields instead of indexed
-  // copies. Issue #1440.
   std::optional<SortByKey> sortby_key;
-  if (parameters.sortby_parameter.has_value() &&
-      options::EnabledInVersion(1, 3, 0)) {
+  if (parameters.sortby_parameter.has_value()) {
     const std::string &sortby_field = parameters.sortby_parameter->field;
     sortby_key.emplace(*parameters.index_schema, sortby_field);
     if (KnnPrefillAddsSortKey(parameters, *sortby_key)) {
       auto index = parameters.index_schema->GetIndex(sortby_field);
-      // Defensive guard for callers that bypass parser and shard validation.
+      // The parser and the shard's fingerprint check make this unreachable.
       DCHECK(index.ok()) << index.status();
       if (!index.ok()) {
         return results;
       }
-      attributes.push_back(AttributeInfo{.identifier = sortby_key->identifier,
-                                         .index = index.value().get()});
+      attributes.push_back(AttributeInfo{.identifier = sortby_key->lookup_key,
+                                         .index = index.value().get(),
+                                         .sort_only = true});
     }
   }
   for (auto &attribute : parameters.return_attributes) {
@@ -1035,7 +1073,9 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
             // would answer a different question than RediSearch does. Fall
             // through to the main-thread key fetch, the same way a text
             // attribute does.
-            any_value_missing = true;
+            if (!attribute_info.sort_only) {
+              any_value_missing = true;
+            }
             break;
           }
           // Serving the indexed copy is only correct when it is byte-identical
@@ -1066,7 +1106,9 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
         }
         case indexes::IndexerType::kText: {
           // Text indexes don't store retrievable raw values
-          any_value_missing = true;
+          if (!attribute_info.sort_only) {
+            any_value_missing = true;
+          }
           break;
         }
         default:
@@ -1081,7 +1123,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
         neighbor.attribute_contents->emplace(
             identifier_view,
             RecordsMapValue(std::move(identifier), std::move(attribute_value)));
-      } else {
+      } else if (!attribute_info.sort_only) {
         // Mark this neighbor as needing content retrieval via the main thread
         // (e.g. the attribute value may exist but not be indexed due to type
         // mismatch).

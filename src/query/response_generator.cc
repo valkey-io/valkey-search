@@ -268,8 +268,9 @@ bool CheckSlotOwnership(ValkeyModuleCtx *ctx, absl::string_view key) {
   return cluster_map->IOwnSlot(static_cast<uint16_t>(slot));
 }
 
+// A document's SORTBY value and the name it is filed under.
 struct SortByContent {
-  std::string identifier;
+  std::string lookup_key;
   vmsdk::UniqueValkeyString value;
 };
 
@@ -389,9 +390,8 @@ absl::StatusOr<RecordsMap> GetContent(
     auto itr = content.find(sortby_identifier);
     if (itr != content.end()) {
       if (parameters.all_content) {
-        // A whole record is printed entry by entry, and RediSearch shows the
-        // sort field in it under its alias, so here the copy is returned
-        // content and counts toward the response limits.
+        // JSON only: RediSearch shows the sort field under its alias in a whole
+        // record, so this copy is returned and counted.
         return_content.emplace(
             parameters.sortby_parameter->field,
             RecordsMapValue(
@@ -399,8 +399,16 @@ absl::StatusOr<RecordsMap> GetContent(
                     parameters.sortby_parameter->field),
                 vmsdk::RetainUniqueValkeyString(itr->second.value.get())));
       } else {
+        // Must match SortByKey, except for an older coordinator, which reads
+        // HASH by alias.
+        std::string sortby_key;
+        if (is_json || !parameters.sortby_by_lookup_key) {
+          sortby_key = parameters.sortby_parameter->field;
+        } else {
+          sortby_key = std::move(sortby_identifier);
+        }
         out_sortby_content.emplace(SortByContent{
-            .identifier = std::move(sortby_identifier),
+            .lookup_key = std::move(sortby_key),
             .value = vmsdk::RetainUniqueValkeyString(itr->second.value.get())});
       }
     }
@@ -409,21 +417,12 @@ absl::StatusOr<RecordsMap> GetContent(
   return return_content;
 }
 
-// The legacy lookup, on this node below 1.3.0 or on an older coordinator,
-// reads the sort value by alias.
-void FileSortByContent(RecordsMap &content, SortByContent sortby_content,
-                       absl::string_view alias) {
-  auto owned_identifier =
-      vmsdk::MakeUniqueValkeyString(sortby_content.identifier);
-  auto identifier_view = vmsdk::ToStringView(owned_identifier.get());
-  content.emplace(identifier_view,
-                  RecordsMapValue(std::move(owned_identifier),
-                                  vmsdk::RetainUniqueValkeyString(
-                                      sortby_content.value.get())));
-  auto owned_alias = vmsdk::MakeUniqueValkeyString(alias);
-  auto alias_view = vmsdk::ToStringView(owned_alias.get());
-  content.emplace(alias_view, RecordsMapValue(std::move(owned_alias),
-                                              std::move(sortby_content.value)));
+// Adds the SORTBY value to a fetched row.
+void FileSortByContent(RecordsMap &content, SortByContent sortby_content) {
+  auto owned_key = vmsdk::MakeUniqueValkeyString(sortby_content.lookup_key);
+  auto key_view = vmsdk::ToStringView(owned_key.get());
+  content.emplace(key_view, RecordsMapValue(std::move(owned_key),
+                                            std::move(sortby_content.value)));
 }
 
 // The vector bytes this document holds now, or nullopt if they cannot be read.
@@ -617,11 +616,9 @@ void ProcessNeighborsForReply(
 
     // Only assign content if it's within size limit
     if (!size_exceeded) {
-      // The limits above must not count the sort entries: the client never
-      // receives them.
+      // Filed after the limits: the sort entry is not a RETURN field.
       if (sortby_content.has_value()) {
-        FileSortByContent(content.value(), *std::move(sortby_content),
-                          parameters.sortby_parameter->field);
+        FileSortByContent(content.value(), *std::move(sortby_content));
       }
       neighbor.attribute_contents = std::move(content.value());
     }

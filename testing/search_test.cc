@@ -17,6 +17,7 @@
 #include <queue>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <tuple>
 #include <unordered_set>
 #include <utility>
@@ -1221,6 +1222,97 @@ TEST_P(IndexedContentTest, MaybeAddIndexedContentTest) {
     }
 #endif  // TESTING_TMP_DISABLED
   }
+}
+
+class KnnSortByPrefillTest : public ValkeySearchTest {};
+
+// Collision schema: attribute b's field is a, attribute c's field is b.
+TEST_F(KnnSortByPrefillTest, OldCoordinatorGetsNoSortValueFromTheIndex) {
+  auto index_schema = CreateIndexSchema("test_schema").value();
+  data_model::NumericIndex numeric_index_proto;
+  auto b_index = std::make_shared<indexes::Numeric>(numeric_index_proto);
+  auto c_index = std::make_shared<indexes::Numeric>(numeric_index_proto);
+  VMSDK_EXPECT_OK(index_schema->AddIndex("b", "a", b_index));
+  VMSDK_EXPECT_OK(index_schema->AddIndex("c", "b", c_index));
+  // The mock returns the alias unchanged by default.
+  EXPECT_CALL(*index_schema, GetIdentifier(testing::_))
+      .WillRepeatedly([&](absl::string_view alias) {
+        return index_schema->IndexSchema::GetIdentifier(alias);
+      });
+  auto key = StringInternStore::Intern("k1");
+  VMSDK_EXPECT_OK(testing_infra::AddRecord(*b_index, key, "7"));
+  VMSDK_EXPECT_OK(testing_infra::AddRecord(*c_index, key, "500"));
+
+  for (bool new_coordinator : {true, false}) {
+    UnitTestSearchParameters parameters;
+    parameters.index_schema = index_schema;
+    parameters.attribute_alias = "v";
+    parameters.sortby_parameter = query::SortByParameter{.field = "b"};
+    parameters.sortby_by_lookup_key = new_coordinator;
+    parameters.return_attributes.push_back(query::ReturnAttribute{
+        .identifier = vmsdk::MakeUniqueValkeyString("b"),
+        .attribute_alias = vmsdk::MakeUniqueValkeyString("c"),
+        .alias = vmsdk::MakeUniqueValkeyString("c")});
+    std::vector<indexes::Neighbor> neighbors;
+    neighbors.push_back(indexes::Neighbor{key, 0.1});
+    auto got = query::MaybeAddIndexedContent(std::move(neighbors), parameters);
+    VMSDK_EXPECT_OK(got);
+    ASSERT_EQ(got->size(), 1);
+    ASSERT_TRUE((*got)[0].attribute_contents.has_value());
+    std::unordered_map<std::string, std::string> expected{{"b", "500"}};
+    if (new_coordinator) {
+      expected.emplace("a", "7");
+    }
+    EXPECT_EQ(ToStringMap(*(*got)[0].attribute_contents), expected)
+        << "new_coordinator=" << new_coordinator;
+  }
+}
+
+class OldShardSortByRefileKeyTest : public ValkeySearchTest {};
+
+TEST_F(OldShardSortByRefileKeyTest, OnlyHashRowsSortedOnAnAliasAreRefiled) {
+  auto index_schema = CreateIndexSchema("test_schema").value();
+  data_model::NumericIndex numeric_index_proto;
+  VMSDK_EXPECT_OK(index_schema->AddIndex(
+      "s", "a", std::make_shared<indexes::Numeric>(numeric_index_proto)));
+  VMSDK_EXPECT_OK(index_schema->AddIndex(
+      "n", "n", std::make_shared<indexes::Numeric>(numeric_index_proto)));
+  EXPECT_CALL(*index_schema, GetIdentifier(testing::_))
+      .WillRepeatedly([&](absl::string_view alias) {
+        return index_schema->IndexSchema::GetIdentifier(alias);
+      });
+  struct Case {
+    std::optional<std::string> sortby;
+    bool all_content;
+    std::optional<std::string> expected;
+  };
+  for (const auto &c : std::vector<Case>{{"s", false, "a"},
+                                         {"s", true, std::nullopt},
+                                         {"n", false, std::nullopt},
+                                         {std::nullopt, false, std::nullopt}}) {
+    UnitTestSearchParameters parameters;
+    parameters.index_schema = index_schema;
+    parameters.all_content = c.all_content;
+    if (c.sortby.has_value()) {
+      parameters.sortby_parameter = query::SortByParameter{.field = *c.sortby};
+    }
+    EXPECT_EQ(query::OldShardSortByRefileKey(parameters), c.expected)
+        << c.sortby.value_or("<none>") << " all_content=" << c.all_content;
+  }
+  // Every version files a JSON row's sort value under the alias.
+  ValkeyModuleCtx fake_ctx;
+  EXPECT_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
+      .WillRepeatedly(testing::Return(&fake_ctx));
+  auto json_schema =
+      MockIndexSchema::Create(&fake_ctx, "json_schema", {"json:"},
+                              std::make_unique<JsonAttributeDataType>())
+          .value();
+  VMSDK_EXPECT_OK(json_schema->AddIndex(
+      "s", "$.a", std::make_shared<indexes::Numeric>(numeric_index_proto)));
+  UnitTestSearchParameters json_parameters;
+  json_parameters.index_schema = json_schema;
+  json_parameters.sortby_parameter = query::SortByParameter{.field = "s"};
+  EXPECT_EQ(query::OldShardSortByRefileKey(json_parameters), std::nullopt);
 }
 
 static const char kTestVector0[401] =
@@ -3894,6 +3986,57 @@ TEST_F(ScoreTextQueryTestBase, TagPrefixSkipsEmptyTagsWhenPickingValue) {
   ASSERT_TRUE(lead && plain);
   EXPECT_GT(*lead, 0.0f);
   EXPECT_FLOAT_EQ(*lead, *plain);
+}
+
+// A RecordsMap whose keys view strings the map owns.
+RecordsMap OwnedRecordsMap(
+    const std::vector<std::pair<std::string, std::string>> &entries) {
+  RecordsMap map;
+  for (const auto &[key, value] : entries) {
+    auto owned_key = vmsdk::MakeUniqueValkeyString(key);
+    auto key_view = vmsdk::ToStringView(owned_key.get());
+    map.emplace(key_view,
+                RecordsMapValue(std::move(owned_key),
+                                vmsdk::MakeUniqueValkeyString(value)));
+  }
+  return map;
+}
+
+class RefileAliasSortByValueTest : public ValkeySearchTest {};
+
+// An older shard sends the HASH sort value under the alias.
+TEST_F(RefileAliasSortByValueTest, CopiesAliasEntryUnderLookupKey) {
+  auto contents = OwnedRecordsMap({{"s", "5"}, {"n", "1"}});
+  query::RefileAliasSortByValue(contents, "a", "s");
+  EXPECT_EQ(ToStringMap(contents),
+            (std::unordered_map<std::string, std::string>{
+                {"s", "5"}, {"n", "1"}, {"a", "5"}}));
+}
+
+// The coordinator handles shard replies on a gRPC thread.
+TEST_F(RefileAliasSortByValueTest, RunsOffTheMainThread) {
+  auto contents = OwnedRecordsMap({{"s", "5"}});
+  std::thread([&] {
+    query::RefileAliasSortByValue(contents, "a", "s");
+  }).join();
+  EXPECT_EQ(
+      ToStringMap(contents),
+      (std::unordered_map<std::string, std::string>{{"s", "5"}, {"a", "5"}}));
+}
+
+TEST_F(RefileAliasSortByValueTest, KeepsExistingLookupKey) {
+  auto contents = OwnedRecordsMap({{"a", "5"}, {"s", "9"}});
+  query::RefileAliasSortByValue(contents, "a", "s");
+  EXPECT_EQ(
+      ToStringMap(contents),
+      (std::unordered_map<std::string, std::string>{{"a", "5"}, {"s", "9"}}));
+}
+
+TEST_F(RefileAliasSortByValueTest, NoAliasEntryLeavesRowUnchanged) {
+  auto contents = OwnedRecordsMap({{"n", "1"}});
+  query::RefileAliasSortByValue(contents, "a", "s");
+  EXPECT_EQ(ToStringMap(contents),
+            (std::unordered_map<std::string, std::string>{{"n", "1"}}));
 }
 
 }  // namespace

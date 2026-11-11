@@ -1397,6 +1397,50 @@ INSTANTIATE_TEST_SUITE_P(
                  : "Json";
     });
 
+// An older coordinator reads a HASH sort value under the alias.
+TEST_F(ResponseGeneratorTest, SortByValueFiledForTheCoordinatorVersion) {
+  ValkeyModuleCtx fake_ctx;
+  EXPECT_CALL(*kMockValkeyModule, GetExpire(testing::_))
+      .WillRepeatedly(testing::Return(VALKEYMODULE_NO_EXPIRE));
+  auto index_schema = CreateIndexSchema("index").value();
+  EXPECT_CALL(*index_schema, GetIdentifier(testing::_))
+      .WillRepeatedly(
+          [](absl::string_view alias) -> absl::StatusOr<std::string> {
+            return alias == "s" ? std::string("a") : std::string(alias);
+          });
+  MockAttributeDataType data_type;
+  EXPECT_CALL(data_type, ToProto()).WillRepeatedly([]() {
+    return data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH;
+  });
+  EXPECT_CALL(data_type, FetchAllAttributes(testing::_, testing::_, testing::_,
+                                            testing::_, testing::_))
+      .WillRepeatedly([](ValkeyModuleCtx *, const std::optional<std::string> &,
+                         ValkeyModuleKey *, absl::string_view,
+                         const absl::flat_hash_set<absl::string_view> &)
+                          -> absl::StatusOr<RecordsMap> {
+        return ToRecordsMap({{"a", "7"}, {"n", "1"}});
+      });
+
+  for (bool new_coordinator : {true, false}) {
+    UnitTestSearchParameters parameters;
+    parameters.index_schema = index_schema;
+    parameters.sortby_parameter = query::SortByParameter{.field = "s"};
+    parameters.sortby_by_lookup_key = new_coordinator;
+    parameters.return_attributes.push_back(
+        {.identifier = vmsdk::MakeUniqueValkeyString("n"),
+         .alias = vmsdk::MakeUniqueValkeyString("n")});
+    std::vector<indexes::Neighbor> neighbors;
+    neighbors.push_back(indexes::Neighbor(StringInternStore::Intern("k1"), 0));
+    ProcessNeighborsForReply(&fake_ctx, data_type, neighbors, parameters,
+                             std::nullopt);
+    ASSERT_EQ(neighbors.size(), 1);
+    std::unordered_map<std::string, std::string> expected{{"n", "1"}};
+    expected.emplace(new_coordinator ? "a" : "s", "7");
+    EXPECT_EQ(ToStringMap(neighbors[0].attribute_contents.value()), expected)
+        << "new_coordinator=" << new_coordinator;
+  }
+}
+
 }  // namespace
 
 }  // namespace valkey_search

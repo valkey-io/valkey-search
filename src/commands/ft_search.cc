@@ -83,9 +83,6 @@ void ReplyScoreTopLevel(ValkeyModuleCtx *ctx, float score) {
       ctx, vmsdk::MakeUniqueValkeyString(score_value).get());
 }
 
-std::optional<std::string> GetSortKeyValue(const indexes::Neighbor &neighbor,
-                                           const query::SortByKey &sortby_key);
-
 // If the SORTBY field matches the VR distance alias, returns the formatted
 // distance for this neighbor (to be emitted with the numeric '#' prefix for
 // WITHSORTKEYS). Returns std::nullopt when the SORTBY field is not the VR
@@ -147,22 +144,6 @@ std::optional<std::string> GetSortKeyValue(const indexes::Neighbor &neighbor,
   return std::string(vmsdk::ToStringView(it->second.value.get()));
 }
 
-query::SortByKey ResolveSortByKey(const SearchCommand &command) {
-  const std::string &alias = command.sortby_parameter->field;
-  query::SortByKey key(*command.index_schema, alias);
-
-  if (key.identifier == alias && !query::KnnPrefillAddsSortKey(command, key)) {
-    if (options::EnabledInVersion(1, 3, 0)) {
-      return key;
-    }
-    return query::SortByKey::Legacy(alias);
-  }
-
-  return VALKEY_SEARCH_COMPATIBILITY_FIX(
-      1, 3, 0, "ft_search_sortby_alias", [&]() { return key; },
-      [&]() { return query::SortByKey::Legacy(alias); });
-}
-
 template <typename Comparator>
 void PerformSortingOnRelevantPortion(std::vector<indexes::Neighbor> &neighbors,
                                      const SearchCommand &parameters,
@@ -181,7 +162,7 @@ void PerformSortingOnRelevantPortion(std::vector<indexes::Neighbor> &neighbors,
 // Apply sorting to neighbors based on attribute values in attribute_contents
 void ApplySorting(std::vector<indexes::Neighbor> &neighbors,
                   const SearchCommand &parameters,
-                  const std::optional<query::SortByKey> &sortby_key) {
+                  const query::SortByKey &sortby_key) {
   if (!parameters.sortby_parameter.has_value() || neighbors.empty()) {
     return;
   }
@@ -228,7 +209,6 @@ void ApplySorting(std::vector<indexes::Neighbor> &neighbors,
   bool is_numeric =
       index_result.ok() &&
       index_result.value()->GetIndexerType() == indexes::IndexerType::kNumeric;
-  CHECK(sortby_key.has_value());
   auto compare = [&](const indexes::Neighbor &a,
                      const indexes::Neighbor &b) -> bool {
     if (is_vector_score) {
@@ -245,8 +225,8 @@ void ApplySorting(std::vector<indexes::Neighbor> &neighbors,
       return false;
     }
 
-    auto it_a = sortby_key->Find(*a.attribute_contents);
-    auto it_b = sortby_key->Find(*b.attribute_contents);
+    auto it_a = sortby_key.Find(*a.attribute_contents);
+    auto it_b = sortby_key.Find(*b.attribute_contents);
 
     if (it_a == a.attribute_contents->end()) {
       return false;
@@ -391,7 +371,7 @@ SearchCommand::RowFormat SearchCommand::GetRowFormat() const {
         [&]() { return false; });
   }
   if (sortby_parameter.has_value()) {
-    format.sortby_key = ResolveSortByKey(*this);
+    format.sortby_key.emplace(*index_schema, sortby_parameter->field);
   }
   if (IsVectorRangeQuery()) {
     format.vr_field = query::GetVrScoreFieldName(*this);
@@ -556,8 +536,8 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
     ApplyInkeysFilter(search_result, *inkeys);
   }
   const auto format = GetRowFormat();
-  if (!skip_content) {
-    ApplySorting(search_result.neighbors, *this, format.sortby_key);
+  if (!skip_content && format.sortby_key.has_value()) {
+    ApplySorting(search_result.neighbors, *this, *format.sortby_key);
   }
 
   auto range = search_result.GetSerializationRange(*this);

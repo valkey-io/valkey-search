@@ -81,7 +81,6 @@ class VectorRegistry {
   // Returns the total number of keys pending unshare.
   size_t GetPendingUnsharesCount() const;
 
-
   // Also migrates every db's tables, so they drain without any traffic.
   void OnServerCronCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
                             uint64_t subevent, void *data);

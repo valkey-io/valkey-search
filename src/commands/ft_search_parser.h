@@ -10,6 +10,8 @@
 
 #include <optional>
 
+#include "absl/container/inlined_vector.h"
+#include "absl/strings/string_view.h"
 #include "src/commands/commands.h"
 #include "src/query/search.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -71,6 +73,18 @@ struct SearchCommand : public QueryCommand {
     std::string vr_field;
   };
   RowFormat GetRowFormat() const;
+  // One RETURN field of a document, as replied: the name, then the value.
+  struct ReturnField {
+    absl::string_view name;
+    absl::string_view value;
+    // The value is the neighbor's distance, formatted when replied.
+    bool is_distance{false};
+  };
+  using ReturnFields = absl::InlinedVector<ReturnField, 8>;
+  // The RETURN fields this document has, in RETURN order. Views into the
+  // command and the neighbor, valid while both are.
+  ReturnFields CollectReturnFields(const indexes::Neighbor &neighbor,
+                                   const RowFormat &format) const;
   // Replies a document's elements: key, [score], [sort key], fields. Returns
   // the number of elements replied, always RowElementCount().
   size_t ReplyRowElements(ValkeyModuleCtx *ctx,

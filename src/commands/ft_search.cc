@@ -377,9 +377,47 @@ SearchCommand::RowFormat SearchCommand::GetRowFormat() const {
 }
 
 size_t SearchCommand::RowElementCount() const {
-  // Document ID, [score], then unless NOCONTENT: [sort key], fields array.
-  return 1 + (with_scores ? 1 : 0) +
-         (no_content ? 0 : (with_sort_keys ? 1 : 0) + 1);
+  size_t count = 1;  // Document ID
+  if (with_scores) {
+    ++count;
+  }
+  if (!no_content) {
+    if (with_sort_keys) {
+      ++count;
+    }
+    ++count;  // Fields array
+  }
+  return count;
+}
+
+SearchCommand::ReturnFields SearchCommand::CollectReturnFields(
+    const indexes::Neighbor &neighbor, const RowFormat &format) const {
+  const bool is_vector = !IsNonVectorQuery();
+  const auto &contents = neighbor.attribute_contents.value();
+  ReturnFields fields;
+  for (const auto &return_attribute : return_attributes) {
+    absl::string_view ret_id =
+        vmsdk::ToStringView(return_attribute.identifier.get());
+    if (is_vector && vmsdk::ToStringView(score_as.get()) == ret_id) {
+      fields.push_back({.name = ret_id, .is_distance = true});
+      continue;
+    }
+    if (!format.vr_field.empty() && ret_id == format.vr_field) {
+      if (HasVrDistance(neighbor)) {
+        fields.push_back(
+            {.name = vmsdk::ToStringView(return_attribute.alias.get()),
+             .is_distance = true});
+      }
+      continue;
+    }
+    auto it = contents.find(ret_id);
+    if (it != contents.end()) {
+      fields.push_back(
+          {.name = vmsdk::ToStringView(return_attribute.alias.get()),
+           .value = vmsdk::ToStringView(it->second.value.get())});
+    }
+  }
+  return fields;
 }
 
 size_t SearchCommand::ReplyRowElements(ValkeyModuleCtx *ctx,
@@ -449,43 +487,17 @@ size_t SearchCommand::ReplyRowElements(ValkeyModuleCtx *ctx,
       ValkeyModule_ReplyWithString(ctx, attribute_content.second.value.get());
     }
   } else {
-    // Which RETURN fields this document has decides the array length; one
-    // walk counts them so the array is replied with its length up front, and
-    // the same walk then replies them.
-    auto visit_return_fields = [&](bool reply) {
-      size_t cnt = 0;
-      for (const auto &return_attribute : return_attributes) {
-        absl::string_view ret_id =
-            vmsdk::ToStringView(return_attribute.identifier.get());
-        if (is_vector && vmsdk::ToStringView(score_as.get()) == ret_id) {
-          if (reply) ReplyScore(ctx, *score_as, neighbor);
-          ++cnt;
-          continue;
-        }
-        if (!format.vr_field.empty() && ret_id == format.vr_field) {
-          if (HasVrDistance(neighbor)) {
-            if (reply) {
-              ValkeyModule_ReplyWithString(ctx, return_attribute.alias.get());
-              auto score_value = expr::FormatDouble(neighbor.distance);
-              ReplyWithStringView(ctx, score_value);
-            }
-            ++cnt;
-          }
-          continue;
-        }
-        auto it = contents.find(ret_id);
-        if (it != contents.end()) {
-          if (reply) {
-            ValkeyModule_ReplyWithString(ctx, return_attribute.alias.get());
-            ValkeyModule_ReplyWithString(ctx, it->second.value.get());
-          }
-          ++cnt;
-        }
+    const ReturnFields fields = CollectReturnFields(neighbor, format);
+    ValkeyModule_ReplyWithArray(ctx, 2 * fields.size());
+    for (const auto &field : fields) {
+      ReplyWithStringView(ctx, field.name);
+      if (field.is_distance) {
+        auto score_value = expr::FormatDouble(neighbor.distance);
+        ReplyWithStringView(ctx, score_value);
+      } else {
+        ReplyWithStringView(ctx, field.value);
       }
-      return cnt;
-    };
-    ValkeyModule_ReplyWithArray(ctx, 2 * visit_return_fields(false));
-    visit_return_fields(true);
+    }
   }
   return elements + 1;
 }

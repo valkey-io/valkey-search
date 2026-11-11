@@ -88,8 +88,11 @@ static auto config_rdb_read_v2 =
     vmsdk::config::BooleanBuilder("rdb-read-v2", true).Dev().Build();
 static auto config_rdb_validate_on_write =
     vmsdk::config::BooleanBuilder("rdb-validate-on-write", false).Dev().Build();
-static auto config_rdb_write_key_labels =
-    vmsdk::config::BooleanBuilder("rdb-write-key-labels", true).Dev().Build();
+// Saves key labels ahead of each vector index so the load can share vectors
+// with the keyspace. When off (or for RDBs from older versions), every vector
+// is copied during the load, which can roughly double peak vector memory.
+static auto config_rdb_write_v3 =
+    vmsdk::config::BooleanBuilder("rdb-write-v3", true).Dev().Build();
 
 namespace options {
 const vmsdk::config::Boolean &GetRdbWriteV2() {
@@ -111,7 +114,7 @@ static bool RDBWriteV2() {
 }
 
 static bool RDBWriteKeyLabels() {
-  return dynamic_cast<vmsdk::config::Boolean &>(*config_rdb_write_key_labels)
+  return dynamic_cast<vmsdk::config::Boolean &>(*config_rdb_write_v3)
       .GetValue();
 }
 

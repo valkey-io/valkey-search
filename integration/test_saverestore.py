@@ -404,7 +404,7 @@ class TestLoadTrackedKeyMissingFromKeyspace(ValkeySearchTestCaseDebugMode):
         self.client.execute_command(
             "CONFIG", "SET", "search.rdb-read-v2", rdb_v2)
         self.client.execute_command(
-            "CONFIG", "SET", "search.rdb-write-key-labels", key_labels)
+            "CONFIG", "SET", "search.rdb-write-v3", key_labels)
 
     def reload_and_check(self, expected: set):
         # NOSAVE loads the RDB written by the test instead of saving the

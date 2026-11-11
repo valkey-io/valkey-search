@@ -82,6 +82,7 @@ Valkey prefixes each field with `search_` and each section with `search_` in `IN
 | `vector_registry_shared_externally_cnt`                          | `vector_registry`  |    Count     | Count of vectors successfully shared with the engine's hash field, so only one copy is kept in memory                                                               |
 | `vector_registry_shared_externally_errors`                       | `vector_registry`  |    Count     | Count of failed attempts to share a vector with the engine's hash field                                                                                             |
 | `vector_registry_sharing_active`                                 | `vector_registry`  |   Boolean    | 1 if vector memory sharing with the engine is enabled, otherwise 0                                                                                                  |
+| `vector_registry_unshare_errors`                                 | `vector_registry`  |    Count     | Count of failed attempts to unshare a vector from the engine's hash field or restore its field TTL                                                                  |
 
 ## Compatibility counters
 

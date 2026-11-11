@@ -56,7 +56,7 @@ class VectorRegistry {
   indexes::VectorRecordWithSize DedupOrConstruct(
       const InternedStringPtr &key, ValkeyModuleString *vector,
       const data_model::AttributeDataType &attribute_data_type, int db_num,
-      const indexes::VectorBase *vector_base);
+      const indexes::VectorBase *vector_base, ValkeyModuleCtx *ctx = nullptr);
 
   // Checks whether any registered vector index in db_num matches the given
   // key and attribute_identifier. Also checks that the index vector data size
@@ -76,8 +76,11 @@ class VectorRegistry {
       vmsdk::HugeFlatHashMap<uint64_t, InternedStringPtr> keys);
 
   // Processes up to batch_size pending unshare keys across all databases.
+  // When `retry_lookup_failed` is false, records that previously failed
+  // per-field TTL lookup are left queued without retrying them in this pass.
   // Returns the number of keys processed.
-  size_t ProcessPendingUnshares(uint32_t batch_size);
+  size_t ProcessPendingUnshares(uint32_t batch_size,
+                                bool retry_lookup_failed = true);
 
   // Returns the total number of keys pending unshare.
   size_t GetPendingUnsharesCount() const;
@@ -94,18 +97,27 @@ class VectorRegistry {
     // Unshare batches in which every item was deferred because its vector was
     // still referenced, while other pending unshares waited.
     uint64_t unshare_stalled_batches{0};
+    uint64_t unshare_errors{0};
   };
   const Stats &GetStats() const;
 
   ValkeyModuleCtx *GetCtx() const { return ctx_.get(); }
 
   bool IsSharingActive() const { return hash_vector_sharing_; }
+  bool HasTrackedKeys() const { return !tracked_vectors_.empty(); }
+  bool HasPendingUnshares() const { return !pending_unshares_.empty(); }
 
   void OnFlushDB(const ValkeyModuleFlushInfo *flush_info);
   void OnSwapDB(const ValkeyModuleSwapDbInfo *swap_info);
   // Purges tracked vector records and cancels pending unshares for a physically
   // deleted or overwritten key without interning untracked keys.
   void OnKeyDeleted(int db_num, absl::string_view key);
+  // Reconciles deferred lookup-failed unshares when a hash field mutation
+  // (e.g. replicated HDEL/HSET/HPERSIST on a multi-field hash) changes field
+  // ownership or TTL state.
+  void OnHashKeyMutated(ValkeyModuleCtx *ctx, int db_num,
+                        ValkeyModuleString *key_str, absl::string_view key,
+                        absl::string_view event);
   enum class Action {
     kMove,
     kUnshare,
@@ -122,6 +134,8 @@ class VectorRegistry {
       int db_num, absl::string_view key) const;
 
  private:
+  static constexpr uint32_t kLookupFailedCronRetryTicks = 10;
+
   struct RegistryKey {
     InternedStringPtr key;
     InternedStringPtr attribute_identifier;
@@ -136,8 +150,13 @@ class VectorRegistry {
     }
   };
 
+  struct TrackedVectorEntry {
+    indexes::VectorRecordWithSize record;
+    bool is_shared{false};
+  };
+
   using PerDbRegistryMap =
-      vmsdk::HugeFlatHashMap<RegistryKey, indexes::VectorRecordWithSize>;
+      vmsdk::HugeFlatHashMap<RegistryKey, TrackedVectorEntry>;
 
   // Maps db_num -> inner map to track active vector records per database.
   absl::flat_hash_map<int, PerDbRegistryMap> tracked_vectors_;
@@ -208,9 +227,44 @@ class VectorRegistry {
   // tracked_vectors_ because BorrowedKeyStringHash dereferences Str().
   absl::flat_hash_map<int, PerDbTrackedKeysMap> tracked_keys_by_db_;
 
+  // Multi-tier pending unshare queue per DB:
+  // - `ready` / `deferred`: normal two-tier queue so busy (RefCount() > 1)
+  //   records do not starve newly queued work.
+  // - `lookup_failed_active` / `lookup_failed_deferred`: two-tier cycle for
+  //   records whose HPEXPIRETIME lookup failed (or replica hidden expired
+  //   fields) so replicas skip futile retries, primaries back off retries
+  //   across cron ticks, and each record's lookup failure is counted once in
+  //   `unshare_errors`.
+  // Invariant: all four sets are pairwise disjoint.
+  struct PendingUnshareQueue {
+    vmsdk::HugeFlatHashSet<RegistryKey> ready;
+    vmsdk::HugeFlatHashSet<RegistryKey> deferred;
+    vmsdk::HugeFlatHashSet<RegistryKey> lookup_failed_active;
+    vmsdk::HugeFlatHashSet<RegistryKey> lookup_failed_deferred;
+
+    bool HasLookupFailed() const {
+      return !lookup_failed_active.empty() || !lookup_failed_deferred.empty();
+    }
+    bool ContainsLookupFailed(const RegistryKey &key) const {
+      return lookup_failed_active.contains(key) ||
+             lookup_failed_deferred.contains(key);
+    }
+    bool EraseLookupFailed(const RegistryKey &key) {
+      const size_t erased =
+          lookup_failed_active.erase(key) + lookup_failed_deferred.erase(key);
+      return erased > 0;
+    }
+    bool empty() const {
+      return ready.empty() && deferred.empty() && !HasLookupFailed();
+    }
+    size_t size() const {
+      return ready.size() + deferred.size() + lookup_failed_active.size() +
+             lookup_failed_deferred.size();
+    }
+  };
+
   // Maps db_num -> pending unshare keys queued for rate-limited processing.
-  absl::flat_hash_map<int, vmsdk::HugeFlatHashSet<RegistryKey>>
-      pending_unshares_;
+  absl::flat_hash_map<int, PendingUnshareQueue> pending_unshares_;
 
   void CancelPendingUnshare(int db_num, const RegistryKey &key);
   void AddToTrackedKeysIndex(int db_num, const RegistryKey &key);
@@ -221,6 +275,7 @@ class VectorRegistry {
   friend class VectorRegistryTest;
   bool hash_vector_sharing_{false};
   bool in_process_pending_unshares_{false};
+  uint32_t lookup_failed_cron_ticks_{0};
   mutable Stats stats_;
   vmsdk::UniqueValkeyDetachedThreadSafeContext ctx_;
 
@@ -239,23 +294,31 @@ class VectorRegistry {
       absl::string_view attribute_identifier,
       const indexes::VectorRecord &vector_record, size_t vector_size,
       const data_model::AttributeDataType &attribute_data_type);
-  std::optional<indexes::VectorRecordWithSize> ExtractTrackedRecord(
+  std::optional<TrackedVectorEntry> ExtractTrackedRecord(
       int db_num, const InternedStringPtr &key,
       const InternedStringPtr &attribute_identifier);
   void EraseTrackedRecord(int db_num, const RegistryKey &key);
   void EraseTrackedRecordsForKey(int db_num, absl::string_view key);
+  enum class UnshareResult {
+    kUnshared,
+    kRestoreFailed,
+    kRetainUntilKeyDeleted,
+    kDeferLookupFailed,
+  };
+
   // Replaces a shared string memory reference in the Valkey Hash data model
-  // with an independent owned copy. Returns true when the field no longer
-  // references the record: it was unshared here or already held its own copy.
-  // Returns false when the field is not visible, which includes a logically
-  // expired field that still holds the reference, or when the copy failed;
-  // the caller must then keep the record.
-  bool UnshareWithValkey(ValkeyModuleKey *key_obj,
-                         absl::string_view attribute_identifier,
-                         const indexes::VectorRecord &vector_record,
-                         size_t vector_size);
+  // with an independent owned copy while preserving any per-field TTL.
+  // When `already_verified_shared` is true, the caller has already confirmed
+  // that `key_str` is a hash whose `attribute_identifier` holds a shared string
+  // reference and closed its key handle.
+  UnshareResult UnshareWithValkey(int db_num, ValkeyModuleString *key_str,
+                                  absl::string_view attribute_identifier,
+                                  const indexes::VectorRecord &vector_record,
+                                  size_t vector_size,
+                                  bool already_verified_shared = false,
+                                  bool already_counted_error = false);
   bool ShouldRetainMissingVector(
-      int db_num, const RegistryKey &search_key,
+      ValkeyModuleCtx *ctx, int db_num, const RegistryKey &search_key,
       const data_model::AttributeDataType &attribute_data_type);
   bool IsEraseTrackedRecordSafe(
       int db_num, const RegistryKey &search_key, absl::string_view vector_str,

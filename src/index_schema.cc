@@ -619,7 +619,7 @@ std::vector<const indexes::VectorBase *> IndexSchema::GetVectorIndexes() const {
 namespace {
 
 void AppendMutatedAttribute(
-    IndexSchema::MutatedAttributes &mutated_attributes,
+    ValkeyModuleCtx *ctx, IndexSchema::MutatedAttributes &mutated_attributes,
     const InternedStringPtr &key, const Attribute &attribute,
     vmsdk::UniqueValkeyString attr_val, indexes::DeletionType deletion_type,
     const data_model::AttributeDataType &attribute_data_type, int db_num) {
@@ -631,12 +631,12 @@ void AppendMutatedAttribute(
     CHECK(vector_base);
     if (deletion_type != indexes::DeletionType::kNone || !attr_val) {
       VectorRegistry::Instance().DedupOrConstruct(
-          key, nullptr, attribute_data_type, db_num, vector_base);
+          key, nullptr, attribute_data_type, db_num, vector_base, ctx);
       mutated_attributes[alias] = AttributeData(deletion_type);
       return;
     }
     auto vector_record_with_size = VectorRegistry::Instance().DedupOrConstruct(
-        key, attr_val.get(), attribute_data_type, db_num, vector_base);
+        key, attr_val.get(), attribute_data_type, db_num, vector_base, ctx);
     mutated_attributes[alias] =
         AttributeData(std::move(vector_record_with_size));
     return;
@@ -678,7 +678,7 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
     const auto &attribute = attribute_itr.second;
     if (!key_obj) {
       added = true;
-      AppendMutatedAttribute(mutated_attributes, interned_key, attribute,
+      AppendMutatedAttribute(ctx, mutated_attributes, interned_key, attribute,
                              nullptr, indexes::DeletionType::kRecord,
                              attribute_data_type_->ToProto(), db_num_);
       continue;
@@ -695,7 +695,7 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
     }
     auto deletion_type = attr_val ? indexes::DeletionType::kNone
                                   : indexes::DeletionType::kIdentifier;
-    AppendMutatedAttribute(mutated_attributes, interned_key, attribute,
+    AppendMutatedAttribute(ctx, mutated_attributes, interned_key, attribute,
                            std::move(attr_val), deletion_type,
                            attribute_data_type_->ToProto(), db_num_);
     added = true;

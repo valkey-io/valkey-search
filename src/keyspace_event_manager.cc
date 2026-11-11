@@ -12,7 +12,6 @@
 #include <vector>
 
 #include "absl/base/no_destructor.h"
-#include "absl/cleanup/cleanup.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/strings/string_view.h"
@@ -35,6 +34,13 @@ constexpr absl::string_view kExpiredEvent = "expired";
 constexpr absl::string_view kEvictedEvent = "evicted";
 constexpr absl::string_view kRestoreEvent = "restore";
 constexpr absl::string_view kCopyToEvent = "copy_to";
+constexpr absl::string_view kHexpireEvent = "hexpire";
+constexpr absl::string_view kHexpiredEvent = "hexpired";
+constexpr absl::string_view kHpersistEvent = "hpersist";
+constexpr absl::string_view kHdelEvent = "hdel";
+constexpr absl::string_view kHsetEvent = "hset";
+constexpr absl::string_view kHincrbyEvent = "hincrby";
+constexpr absl::string_view kHincrbyfloatEvent = "hincrbyfloat";
 
 inline bool IsMoveFromEvent(const char *event) {
   return event && (event == kRenameFromEvent || event == kMoveFromEvent);
@@ -48,6 +54,13 @@ inline bool IsDeleteEvent(const char *event) {
   return event && (event == kDelEvent || event == kExpiredEvent ||
                    event == kEvictedEvent || event == kRestoreEvent ||
                    event == kCopyToEvent);
+}
+
+inline bool IsHashMutationEvent(const char *event) {
+  return event && (event == kHdelEvent || event == kHsetEvent ||
+                   event == kHincrbyEvent || event == kHincrbyfloatEvent ||
+                   event == kHexpiredEvent || event == kHexpireEvent ||
+                   event == kHpersistEvent);
 }
 }  // namespace
 
@@ -84,21 +97,19 @@ void KeyspaceEventManager::ProcessMoveNotification(ValkeyModuleCtx *ctx,
                                                    int type,
                                                    ValkeyModuleString *dst_key,
                                                    const char *dst_event) {
+  vmsdk::UniqueValkeyString moved_src_key = std::move(moved_src_key_);
+  int src_db_num = std::exchange(src_db_num_, -1);
   int dst_db_num = ValkeyModule_GetSelectedDb(ctx);
-  auto cleanup = absl::MakeCleanup([this]() {
-    moved_src_key_.reset();
-    src_db_num_ = -1;
-  });
 
-  auto src_key_view = vmsdk::ToStringView(moved_src_key_.get());
+  auto src_key_view = vmsdk::ToStringView(moved_src_key.get());
   auto src_subscriptions =
-      GetMatchingSubscriptions(src_key_view, type, src_db_num_);
-  auto tracked_attrs = VectorRegistry::Instance().GetTrackedAttributes(
-      src_db_num_, src_key_view);
+      GetMatchingSubscriptions(src_key_view, type, src_db_num);
+  auto tracked_attrs =
+      VectorRegistry::Instance().GetTrackedAttributes(src_db_num, src_key_view);
 
   auto dst_key_view = vmsdk::ToStringView(dst_key);
   if (src_subscriptions.empty() && tracked_attrs.empty()) {
-    if (src_db_num_ != dst_db_num || src_key_view != dst_key_view) {
+    if (src_db_num != dst_db_num || src_key_view != dst_key_view) {
       VectorRegistry::Instance().OnKeyDeleted(dst_db_num, dst_key_view);
     }
     return;
@@ -107,37 +118,42 @@ void KeyspaceEventManager::ProcessMoveNotification(ValkeyModuleCtx *ctx,
   auto src_interned_key = StringInternStore::Intern(src_key_view);
 
   // Classify each source vector attribute (from active subscriptions or
-  // tracked records awaiting unshare) as either kMove or kUnshare.
-  vmsdk::UniqueValkeyOpenKey dst_key_obj;
+  // tracked records awaiting unshare) as either kMove or kUnshare. Close
+  // dst_key_obj before calling MoveKey so expiration commands inside
+  // UnshareWithValkey cannot delete the key underneath an open outer handle.
   absl::flat_hash_map<InternedStringPtr, VectorRegistry::Action> actions;
-  auto classify_attribute = [&](const InternedStringPtr &attr_id,
-                                size_t vec_size) {
-    auto it =
-        actions.try_emplace(attr_id, VectorRegistry::Action::kUnshare).first;
-    if (it->second == VectorRegistry::Action::kUnshare) {
-      if (!dst_key_obj) {
-        dst_key_obj = vmsdk::MakeUniqueValkeyOpenKey(
-            ctx, dst_key, VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
+  {
+    vmsdk::UniqueValkeyOpenKey dst_key_obj;
+    auto classify_attribute = [&](const InternedStringPtr &attr_id,
+                                  size_t vec_size) {
+      auto it =
+          actions.try_emplace(attr_id, VectorRegistry::Action::kUnshare).first;
+      if (it->second == VectorRegistry::Action::kUnshare) {
+        if (!dst_key_obj) {
+          dst_key_obj = vmsdk::MakeUniqueValkeyOpenKey(
+              ctx, dst_key,
+              VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
+        }
+        if (dst_key_obj && VectorRegistry::Instance().HasMatchingVectorIndex(
+                               dst_db_num, dst_key_view, attr_id,
+                               dst_key_obj.get(), vec_size)) {
+          it->second = VectorRegistry::Action::kMove;
+        }
       }
-      if (dst_key_obj &&
-          VectorRegistry::Instance().HasMatchingVectorIndex(
-              dst_db_num, dst_key_view, attr_id, dst_key_obj.get(), vec_size)) {
-        it->second = VectorRegistry::Action::kMove;
+    };
+
+    for (const auto *sub : src_subscriptions) {
+      for (const auto *src_index : sub->GetVectorIndexes()) {
+        classify_attribute(src_index->GetInternedAttributeIdentifier(),
+                           src_index->GetVectorDataSize());
       }
     }
-  };
-
-  for (const auto *sub : src_subscriptions) {
-    for (const auto *src_index : sub->GetVectorIndexes()) {
-      classify_attribute(src_index->GetInternedAttributeIdentifier(),
-                         src_index->GetVectorDataSize());
+    for (const auto &[attr_id, vec_size] : tracked_attrs) {
+      classify_attribute(attr_id, vec_size);
     }
   }
-  for (const auto &[attr_id, vec_size] : tracked_attrs) {
-    classify_attribute(attr_id, vec_size);
-  }
 
-  VectorRegistry::Instance().MoveKey(src_db_num_, src_interned_key, dst_db_num,
+  VectorRegistry::Instance().MoveKey(src_db_num, src_interned_key, dst_db_num,
                                      dst_key, actions);
 
   if (src_subscriptions.empty()) {
@@ -146,17 +162,17 @@ void KeyspaceEventManager::ProcessMoveNotification(ValkeyModuleCtx *ctx,
 
   // Source subscriptions must be notified with the source event (e.g.
   // rename_from or move_from) in the context of their original database
-  // (src_db_num_). We temporarily switch databases if moving across databases
+  // (src_db_num). We temporarily switch databases if moving across databases
   // and restore dst_db_num afterward. Destination subscriptions will be
   // notified with the destination event subsequently in NotifySubscribers.
   const char *src_event = (dst_event && dst_event == kMoveToEvent)
                               ? kMoveFromEvent.data()
                               : kRenameFromEvent.data();
   {
-    vmsdk::ValkeySelectDbGuard db_guard(ctx, src_db_num_);
+    vmsdk::ValkeySelectDbGuard db_guard(ctx, src_db_num);
     for (const auto &subscription : src_subscriptions) {
       subscription->OnKeyspaceNotification(ctx, type, src_event,
-                                           moved_src_key_.get());
+                                           moved_src_key.get());
     }
   }
 }
@@ -164,6 +180,9 @@ void KeyspaceEventManager::ProcessMoveNotification(ValkeyModuleCtx *ctx,
 void KeyspaceEventManager::NotifySubscribers(ValkeyModuleCtx *ctx, int type,
                                              const char *event,
                                              ValkeyModuleString *key) {
+  if (suppress_hexpire_notifications_ && event && event == kHexpireEvent) {
+    return;
+  }
   if (IsMoveFromEvent(event)) {
     moved_src_key_ = vmsdk::RetainUniqueValkeyString(key);
     src_db_num_ = ValkeyModule_GetSelectedDb(ctx);
@@ -180,6 +199,10 @@ void KeyspaceEventManager::NotifySubscribers(ValkeyModuleCtx *ctx, int type,
   if (IsDeleteEvent(event)) {
     VectorRegistry::Instance().OnKeyDeleted(ValkeyModule_GetSelectedDb(ctx),
                                             key_view);
+  } else if (VectorRegistry::Instance().HasPendingUnshares() &&
+             IsHashMutationEvent(event)) {
+    VectorRegistry::Instance().OnHashKeyMutated(
+        ctx, ValkeyModule_GetSelectedDb(ctx), key, key_view, event);
   }
   auto subscriptions_to_notify = GetMatchingSubscriptions(key_view, type);
   if (subscriptions_to_notify.empty()) {

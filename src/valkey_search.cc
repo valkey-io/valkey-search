@@ -404,6 +404,12 @@ static vmsdk::info_field::Integer vector_registry_shared_externally_errors(
       return VectorRegistry::Instance().GetStats().hash_sharing_errors;
     }));
 
+static vmsdk::info_field::Integer vector_registry_unshare_errors(
+    "vector_registry", "vector_registry_unshare_errors",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      return VectorRegistry::Instance().GetStats().unshare_errors;
+    }));
+
 static vmsdk::info_field::Integer vector_registry_dedup_cnt(
     "vector_registry", "vector_registry_dedup_cnt",
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {

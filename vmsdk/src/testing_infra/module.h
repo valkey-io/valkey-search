@@ -239,6 +239,14 @@ class MockValkeyModule {
   MOCK_METHOD(ValkeyModuleCallReply *, Call,
               (ValkeyModuleCtx * ctx, const char *cmd, const char *fmt,
                const char *arg1));
+  MOCK_METHOD(ValkeyModuleCallReply *, Call,
+              (ValkeyModuleCtx * ctx, const char *cmd, const char *fmt,
+               ValkeyModuleString *arg1, const char *arg2, const char *arg3,
+               ValkeyModuleString *arg4));
+  MOCK_METHOD(ValkeyModuleCallReply *, Call,
+              (ValkeyModuleCtx * ctx, const char *cmd, const char *fmt,
+               ValkeyModuleString *arg1, long long arg2, const char *arg3,
+               const char *arg4, ValkeyModuleString *arg5));  // NOLINT
   MOCK_METHOD(ValkeyModuleCallReply *, CallReplyArrayElement,
               (ValkeyModuleCallReply * reply, size_t index));
   MOCK_METHOD(int, CallReplyMapElement,
@@ -1457,6 +1465,24 @@ inline ValkeyModuleCallReply *TestValkeyModule_Call(ValkeyModuleCtx *ctx,
                                        arg3, arg3_len);
     return ret;
   }
+  if (format == "sccs") {
+    ValkeyModuleString *arg1 = va_arg(args, ValkeyModuleString *);
+    const char *arg2 = va_arg(args, const char *);
+    const char *arg3 = va_arg(args, const char *);
+    ValkeyModuleString *arg4 = va_arg(args, ValkeyModuleString *);
+    va_end(args);
+    return kMockValkeyModule->Call(ctx, cmdname, fmt, arg1, arg2, arg3, arg4);
+  }
+  if (format == "slccs") {
+    ValkeyModuleString *arg1 = va_arg(args, ValkeyModuleString *);
+    long long arg2 = va_arg(args, long long);  // NOLINT
+    const char *arg3 = va_arg(args, const char *);
+    const char *arg4 = va_arg(args, const char *);
+    ValkeyModuleString *arg5 = va_arg(args, ValkeyModuleString *);
+    va_end(args);
+    return kMockValkeyModule->Call(ctx, cmdname, fmt, arg1, arg2, arg3, arg4,
+                                   arg5);
+  }
   CHECK(false && "Unsupported format specifier");
   return nullptr;
 }
@@ -1828,15 +1854,31 @@ inline void TestValkeyModule_Init() {
       .WillByDefault(TestValkeyModule_CallReplyMapElementImpl);
   ON_CALL(*kMockValkeyModule, CallReplyInteger(testing::_))
       .WillByDefault(TestValkeyModule_CallReplyIntegerImpl);
-  ON_CALL(*kMockValkeyModule,
-          Call(testing::_, testing::_, testing::_, testing::_, testing::_,
-               testing::_, testing::_, testing::_))
+  ON_CALL(*kMockValkeyModule, Call(testing::_, testing::_, testing::_,
+                                   testing::Matcher<const char *>(testing::_),
+                                   testing::Matcher<const char *>(testing::_),
+                                   testing::Matcher<size_t>(testing::_),
+                                   testing::Matcher<const char *>(testing::_),
+                                   testing::Matcher<size_t>(testing::_)))
       .WillByDefault([](ValkeyModuleCtx *ctx, const char *cmd, const char *fmt,
                         const char *arg1, const char *arg2, size_t arg2_len,
                         const char *arg3,
                         size_t arg3_len) -> ValkeyModuleCallReply * {
         static auto ok_reply = CreateValkeyModuleCallReply(std::string("OK"));
         return ok_reply.get();
+      });
+  ON_CALL(*kMockValkeyModule, Call(testing::_, testing::StrEq("HPEXPIRETIME"),
+                                   testing::StrEq("sccs"), testing::_,
+                                   testing::_, testing::_, testing::_))
+      .WillByDefault([](ValkeyModuleCtx *, const char *, const char *,
+                        ValkeyModuleString *, const char *, const char *,
+                        ValkeyModuleString *) -> ValkeyModuleCallReply * {
+        static auto no_ttl_reply = []() {
+          CallReplyArray arr;
+          arr.push_back(CreateValkeyModuleCallReply(CallReplyInteger(-1)));
+          return CreateValkeyModuleCallReply(std::move(arr));
+        }();
+        return no_ttl_reply.get();
       });
   ON_CALL(*kMockValkeyModule, Milliseconds()).WillByDefault([]() -> long long {
     static long long fake_time = 0;

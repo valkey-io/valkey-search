@@ -1412,14 +1412,16 @@ TEST_F(ResponseGeneratorTest, SortByValueFiledForTheCoordinatorVersion) {
   EXPECT_CALL(data_type, ToProto()).WillRepeatedly([]() {
     return data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH;
   });
+  // ToRecordsMap keys view the input map, so it must outlive the replies.
+  const std::unordered_map<std::string, std::string> fetched{{"a", "7"},
+                                                             {"n", "1"}};
   EXPECT_CALL(data_type, FetchAllAttributes(testing::_, testing::_, testing::_,
                                             testing::_, testing::_))
-      .WillRepeatedly([](ValkeyModuleCtx *, const std::optional<std::string> &,
-                         ValkeyModuleKey *, absl::string_view,
-                         const absl::flat_hash_set<absl::string_view> &)
-                          -> absl::StatusOr<RecordsMap> {
-        return ToRecordsMap({{"a", "7"}, {"n", "1"}});
-      });
+      .WillRepeatedly(
+          [&fetched](ValkeyModuleCtx *, const std::optional<std::string> &,
+                     ValkeyModuleKey *, absl::string_view,
+                     const absl::flat_hash_set<absl::string_view> &)
+              -> absl::StatusOr<RecordsMap> { return ToRecordsMap(fetched); });
 
   for (bool new_coordinator : {true, false}) {
     UnitTestSearchParameters parameters;

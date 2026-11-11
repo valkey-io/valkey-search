@@ -143,7 +143,6 @@ struct SearchPartitionResultsTracker {
     absl::MutexLock lock(&mutex);
     accumulated_total_count.fetch_add(response.total_count(),
                                       std::memory_order_relaxed);
-    // TODO: remove once every node sets sortby_keyed_by_lookup_key.
     std::optional<std::string> refile_to;
     if (!response.sortby_keyed_by_lookup_key()) {
       refile_to = OldShardSortByRefileKey(*parameters);

@@ -74,7 +74,6 @@ struct SortByKey {
 
 // Copies a row's SORTBY value from the alias to lookup_key, for rows from a
 // shard that predates sortby_keyed_by_lookup_key.
-// TODO: remove once every node sets sortby_keyed_by_lookup_key.
 void RefileAliasSortByValue(RecordsMap &contents, absl::string_view lookup_key,
                             absl::string_view alias);
 
@@ -490,7 +489,6 @@ std::string GetVrScoreFieldName(const SearchParameters &parameters);
 // The name to re-file an older shard's SORTBY values under, or nullopt. A whole
 // hash, or a RETURN of the sort field, already has the field, and an
 // alias-named entry there is a real field.
-// TODO: remove once every node sets sortby_keyed_by_lookup_key.
 std::optional<std::string> OldShardSortByRefileKey(
     const SearchParameters &parameters);
 

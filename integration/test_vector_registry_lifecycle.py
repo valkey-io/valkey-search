@@ -2028,6 +2028,86 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         assert self.client.ping()
         waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0)
 
+    def test_filter_rejected_key_is_released(self):
+        """A FILTER-rejected key's vector stays registered once the index is
+        dropped.
+
+        Stimulus: an index with a FILTER, one key it admits and one it rejects,
+        then FT.DROPINDEX followed by DEL. The vector is registered and shared
+        before the FILTER runs; a rejected key is then tracked by no index, so
+        once the drop removes the subscription nothing reaches its entry.
+
+        Expected: no registry entry survives the drop and the deletes.
+        Observed: the rejected key's entry stays until FLUSHDB.
+        """
+        self.assert_sharing_active()
+        self.client.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc",
+            "FILTER", "@tag=='keep'",
+            "SCHEMA", "tag", "TAG",
+            "vec", "VECTOR", "HNSW", "6", "TYPE", "FLOAT32", "DIM", str(DIM), "DISTANCE_METRIC", "L2",
+        )
+        index = Index("idx", [], prefixes=["doc"])
+        self.client.hset("doc:keep", mapping={"tag": "keep", "vec": vector(0)})
+        self.client.hset("doc:drop", mapping={"tag": "drop", "vec": vector(1)})
+        assert index.info(self.client).num_docs == 1
+        assert self.registry_stat("entry_cnt") == 1
+
+        index.drop(self.client)
+        self.client.delete("doc:keep", "doc:drop")
+        self.wait_for_unshare_drain()
+
+        assert self.registry_stat("entry_cnt") == 0, "registry still holds the FILTER-rejected key"
+
+    @pytest.mark.parametrize("algo", ["HNSW", "FLAT"])
+    def test_filter_update_rejecting_previously_accepted_key_unshares_vector(
+        self, algo: str
+    ):
+        """Updating a key so its index's FILTER now rejects it must unshare and
+        release the vector from the registry."""
+        self.assert_sharing_active()
+        self.client.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:",
+            "FILTER", "@tag=='keep'",
+            "SCHEMA", "tag", "TAG",
+            "vec", "VECTOR", algo, "6", "TYPE", "FLOAT32", "DIM", str(DIM), "DISTANCE_METRIC", "L2",
+        )
+        index = Index("idx", [], prefixes=["doc:"])
+        self.client.hset("doc:0", mapping={"tag": "keep", "vec": vector(0)})
+        self.wait_for_docs(index, 1)
+        assert self.registry_stat("entry_cnt") == 1
+
+        self.client.hset("doc:0", "tag", "drop")
+        self.wait_for_docs(index, 0)
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0)
+        assert self.client.hget("doc:0", "vec") == vector(0)
+
+    @pytest.mark.parametrize("algo", ["HNSW", "FLAT"])
+    def test_invalid_other_field_releases_vector_entry(self, algo: str):
+        """When invalid data on another field drops the key under
+        emulate-release >= 1.3.0, its vector registry entry must be released."""
+        self.assert_sharing_active()
+        self.client.config_set("search.emulate-release", "1.3.0")
+        self.client.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:",
+            "SCHEMA", "num", "NUMERIC",
+            "vec", "VECTOR", algo, "6", "TYPE", "FLOAT32", "DIM", str(DIM), "DISTANCE_METRIC", "L2",
+        )
+        index = Index("idx", [], prefixes=["doc:"])
+        self.client.hset(
+            "doc:bad", mapping={"num": "not_a_number", "vec": vector(0)}
+        )
+        waiters.wait_for_equal(
+            lambda: index.info(self.client).hash_indexing_failures, 1
+        )
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0)
+        assert self.client.hget("doc:bad", "vec") == vector(0)
+
+        index.drop(self.client)
+        self.client.delete("doc:bad")
+        self.wait_for_unshare_drain()
+        assert self.registry_stat("entry_cnt") == 0
+
 
 class TestVectorRegistryPersistence(ValkeySearchTestCaseDebugMode):
     """Save on one server, load on another.

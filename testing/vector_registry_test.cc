@@ -1451,4 +1451,34 @@ TEST_F(
   EXPECT_EQ(registry.GetStats().entry_cnt, 0);
 }
 
+TEST_F(VectorRegistryTest,
+       ProcessPendingUnsharesDefersUntilRefCountDropsToOne) {
+  auto &registry = VectorRegistry::Instance();
+  auto k1 = StringInternStore::Intern("k_refcount_defer");
+  auto attr = StringInternStore::Intern("vec");
+  MockIndex index(2, attr->Str(), 0);
+  auto valkey_vec = MakeFloatVectorString();
+
+  auto held_rec = registry.DedupOrConstruct(
+      k1, valkey_vec.get(),
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &index);
+  ASSERT_NE(held_rec, nullptr);
+  EXPECT_EQ(held_rec.vector_record.RefCount(), 2u);
+
+  // While held_rec keeps RefCount() > 1, RemoveIndexKeys must defer the
+  // unshare rather than dropping it from pending_unshares_.
+  std::vector<InternedStringPtr> keys = {k1};
+  registry.RemoveIndexKeys(0, attr, keys);
+  EXPECT_EQ(registry.GetPendingUnsharesCount(), 1u);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 1u);
+
+  // Once the external reference is released, the next server cron tick
+  // unshares and erases the tracked entry.
+  held_rec.vector_record.reset();
+  registry.OnServerCronCallback(nullptr, ValkeyModuleEvent_CronLoop, 0,
+                                nullptr);
+  EXPECT_EQ(registry.GetPendingUnsharesCount(), 0u);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 0u);
+}
+
 }  // namespace valkey_search

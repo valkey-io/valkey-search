@@ -130,6 +130,11 @@ class VectorHNSW : public VectorType<T> {
   size_t GetCapacity() const override ABSL_NO_THREAD_SAFETY_ANALYSIS {
     return algo_->max_elements_;
   }
+  void ReclaimRetired() const override ABSL_NO_THREAD_SAFETY_ANALYSIS {
+    if (algo_->has_retired_.load(std::memory_order_relaxed)) {
+      algo_->ReclaimRetired();
+    }
+  }
   // Reading immutable index parameters does not require a mutex. Bypassing
   // thread-safety analysis because while the pointer algo_ is guarded to
   // protect mutative operations, these specific fields are strictly constant

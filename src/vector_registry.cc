@@ -386,6 +386,7 @@ bool VectorRegistry::HasMatchingVectorIndex(
           continue;
         }
         if (require_tracked && !index->IsTracked(interned_key)) {
+          index->ReclaimRetired();
           continue;
         }
         return true;
@@ -469,6 +470,7 @@ size_t VectorRegistry::ProcessPendingUnshares(uint32_t batch_size) {
       break;
     }
     vmsdk::ValkeySelectDbGuard db_guard(ctx_.get(), db_num);
+    std::vector<absl::flat_hash_set<RegistryKey>::node_type> deferred_nodes;
 
     while (!pending_keys.empty() && processed < batch_size) {
       auto node = pending_keys.extract(pending_keys.begin());
@@ -487,10 +489,13 @@ size_t VectorRegistry::ProcessPendingUnshares(uint32_t batch_size) {
       auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
           ctx_.get(), key_str.get(),
           VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_WRITE);
-      if (tracked_it->second.vector_record.RefCount() > 1 ||
-          HasMatchingVectorIndex(db_num, rk.key->Str(), rk.attribute_identifier,
+      if (HasMatchingVectorIndex(db_num, rk.key->Str(), rk.attribute_identifier,
                                  key_obj.get(), tracked_it->second.size,
                                  /*require_tracked=*/true)) {
+        continue;
+      }
+      if (tracked_it->second.vector_record.RefCount() > 1) {
+        deferred_nodes.push_back(std::move(node));
         continue;
       }
       auto record = tracked_it->second;
@@ -502,6 +507,10 @@ size_t VectorRegistry::ProcessPendingUnshares(uint32_t batch_size) {
         UnshareWithValkey(key_obj.get(), rk.attribute_identifier->Str(),
                           record.vector_record, record.size);
       }
+    }
+
+    for (auto &node : deferred_nodes) {
+      pending_keys.insert(std::move(node));
     }
 
     if (pending_keys.empty()) {

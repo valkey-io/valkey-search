@@ -552,6 +552,7 @@ class VectorBase : public IndexBase {
     return distance.ok() && *distance <= radius;
   }
   bool IsVectorIndex() const override { return true; }
+  virtual void ReclaimRetired() const {}
   virtual uint64_t GetMaxLoadedLabel() const { return 0; }
   virtual size_t GetLabelCount() const { return 0; }
   FixedSizeAllocator *GetVectorAllocator() const {

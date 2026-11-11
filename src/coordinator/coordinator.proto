@@ -32,7 +32,7 @@ service Coordinator {
   // for the shared consistency check.
   rpc MultiSearchIndexPartition(MultiSearchIndexPartitionRequest)
       returns (MultiSearchIndexPartitionResponse) {}
-  // Bounded content fan-out recovery: content for global winners that a shard
+  // Bounded content fan-out refetch: content for global winners that a shard
   // returned without content (NeighborEntry.content_omitted). The shard
   // revalidates each key against the query, as it does for a search, and
   // returns entries only for keys that still match.

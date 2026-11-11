@@ -162,7 +162,7 @@ const config::Boolean &GetFanoutBoundedContent();
 
 /// Return the target fraction of bounded-content queries that may need a
 /// second round
-double GetFanoutContentRecoveryRate();
+double GetFanoutContentRefetchRatio();
 
 /// Return the threshold for async fanout operations
 config::Number &GetAsyncFanoutThreshold();

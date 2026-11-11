@@ -37,7 +37,6 @@
 #include "src/query/fanout_merge.h"
 #include "src/query/search.h"
 #include "src/schema_manager.h"
-#include "src/valkey_search.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/info.h"
@@ -202,7 +201,7 @@ class RemoteResponderSearch : public query::SearchParameters {
   }
 };
 
-// Bounded content fan-out recovery (FetchContent): resolves content for
+// Bounded content fan-out refetch (FetchContent): resolves content for
 // given keys through the search completion path, without running a search.
 // Not a search partition, so it stays out of the search partition metrics.
 class RemoteContentFetch final : public RemoteResponderSearch {
@@ -216,19 +215,7 @@ class RemoteContentFetch final : public RemoteResponderSearch {
 
 grpc::Status Service::PerformSlotConsistencyCheck(
     uint64_t expected_slot_fingerprint) {
-  // compare slot fingerprint
-  // use the cached cluster map for now, refreshing the cluster map would need
-  // the client to execute commands at that node, will use new core api in the
-  // future
-  auto cluster_map = ValkeySearch::Instance().GetClusterMap();
-  CHECK(cluster_map);
-  auto current_node_shard = cluster_map->GetCurrentNodeShard();
-  CHECK(current_node_shard);
-  uint64_t my_shard_slot_fingerprint = current_node_shard->slots_fingerprint;
-  if (my_shard_slot_fingerprint != expected_slot_fingerprint) {
-    return {grpc::StatusCode::FAILED_PRECONDITION, "Slot fingerprint mismatch"};
-  }
-  return grpc::Status::OK;
+  return ToGrpcStatus(CheckSlotConsistency(expected_slot_fingerprint));
 }
 
 grpc::Status Service::PerformIndexConsistencyCheck(
@@ -279,20 +266,11 @@ absl::Status Service::PrepareRemoteSearch(
   VMSDK_RETURN_IF_ERROR(
       GRPCSearchRequestToParameters(request, context, &operation));
 
-  // perform index consistency check (index fingerprint/version), required
   auto schema =
       SchemaManager::Instance()
           .GetIndexSchema(operation.db_num, operation.index_schema_name)
           .value();
-  VMSDK_RETURN_IF_ERROR(ToAbslStatus(PerformIndexConsistencyCheck(
-      request.index_fingerprint_version(), schema)));
-
-  if (request.enable_consistency()) {
-    // Perform slot consistency check
-    VMSDK_RETURN_IF_ERROR(
-        ToAbslStatus(PerformSlotConsistencyCheck(request.slot_fingerprint())));
-  }
-  return absl::OkStatus();
+  return CheckRequestConsistency(request, *schema);
 }
 
 void Service::SearchOneArm(grpc::CallbackServerContext *context,

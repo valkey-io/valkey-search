@@ -17,7 +17,7 @@
 namespace valkey_search::query {
 
 // Prepares `params` to resolve content for `candidates` instead of running a
-// search (bounded content fan-out recovery). Each candidate carries its key,
+// search (bounded content fan-out refetch). Each candidate carries its key,
 // score, distance and mutation sequence number from the first round, and no
 // content. ResolveContent then applies the contention check, fetch,
 // revalidation and slot ownership exactly as for a search's own results: a

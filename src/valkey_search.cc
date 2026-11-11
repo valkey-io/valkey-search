@@ -730,12 +730,12 @@ static vmsdk::info_field::Integer bounded_content_single_round_queries(
         }));
 
 // Bounded content fan-outs that needed a FetchContent round.
-static vmsdk::info_field::Integer bounded_content_recovery_queries(
-    "coordinator", "bounded_content_recovery_queries",
+static vmsdk::info_field::Integer bounded_content_refetch_queries(
+    "coordinator", "bounded_content_refetch_queries",
     vmsdk::info_field::IntegerBuilder()
         .Dev()
         .Computed([]() -> long long {
-          return Metrics::GetStats().bounded_content_recovery_queries;
+          return Metrics::GetStats().bounded_content_refetch_queries;
         })
         .VisibleIf([]() -> bool {
           return ValkeySearch::Instance().UsingCoordinator();

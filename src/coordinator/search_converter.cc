@@ -28,6 +28,7 @@
 #include "src/query/predicate.h"
 #include "src/query/search.h"
 #include "src/schema_manager.h"
+#include "src/valkey_search.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
@@ -40,6 +41,30 @@ absl::Status CheckIndexConsistency(
   if (schema.GetFingerprint() != expected_fingerprint_version.fingerprint() ||
       schema.GetVersion() != expected_fingerprint_version.version()) {
     return absl::FailedPreconditionError("Slot fingerprint mismatch");
+  }
+  return absl::OkStatus();
+}
+
+absl::Status CheckSlotConsistency(uint64_t expected_slot_fingerprint) {
+  // use the cached cluster map for now, refreshing the cluster map would need
+  // the client to execute commands at that node, will use new core api in the
+  // future
+  auto cluster_map = ValkeySearch::Instance().GetClusterMap();
+  CHECK(cluster_map);
+  auto current_node_shard = cluster_map->GetCurrentNodeShard();
+  CHECK(current_node_shard);
+  if (current_node_shard->slots_fingerprint != expected_slot_fingerprint) {
+    return absl::FailedPreconditionError("Slot fingerprint mismatch");
+  }
+  return absl::OkStatus();
+}
+
+absl::Status CheckRequestConsistency(const SearchIndexPartitionRequest& request,
+                                     const IndexSchema& schema) {
+  VMSDK_RETURN_IF_ERROR(
+      CheckIndexConsistency(request.index_fingerprint_version(), schema));
+  if (request.enable_consistency()) {
+    return CheckSlotConsistency(request.slot_fingerprint());
   }
   return absl::OkStatus();
 }

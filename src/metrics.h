@@ -95,7 +95,7 @@ class Metrics {
     // Bounded content fan-out (query/content_bounded_fanout.h).
     std::atomic<uint64_t> bounded_content_queries{0};
     std::atomic<uint64_t> bounded_content_single_round_queries{0};
-    std::atomic<uint64_t> bounded_content_recovery_queries{0};
+    std::atomic<uint64_t> bounded_content_refetch_queries{0};
     std::atomic<uint64_t> bounded_content_missing_winners{0};
     std::atomic<uint64_t> bounded_content_fetch_requests{0};
     std::atomic<uint64_t> bounded_content_fetch_failures{0};

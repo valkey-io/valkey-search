@@ -8,6 +8,7 @@
 #ifndef VALKEYSEARCH_SRC_COORDINATOR_SEARCH_CONVERTER_H_
 #define VALKEYSEARCH_SRC_COORDINATOR_SEARCH_CONVERTER_H_
 
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -45,6 +46,15 @@ absl::Status GRPCSearchRequestToParameters(
 absl::Status CheckIndexConsistency(
     const IndexFingerprintVersion& expected_fingerprint_version,
     const IndexSchema& schema);
+
+// FAILED_PRECONDITION unless this node's shard still owns the slots the
+// request was built for.
+absl::Status CheckSlotConsistency(uint64_t expected_slot_fingerprint);
+
+// The checks a search request must pass on the node that runs it: the index
+// it was built for and, under consistency, the slots.
+absl::Status CheckRequestConsistency(const SearchIndexPartitionRequest& request,
+                                     const IndexSchema& schema);
 
 std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
     const query::SearchParameters& parameters);

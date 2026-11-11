@@ -28,7 +28,7 @@ using ::testing::ElementsAre;
 std::vector<uint64_t> Estimate(double alpha, uint64_t k,
                                std::vector<double> weights) {
   std::vector<uint64_t> limits(weights.size());
-  RecoveryRateEstimator(alpha).Estimate({k, weights}, absl::MakeSpan(limits));
+  RefetchRateEstimator(alpha).Estimate({k, weights}, absl::MakeSpan(limits));
   return limits;
 }
 
@@ -37,11 +37,11 @@ std::vector<double> Equal(size_t n) {
 }
 
 // ---------------------------------------------------------------------------
-// RecoveryRateEstimator
+// RefetchRateEstimator
 // ---------------------------------------------------------------------------
 
 // Values checked against an exact binomial computation.
-TEST(RecoveryRateEstimatorTest, EqualSharesMatchExactBinomial) {
+TEST(RefetchRateEstimatorTest, EqualSharesMatchExactBinomial) {
   EXPECT_THAT(Estimate(0.10, 10, Equal(2)), ElementsAre(8, 8));
   EXPECT_THAT(Estimate(0.10, 10, Equal(4)), Each(5));
   EXPECT_THAT(Estimate(0.01, 10, Equal(2)), Each(9));
@@ -50,7 +50,7 @@ TEST(RecoveryRateEstimatorTest, EqualSharesMatchExactBinomial) {
   EXPECT_THAT(Estimate(0.10, 100, Equal(4)), Each(34));
 }
 
-TEST(RecoveryRateEstimatorTest, StaysBetweenMeanShareAndK) {
+TEST(RefetchRateEstimatorTest, StaysBetweenMeanShareAndK) {
   for (double alpha : {0.001, 0.01, 0.1, 0.5, 1.0}) {
     for (uint64_t k : {1u, 2u, 7u, 10u, 100u, 1000u, 100000u}) {
       for (size_t n : {2u, 3u, 8u, 64u, 500u}) {
@@ -66,18 +66,18 @@ TEST(RecoveryRateEstimatorTest, StaysBetweenMeanShareAndK) {
   }
 }
 
-TEST(RecoveryRateEstimatorTest, ZeroRateNeverBounds) {
+TEST(RefetchRateEstimatorTest, ZeroRateNeverBounds) {
   EXPECT_THAT(Estimate(0.0, 100, Equal(8)), Each(100));
 }
 
-TEST(RecoveryRateEstimatorTest, FullRateIsMostAggressive) {
+TEST(RefetchRateEstimatorTest, FullRateIsMostAggressive) {
   // Each shard may overflow with probability 1/N, so the limit sits a little
   // above the mean share of 25.
   EXPECT_THAT(Estimate(1.0, 100, Equal(4)), Each(28));
   EXPECT_THAT(Estimate(1.0, 10, Equal(2)), Each(5));
 }
 
-TEST(RecoveryRateEstimatorTest, HigherRateNeverRaisesTheLimit) {
+TEST(RefetchRateEstimatorTest, HigherRateNeverRaisesTheLimit) {
   uint64_t previous = 100;
   for (double alpha = 0.001; alpha <= 1.0; alpha *= 2) {
     const uint64_t limit = Estimate(alpha, 100, Equal(4))[0];
@@ -86,11 +86,11 @@ TEST(RecoveryRateEstimatorTest, HigherRateNeverRaisesTheLimit) {
   }
 }
 
-TEST(RecoveryRateEstimatorTest, LargerShareGetsLargerLimit) {
+TEST(RefetchRateEstimatorTest, LargerShareGetsLargerLimit) {
   EXPECT_THAT(Estimate(0.10, 100, {0.6, 0.4}), ElementsAre(68, 48));
 }
 
-TEST(RecoveryRateEstimatorTest, ShardWithNoShareGetsNoContent) {
+TEST(RefetchRateEstimatorTest, ShardWithNoShareGetsNoContent) {
   EXPECT_THAT(Estimate(0.10, 10, {1.0, 0.0}), ElementsAre(10, 0));
 }
 
@@ -134,7 +134,7 @@ class FixedEstimator : public ContentLimitEstimator {
 };
 
 TEST_F(FanoutContentPlannerTest, PlansKCandidatesAndEstimatedContent) {
-  RecoveryRateEstimator estimator(0.10);
+  RefetchRateEstimator estimator(0.10);
   auto parameters = TextSearch(0, 10);
   auto targets = Targets(4);
   auto plan = FanoutContentPlanner(estimator).Plan(parameters, targets);
@@ -215,7 +215,7 @@ TEST_F(FanoutContentPlannerTest, SharesFollowSlotOwnership) {
   auto targets = Targets(2);
   targets[0].shard = &big;
   targets[1].shard = &small;
-  RecoveryRateEstimator estimator(0.10);
+  RefetchRateEstimator estimator(0.10);
   auto parameters = TextSearch(0, 100);
   auto plan = FanoutContentPlanner(estimator).Plan(parameters, targets);
   ASSERT_TRUE(plan.has_value());
@@ -231,7 +231,7 @@ TEST_F(FanoutContentPlannerTest, UnknownSlotOwnershipFallsBackToEqualShares) {
   known.owned_slots = {{0, 12287}};
   auto targets = Targets(2);
   targets[0].shard = &known;  // targets[1].shard stays null
-  RecoveryRateEstimator estimator(0.10);
+  RefetchRateEstimator estimator(0.10);
   auto parameters = TextSearch(0, 10);
   auto plan = FanoutContentPlanner(estimator).Plan(parameters, targets);
   ASSERT_TRUE(plan.has_value());

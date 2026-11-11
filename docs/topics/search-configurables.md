@@ -27,7 +27,7 @@ The search module uses the Valkey configuration mechanism. Thus each of the name
 | search.ft-info-rpc-timeout-ms                 | Number  |               | RPC timeout in milliseconds for FT.INFO fanout command                                                                            |
 | search.local-fanout-queue-wait-threshold      | Number  |               | Queue wait threshold in milliseconds for preferring local node in fanout operations                                               |
 | search.fanout-bounded-content                 | Boolean |      no       | Cluster FT.SEARCH with content asks each shard for content on only its estimated share of the results, and fetches the rest on demand |
-| search.fanout-content-recovery-rate           | String  |      0.1      | With fanout-bounded-content: target fraction of queries that may need the second content round (0 never, 1 most aggressive)      |
+| search.fanout-content-refetch-ratio           | String  |      0.1      | With fanout-bounded-content: target fraction of queries that may need the second content round (0 never, 1 most aggressive)      |
 | search.thread-pool-wait-time-samples          | Number  |               | Sample queue size for thread pool wait time tracking                                                                              |
 | search.max-term-expansions                    | Number  |               | Maximum number of words to search in text operations (prefix, suffix, fuzzy) to limit memory usage                                |
 | search.tag-min-prefix-length                  | Number  |               | Minimum number of characters required before trailing `*` in TAG wildcard queries (length excludes `*`)                          |

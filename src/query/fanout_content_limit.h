@@ -20,7 +20,7 @@
 // with probability p_i, the shard's share of the slots, and the number of
 // winners on that shard is Binomial(K, p_i). A query needs the second round
 // when any shard holds more winners than its E_i. The estimator picks the
-// smallest E_i that keeps the chance of that at or below a target recovery
+// smallest E_i that keeps the chance of that at or below a target refetch
 // rate alpha, split evenly over the shards (alpha / N each, so the sum over
 // shards is at most alpha). Small clusters get E_i close to K, where a second
 // round would cost more than it saves; large clusters get E_i close to K * p_i.
@@ -57,18 +57,18 @@ class ContentLimitEstimator {
                         absl::Span<uint64_t> limits) const = 0;
 };
 
-// The smallest E_i per shard that keeps the query-level chance of a recovery
-// round at or below `target_recovery_rate` (see the file comment). 0 never
-// recovers (every E_i = K); 1 is the most aggressive setting, still at or
+// The smallest E_i per shard that keeps the query-level chance of a refetch
+// round at or below `target_refetch_rate` (see the file comment). 0 never
+// refetches (every E_i = K); 1 is the most aggressive setting, still at or
 // above each shard's mean share.
-class RecoveryRateEstimator final : public ContentLimitEstimator {
+class RefetchRateEstimator final : public ContentLimitEstimator {
  public:
-  explicit RecoveryRateEstimator(double target_recovery_rate);
+  explicit RefetchRateEstimator(double target_refetch_rate);
   void Estimate(const EstimateInput &input,
                 absl::Span<uint64_t> limits) const override;
 
  private:
-  double target_recovery_rate_;
+  double target_refetch_rate_;
 };
 
 using ShardLimits = absl::InlinedVector<uint64_t, 16>;

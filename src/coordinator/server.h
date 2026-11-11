@@ -69,7 +69,7 @@ class Service final : public Coordinator::CallbackService {
       const InfoIndexPartitionRequest* request,
       InfoIndexPartitionResponse* response) override;
 
-  // Bounded content fan-out recovery: content for the given keys, revalidated
+  // Bounded content fan-out refetch: content for the given keys, revalidated
   // against the query, without running a search.
   grpc::ServerUnaryReactor* FetchContent(
       grpc::CallbackServerContext* context, const FetchContentRequest* request,

@@ -559,19 +559,19 @@ constexpr absl::string_view kFanoutBoundedContentConfig{
 static auto fanout_bounded_content =
     config::BooleanBuilder(kFanoutBoundedContentConfig, false).Build();
 
-/// Register the "fanout-content-recovery-rate" flag.
+/// Register the "fanout-content-refetch-ratio" flag.
 /// Bounded content fan-out: the target fraction of queries that may need the
 /// second round. 0 never needs it (content for all K, as without bounding);
 /// higher values move less content at the cost of more second rounds.
-constexpr absl::string_view kFanoutContentRecoveryRateConfig{
-    "fanout-content-recovery-rate"};
-constexpr double kDefaultFanoutContentRecoveryRate{0.1};
-constexpr double kMinimumFanoutContentRecoveryRate{0.0};
-constexpr double kMaximumFanoutContentRecoveryRate{1.0};
-static auto fanout_content_recovery_rate =
+constexpr absl::string_view kFanoutContentRefetchRatioConfig{
+    "fanout-content-refetch-ratio"};
+constexpr double kDefaultFanoutContentRefetchRatio{0.1};
+constexpr double kMinimumFanoutContentRefetchRatio{0.0};
+constexpr double kMaximumFanoutContentRefetchRatio{1.0};
+static auto fanout_content_refetch_ratio =
     config::DoubleBuilder(
-        kFanoutContentRecoveryRateConfig, kDefaultFanoutContentRecoveryRate,
-        kMinimumFanoutContentRecoveryRate, kMaximumFanoutContentRecoveryRate)
+        kFanoutContentRefetchRatioConfig, kDefaultFanoutContentRefetchRatio,
+        kMinimumFanoutContentRefetchRatio, kMaximumFanoutContentRefetchRatio)
         .Build();
 
 /// Register the "--async-fanout-threshold" flag. Controls the threshold
@@ -817,8 +817,8 @@ const vmsdk::config::Boolean &GetFanoutBoundedContent() {
   return dynamic_cast<const vmsdk::config::Boolean &>(*fanout_bounded_content);
 }
 
-double GetFanoutContentRecoveryRate() {
-  return fanout_content_recovery_rate->GetValue();
+double GetFanoutContentRefetchRatio() {
+  return fanout_content_refetch_ratio->GetValue();
 }
 
 vmsdk::config::Number &GetAsyncFanoutThreshold() {

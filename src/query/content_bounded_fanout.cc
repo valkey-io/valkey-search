@@ -193,7 +193,7 @@ class BoundedContentFanout
   void KeepAlive(std::unique_ptr<SearchParameters> local)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
   // Starts the next fetch round, or completes the query when none is needed.
-  void ContinueRecovery();
+  void ContinueRefetch();
   void RankCandidates() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
   // The leading candidates a reply may draw from: the k nearest for a vector
   // query (the rest are kept to replace winners that drop out), all of them
@@ -225,7 +225,7 @@ class BoundedContentFanout
   std::vector<bool> failed_shards_ ABSL_GUARDED_BY(mutex_);
   size_t total_count_ ABSL_GUARDED_BY(mutex_){0};
   size_t outstanding_ ABSL_GUARDED_BY(mutex_);
-  bool recovered_ ABSL_GUARDED_BY(mutex_){false};
+  bool refetched_ ABSL_GUARDED_BY(mutex_){false};
   // A fetch returned a recomputed score or distance, so the ranking is stale.
   bool ranking_stale_ ABSL_GUARDED_BY(mutex_){false};
   // The current fetch round: the candidate each requested key belongs to.
@@ -417,7 +417,7 @@ void BoundedContentFanout::OnSearchRoundComplete() {
     absl::MutexLock lock(&mutex_);
     RankCandidates();
   }
-  ContinueRecovery();
+  ContinueRefetch();
 }
 
 void BoundedContentFanout::RankCandidates() {
@@ -437,9 +437,10 @@ size_t BoundedContentFanout::EligibleCount() const {
 
 size_t BoundedContentFanout::WindowEnd() const {
   // A default SearchResult is not yet offset, so this is the end of
-  // [offset, offset + count) over the ranked candidates.
+  // [offset, offset + count) over the eligible candidates: a vector query's
+  // window ends at k, not among the candidates kept past it.
   return SearchResult()
-      .GetSerializationRange(*parameters_, candidates_.size())
+      .GetSerializationRange(*parameters_, EligibleCount())
       .end_index;
 }
 
@@ -509,12 +510,12 @@ size_t BoundedContentFanout::PlanFetchRound() {
     ++missing;
   }
   auto &stats = Metrics::GetStats();
-  if (!recovered_) {
+  if (!refetched_) {
     if (pending_fetches_.empty()) {
       ++stats.bounded_content_single_round_queries;
     } else {
-      ++stats.bounded_content_recovery_queries;
-      recovered_ = true;
+      ++stats.bounded_content_refetch_queries;
+      refetched_ = true;
     }
   }
   stats.bounded_content_missing_winners += missing;
@@ -522,7 +523,7 @@ size_t BoundedContentFanout::PlanFetchRound() {
   return pending_fetches_.size();
 }
 
-void BoundedContentFanout::ContinueRecovery() {
+void BoundedContentFanout::ContinueRefetch() {
   size_t fetch_count = 0;
   {
     absl::MutexLock lock(&mutex_);
@@ -581,7 +582,7 @@ void BoundedContentFanout::OnFetchReply(
   }
   if (RecordFetchResult(shard, ToAbslStatus(status), std::move(fetched),
                         nullptr)) {
-    ContinueRecovery();
+    ContinueRefetch();
   }
 }
 
@@ -590,15 +591,15 @@ void BoundedContentFanout::FetchLocally(
   auto fetch = std::make_unique<LocalContentFetch>(shared_from_this(), shard);
   auto status = coordinator::GRPCSearchRequestToParameters(
       request->query(), nullptr, fetch.get());
+  // Unlike the local search, the fetch runs a round trip later: it must pass
+  // the same checks as the remote fetch.
   if (status.ok()) {
-    // The index is looked up by name: it must still be the one searched in
-    // the first round, as the remote fetch checks.
-    status = coordinator::CheckIndexConsistency(
-        request->query().index_fingerprint_version(), *fetch->index_schema);
+    status = coordinator::CheckRequestConsistency(request->query(),
+                                                  *fetch->index_schema);
   }
   if (!status.ok()) {
     if (RecordFetchResult(shard, status, {}, nullptr)) {
-      ContinueRecovery();
+      ContinueRefetch();
     }
     return;
   }
@@ -611,7 +612,7 @@ void BoundedContentFanout::OnLocalFetchDone(
   const absl::Status status = local->search_result.status;
   auto fetched = std::move(local->search_result.neighbors);
   if (RecordFetchResult(shard, status, std::move(fetched), std::move(local))) {
-    ContinueRecovery();
+    ContinueRefetch();
   }
 }
 
@@ -711,8 +712,7 @@ std::optional<BoundedContentPlan> PlanBoundedContentFanout(
       options::GetMaxNonVectorSearchResultsFetched().GetValue()) {
     return std::nullopt;
   }
-  const RecoveryRateEstimator estimator(
-      options::GetFanoutContentRecoveryRate());
+  const RefetchRateEstimator estimator(options::GetFanoutContentRefetchRatio());
   return FanoutContentPlanner(estimator).Plan(parameters, targets);
 }
 

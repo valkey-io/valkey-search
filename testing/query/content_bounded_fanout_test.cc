@@ -126,11 +126,11 @@ class BoundedContentFanoutTest : public ValkeySearchTest {
   }
 
   // KNN `k`, every shard bounded to `content_limit`.
-  void StartKnn(int k, uint64_t content_limit) {
+  void StartKnn(int k, uint64_t content_limit, uint64_t offset = 0) {
     auto search = std::make_unique<CapturingSearch>(&completed_);
     search->attribute_alias = "vec";
     search->k = k;
-    search->limit = LimitParameter{0, static_cast<uint64_t>(k)};
+    search->limit = LimitParameter{offset, static_cast<uint64_t>(k)};
     BoundedContentPlan plan{static_cast<uint64_t>(k),
                             ShardLimits(kShards, content_limit)};
     VMSDK_EXPECT_OK(PerformBoundedContentFanoutAsync(
@@ -402,6 +402,27 @@ TEST_F(BoundedContentFanoutTest, KnnReplacesADroppedWinnerWithTheNextNearest) {
   Reply(fetches_[0], {});  // "mid" no longer matches.
   ASSERT_NE(completed_, nullptr);
   EXPECT_THAT(Keys(completed_->search_result), ElementsAre("near", "far"));
+}
+
+TEST_F(BoundedContentFanoutTest, KnnWithAnOffsetFetchesNothingPastK) {
+  // KNN 2 LIMIT 1 2: the reply is "mid" alone. "far" is kept only to replace
+  // a winner that drops out, so it is not fetched while none does.
+  StartKnn(/*k=*/2, /*content_limit=*/1, /*offset=*/1);
+  coordinator::SearchIndexPartitionResponse r0, r1;
+  AddResult(r0, "near", 0, true, /*distance=*/0.1f);
+  AddResult(r0, "mid", 0, false, /*distance=*/0.5f);
+  AddResult(r1, "far", 0, false, /*distance=*/0.9f);
+  Reply(searches_[0], r0);
+  Reply(searches_[1], r1);
+  ASSERT_EQ(fetches_[0].size(), 1u);
+  EXPECT_THAT(FetchKeys(*fetches_[0][0].request), ElementsAre("mid"));
+  EXPECT_TRUE(fetches_[1].empty());
+
+  coordinator::SearchIndexPartitionResponse fetched;
+  AddResult(fetched, "mid", 0, true, /*distance=*/0.5f);
+  Reply(fetches_[0], fetched);
+  ASSERT_NE(completed_, nullptr);
+  EXPECT_THAT(Keys(completed_->search_result), ElementsAre("mid"));
 }
 
 TEST_F(BoundedContentFanoutTest, PlanningSkipsBoundsBeyondTheResultsCap) {

@@ -235,7 +235,7 @@ void ClientImpl::SearchIndexPartition(
 void ClientImpl::FetchContent(std::unique_ptr<FetchContentRequest> request,
                               SearchIndexPartitionCallback done) {
   // Not a search partition, so no search partition metrics; the bounded
-  // content fan-out counts its recovery requests itself.
+  // content fan-out counts its refetch requests itself.
   auto *call =
       UnaryCall<FetchContentRequest, SearchIndexPartitionResponse>::Start(
           std::move(request), std::move(done), /*record_metrics=*/nullptr);

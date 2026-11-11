@@ -39,7 +39,7 @@ class Client {
   virtual void MultiSearchIndexPartition(
       std::unique_ptr<MultiSearchIndexPartitionRequest> request,
       MultiSearchIndexPartitionCallback done) = 0;
-  // Bounded content fan-out recovery; the reply has the same shape as a
+  // Bounded content fan-out refetch; the reply has the same shape as a
   // search partition's.
   virtual void FetchContent(std::unique_ptr<FetchContentRequest> request,
                             SearchIndexPartitionCallback done) = 0;

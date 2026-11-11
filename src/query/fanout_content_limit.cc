@@ -97,17 +97,17 @@ absl::InlinedVector<double, 16> ShardWeights(
 
 }  // namespace
 
-RecoveryRateEstimator::RecoveryRateEstimator(double target_recovery_rate)
-    : target_recovery_rate_(std::clamp(target_recovery_rate, 0.0, 1.0)) {}
+RefetchRateEstimator::RefetchRateEstimator(double target_refetch_rate)
+    : target_refetch_rate_(std::clamp(target_refetch_rate, 0.0, 1.0)) {}
 
-void RecoveryRateEstimator::Estimate(const EstimateInput &input,
-                                     absl::Span<uint64_t> limits) const {
+void RefetchRateEstimator::Estimate(const EstimateInput &input,
+                                    absl::Span<uint64_t> limits) const {
   CHECK_EQ(limits.size(), input.shard_weights.size());
   if (limits.empty()) {
     return;
   }
   const double per_shard_tolerance =
-      target_recovery_rate_ / static_cast<double>(limits.size());
+      target_refetch_rate_ / static_cast<double>(limits.size());
   // Shards usually own equal shares; compute each distinct share once.
   std::optional<double> last_weight;
   uint64_t last_limit = 0;

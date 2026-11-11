@@ -118,7 +118,7 @@ For the formula and its constants, see [Term Score](#term-score).
 If the queried field uses stemming and the query does not use `VERBATIM`, one term can match several words that have the same stem.
 For example, `running` matches `running`, `runs`, and `run`.
 A key that contains the exact query word gets a higher score than a key that contains only a different form of the word.
-A `$weight` on the term applies only to the exact word. The other forms of the word keep a weight of 1.
+A `$weight` on the term multiplies the scores of all forms of the word.
 
 ### Prefix, Suffix, and Fuzzy Terms
 
@@ -250,8 +250,8 @@ score = document score * (jacket score + 2 * red score)
 
 The `$weight` attribute multiplies the score of the clause that it is attached to.
 The weight must be 0 or greater. A clause with a weight of 0 still filters keys, but adds 0 to the score.
-A weight on a single term multiplies the score of the word as written in the query.
-If the term is stemmed, the other forms of the word keep a weight of 1. See [Stemming Adds an Exact-Match Bonus](#stemming-adds-an-exact-match-bonus).
+A weight on a single term multiplies the score of the term.
+If the term is stemmed, the weight also multiplies the scores of the other forms of the word. See [Stemming Adds an Exact-Match Bonus](#stemming-adds-an-exact-match-bonus).
 A weight on a group of terms multiplies the sum of the group.
 
 ## Document Score
@@ -334,7 +334,7 @@ The word as written in the query is in part 1 and also in part 3.
 Assume that `running` is the only indexed word with the stem `run`.
 Then, with the default weight of 1, a query for `running` scores twice as high as the same query with `VERBATIM`.
 
-A `$weight` on the term multiplies only part 1. Parts 2 and 3 use a weight of 1.
+A `$weight` on the term multiplies all three parts.
 
 A word that is its own stem, such as `jacket`, is never in part 3.
 For a query for `jacket`, a key that contains `jacket` gets part 1, and a key that contains `jackets` gets part 3.

@@ -16,6 +16,8 @@
 #include "src/valkey_search.h"
 #include "src/vector_registry.h"
 #include "vmsdk/src/debug.h"
+#include "vmsdk/src/log.h"
+#include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -50,6 +52,31 @@ void OnSwapDBCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
   auto *swap_info = static_cast<ValkeyModuleSwapDbInfo *>(data);
   SchemaManager::Instance().OnSwapDB(swap_info);
   VectorRegistry::Instance().OnSwapDB(swap_info);
+}
+
+void OnKeyCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
+                   uint64_t subevent, void *data) {
+  if (!VectorRegistry::Instance().HasTrackedKeys()) {
+    return;
+  }
+  // Ignore VALKEYMODULE_SUBEVENT_KEY_DELETED because RENAME and MOVE fire
+  // dbDelete on the source key before rename_from/move_from notifications run.
+  if (subevent != VALKEYMODULE_SUBEVENT_KEY_EXPIRED &&
+      subevent != VALKEYMODULE_SUBEVENT_KEY_EVICTED &&
+      subevent != VALKEYMODULE_SUBEVENT_KEY_OVERWRITTEN) {
+    return;
+  }
+  auto *key_info = static_cast<ValkeyModuleKeyInfo *>(data);
+  if (!key_info || !key_info->key) {
+    return;
+  }
+  const ValkeyModuleString *key_name =
+      ValkeyModule_GetKeyNameFromModuleKey(key_info->key);
+  if (!key_name) {
+    return;
+  }
+  VectorRegistry::Instance().OnKeyDeleted(ValkeyModule_GetSelectedDb(ctx),
+                                          vmsdk::ToStringView(key_name));
 }
 
 void OnServerCronCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
@@ -120,6 +147,13 @@ void SubscribeToServerEvents() {
                                       &OnFlushDBCallback);
   ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_Shutdown,
                                       &OnShutdownCallback);
+  if (VectorRegistry::Instance().IsSharingActive() &&
+      ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_Key,
+                                          &OnKeyCallback) != VALKEYMODULE_OK) {
+    VMSDK_LOG(WARNING, ctx)
+        << "Failed to subscribe to ValkeyModuleEvent_Key; logically expired "
+           "or overwritten shared vector entries may be retained until flush";
+  }
 }
 
 }  // namespace valkey_search::server_events

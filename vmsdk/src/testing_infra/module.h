@@ -106,6 +106,8 @@ class MockValkeyModule {
   MOCK_METHOD(int, ModuleTypeSetValue,
               (ValkeyModuleKey * key, ValkeyModuleType *mt, void *value));
   MOCK_METHOD(int, DeleteKey, (ValkeyModuleKey * key));
+  MOCK_METHOD(const ValkeyModuleString *, GetKeyNameFromModuleKey,
+              (ValkeyModuleKey * key));
   MOCK_METHOD(int, RegisterInfoFunc,
               (ValkeyModuleCtx * ctx, ValkeyModuleInfoFunc cb));
   MOCK_METHOD(int, Init,
@@ -551,6 +553,7 @@ struct ValkeyModuleInfoCtx {
 struct ValkeyModuleKey {
   ValkeyModuleCtx *ctx;
   std::string key;
+  mutable ValkeyModuleString key_str{};
 };
 
 inline const char *TestValkeyModule_StringPtrLen(const ValkeyModuleString *str,
@@ -699,8 +702,10 @@ inline int TestValkeyModule_HashGetExistsDefaultImpl(ValkeyModuleKey *key,
                                                      const char *field,
                                                      int *exists_out,
                                                      void *terminating_null) {
-  CHECK(false);
-  return VALKEYMODULE_ERR;
+  if (exists_out) {
+    *exists_out = 1;
+  }
+  return VALKEYMODULE_OK;
 }
 
 inline int TestValkeyModule_HashGetDefaultImpl(ValkeyModuleKey *key, int flags,
@@ -756,7 +761,13 @@ inline int TestValkeyModule_HashGet(ValkeyModuleKey *key, int flags, ...) {
   va_list args;
   va_start(args, flags);
 
-  const char *field = va_arg(args, const char *);
+  const char *field = nullptr;
+  if (flags & VALKEYMODULE_HASH_CFIELDS) {
+    field = va_arg(args, const char *);
+  } else {
+    ValkeyModuleString *field_str = va_arg(args, ValkeyModuleString *);
+    field = field_str ? field_str->data.c_str() : nullptr;
+  }
   int result;
   if (flags & VALKEYMODULE_HASH_EXISTS) {
     int *exists_out = va_arg(args, int *);
@@ -866,6 +877,20 @@ inline int TestValkeyModule_DeleteKeyDefaultImpl(ValkeyModuleKey *key) {
 
 inline int TestValkeyModule_DeleteKey(ValkeyModuleKey *key) {
   return kMockValkeyModule->DeleteKey(key);
+}
+
+inline const ValkeyModuleString *
+TestValkeyModule_GetKeyNameFromModuleKeyDefaultImpl(ValkeyModuleKey *key) {
+  if (!key) {
+    return nullptr;
+  }
+  key->key_str.data = key->key;
+  return &key->key_str;
+}
+
+inline const ValkeyModuleString *TestValkeyModule_GetKeyNameFromModuleKey(
+    ValkeyModuleKey *key) {
+  return kMockValkeyModule->GetKeyNameFromModuleKey(key);
 }
 
 inline int TestValkeyModule_ReplyWithArray(ValkeyModuleCtx *ctx,
@@ -1644,6 +1669,8 @@ inline void TestValkeyModule_Init() {
   ValkeyModule_KeyType = &TestValkeyModule_KeyType;
   ValkeyModule_ModuleTypeSetValue = &TestValkeyModule_ModuleTypeSetValue;
   ValkeyModule_DeleteKey = &TestValkeyModule_DeleteKey;
+  ValkeyModule_GetKeyNameFromModuleKey =
+      &TestValkeyModule_GetKeyNameFromModuleKey;
   ValkeyModule_RegisterInfoFunc = &TestValkeyModule_RegisterInfoFunc;
   ValkeyModule_ReplyWithArray = &TestValkeyModule_ReplyWithArray;
   ValkeyModule_ReplySetArrayLength = &TestValkeyModule_ReplySetArrayLength;
@@ -1765,6 +1792,8 @@ inline void TestValkeyModule_Init() {
       .WillByDefault(TestValkeyModule_KeyTypeDefaultImpl);
   ON_CALL(*kMockValkeyModule, DeleteKey(testing::_))
       .WillByDefault(TestValkeyModule_DeleteKeyDefaultImpl);
+  ON_CALL(*kMockValkeyModule, GetKeyNameFromModuleKey(testing::_))
+      .WillByDefault(TestValkeyModule_GetKeyNameFromModuleKeyDefaultImpl);
   ON_CALL(*kMockValkeyModule, KeyExists(testing::_, testing::_))
       .WillByDefault(TestValkeyModule_KeyExistsDefaultImpl);
   ON_CALL(*kMockValkeyModule,

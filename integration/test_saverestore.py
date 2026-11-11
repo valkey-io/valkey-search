@@ -386,12 +386,14 @@ class TestLoadTrackedKeyMissingFromKeyspace(ValkeySearchTestCaseDebugMode):
     def create_and_fill(self, algo: str, metric: str):
         self.client.execute_command(
             "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "k:",
-            "SCHEMA", "v", "VECTOR", algo, "6", "TYPE", "FLOAT32", "DIM", "2",
+            "SCHEMA", "t", "TAG",
+            "v", "VECTOR", algo, "6", "TYPE", "FLOAT32", "DIM", "2",
             "DISTANCE_METRIC", metric,
         )
         for i in range(4):
             self.client.hset(
-                f"k:{i}", mapping={"v": float_to_bytes([float(i), 1.0])})
+                f"k:{i}",
+                mapping={"v": float_to_bytes([float(i), 1.0]), "t": "x"})
         waiters.wait_for_true(self.index_idle)
 
     def use_rdb_format(self, rdb_v2: str, key_labels: str):
@@ -427,11 +429,15 @@ class TestLoadTrackedKeyMissingFromKeyspace(ValkeySearchTestCaseDebugMode):
     def test_key_expired_before_load(self, algo, metric, rdb_v2, key_labels):
         self.use_rdb_format(rdb_v2, key_labels)
         self.create_and_fill(algo, metric)
-        self.client.pexpire("k:1", 500)
-        self.client.execute_command("SAVE")
-        # k:1 is saved alive and has expired by the load.
-        time.sleep(1)
-        self.reload_and_check({b"k:0", b"k:2", b"k:3"})
+        # With active expiry off, k:1 can't be deleted before SAVE writes it.
+        self.client.execute_command("DEBUG", "SET-ACTIVE-EXPIRE", "0")
+        try:
+            self.client.pexpire("k:1", 100)
+            self.client.execute_command("SAVE")
+            time.sleep(0.2)  # let k:1 expire; the load then drops it
+            self.reload_and_check({b"k:0", b"k:2", b"k:3"})
+        finally:
+            self.client.execute_command("DEBUG", "SET-ACTIVE-EXPIRE", "1")
 
     @pytest.mark.parametrize("algo", ["FLAT", "HNSW"])
     @pytest.mark.parametrize("metric", ["L2", "COSINE"])
@@ -466,17 +472,7 @@ class TestLoadTrackedKeyMissingFromKeyspace(ValkeySearchTestCaseDebugMode):
         # size or was updated, so V1 relies on the backfill rather than the
         # stale-entry scan.
         self.use_rdb_format(rdb_v2, key_labels)
-        self.client.execute_command(
-            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "k:",
-            "SCHEMA", "t", "TAG",
-            "v", "VECTOR", algo, "6", "TYPE", "FLOAT32", "DIM", "2",
-            "DISTANCE_METRIC", "L2",
-        )
-        for i in range(4):
-            self.client.hset(
-                f"k:{i}",
-                mapping={"v": float_to_bytes([float(i), 1.0]), "t": "x"})
-        waiters.wait_for_true(self.index_idle)
+        self.create_and_fill(algo, "L2")
         self.client.execute_command(
             "FT._DEBUG", "PAUSEPOINT", "SET", "block_mutation_queue")
         writer_client = self.server.get_new_client()

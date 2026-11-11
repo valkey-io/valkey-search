@@ -3601,6 +3601,174 @@ TEST_F(VectorIndexTest, HnswReplacedVectorOutlivesConcurrentReader) {
   EXPECT_TRUE(algo.retired_.empty());
 }
 
+// The vector registry reclaims from the main thread, outside any mutation,
+// while writers run. That reclaim must not release a vector a running
+// mutation can still read.
+TEST_F(VectorIndexTest, HnswReclaimOutsideMutationKeepsVectorReadByWriter) {
+  auto vector_allocator = CREATE_UNIQUE_PTR(
+      FixedSizeAllocator,
+      VectorRecord::kStorageHeaderSize + kDimensions * sizeof(float), true);
+  auto vectors = DeterministicallyGenerateVectors(3, kDimensions, 10.0);
+  auto make_record = [&](const std::vector<float> &v) {
+    absl::string_view bytes(reinterpret_cast<const char *>(v.data()),
+                            kDimensions * sizeof(float));
+    return VectorRecord::Construct(bytes, kDefaultMagnitude,
+                                   vector_allocator.get());
+  };
+  auto query = [](const VectorRecord &record) {
+    return QueryVector(record, kDimensions * sizeof(float), false,
+                       data_model::VECTOR_DATA_TYPE_FLOAT32);
+  };
+
+  std::atomic<bool> hook_enabled = false;
+  std::atomic<bool> intercepted = false;
+  absl::Notification reader_in_distance;
+  absl::Notification vector_replaced;
+  ConcurrentSyncL2Space space(kDimensions, [&]() {
+    if (hook_enabled.load(std::memory_order_relaxed) &&
+        !intercepted.exchange(true, std::memory_order_relaxed)) {
+      reader_in_distance.Notify();
+      vector_replaced.WaitForNotification();
+    }
+  });
+  VectorHNSW<float>::HNSWIndex algo(&space, /*max_elements=*/kGoldenMax,
+                                    /*normalized=*/false, kM, kEFConstruction,
+                                    /*allow_replace_deleted=*/false,
+                                    /*random_seed=*/100);
+  {
+    auto record0 = make_record(vectors[0]);
+    algo.addPoint(query(record0), /*label=*/0, /*level=*/2);
+  }
+  const char *old_vector = algo.GetDataByInternalId(0).GetRawVector();
+
+  // Stands in for the main thread: reclaims the way VectorHNSW::ReclaimRetired
+  // does, in a loop, for the whole test.
+  auto record1 = make_record(vectors[1]);
+  std::atomic<bool> stop_reclaimer = false;
+  std::atomic<int> reclaims = 0;
+  std::thread reclaimer;
+  std::thread reader;
+  auto join_threads = absl::MakeCleanup([&]() {
+    if (!vector_replaced.HasBeenNotified()) {
+      vector_replaced.Notify();
+    }
+    if (reader.joinable()) {
+      reader.join();
+    }
+    stop_reclaimer.store(true, std::memory_order_relaxed);
+    if (reclaimer.joinable()) {
+      reclaimer.join();
+    }
+  });
+  reclaimer = std::thread([&]() {
+    while (!stop_reclaimer.load(std::memory_order_relaxed)) {
+      if (algo.has_retired_.load(std::memory_order_relaxed)) {
+        algo.ReclaimRetired();
+      }
+      reclaims.fetch_add(1, std::memory_order_relaxed);
+      std::this_thread::yield();
+    }
+  });
+
+  hook_enabled.store(true, std::memory_order_relaxed);
+  reader = std::thread(
+      [&]() { algo.addPoint(query(record1), /*label=*/1, /*level=*/0); });
+  reader_in_distance.WaitForNotification();
+
+  {
+    auto new_record0 = make_record(vectors[2]);
+    algo.addPoint(query(new_record0), /*label=*/0);
+  }
+  const int reclaims_after_replace = reclaims.load(std::memory_order_relaxed);
+  while (reclaims.load(std::memory_order_relaxed) <
+         reclaims_after_replace + 1000) {
+    std::this_thread::yield();
+  }
+  {
+    std::lock_guard<std::mutex> lock(algo.retired_lock_);
+    ASSERT_EQ(algo.retired_.size(), 1u);
+    EXPECT_EQ(algo.retired_[0].second.GetRawVector(), old_vector);
+  }
+
+  vector_replaced.Notify();
+  reader.join();
+  stop_reclaimer.store(true, std::memory_order_relaxed);
+  reclaimer.join();
+  if (algo.has_retired_.load(std::memory_order_relaxed)) {
+    algo.ReclaimRetired();
+  }
+  std::lock_guard<std::mutex> lock(algo.retired_lock_);
+  EXPECT_TRUE(algo.retired_.empty());
+  EXPECT_FALSE(algo.has_retired_.load());
+}
+
+TEST_F(VectorIndexTest, VectorHNSWReclaimRetiredReleasesRetiredSharedVector) {
+  constexpr int kDim = 4;
+  auto vector_allocator = CREATE_UNIQUE_PTR(
+      FixedSizeAllocator,
+      VectorRecord::kStorageHeaderSize + kDim * sizeof(float), true);
+  auto index_or = VectorHNSW<float>::Create(
+      CreateHNSWVectorIndexProto(kDim, data_model::DISTANCE_METRIC_L2,
+                                 /*initial_cap=*/16, /*m=*/4,
+                                 /*ef_construction=*/16, /*ef_runtime=*/16),
+      attribute_identifier, attribute_data_type, 0);
+  ASSERT_TRUE(index_or.ok());
+  auto index = index_or.value();
+  const VectorBase *vector_base = index.get();
+
+  std::vector<float> vec = {1.0f, 2.0f, 3.0f, 4.0f};
+  absl::string_view vec_bytes(reinterpret_cast<const char *>(vec.data()),
+                              vec.size() * sizeof(float));
+  auto shared_record = VectorRecord::Construct(vec_bytes, kDefaultMagnitude,
+                                               vector_allocator.get());
+  auto key = IndexToKey(0);
+  ASSERT_TRUE(index
+                  ->AddRecord(key, AttributeData(VectorRecordWithSize{
+                                       .vector_record = shared_record,
+                                       .size = vec_bytes.size(),
+                                   }))
+                  .ok());
+  ASSERT_EQ(shared_record.RefCount(), 2u);
+
+  // Hold an active mutation epoch on another thread while deleting `key` so
+  // `AlgoDeleteRecord` swaps in a private copy and leaves `shared_record`
+  // queued in `algo_->retired_` (`has_retired_ == true`).
+  absl::Notification epoch_entered;
+  absl::Notification release_epoch;
+  std::thread epoch_holder;
+  auto join_holder = absl::MakeCleanup([&]() {
+    if (!release_epoch.HasBeenNotified()) {
+      release_epoch.Notify();
+    }
+    if (epoch_holder.joinable()) {
+      epoch_holder.join();
+    }
+  });
+  epoch_holder = std::thread([&]() {
+    vmsdk::epoch::EpochGuard guard;
+    epoch_entered.Notify();
+    release_epoch.WaitForNotification();
+  });
+  epoch_entered.WaitForNotification();
+
+  auto removed = index->RemoveRecord(key, DeletionType::kRecord);
+  ASSERT_TRUE(removed.ok());
+  ASSERT_TRUE(*removed);
+  EXPECT_EQ(shared_record.RefCount(), 2u);
+
+  release_epoch.Notify();
+  epoch_holder.join();
+  EXPECT_EQ(shared_record.RefCount(), 2u);
+
+  // Reclaiming via VectorBase::ReclaimRetired() drains `algo_->retired_` and
+  // drops the index's retired reference; calling again with `has_retired_`
+  // cleared is a no-op.
+  vector_base->ReclaimRetired();
+  EXPECT_EQ(shared_record.RefCount(), 1u);
+  vector_base->ReclaimRetired();
+  EXPECT_EQ(shared_record.RefCount(), 1u);
+}
+
 TEST_F(VectorIndexTest, HnswTombstoneClusterFallbackDoesNotThrow) {
   hnswlib::L2Space space{kDimensions};
   VectorHNSW<float>::HNSWIndex algo(&space, /*max_elements=*/kGoldenMax,

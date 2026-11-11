@@ -206,5 +206,22 @@ class ThreadPool {
   FRIEND_TEST(ThreadPoolTest, ResizeDownWithQueuedTasks);
 };
 
+// Schedules `task` on `pool`; returns it (not destroyed) if refused.
+template <typename Task>
+std::optional<Task> ScheduleOrReturn(ThreadPool& pool, Task task,
+                                     ThreadPool::Priority priority) {
+  auto holder = std::make_shared<std::optional<Task>>(std::move(task));
+  if (pool.Schedule(
+          [holder]() {
+            Task task = std::move(**holder);
+            holder->reset();
+            task();
+          },
+          priority)) {
+    return std::nullopt;
+  }
+  return std::move(*holder);
+}
+
 }  // namespace vmsdk
 #endif  // VMSDK_SRC_THREAD_POOL_H_

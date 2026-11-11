@@ -488,7 +488,8 @@ const VectorRangePredicate *GetVectorRangePredicate(
 std::string GetVrScoreFieldName(const SearchParameters &parameters);
 
 // The name to re-file an older shard's SORTBY values under, or nullopt. A whole
-// hash already has the field, and an alias-named entry there is a real field.
+// hash, or a RETURN of the sort field, already has the field, and an
+// alias-named entry there is a real field.
 // TODO: remove once every node sets sortby_keyed_by_lookup_key.
 std::optional<std::string> OldShardSortByRefileKey(
     const SearchParameters &parameters);

@@ -943,6 +943,12 @@ std::optional<std::string> OldShardSortByRefileKey(
   if (key.lookup_key == parameters.sortby_parameter->field) {
     return std::nullopt;
   }
+  // The shard fetched a returned field itself, so absent means not in the key.
+  for (const auto &attribute : parameters.return_attributes) {
+    if (vmsdk::ToStringView(attribute.identifier.get()) == key.lookup_key) {
+      return std::nullopt;
+    }
+  }
   return std::move(key.lookup_key);
 }
 

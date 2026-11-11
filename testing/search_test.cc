@@ -1299,6 +1299,19 @@ TEST_F(OldShardSortByRefileKeyTest, OnlyHashRowsSortedOnAnAliasAreRefiled) {
     EXPECT_EQ(query::OldShardSortByRefileKey(parameters), c.expected)
         << c.sortby.value_or("<none>") << " all_content=" << c.all_content;
   }
+  // RETURN of the sort field: an older shard sent it if the key has it.
+  for (const auto &[returned, expected] :
+       std::vector<std::pair<std::string, std::optional<std::string>>>{
+           {"a", std::nullopt}, {"n", "a"}}) {
+    UnitTestSearchParameters parameters;
+    parameters.index_schema = index_schema;
+    parameters.sortby_parameter = query::SortByParameter{.field = "s"};
+    parameters.return_attributes.push_back(query::ReturnAttribute{
+        .identifier = vmsdk::MakeUniqueValkeyString(returned),
+        .alias = vmsdk::MakeUniqueValkeyString(returned)});
+    EXPECT_EQ(query::OldShardSortByRefileKey(parameters), expected)
+        << "RETURN " << returned;
+  }
   // Every version files a JSON row's sort value under the alias.
   ValkeyModuleCtx fake_ctx;
   EXPECT_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))

@@ -224,8 +224,7 @@ size_t ChunkEntries(bool huge_pages, size_t size) {
 size_t ChunkDataBytes(bool huge_pages, size_t entries_in_chunk, size_t size) {
   size_t bytes = BufferSize(entries_in_chunk, size);
   if (huge_pages) {
-    bytes = (bytes + vmsdk::kHugePageSize - 1) / vmsdk::kHugePageSize *
-            vmsdk::kHugePageSize;
+    bytes = vmsdk::RoundUpToHugePage(bytes);
   }
   return bytes;
 }

@@ -279,9 +279,8 @@ class ChunkedArray {
     if (huge_pages_) {
       elements_per_chunk_ =
           std::max<size_t>(1, vmsdk::kHugePageSize / element_byte_size_);
-      chunk_bytes_ = elements_per_chunk_ * element_byte_size_;
-      chunk_bytes_ = (chunk_bytes_ + vmsdk::kHugePageSize - 1) /
-                     vmsdk::kHugePageSize * vmsdk::kHugePageSize;
+      chunk_bytes_ =
+          vmsdk::RoundUpToHugePage(elements_per_chunk_ * element_byte_size_);
     } else {
       chunk_bytes_ = elements_per_chunk_ * element_byte_size_;
     }
@@ -318,15 +317,27 @@ class ChunkedArray {
   }
 
   void resize(size_t new_element_count) {
-    size_t chunk_count =
-        getChunkCount(element_count_.load(std::memory_order_relaxed));
+    size_t chunk_count = chunks_.size();
     size_t new_chunk_count = getChunkCount(new_element_count);
 
-    chunks_.resize(new_chunk_count);
-    for (size_t i = chunk_count; i < new_chunk_count; i++) {
-      chunks_[i] = allocateChunk();
-      // Note that we don't initialize the memory on purpose. The caller
-      // is expected to track the initialization state.
+    // Allocate every new chunk before publishing any, so a failed allocation
+    // leaves the array unchanged and the caller can retry or keep going.
+    std::vector<char *> added;
+    try {
+      if (new_chunk_count > chunk_count) {
+        added.reserve(new_chunk_count - chunk_count);
+      }
+      for (size_t i = chunk_count; i < new_chunk_count; i++) {
+        added.push_back(allocateChunk());
+        // Note that we don't initialize the memory on purpose. The caller
+        // is expected to track the initialization state.
+      }
+      chunks_.insert(chunks_.end(), added.begin(), added.end());
+    } catch (...) {
+      for (char *chunk : added) {
+        freeChunk(chunk);
+      }
+      throw;
     }
     element_count_.store(new_element_count, std::memory_order_relaxed);
   }
@@ -342,6 +353,9 @@ class ChunkedArray {
   }
 
   void freeChunk(char *chunk) const {
+    if (chunk == nullptr) {
+      return;
+    }
     if (huge_pages_) {
       vmsdk::FreeHugePages(chunk, chunk_bytes_);
     } else {

@@ -7,6 +7,10 @@
 #ifndef SAN_BUILD
 #include "src/utils/allocator.h"
 
+#ifdef __linux__
+#include <sys/prctl.h>
+#endif
+
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -348,6 +352,17 @@ class HugePageAllocatorTest : public vmsdk::ValkeyTest {
     vmsdk::ValkeyTest::TearDown();
   }
 };
+
+#ifdef PR_SET_THP_DISABLE
+TEST_F(HugePageAllocatorTest, FallbackWhenThpDisabledForProcess) {
+  ASSERT_EQ(prctl(PR_SET_THP_DISABLE, 1, 0, 0, 0), 0);
+  vmsdk::InitHugePageAllocation(nullptr);
+  EXPECT_FALSE(vmsdk::UseHugePageAllocation());
+  // Restore the process setting and the cached result.
+  ASSERT_EQ(prctl(PR_SET_THP_DISABLE, 0, 0, 0, 0), 0);
+  vmsdk::InitHugePageAllocation(nullptr);
+}
+#endif
 
 // About the size of a 1024-dim FLOAT32 VectorRecord.
 constexpr size_t kVectorSize = 4104;

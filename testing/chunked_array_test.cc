@@ -5,8 +5,11 @@
  *
  */
 
+#include <sys/mman.h>
+
 #include <cstdint>
 #include <cstring>
+#include <new>
 
 #include "absl/log/check.h"  // IWYU pragma: keep (needed by hnswlib)
 #include "gtest/gtest.h"
@@ -21,8 +24,17 @@ using hnswlib::ChunkedArray;
 
 size_t external_bytes = 0;
 int external_calls = 0;
+// When >= 0, the number of IncrExternalMemory calls that succeed before one
+// fails.
+int incr_successes_left = -1;
 
 int FakeIncrExternalMemory(size_t bytes) {
+  if (incr_successes_left == 0) {
+    return VALKEYMODULE_ERR;
+  }
+  if (incr_successes_left > 0) {
+    --incr_successes_left;
+  }
   external_bytes += bytes;
   ++external_calls;
   return VALKEYMODULE_OK;
@@ -42,6 +54,7 @@ class ChunkedArrayTest : public ::testing::Test {
   void SetUp() override {
     external_bytes = 0;
     external_calls = 0;
+    incr_successes_left = -1;
   }
   void TearDown() override {
     ValkeyModule_IncrExternalMemory = nullptr;
@@ -137,6 +150,54 @@ TEST_F(ChunkedArrayTest, ModeFixedAtConstruction) {
     array.resize(vmsdk::kHugePageSize / kElementSize + 1);
     EXPECT_EQ(external_bytes, 2 * vmsdk::kHugePageSize);
   }
+  EXPECT_EQ(external_bytes, 0u);
+}
+
+// A failed growth leaves the array as it was: no chunks leak, the accounting
+// is unchanged, and a later growth and the destructor still work.
+TEST_F(ChunkedArrayTest, FailedGrowthRollsBack) {
+  InstallExternalMemoryApis();
+  const size_t per_chunk = vmsdk::kHugePageSize / kElementSize;
+  const uint64_t used_before = vmsdk::GetUsedMemoryCnt();
+  {
+    ChunkedArray array(kElementSize, kElementsPerChunk, 1);
+    incr_successes_left = 2;  // Two of the three new chunks succeed.
+    EXPECT_THROW(array.resize(4 * per_chunk), std::bad_alloc);
+    EXPECT_EQ(array.getCapacity(), 1u);
+    EXPECT_EQ(external_bytes, vmsdk::kHugePageSize);
+    EXPECT_EQ(vmsdk::GetUsedMemoryCnt() - used_before, vmsdk::kHugePageSize);
+
+    incr_successes_left = -1;
+    array.resize(4 * per_chunk);
+    EXPECT_EQ(external_bytes, 4 * vmsdk::kHugePageSize);
+    VerifyElements(array, 4 * per_chunk);
+  }
+  EXPECT_EQ(external_bytes, 0u);
+  EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), used_before);
+}
+
+// Consecutive mappings are placed next to each other so the kernel merges
+// them, and freeing one from the middle still works.
+TEST_F(ChunkedArrayTest, MappingsAreAdjacent) {
+  InstallExternalMemoryApis();
+  const size_t bytes = vmsdk::kHugePageSize;
+  char *a = vmsdk::AllocateHugePages(bytes);
+  char *b = vmsdk::AllocateHugePages(bytes);
+  char *c = vmsdk::AllocateHugePages(bytes);
+#ifdef MAP_FIXED_NOREPLACE
+  EXPECT_EQ(b + bytes, a);
+  EXPECT_EQ(c + bytes, b);
+#endif
+  for (char *p : {a, b, c}) {
+    EXPECT_EQ(reinterpret_cast<uintptr_t>(p) % vmsdk::kHugePageSize, 0u);
+    memset(p, 0x5a, bytes);
+  }
+  vmsdk::FreeHugePages(b, bytes);
+  EXPECT_EQ(external_bytes, 2 * bytes);
+  EXPECT_EQ(a[0], 0x5a);
+  EXPECT_EQ(c[bytes - 1], 0x5a);
+  vmsdk::FreeHugePages(a, bytes);
+  vmsdk::FreeHugePages(c, bytes);
   EXPECT_EQ(external_bytes, 0u);
 }
 

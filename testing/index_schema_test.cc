@@ -3694,6 +3694,181 @@ TEST_F(IndexSchemaScoreFieldTest,
 }
 
 TEST_F(IndexSchemaScoreFieldTest,
+       FilterRejectedAndUpdatedKeyReleasesVectorRegistryEntry) {
+  vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
+  mutations_thread_pool.StartWorkers();
+
+  data_model::IndexSchema schema_proto;
+  schema_proto.set_name("filter_vec_schema");
+  schema_proto.set_db_num(0);
+  schema_proto.set_attribute_data_type(
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH);
+  schema_proto.add_subscribed_key_prefixes("prefix:");
+  schema_proto.set_filter("@tag=='keep'");
+  schema_proto.set_skip_initial_scan(true);
+
+  auto *tag_attr = schema_proto.add_attributes();
+  tag_attr->set_alias("tag");
+  tag_attr->set_identifier("tag");
+  tag_attr->mutable_index()->mutable_tag_index()->set_separator(",");
+
+  auto *vec_attr = schema_proto.add_attributes();
+  vec_attr->set_alias("vec");
+  vec_attr->set_identifier("vec");
+  *vec_attr->mutable_index()->mutable_vector_index() =
+      CreateHNSWVectorIndexProto(4, data_model::DISTANCE_METRIC_L2, 100, 16,
+                                 200, 50);
+  vec_attr->mutable_index()->mutable_vector_index()->set_vector_data_type(
+      data_model::VECTOR_DATA_TYPE_FLOAT32);
+
+  auto index_schema_or =
+      IndexSchema::Create(&fake_ctx_, schema_proto, &mutations_thread_pool,
+                          /*skip_attributes=*/false, /*reload=*/false);
+  VMSDK_EXPECT_OK_STATUSOR(index_schema_or);
+  auto index_schema = index_schema_or.value();
+
+  EXPECT_CALL(*kMockValkeyModule, OpenKey(testing::_, testing::_, testing::_))
+      .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
+  EXPECT_CALL(*kMockValkeyModule, KeyType(testing::_))
+      .WillRepeatedly(Return(VALKEYMODULE_KEYTYPE_HASH));
+  EXPECT_CALL(*kMockValkeyModule, HashHasStringRef(testing::_, testing::_))
+      .WillRepeatedly(Return(1));
+  EXPECT_CALL(*kMockValkeyModule, HashSet(testing::_, VALKEYMODULE_HASH_NONE,
+                                          testing::_, testing::_, nullptr))
+      .WillRepeatedly(Return(VALKEYMODULE_OK));
+
+  std::vector<float> vec_data = {1.0f, 2.0f, 3.0f, 4.0f};
+  std::string vec_str(reinterpret_cast<const char *>(vec_data.data()),
+                      vec_data.size() * sizeof(float));
+
+  // 1. Key initially rejected by FILTER never enters VectorRegistry.
+  auto rejected_key = StringInternStore::Intern("prefix:rejected");
+  auto rejected_key_str = vmsdk::MakeUniqueValkeyString(rejected_key->Str());
+  EXPECT_CALL(*kMockValkeyModule,
+              HashGet(vmsdk::ValkeyModuleKeyIsForString(rejected_key->Str()),
+                      VALKEYMODULE_HASH_CFIELDS, testing::_,
+                      An<ValkeyModuleString **>(), TypedEq<void *>(nullptr)))
+      .WillRepeatedly([&](ValkeyModuleKey *, int, const char *field,
+                          ValkeyModuleString **value_out, void *) {
+        if (absl::string_view(field) == "tag") {
+          *value_out = TestValkeyModule_CreateString(nullptr, "drop", 4);
+        } else {
+          *value_out = TestValkeyModule_CreateString(nullptr, vec_str.data(),
+                                                     vec_str.size());
+        }
+        return VALKEYMODULE_OK;
+      });
+  index_schema->OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_HASH,
+                                       "hset", rejected_key_str.get());
+  WaitWorkerTasksAreCompleted(mutations_thread_pool);
+  kMockValkeyModule->RunPendingOneShots();
+  EXPECT_EQ(VectorRegistry::Instance().GetStats().entry_cnt, 0);
+
+  // 2. Accepted key enters VectorRegistry, then updating @tag to fail FILTER
+  // releases its VectorRegistry entry.
+  auto accepted_key = StringInternStore::Intern("prefix:accepted");
+  auto accepted_key_str = vmsdk::MakeUniqueValkeyString(accepted_key->Str());
+  std::string tag_val = "keep";
+  EXPECT_CALL(*kMockValkeyModule,
+              HashGet(vmsdk::ValkeyModuleKeyIsForString(accepted_key->Str()),
+                      VALKEYMODULE_HASH_CFIELDS, testing::_,
+                      An<ValkeyModuleString **>(), TypedEq<void *>(nullptr)))
+      .WillRepeatedly([&](ValkeyModuleKey *, int, const char *field,
+                          ValkeyModuleString **value_out, void *) {
+        if (absl::string_view(field) == "tag") {
+          *value_out = TestValkeyModule_CreateString(nullptr, tag_val.data(),
+                                                     tag_val.size());
+        } else {
+          *value_out = TestValkeyModule_CreateString(nullptr, vec_str.data(),
+                                                     vec_str.size());
+        }
+        return VALKEYMODULE_OK;
+      });
+  index_schema->OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_HASH,
+                                       "hset", accepted_key_str.get());
+  WaitWorkerTasksAreCompleted(mutations_thread_pool);
+  kMockValkeyModule->RunPendingOneShots();
+  EXPECT_EQ(VectorRegistry::Instance().GetStats().entry_cnt, 1);
+
+  tag_val = "drop";
+  index_schema->OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_HASH,
+                                       "hset", accepted_key_str.get());
+  WaitWorkerTasksAreCompleted(mutations_thread_pool);
+  kMockValkeyModule->RunPendingOneShots();
+  VectorRegistry::Instance().ProcessPendingUnshares(10);
+  EXPECT_EQ(VectorRegistry::Instance().GetStats().entry_cnt, 0);
+}
+
+TEST_F(IndexSchemaScoreFieldTest,
+       InvalidOtherFieldUnderRelease130ReleasesVectorRegistryEntry) {
+  const auto saved_emulate_release = options::GetEmulateRelease().GetValue();
+  auto restore_emulate_release = absl::MakeCleanup([&]() {
+    VMSDK_EXPECT_OK(
+        options::GetEmulateRelease().SetValue(saved_emulate_release));
+  });
+  VMSDK_EXPECT_OK(
+      options::GetEmulateRelease().SetValue(vmsdk::ValkeyVersion(1, 3, 0)));
+  vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
+  mutations_thread_pool.StartWorkers();
+
+  std::vector<absl::string_view> key_prefixes = {"prefix:"};
+  auto index_schema =
+      MockIndexSchema::Create(
+          &fake_ctx_, "invalid_sibling_schema", key_prefixes,
+          std::make_unique<HashAttributeDataType>(), &mutations_thread_pool)
+          .value();
+  auto numeric_index =
+      std::make_shared<indexes::Numeric>(CreateNumericIndexProto());
+  VMSDK_EXPECT_OK(index_schema->AddIndex("num", "num", numeric_index));
+  auto hnsw_index =
+      indexes::VectorHNSW<float>::Create(
+          CreateHNSWVectorIndexProto(4, data_model::DISTANCE_METRIC_L2, 100, 16,
+                                     200, 50),
+          "vec", data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
+          .value();
+  VMSDK_EXPECT_OK(index_schema->AddIndex("vec", "vec", hnsw_index));
+
+  auto key = StringInternStore::Intern("prefix:bad_sibling");
+  auto key_str = vmsdk::MakeUniqueValkeyString(key->Str());
+  std::vector<float> vec_data = {1.0f, 2.0f, 3.0f, 4.0f};
+  std::string vec_str(reinterpret_cast<const char *>(vec_data.data()),
+                      vec_data.size() * sizeof(float));
+
+  EXPECT_CALL(*kMockValkeyModule, OpenKey(testing::_, testing::_, testing::_))
+      .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
+  EXPECT_CALL(*kMockValkeyModule, KeyType(testing::_))
+      .WillRepeatedly(Return(VALKEYMODULE_KEYTYPE_HASH));
+  EXPECT_CALL(*kMockValkeyModule, HashHasStringRef(testing::_, testing::_))
+      .WillRepeatedly(Return(1));
+  EXPECT_CALL(*kMockValkeyModule, HashSet(testing::_, VALKEYMODULE_HASH_NONE,
+                                          testing::_, testing::_, nullptr))
+      .WillRepeatedly(Return(VALKEYMODULE_OK));
+  EXPECT_CALL(*kMockValkeyModule,
+              HashGet(vmsdk::ValkeyModuleKeyIsForString(key->Str()),
+                      VALKEYMODULE_HASH_CFIELDS, testing::_,
+                      An<ValkeyModuleString **>(), TypedEq<void *>(nullptr)))
+      .WillRepeatedly([&](ValkeyModuleKey *, int, const char *field,
+                          ValkeyModuleString **value_out, void *) {
+        if (absl::string_view(field) == "num") {
+          *value_out =
+              TestValkeyModule_CreateString(nullptr, "not_a_number", 12);
+        } else {
+          *value_out = TestValkeyModule_CreateString(nullptr, vec_str.data(),
+                                                     vec_str.size());
+        }
+        return VALKEYMODULE_OK;
+      });
+
+  index_schema->OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_HASH,
+                                       "hset", key_str.get());
+  WaitWorkerTasksAreCompleted(mutations_thread_pool);
+  kMockValkeyModule->RunPendingOneShots();
+  VectorRegistry::Instance().ProcessPendingUnshares(10);
+  EXPECT_FALSE(hnsw_index->IsTracked(key));
+  EXPECT_EQ(VectorRegistry::Instance().GetStats().entry_cnt, 0);
+}
+
+TEST_F(IndexSchemaScoreFieldTest,
        DestructingSchemaIgnoresKeyspaceNotification) {
   std::vector<absl::string_view> key_prefixes = {"prefix:"};
   std::string index_schema_name_str("index_schema_name");

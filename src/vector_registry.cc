@@ -154,6 +154,29 @@ void VectorRegistry::EraseTrackedRecord(int db_num, const RegistryKey &key) {
   ExtractTrackedRecord(db_num, key.key, key.attribute_identifier);
 }
 
+namespace {
+
+enum class HashFieldRefState {
+  kMissing,
+  kUnshared,
+  kShared,
+};
+
+HashFieldRefState GetHashFieldRefState(ValkeyModuleKey *key_obj,
+                                       ValkeyModuleString *attr_str) {
+  int exists = 0;
+  if (ValkeyModule_HashGet(key_obj, VALKEYMODULE_HASH_EXISTS, attr_str, &exists,
+                           nullptr) != VALKEYMODULE_OK ||
+      !exists) {
+    return HashFieldRefState::kMissing;
+  }
+  return ValkeyModule_HashHasStringRef(key_obj, attr_str) == 1
+             ? HashFieldRefState::kShared
+             : HashFieldRefState::kUnshared;
+}
+
+}  // namespace
+
 bool VectorRegistry::IsEraseTrackedRecordSafe(
     int db_num, const InternedStringPtr &key, absl::string_view vector_str,
     absl::string_view attribute_identifier,
@@ -177,8 +200,8 @@ bool VectorRegistry::IsEraseTrackedRecordSafe(
   }
   auto attribute_identifier_str =
       vmsdk::MakeUniqueValkeyString(attribute_identifier);
-  return ValkeyModule_HashHasStringRef(key_obj.get(),
-                                       attribute_identifier_str.get()) != 1;
+  return GetHashFieldRefState(key_obj.get(), attribute_identifier_str.get()) !=
+         HashFieldRefState::kShared;
 }
 
 bool VectorRegistry::ShareWithValkey(
@@ -202,8 +225,8 @@ bool VectorRegistry::ShareWithValkey(
   }
   auto attribute_identifier_str =
       vmsdk::MakeUniqueValkeyString(attribute_identifier);
-  if (ValkeyModule_HashHasStringRef(key_obj.get(),
-                                    attribute_identifier_str.get()) == 1) {
+  if (GetHashFieldRefState(key_obj.get(), attribute_identifier_str.get()) !=
+      HashFieldRefState::kUnshared) {
     return false;
   }
 
@@ -277,7 +300,8 @@ bool VectorRegistry::UnshareWithValkey(
     return false;
   }
   auto attr_str = vmsdk::MakeUniqueValkeyString(attribute_identifier);
-  if (ValkeyModule_HashHasStringRef(key_obj, attr_str.get()) != 1) {
+  if (GetHashFieldRefState(key_obj, attr_str.get()) !=
+      HashFieldRefState::kShared) {
     return false;
   }
   auto raw_vec = vector_record.GetRawVector();
@@ -362,6 +386,7 @@ bool VectorRegistry::HasMatchingVectorIndex(
           continue;
         }
         if (require_tracked && !index->IsTracked(interned_key)) {
+          index->ReclaimRetired();
           continue;
         }
         return true;
@@ -445,6 +470,7 @@ size_t VectorRegistry::ProcessPendingUnshares(uint32_t batch_size) {
       break;
     }
     vmsdk::ValkeySelectDbGuard db_guard(ctx_.get(), db_num);
+    std::vector<absl::flat_hash_set<RegistryKey>::node_type> deferred_nodes;
 
     while (!pending_keys.empty() && processed < batch_size) {
       auto node = pending_keys.extract(pending_keys.begin());
@@ -463,10 +489,13 @@ size_t VectorRegistry::ProcessPendingUnshares(uint32_t batch_size) {
       auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
           ctx_.get(), key_str.get(),
           VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_WRITE);
-      if (tracked_it->second.vector_record.RefCount() > 1 ||
-          HasMatchingVectorIndex(db_num, rk.key->Str(), rk.attribute_identifier,
+      if (HasMatchingVectorIndex(db_num, rk.key->Str(), rk.attribute_identifier,
                                  key_obj.get(), tracked_it->second.size,
                                  /*require_tracked=*/true)) {
+        continue;
+      }
+      if (tracked_it->second.vector_record.RefCount() > 1) {
+        deferred_nodes.push_back(std::move(node));
         continue;
       }
       auto record = tracked_it->second;
@@ -478,6 +507,10 @@ size_t VectorRegistry::ProcessPendingUnshares(uint32_t batch_size) {
         UnshareWithValkey(key_obj.get(), rk.attribute_identifier->Str(),
                           record.vector_record, record.size);
       }
+    }
+
+    for (auto &node : deferred_nodes) {
+      pending_keys.insert(std::move(node));
     }
 
     if (pending_keys.empty()) {

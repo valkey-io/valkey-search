@@ -637,9 +637,11 @@ void AppendMutatedAttribute(
     auto *vector_base = static_cast<indexes::VectorBase *>(index.get());
     CHECK(vector_base);
     if (deletion_type != indexes::DeletionType::kNone || !attr_val) {
-      VectorRegistry::Instance().DedupOrConstruct(
-          key, nullptr, attribute_data_type, db_num, vector_base);
-      mutated_attributes[alias] = AttributeData(deletion_type);
+      auto vector_record_with_size =
+          VectorRegistry::Instance().DedupOrConstruct(
+              key, nullptr, attribute_data_type, db_num, vector_base);
+      mutated_attributes[alias] =
+          AttributeData(std::move(vector_record_with_size), deletion_type);
       return;
     }
     auto vector_record_with_size = VectorRegistry::Instance().DedupOrConstruct(
@@ -653,6 +655,34 @@ void AppendMutatedAttribute(
     return;
   }
   mutated_attributes[alias] = AttributeData(std::move(attr_val));
+}
+
+void RemoveKeyFromVectorRegistry(
+    const absl::flat_hash_map<std::string, Attribute> &attributes,
+    const InternedStringPtr &key) {
+  std::vector<std::shared_ptr<indexes::IndexBase>> vector_indexes;
+  for (const auto &attribute_itr : attributes) {
+    auto index = attribute_itr.second.GetIndex();
+    if (indexes::IsVectorIndex(index)) {
+      vector_indexes.push_back(std::move(index));
+    }
+  }
+  if (vector_indexes.empty()) {
+    return;
+  }
+  auto remove_fn = [key, vector_indexes = std::move(vector_indexes)]() {
+    const InternedStringPtr key_arr[] = {key};
+    for (const auto &index : vector_indexes) {
+      auto *vb = static_cast<const indexes::VectorBase *>(index.get());
+      VectorRegistry::Instance().RemoveIndexKeys(
+          vb->GetDBNum(), vb->GetInternedAttributeIdentifier(), key_arr);
+    }
+  };
+  if (vmsdk::IsMainThread()) {
+    remove_fn();
+    return;
+  }
+  vmsdk::RunByMain(std::move(remove_fn));
 }
 
 }  // namespace
@@ -697,11 +727,13 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
       attr_val =
           attribute.GetIndex()->NormalizeStringAttribute(std::move(attr_val));
     }
-    auto deletion_type = attr_val ? indexes::DeletionType::kNone
-                                  : indexes::DeletionType::kIdentifier;
-    AppendMutatedAttribute(mutated_attributes, interned_key, attribute,
-                           std::move(attr_val), deletion_type,
-                           attribute_data_type_->ToProto(), db_num_);
+    if (attr_val) {
+      mutated_attributes[attribute.GetAlias()] =
+          AttributeData(std::move(attr_val));
+    } else {
+      mutated_attributes[attribute.GetAlias()] =
+          AttributeData(indexes::DeletionType::kIdentifier);
+    }
     added = true;
   }
 
@@ -739,6 +771,24 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
     }
     ++stats_.filter_rejected_keys;
     filter_rejected = true;
+  }
+
+  if (key_obj && !filter_rejected) {
+    for (const auto &attribute_itr : attributes_) {
+      const auto &attribute = attribute_itr.second;
+      if (!indexes::IsVectorIndex(attribute.GetIndex())) {
+        continue;
+      }
+      auto &attr_data = mutated_attributes[attribute.GetAlias()];
+      auto deletion_type = attr_data.deletion_type;
+      vmsdk::UniqueValkeyString attr_val;
+      if (!attr_data.IsNull()) {
+        attr_val = attr_data.ConsumeString();
+      }
+      AppendMutatedAttribute(mutated_attributes, interned_key, attribute,
+                             std::move(attr_val), deletion_type,
+                             attribute_data_type_->ToProto(), db_num_);
+    }
   }
 
   if (added) {
@@ -787,7 +837,8 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
   bool invalid_data = false;
   for (auto &attribute_data_itr : mutated_attributes) {
     const auto itr = attributes_.find(attribute_data_itr.first);
-    if (itr == attributes_.end()) {
+    if (itr == attributes_.end() ||
+        indexes::IsVectorIndex(itr->second.GetIndex())) {
       continue;
     }
     if (attribute_data_itr.second.deletion_type !=
@@ -799,12 +850,43 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
       invalid_data = true;
     }
   }
+  bool needs_vector_registry_cleanup = false;
+  for (auto &attribute_data_itr : mutated_attributes) {
+    const auto itr = attributes_.find(attribute_data_itr.first);
+    if (itr == attributes_.end() ||
+        !indexes::IsVectorIndex(itr->second.GetIndex())) {
+      continue;
+    }
+    if (attribute_data_itr.second.deletion_type !=
+        indexes::DeletionType::kRecord) {
+      all_records_deleted = false;
+    } else if (!attribute_data_itr.second.IsVector()) {
+      needs_vector_registry_cleanup = true;
+    }
+    auto *vb = static_cast<indexes::VectorBase *>(itr->second.GetIndex().get());
+    if (ABSL_PREDICT_FALSE(
+            invalid_data && options::EnabledInVersion(1, 3, 0) &&
+            !attribute_data_itr.second.IsNull() &&
+            vb->IsValidSizeVector(attribute_data_itr.second.GetLength()))) {
+      attribute_data_itr.second = AttributeData();
+      continue;
+    }
+    if (ProcessAttributeMutation(ctx, itr->second, key,
+                                 std::move(attribute_data_itr.second))) {
+      invalid_data = true;
+    }
+  }
   CHECK(!all_records_deleted || !invalid_data);
   if (all_records_deleted) {
     // If all attributes are deletes, we can remove the key from the tracked
     // mutation records.
-    absl::MutexLock lock(&mutated_records_mutex_);
-    index_key_info_.erase(key);
+    {
+      absl::MutexLock lock(&mutated_records_mutex_);
+      index_key_info_.erase(key);
+    }
+    if (needs_vector_registry_cleanup) {
+      RemoveKeyFromVectorRegistry(attributes_, key);
+    }
   }
   if (text_index_schema_) {
     // Text index structures operate at the schema-level so we commit the
@@ -848,6 +930,7 @@ void IndexSchema::RemoveKeyFromAllIndexes(ValkeyModuleCtx *ctx,
     absl::MutexLock lock(&mutated_records_mutex_);
     index_key_info_.erase(key);
   }
+  RemoveKeyFromVectorRegistry(attributes_, key);
 }
 
 bool IndexSchema::ProcessAttributeMutation(ValkeyModuleCtx *ctx,
@@ -2352,15 +2435,12 @@ void IndexSchema::MarkAsDestructing() {
   for (auto &[key, mutation] : tracked_mutated_records_) {
     if (mutation.attributes) {
       for (const auto &[alias, attr_data] : *mutation.attributes) {
-        if (attr_data.IsVector()) {
-          auto it = attributes_.find(alias);
-          if (it != attributes_.end()) {
-            auto *vb = dynamic_cast<indexes::VectorBase *>(
-                it->second.GetIndex().get());
-            if (vb) {
-              pending_keys_by_index[vb].push_back(key);
-            }
-          }
+        auto it = attributes_.find(alias);
+        if (it != attributes_.end() &&
+            indexes::IsVectorIndex(it->second.GetIndex())) {
+          auto *vb =
+              static_cast<indexes::VectorBase *>(it->second.GetIndex().get());
+          pending_keys_by_index[vb].push_back(key);
         }
       }
     }

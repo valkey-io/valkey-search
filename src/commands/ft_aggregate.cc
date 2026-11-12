@@ -67,11 +67,32 @@ absl::Status CheckLoadAfterGroupby(const AggregateParameters &params) {
       [] { return absl::OkStatus(); });
 }
 
-// Only a rename or `__key` changes the 1.2.1 reply, so only they are counted.
+// 1.2.1 ignored every named load under `LOAD *`. Only those that change its
+// reply are counted: on HASH the stored field is in the record already, with
+// the same text unless it is numeric, under the same name unless the
+// attribute is declared under another one.
 absl::Status ResolveLoadsUnderLoadAll(AggregateParameters &params) {
+  const bool is_json = params.index_schema->GetAttributeDataType().ToProto() ==
+                       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON;
   const bool reply_differs = std::any_of(
-      params.loads_.begin(), params.loads_.end(), [](const LoadField &f) {
-        return !f.after_groupby && (f.renamed || f.identifier == "__key");
+      params.loads_.begin(), params.loads_.end(), [&](const LoadField &f) {
+        auto indexer = params.index_schema->GetIndex(f.identifier);
+        // On HASH `LOAD *` already returns a vector field under its own name,
+        // so naming it changes nothing. On JSON every named load differs from
+        // 1.2.1's `$`-only reply, a rejected vector load included.
+        if (f.after_groupby || (!is_json && !f.renamed && indexer.ok() &&
+                                indexes::IsVectorIndex(*indexer))) {
+          return false;
+        }
+        if (is_json || f.renamed || f.identifier == "__key") {
+          return true;
+        }
+        if (!indexer.ok()) {
+          return false;
+        }
+        auto field = params.index_schema->GetIdentifier(f.identifier);
+        return (*indexer)->GetIndexerType() == indexes::IndexerType::kNumeric ||
+               (field.ok() && *field != f.identifier);
       });
   if (!reply_differs) {
     return absl::OkStatus();
@@ -117,17 +138,26 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
       std::any_of(params.loads_.begin(), params.loads_.end(),
                   [](const LoadField &f) { return f.newly_loadable; });
   const auto score_sv = vmsdk::ToStringView(params.score_as.get());
-  if (newly_loadable && params.addscores_ && !params.IsVectorQuery()) {
+  if (params.addscores_ && !params.IsVectorQuery() &&
+      params.ambiguous_load_name_.ok()) {
     for (const auto &load : params.loads_) {
       const bool touches_score =
           load.alias == score_sv || load.identifier == score_sv;
       if (load.renamed && !load.after_groupby &&
           load.alias != load.identifier && touches_score) {
-        return absl::InvalidArgumentError(absl::StrCat(
+        params.ambiguous_load_name_ = absl::InvalidArgumentError(absl::StrCat(
             "LOAD cannot rename to or from the score name `", score_sv, "`"));
+        break;
       }
     }
+    if (newly_loadable) {
+      VMSDK_RETURN_IF_ERROR(params.ambiguous_load_name_);
+    }
   }
+  const bool is_json = params.index_schema->GetAttributeDataType().ToProto() ==
+                       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON;
+  const bool legacy_loadall =
+      params.loadall_ && !options::EnabledInVersion(1, 3, 0);
   std::vector<LoadField> loads_to_process;
   for (const auto &load : params.loads_) {
     // FT.HYBRID ignores a late LOAD, but a GROUPBY on the key still needs it.
@@ -140,8 +170,16 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
     if (load.after_groupby && params.loadall_) {
       continue;
     }
+    // Below 1.3.0 the reply is 1.2.1's, which ignored named loads under
+    // `LOAD *`; ResolveLoadsUnderLoadAll counts the difference. A HASH record
+    // already holds the stored field; a JSON path is fetched for later stages
+    // and hidden in the reply.
+    if (legacy_loadall && !is_json) {
+      continue;
+    }
     loads_to_process.push_back(load);
   }
+  const size_t named_loads = loads_to_process.size();
 
   // A field named by a pipeline stage but absent from the LOAD clause still
   // has to be fetched. Redisearch loads such fields implicitly; without that
@@ -186,7 +224,9 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
     }
   }
 
-  for (const auto &load : loads_to_process) {
+  for (size_t load_index = 0; load_index < loads_to_process.size();
+       ++load_index) {
+    const auto &load = loads_to_process[load_index];
     const std::string &identifier = load.identifier;
     const std::string &alias = load.alias;  // output name (== identifier
                                             // when there is no AS clause)
@@ -230,6 +270,14 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
     content = true;
     auto indexer = params.index_schema->GetIndex(identifier);
     if (indexer.ok() && indexes::IsVectorIndex(*indexer)) {
+      // On HASH, `LOAD *` returns the vector already, so a named load of it
+      // adds nothing. On JSON it does not, and a vector cannot be loaded as
+      // its own column any more than `LOAD @v` alone can; below 1.3.0 the
+      // named load is ignored, as in 1.2.1, and from 1.3.0 it is rejected,
+      // as on main.
+      if (params.loadall_ && (!is_json || legacy_loadall)) {
+        continue;
+      }
       return absl::InvalidArgumentError(
           absl::StrCat("Loading of vector fields is not supported (field `",
                        identifier, "`)"));
@@ -273,6 +321,9 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
     }
     if (renamed) {
       apply_rename(record_index);
+    }
+    if (legacy_loadall && load_index < named_loads) {
+      params.legacy_loadall_hidden_.insert(record_index);
     }
   }
   // After the loop, so a command another check rejects is not counted.

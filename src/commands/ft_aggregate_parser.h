@@ -93,6 +93,9 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   size_t loads_before_loadall_{0};
   // The 1.3.0 rule for named loads under `LOAD *`.
   bool loadall_named_loads_{false};
+  // Below 1.3.0 on JSON, columns of named loads under `LOAD *`: they feed
+  // later stages, but 1.2.1's reply showed only the `$` root.
+  absl::flat_hash_set<size_t> legacy_loadall_hidden_;
   // The first ambiguous LOAD name, returned once the command also loads a
   // field outside the schema.
   absl::Status ambiguous_load_name_;

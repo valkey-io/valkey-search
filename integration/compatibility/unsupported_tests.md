@@ -425,8 +425,9 @@ the renamed field, so the reply carried neither column.
 
 Two further shapes are not swept. `LOAD 6 @__key AS x @__score AS x` claims
 one output name twice; valkey-search rejects that whenever an `AS` is
-involved, which is the deliberate extra strictness the LOAD parser documents
-and the FT.AGGREGATE suite already covers. And an upper-case `@__KEY` or
+involved, which is the extra strictness `COMPATIBILITY.md` documents under
+`compatibility-ft_aggregate_load_as`, and the FT.AGGREGATE suite covers it.
+And an upper-case `@__KEY` or
 `@__SCORE` names nothing on either engine, because both match the reserved
 names case-sensitively; `test_load_unknown_field` sweeps it.
 

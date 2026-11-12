@@ -260,6 +260,9 @@ class TestAggregateLoadAs(ValkeySearchTestCaseDebugMode):
              None, None, "output name of an earlier LOAD entry"),
             (("LOAD", "3", "@price", "AS", "x", "LOAD", "3", "@x", "AS", "y"),
              None, None, "output name of an earlier LOAD entry"),
+            # Read under the same name, it also claims `x` again.
+            (("LOAD", "3", "@price", "AS", "x", "LOAD", "2", "@extra", "@x"),
+             None, None, "output name of an earlier LOAD entry"),
         ]
         for make, idx, key in ((self._make_hash_with_extra, "idx_hash", b"h:1"),
                                (self._make_json_with_extra, "idx_json", b"j:1")):
@@ -275,6 +278,23 @@ class TestAggregateLoadAs(ValkeySearchTestCaseDebugMode):
                     assert pairs(client.execute_command(
                         "FT.AGGREGATE", idx, "@price:[-inf inf]", *answered)) == [
                             expected], answered
+
+    def test_rename_onto_the_json_root_next_to_loadall(self):
+        """On JSON `LOAD *` returns `$`, so a rename onto `$` names two
+        fields. Rejected with an undeclared field; main's reply otherwise."""
+        client = self._client()
+        self._make_json_with_extra(client)
+        doc = b'{"price":10,"qty":5,"extra":"e"}'
+        for loads in [("LOAD", "*", "LOAD", "3", "$.extra", "AS", "$"),
+                      ("LOAD", "3", "$.extra", "AS", "$", "LOAD", "*")]:
+            with pytest.raises(valkey.exceptions.ResponseError,
+                               match="rename onto `\\$`"):
+                client.execute_command(
+                    "FT.AGGREGATE", "idx_json", "@price:[-inf inf]", *loads)
+        assert sorted(pairs(client.execute_command(
+            "FT.AGGREGATE", "idx_json", "@price:[-inf inf]",
+            "LOAD", "*", "LOAD", "3", "@qty", "AS", "$"))[0]) == [
+                ("$", b"5"), ("$", doc)]
 
     def test_renamed_undeclared_field_is_known_only_by_its_alias(self):
         """A stage cannot read an undeclared field under the name it was

@@ -1128,10 +1128,6 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         idx = f"{key_type}_idx1"
         self.check(dialect, f"ft.aggregate {idx} * load * load 1 @__key")
         self.check(dialect, f"ft.aggregate {idx} * load * load 3 @__key as k sortby 2 @k asc")
-        if key_type != "hash":
-            # A JSON LOAD * fetches the document as one `$` column, so a named
-            # entry alongside it reads nothing (unsupported_tests.md 5.2).
-            return
         for loads in [
             "load * load 3 @e2 as x",
             "load 3 @e2 as x load *",
@@ -1173,9 +1169,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
             f"apply 1 as y load 1 @n1 {gb}",
         ]:
             self.check(dialect, f"ft.aggregate {idx} * {tail}")
-        if key_type == "hash":
-            # JSON GROUPBY over LOAD * is unsupported_tests.md 5.2.
-            self.check(dialect, f"ft.aggregate {idx} * load * {gb}")
+        self.check(dialect, f"ft.aggregate {idx} * load * {gb}")
 
     def test_aggregate_json_field_names(self, key_type, dialect, vector_data_type):
         """Field names in the reply must be the user-facing name, not the

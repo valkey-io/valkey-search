@@ -1260,11 +1260,14 @@ absl::Status CreateRecordsFromNeighbors(
   // On JSON, `LOAD *` is the `$` root; named paths only feed columns.
   const bool is_json =
       data_type == data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON;
-  const bool root_is_a_column =
-      std::any_of(parameters.record_info_by_index_.begin(),
-                  parameters.record_info_by_index_.end(), [](const auto &info) {
-                    return info.output_name_ == kJsonRootElementQuery;
-                  });
+  bool root_is_a_column = false;
+  for (size_t i = 0; i < parameters.record_info_by_index_.size(); ++i) {
+    const bool shown = !parameters.legacy_loadall_hidden_.contains(i);
+    if (shown && parameters.record_info_by_index_[i].output_name_ ==
+                     kJsonRootElementQuery) {
+      root_is_a_column = true;
+    }
+  }
 
   for (auto &n : neighbors) {
     // One slot per record column. Not record_indexes_by_alias_.size(): that
@@ -1475,6 +1478,12 @@ void AggregateParameters::ReplyRecords(ValkeyModuleCtx *ctx, RecordSet &records,
     }
   }
 
+  // After a GROUPBY the reply holds groups, which show their keys.
+  const bool hide_legacy_loads = std::none_of(
+      parameters.stages_.begin(), parameters.stages_.end(),
+      [](const auto &stage) {
+        return dynamic_cast<const GroupBy *>(stage.get()) != nullptr;
+      });
   for (size_t n = 0; n < count; ++n) {
     auto rec = records.pop_front();
     ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_ARRAY_LEN);
@@ -1487,6 +1496,9 @@ void AggregateParameters::ReplyRecords(ValkeyModuleCtx *ctx, RecordSet &records,
         continue;
       }
       const auto &name = parameters.record_info_by_index_[i].output_name_;
+      if (hide_legacy_loads && parameters.legacy_loadall_hidden_.contains(i)) {
+        continue;
+      }
       if (yields_to_stored.contains(i) &&
           std::any_of(rec->extra_fields_.begin(), rec->extra_fields_.end(),
                       [&](const auto &field) { return field.first == name; })) {

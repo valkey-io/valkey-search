@@ -162,6 +162,30 @@ class TestAggregateLoadAfterGroupby(ValkeySearchTestCaseDebugMode):
         assert reply[0] == 1 and dict(zip(reply[1][::2], reply[1][1::2]))[b"g"] == b"a"
         assert b"x" not in reply[1][::2]
 
+    def test_hybrid_late_load_does_not_make_an_earlier_name_an_error(self):
+        """An ignored late LOAD of an undeclared field loads nothing, so an
+        ambiguous earlier name keeps its reply instead of being rejected."""
+        client = self._client("1.3.0")
+        client.execute_command(
+            "FT.CREATE", "hd", "ON", "HASH", "PREFIX", "1", "hd:", "SCHEMA",
+            "title", "TEXT", "g", "TAG", "n", "NUMERIC",
+            "vec", "VECTOR", "FLAT", "6", "TYPE", "FLOAT32", "DIM", "2",
+            "DISTANCE_METRIC", "L2")
+        client.execute_command(
+            "HSET", "hd:1", "title", "alpha", "g", "a", "n", "1", "extra", "e",
+            "vec", struct.pack("<2f", 1.0, 0.0))
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "hd")
+
+        def hybrid(*late):
+            return client.execute_command(
+                "FT.HYBRID", "hd", "SEARCH", "@title:alpha",
+                "VSIM", "@vec", "$q", "KNN", "2", "K", "10",
+                "LOAD", "3", "@n", "AS", "q", "LOAD", "3", "@g", "AS", "q",
+                "GROUPBY", "1", "@g", "REDUCE", "COUNT", "0", "AS", "c", *late,
+                "PARAMS", "2", "q", struct.pack("<2f", 0.0, 0.0))
+
+        assert hybrid("LOAD", "1", "@extra") == hybrid()
+
     def test_load_after_other_stages_still_loads(self):
         client = self._client("1.3.0")
         reply, ticks = self._ticks(

@@ -801,7 +801,7 @@ class PrefilterEvaluator : public query::Evaluator {
   PrefilterEvaluator(query::QueryContext &query_ctx,
                      QueryOperations query_operations,
                      const IndexSchema &index_schema,
-                     bool source_resolves_text = true);
+                     bool source_resolves_text);
   bool Evaluate(const query::Predicate &predicate,
                 const InternedStringPtr &key);
   // Like Evaluate(), but returns the full EvaluationResult so that callers
@@ -813,7 +813,7 @@ class PrefilterEvaluator : public query::Evaluator {
     CHECK(key_);
     return *key_;
   }
-  bool IsPrefilterEvaluator() const override { return source_resolves_text_; }
+  bool SourceResolvesText() const override { return source_resolves_text_; }
 
  private:
   query::EvaluationResult EvaluateTags(

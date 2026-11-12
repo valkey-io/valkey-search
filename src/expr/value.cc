@@ -13,8 +13,8 @@
 #include <sstream>
 #include <system_error>
 
+#include "absl/strings/ascii.h"
 #include "absl/strings/str_cat.h"
-#include "src/utils/scanner.h"
 #include "src/valkey_search_options.h"  // VALKEY_SEARCH_COMPATIBILITY_FIX
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -1125,17 +1125,8 @@ Value FuncLower(const Value& o) {
   if (!os) {
     return Value(Value::Nil("lower: operand has no string representation"));
   }
-  std::string result;
-  result.reserve(os->size());
-  utils::Scanner in(*os);
-  for (auto utf8 = in.NextUtf8(); utf8 != utils::Scanner::kEOF;
-       utf8 = in.NextUtf8()) {
-    if (utf8 < 0x80) {
-      utf8 = std::tolower(utf8);
-    }
-    utils::Scanner::PushBackUtf8(result, utf8);
-  }
-  return Value(std::move(result));
+  // Maps ASCII bytes only. Other bytes, valid UTF-8 or not, are copied as-is.
+  return Value(absl::AsciiStrToLower(*os));
 }
 
 Value FuncUpper(const Value& o) {
@@ -1149,17 +1140,7 @@ Value FuncUpper(const Value& o) {
   if (!os) {
     return Value(Value::Nil("upper: operand has no string representation"));
   }
-  std::string result;
-  result.reserve(os->size());
-  utils::Scanner in(*os);
-  for (auto utf8 = in.NextUtf8(); utf8 != utils::Scanner::kEOF;
-       utf8 = in.NextUtf8()) {
-    if (utf8 < 0x80) {
-      utf8 = std::toupper(utf8);
-    }
-    utils::Scanner::PushBackUtf8(result, utf8);
-  }
-  return Value(std::move(result));
+  return Value(absl::AsciiStrToUpper(*os));
 }
 
 // 1.2.1 fix shared by all date functions: pre-epoch (negative) timestamps

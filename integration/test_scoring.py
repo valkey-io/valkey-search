@@ -984,6 +984,7 @@ class TestScoring(ValkeySearchTestCaseBase):
         text_filters = [
             ("@body:(hello|world)", ["INORDER"]),
             ("@body:(hello world)", ["INORDER"]),
+            ('@body:"hello world"', []),
             ("@body:(hello world)", ["SLOP", "0"]),
             ("@body:(hello world)", ["SLOP", "2"]),
             ("@body:(hel*|wor*)", ["INORDER"]),

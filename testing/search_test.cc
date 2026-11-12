@@ -3628,8 +3628,7 @@ TEST_F(ScoreTextQueryTestBase, ExpansionRepresentativeSuffixAndFuzzy) {
 
 // The point of the context: filtering and scoring together walk the trees once
 // per term leaf per query, however many candidates there are. Stemming is on so
-// the leaf carries every group kind, and the negation makes the prefilter
-// evaluate the text child instead of trusting the entries fetcher.
+// the leaf carries every group kind.
 TEST_F(ScoreTextQueryTestBase, TermLeavesWalkTreesOncePerQuery) {
   std::vector<std::tuple<std::string, std::string, std::string>> docs;
   for (int i = 0; i < 100; ++i) {

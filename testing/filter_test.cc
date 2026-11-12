@@ -1038,10 +1038,9 @@ INSTANTIATE_TEST_SUITE_P(
                                        "  TEXT-TERM(\"is\", field_mask=2)\n"
                                        "}\n",
         },
-        // The prefilter skips text children of an AND unless the query carries
-        // a negation, so these force evaluation. Both terms are present; only
-        // the proximity check can reject, which guards against a cached leaf
-        // answering a bare verdict without handing back its iterator.
+        // Both terms are present; only the proximity check can reject, which
+        // guards against a cached leaf answering a bare verdict without
+        // handing back its iterator.
         {
             .test_name = "proximity_adjacent_evaluated",
             .filter = "-@num_field_1.5:[5 6] @text_field1:\"my name\"",

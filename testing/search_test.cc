@@ -3386,7 +3386,8 @@ TEST_F(ScoreTextQueryTestBase, StemInflectionMatchesInPerKeyOr) {
       *schema,
       indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std));
   indexes::PrefilterEvaluator evaluator(query_ctx, parsed->query_operations,
-                                        *schema);
+                                        *schema,
+                                        /*source_resolves_text=*/false);
   vmsdk::ReaderMutexLock lock(&schema->GetTimeSlicedMutex());
   auto matches = [&](const char *k) {
     return evaluator.Evaluate(*parsed->root_predicate,
@@ -3851,8 +3852,7 @@ TEST_F(ScoreTextQueryTestBase, ExpansionRepresentativeSuffixAndFuzzy) {
 
 // The point of the context: filtering and scoring together walk the trees once
 // per term leaf per query, however many candidates there are. Stemming is on so
-// the leaf carries every group kind, and the negation makes the prefilter
-// evaluate the text child instead of trusting the entries fetcher.
+// the leaf carries every group kind.
 TEST_F(ScoreTextQueryTestBase, TermLeavesWalkTreesOncePerQuery) {
   std::vector<std::tuple<std::string, std::string, std::string>> docs;
   for (int i = 0; i < 100; ++i) {
@@ -3869,7 +3869,8 @@ TEST_F(ScoreTextQueryTestBase, TermLeavesWalkTreesOncePerQuery) {
   auto walks_for = [&](int candidates) {
     query::QueryContext query_ctx(*schema, scorer);
     indexes::PrefilterEvaluator evaluator(query_ctx, parsed->query_operations,
-                                          *schema);
+                                          *schema,
+                                          /*source_resolves_text=*/false);
     std::vector<InternedStringPtr> keys;
     std::vector<indexes::BorrowedNeighbor> matched;
     vmsdk::ReaderMutexLock lock(&schema->GetTimeSlicedMutex());
@@ -3903,7 +3904,8 @@ TEST_F(ScoreTextQueryTestBase, EvaluateFullRefetchesPerKeyTreeForEachKey) {
   ASSERT_TRUE(parsed.ok()) << parsed.status();
   query::QueryContext query_ctx(*schema, scorer);
   indexes::PrefilterEvaluator evaluator(query_ctx, parsed->query_operations,
-                                        *schema);
+                                        *schema,
+                                        /*source_resolves_text=*/false);
   const auto d0 = StringInternStore::Intern("d0");
   const auto d1 = StringInternStore::Intern("d1");
   vmsdk::ReaderMutexLock lock(&schema->GetTimeSlicedMutex());
@@ -3933,7 +3935,8 @@ TEST_F(ScoreTextQueryTestBase, TagValuesLookedUpOncePerQuery) {
   auto lookups_for = [&](int candidates) {
     query::QueryContext query_ctx(*schema, scorer);
     indexes::PrefilterEvaluator evaluator(query_ctx, parsed->query_operations,
-                                          *schema);
+                                          *schema,
+                                          /*source_resolves_text=*/false);
     std::vector<InternedStringPtr> keys;
     std::vector<indexes::BorrowedNeighbor> matched;
     vmsdk::ReaderMutexLock lock(&schema->GetTimeSlicedMutex());
@@ -4001,9 +4004,11 @@ TEST_F(ScoreTextQueryTestBase, MainThreadLockModesMatchBackground) {
       query::QueryContext background(*schema, scorer);
       query::QueryContext main(*schema, scorer, query::LockMode::kShortLocks);
       indexes::PrefilterEvaluator bg_eval(background, parsed->query_operations,
-                                          *schema);
+                                          *schema,
+                                          /*source_resolves_text=*/false);
       indexes::PrefilterEvaluator main_eval(main, parsed->query_operations,
-                                            *schema);
+                                            *schema,
+                                            /*source_resolves_text=*/false);
       for (const auto &k : {"d1", "d2", "d3", "d4"}) {
         auto key = StringInternStore::Intern(k);
         std::vector<indexes::BorrowedNeighbor> bg_cands{

@@ -121,7 +121,8 @@ class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
     if (text_index_schema_) {
       text_index = text_index_schema_->GetPerKeyTextIndex(*key, false);
     }
-    indexes::PrefilterEvaluator evaluator(text_index, query_operations_);
+    indexes::PrefilterEvaluator evaluator(text_index, query_operations_,
+                                          /*source_resolves_text=*/false);
     return evaluator.Evaluate(*filter_predicate_, *key);
   }
 
@@ -427,7 +428,8 @@ void EvaluatePrefilteredKeys(
           text_index_schema ? text_index_schema->GetPerKeyTextIndex(key, false)
                             : nullptr;
       indexes::PrefilterEvaluator key_evaluator(
-          text_index, parameters.filter_parse_results.query_operations);
+          text_index, parameters.filter_parse_results.query_operations,
+          /*source_resolves_text=*/true);
       BACKGROUND_PAUSEPOINT("search_prefilter_eval");
       // 3. Evaluate predicate
       if (key_evaluator.Evaluate(

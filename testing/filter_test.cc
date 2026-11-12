@@ -154,13 +154,15 @@ TEST_P(FilterTest, ParseParams) {
       auto text_index = index_schema->GetTextIndexSchema()->GetPerKeyTextIndex(
           interned_key, false);
       indexes::PrefilterEvaluator evaluator(
-          text_index, parse_results.value().query_operations);
+          text_index, parse_results.value().query_operations,
+          /*source_resolves_text=*/false);
       EXPECT_EQ(test_case.evaluate_success.value(),
                 evaluator.Evaluate(*parse_results.value().root_predicate,
                                    interned_key));
     } else {
       indexes::PrefilterEvaluator evaluator(
-          nullptr, parse_results.value().query_operations);
+          nullptr, parse_results.value().query_operations,
+          /*source_resolves_text=*/false);
       EXPECT_EQ(test_case.evaluate_success.value(),
                 evaluator.Evaluate(*parse_results.value().root_predicate,
                                    interned_key));

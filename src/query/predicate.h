@@ -84,7 +84,10 @@ class Evaluator {
       const NumericPredicate& predicate) = 0;
   // Access target key for proximity validation (only for Text)
   virtual const InternedStringPtr& GetTargetKey() const = 0;
-  virtual bool IsPrefilterEvaluator() const { return false; }
+  // True when the candidate keys came from entries fetchers that already
+  // applied every AND-ed text predicate, so the tree may skip re-evaluating
+  // them.
+  virtual bool SourceResolvesText() const { return false; }
   valkey_search::QueryOperations GetQueryOperations() const {
     return query_operations_;
   }

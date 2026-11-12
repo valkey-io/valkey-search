@@ -129,9 +129,12 @@ EvaluationResult TermPredicate::Evaluate(
     }
     // Search for stem variants - these should all exist from ingestion
     for (const auto &variant : stem_variants) {
-      TryAddWordKeyIteratorForPrefilter(text_index, variant, target_key,
-                                        stem_field_mask, require_positions,
-                                        key_iterators);
+      if (TryAddWordKeyIteratorForPrefilter(text_index, variant, target_key,
+                                            stem_field_mask, require_positions,
+                                            key_iterators) &&
+          !require_positions) {
+        return EvaluationResult(true);
+      }
     }
   }
   if (key_iterators.empty()) {
@@ -442,15 +445,14 @@ EvaluationResult ComposedPredicate::EvaluateWithContext(Evaluator &evaluator,
                         indexes::text::kProximityTermsInlineCapacity>
         iterators;
     for (const auto &child : children_) {
-      // In AND: skip text children when in prefilter evaluation because text in
-      // AND is fully (recursively) resolved in the entries fetcher layer
-      // already. The only cases where this is not true are:
+      // In AND: skip text children when the entries fetcher layer already fully
+      // (recursively) resolved them. The only cases where this is not true are:
       // 1) when an AND predicate contains an OR which has some other non text
       // children and an AND child containing text. This is not solved in
       // entries fetcher yet.
       // 2) when the query has negation on text. Currently, a universal set is
       // used in the entries fetcher layer for text+negate queries.
-      if (evaluator.IsPrefilterEvaluator() &&
+      if (evaluator.SourceResolvesText() &&
           child->GetType() == PredicateType::kText && !from_or &&
           !(evaluator.GetQueryOperations() &
             QueryOperations::kContainsNegate)) {

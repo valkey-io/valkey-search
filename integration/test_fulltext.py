@@ -2485,6 +2485,51 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         pre, inline = get_metrics()
         assert (pre, inline) == (2, 4), f"Test 6: Expected (prefilter=2, inline=4), got ({pre}, {inline})"
 
+    def test_inline_filter_evaluates_and_text(self):
+        """Inline KNN filtering must apply AND-ed text terms (issue #1424)"""
+        import struct
+        client: Valkey = self.server.get_new_client()
+        client.execute_command("CONFIG SET search.info-developer-visible yes")
+        client.execute_command("CONFIG SET search.prefiltering-threshold-ratio 0")
+        client.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA",
+            "content", "TEXT", "price", "NUMERIC", "cat", "TAG",
+            "vec", "VECTOR", "HNSW", "6", "TYPE", "FLOAT32", "DIM", "2", "DISTANCE_METRIC", "L2")
+        vec = struct.pack("<2f", 0.0, 0.0)
+        client.execute_command("HSET", "doc:0", "content", "I love ocean waves", "price", 10, "cat", "a", "vec", vec)
+        client.execute_command("HSET", "doc:1", "content", "love songs", "price", 10, "cat", "a", "vec", vec)
+        client.execute_command("HSET", "doc:2", "content", "running ocean", "price", 10, "cat", "a", "vec", vec)
+        client.execute_command("HSET", "doc:3", "content", "runs away", "price", 10, "cat", "a", "vec", vec)
+        for i in range(4, 10):
+            client.execute_command("HSET", f"doc:{i}", "content", "unrelated words", "price", 10, "cat", "a", "vec", vec)
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+
+        def inline_count():
+            return int(client.info("search")["search_inline_filtering_requests_count"])
+
+        queries = [
+            ("love ocean", ()),
+            ("songs waves", ()),
+            ('"love ocean"', ()),
+            ('"ocean love"', ()),
+            ("love ocean", ("INORDER",)),
+            ("ocean love", ("INORDER",)),
+            ("love waves", ("SLOP", "0")),
+            ("love waves", ("SLOP", "1")),
+            ("love ocean @price:[0 20]", ()),
+            ("love ocean @cat:{a}", ()),
+            ("lov* ocean", ()),
+            ("(love | songs) ocean", ()),
+            ("runs ocean", ()),
+        ]
+        for query, extra in queries:
+            plain = client.execute_command("FT.SEARCH", "idx", query, "NOCONTENT", "LIMIT", "0", "100", "DIALECT", "2", *extra)
+            before = inline_count()
+            knn = client.execute_command("FT.SEARCH", "idx", f"({query})=>[KNN 100 @vec $v]", "NOCONTENT", "LIMIT", "0", "100",
+                                         "PARAMS", "2", "v", vec, "DIALECT", "2", *extra)
+            assert inline_count() == before + 1, f"{query} {extra}: not inline filtered"
+            assert set(knn[1:]) == set(plain[1:]), f"{query} {extra}: knn={knn[1:]} plain={plain[1:]}"
+
 
 class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
     """

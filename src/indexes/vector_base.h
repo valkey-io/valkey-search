@@ -438,6 +438,13 @@ struct TrackedKeyMetadata {
   float magnitude;
 };
 
+// A vector index's key maps, saved ahead of the index content so the index can
+// check each node's key against the keyspace while the node is being loaded.
+struct TrackedKeys {
+  InternedStringHashMap<TrackedKeyMetadata> metadata_by_key;
+  absl::flat_hash_map<uint64_t, InternedStringPtr> key_by_internal_id;
+};
+
 class VectorBase : public IndexBase {
  public:
   absl::StatusOr<indexes::RecordResult> AddRecord(const InternedStringPtr &key,
@@ -464,6 +471,9 @@ class VectorBase : public IndexBase {
   absl::Status LoadTrackedKeys(ValkeyModuleCtx *ctx,
                                const AttributeDataType *attribute_data_type,
                                SupplementalContentChunkIter &&iter);
+  // Reads a section written by SaveTrackedKeys into the key maps.
+  static absl::StatusOr<TrackedKeys> LoadKeyLabels(
+      SupplementalContentChunkIter &&iter);
 
   uint32_t GetMutationWeight() const override;
 
@@ -727,6 +737,18 @@ class VectorBase : public IndexBase {
 
   virtual VectorRecord &GetVectorLockFree(uint64_t internal_id) const = 0;
   virtual VectorRecord &GetVector(uint64_t internal_id) const = 0;
+
+  // The keyspace's shared copy of `key`'s vector if it still equals `saved`,
+  // the vector the RDB holds for the key; nullopt if the key changed since.
+  std::optional<VectorRecord> ShareIfUnchangedSinceSave(
+      ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
+      const InternedStringPtr &key, absl::string_view saved) const;
+  void AdoptTrackedKeys(TrackedKeys &&tracked_keys)
+      ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
+  // Set by a load that took the key maps from the key labels section and
+  // resolved every node's vector, so LoadTrackedKeys skips the older copy.
+  bool vectors_resolved_on_load_{false};
+  size_t keys_changed_since_save_{0};
 
   int db_num_;
   int dimensions_;

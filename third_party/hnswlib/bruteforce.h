@@ -294,7 +294,7 @@ class BruteforceSearch
       memcpy((char *)&id, chunk->data() + vector_size_, sizeof(labeltype));
       VectorRecordT *stored_vector = GetDataPtrByInternalId(i);
       new (stored_vector) VectorRecordT(
-          generator(absl::string_view(chunk->data(), vector_size_)));
+          generator(absl::string_view(chunk->data(), vector_size_), id));
       memcpy(reinterpret_cast<char *>(GetDataPtrByInternalId(i)) +
                  sizeof(VectorRecordT),
              (char *)&id, sizeof(labeltype));

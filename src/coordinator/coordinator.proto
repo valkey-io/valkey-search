@@ -32,6 +32,11 @@ service Coordinator {
   // for the shared consistency check.
   rpc MultiSearchIndexPartition(MultiSearchIndexPartitionRequest)
       returns (MultiSearchIndexPartitionResponse) {}
+  // Bounded content fan-out refetch: content for global winners that a shard
+  // returned without content (NeighborEntry.content_omitted). The shard
+  // revalidates each key against the query, as it does for a search, and
+  // returns entries only for keys that still match.
+  rpc FetchContent(FetchContentRequest) returns (SearchIndexPartitionResponse) {}
   // Get index info across cluster
   rpc InfoIndexPartition(InfoIndexPartitionRequest)
       returns (InfoIndexPartitionResponse) {}
@@ -201,6 +206,12 @@ message SearchIndexPartitionRequest {
   // Preserves a derived command's NoProcessingRequired() decision after the
   // shard reconstructs this request as base SearchParameters.
   bool force_content_processing = 26;
+  // Bounded content fan-out. When set, the shard still returns up to `limit`
+  // ranked candidates, but resolves content only for the first
+  // `content_limit`; the rest carry NeighborEntry.content_omitted. Unset means
+  // content for every result. A shard that predates this field ignores it and
+  // returns full content.
+  optional uint64 content_limit = 27;
 }
 
 message InkeysFilter {
@@ -212,6 +223,16 @@ message NeighborEntry {
   float distance = 2;
   repeated AttributeContentEntry attribute_contents = 3;
   float score = 4;
+  // Set when the shard returned only key and score because the result fell
+  // beyond the request's content_limit. Phrased as an omission so that a reply
+  // from a shard predating content_limit, which never sets it, reads as
+  // carrying content.
+  bool content_omitted = 5;
+  // Bounded content fan-out: the document's mutation sequence number when the
+  // shard searched it. Sent back with a FetchContent candidate, so the shard
+  // revalidates and rescores only a document that changed since, as it does
+  // for its own search results.
+  uint64 sequence_number = 6;
 }
 
 message SearchIndexPartitionResponse {
@@ -255,6 +276,18 @@ message MultiSearchIndexPartitionRequest {
 
 message MultiSearchIndexPartitionResponse {
   repeated MultiSearchSubResponse sub_responses = 1;
+}
+
+message FetchContentRequest {
+  // The original search, without content_limit. Supplies the consistency
+  // fingerprints, the projection, and the filter each key is revalidated
+  // against.
+  SearchIndexPartitionRequest query = 1;
+  // Global winners owned by the target shard that arrived without content:
+  // key, score and distance from the first round, content_omitted set. The
+  // shard returns each one that still matches, with its content and, if the
+  // document changed, its recomputed score and distance.
+  repeated NeighborEntry candidates = 2;
 }
 
 message GlobalMetadataVersionHeader {

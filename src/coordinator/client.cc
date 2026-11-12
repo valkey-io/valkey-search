@@ -139,55 +139,109 @@ void ClientImpl::GetGlobalMetadata(GetGlobalMetadataCallback done) {
       });
 }
 
+namespace {
+
+// RPC-specific success / failure metrics, recorded once a call completes.
+using RecordCallMetrics = void (*)(bool ok,
+                                   std::unique_ptr<vmsdk::StopWatch> sample);
+
+void RecordSearchPartitionClientMetrics(
+    bool ok, std::unique_ptr<vmsdk::StopWatch> latency_sample) {
+  auto &stats = Metrics::GetStats();
+  if (ok) {
+    stats.coordinator_client_search_index_partition_success_cnt++;
+    stats.coordinator_client_search_index_partition_success_latency
+        .SubmitSample(std::move(latency_sample));
+  } else {
+    stats.coordinator_client_search_index_partition_failure_cnt++;
+    stats.coordinator_client_search_index_partition_failure_latency
+        .SubmitSample(std::move(latency_sample));
+  }
+}
+
+// One in-flight unary RPC with an arena-allocated response. Owns itself from
+// Start() until Complete(), which the stub's completion invokes exactly once.
+// Shared by the RPCs whose calls differ only in the stub method and metrics.
+template <typename Request, typename Response>
+class UnaryCall {
+ public:
+  using Done = absl::AnyInvocable<void(grpc::Status, Response &)>;
+
+  // Counts the request bytes and arms the deadline.
+  static UnaryCall *Start(std::unique_ptr<Request> request, Done done,
+                          RecordCallMetrics record_metrics) {
+    auto *call =
+        new UnaryCall(std::move(request), std::move(done), record_metrics);
+    Metrics::GetStats().coordinator_bytes_out.fetch_add(
+        call->request_->ByteSizeLong(), std::memory_order_relaxed);
+    return call;
+  }
+
+  ::grpc::ClientContext *context() { return &context_; }
+  const Request *request() const { return request_.get(); }
+  Response *response() { return response_; }
+
+  // Hands the response to `done`, then records metrics and deletes the call.
+  void Complete(const grpc::Status &status) {
+    GRPCSuspensionGuard guard(GRPCSuspender::Instance());
+    std::unique_ptr<UnaryCall> self(this);
+    // Measured before `done`, which may consume the response.
+    const uint64_t response_bytes = status.ok() ? response_->ByteSizeLong() : 0;
+    done_(status, *response_);
+    if (record_metrics_ != nullptr) {
+      record_metrics_(status.ok(), std::move(latency_sample_));
+    }
+    if (status.ok()) {
+      Metrics::GetStats().coordinator_bytes_in.fetch_add(
+          response_bytes, std::memory_order_relaxed);
+    }
+  }
+
+ private:
+  UnaryCall(std::unique_ptr<Request> request, Done done,
+            RecordCallMetrics record_metrics)
+      : request_(std::move(request)),
+        response_(google::protobuf::Arena::Create<Response>(&arena_)),
+        done_(std::move(done)),
+        record_metrics_(record_metrics),
+        latency_sample_(SAMPLE_EVERY_N(100)) {
+    context_.set_deadline(absl::ToChronoTime(
+        absl::Now() + absl::Seconds(query_connection_timeout->GetValue())));
+  }
+
+  ::grpc::ClientContext context_;
+  std::unique_ptr<Request> request_;
+  google::protobuf::Arena arena_;
+  Response *response_;
+  Done done_;
+  RecordCallMetrics record_metrics_;
+  std::unique_ptr<vmsdk::StopWatch> latency_sample_;
+};
+
+}  // namespace
+
 void ClientImpl::SearchIndexPartition(
     std::unique_ptr<SearchIndexPartitionRequest> request,
     SearchIndexPartitionCallback done) {
-  struct SearchIndexPartitionArgs {
-    ::grpc::ClientContext context;
-    std::unique_ptr<SearchIndexPartitionRequest> request;
-    google::protobuf::Arena arena;
-    SearchIndexPartitionResponse *response;
-    SearchIndexPartitionCallback callback;
-    std::unique_ptr<vmsdk::StopWatch> latency_sample;
-  };
-  auto args = std::make_unique<SearchIndexPartitionArgs>();
-  args->response =
-      google::protobuf::Arena::Create<SearchIndexPartitionResponse>(
-          &args->arena);
-  args->context.set_deadline(absl::ToChronoTime(
-      absl::Now() + absl::Seconds(query_connection_timeout->GetValue())));
-  args->callback = std::move(done);
-  args->request = std::move(request);
-  args->latency_sample = SAMPLE_EVERY_N(100);
-  auto *args_raw = args.release();
-  Metrics::GetStats().coordinator_bytes_out.fetch_add(
-      args_raw->request->ByteSizeLong(), std::memory_order_relaxed);
+  auto *call =
+      UnaryCall<SearchIndexPartitionRequest, SearchIndexPartitionResponse>::
+          Start(std::move(request), std::move(done),
+                &RecordSearchPartitionClientMetrics);
   stub_->async()->SearchIndexPartition(
-      &args_raw->context, args_raw->request.get(), args_raw->response,
-      // std::function is not move-only.
-      [args_raw](const grpc::Status &s) mutable {
-        GRPCSuspensionGuard guard(GRPCSuspender::Instance());
-        auto args = std::unique_ptr<SearchIndexPartitionArgs>(args_raw);
-        const uint64_t response_bytes =
-            s.ok() ? args->response->ByteSizeLong() : 0;
-        args->callback(s, *args->response);
-        if (s.ok()) {
-          Metrics::GetStats()
-              .coordinator_client_search_index_partition_success_cnt++;
-          Metrics::GetStats()
-              .coordinator_client_search_index_partition_success_latency
-              .SubmitSample(std::move(args->latency_sample));
-          Metrics::GetStats().coordinator_bytes_in.fetch_add(
-              response_bytes, std::memory_order_relaxed);
-        } else {
-          Metrics::GetStats()
-              .coordinator_client_search_index_partition_failure_cnt++;
-          Metrics::GetStats()
-              .coordinator_client_search_index_partition_failure_latency
-              .SubmitSample(std::move(args->latency_sample));
-          // No need to count bytes on error
-        }
-      });
+      call->context(), call->request(), call->response(),
+      [call](const grpc::Status &status) { call->Complete(status); });
+}
+
+void ClientImpl::FetchContent(std::unique_ptr<FetchContentRequest> request,
+                              SearchIndexPartitionCallback done) {
+  // Not a search partition, so no search partition metrics; the bounded
+  // content fan-out counts its refetch requests itself.
+  auto *call =
+      UnaryCall<FetchContentRequest, SearchIndexPartitionResponse>::Start(
+          std::move(request), std::move(done), /*record_metrics=*/nullptr);
+  stub_->async()->FetchContent(
+      call->context(), call->request(), call->response(),
+      [call](const grpc::Status &status) { call->Complete(status); });
 }
 
 void ClientImpl::MultiSearchIndexPartition(

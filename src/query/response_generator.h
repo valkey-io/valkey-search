@@ -8,6 +8,8 @@
 #ifndef VALKEYSEARCH_SRC_QUERY_RESPONSE_GENERATOR_H_
 #define VALKEYSEARCH_SRC_QUERY_RESPONSE_GENERATOR_H_
 
+#include <cstddef>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -71,11 +73,16 @@ FilterVerification VerifyFilter(
 // Neighbor already contained in the attribute content map.
 // Neighbor without any attribute content.
 // Neighbor not comply to the pre-filter expression.
+//
+// Only the first `head_limit` neighbors are processed (bounded content
+// fan-out); the rest are left in place, in order and without content, and are
+// neither fetched nor removed.
 void ProcessNeighborsForReply(
     ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
     std::vector<indexes::Neighbor> &neighbors,
     const query::SearchParameters &parameters,
-    const std::optional<std::string> &vector_identifier);
+    const std::optional<std::string> &vector_identifier,
+    size_t head_limit = std::numeric_limits<size_t>::max());
 
 }  // namespace valkey_search::query
 

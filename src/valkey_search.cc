@@ -705,6 +705,78 @@ static vmsdk::info_field::Integer coordinator_bytes_in(
           return ValkeySearch::Instance().UsingCoordinator();
         }));
 
+// Fan-outs that took the bounded content path.
+static vmsdk::info_field::Integer bounded_content_queries(
+    "coordinator", "bounded_content_queries",
+    vmsdk::info_field::IntegerBuilder()
+        .Dev()
+        .Computed([]() -> long long {
+          return Metrics::GetStats().bounded_content_queries;
+        })
+        .VisibleIf([]() -> bool {
+          return ValkeySearch::Instance().UsingCoordinator();
+        }));
+
+// Bounded content fan-outs completed in one round.
+static vmsdk::info_field::Integer bounded_content_single_round_queries(
+    "coordinator", "bounded_content_single_round_queries",
+    vmsdk::info_field::IntegerBuilder()
+        .Dev()
+        .Computed([]() -> long long {
+          return Metrics::GetStats().bounded_content_single_round_queries;
+        })
+        .VisibleIf([]() -> bool {
+          return ValkeySearch::Instance().UsingCoordinator();
+        }));
+
+// Bounded content fan-outs that needed a FetchContent round.
+static vmsdk::info_field::Integer bounded_content_refetch_queries(
+    "coordinator", "bounded_content_refetch_queries",
+    vmsdk::info_field::IntegerBuilder()
+        .Dev()
+        .Computed([]() -> long long {
+          return Metrics::GetStats().bounded_content_refetch_queries;
+        })
+        .VisibleIf([]() -> bool {
+          return ValkeySearch::Instance().UsingCoordinator();
+        }));
+
+// Winners that arrived without content and were fetched.
+static vmsdk::info_field::Integer bounded_content_missing_winners(
+    "coordinator", "bounded_content_missing_winners",
+    vmsdk::info_field::IntegerBuilder()
+        .Dev()
+        .Computed([]() -> long long {
+          return Metrics::GetStats().bounded_content_missing_winners;
+        })
+        .VisibleIf([]() -> bool {
+          return ValkeySearch::Instance().UsingCoordinator();
+        }));
+
+// Fetch requests sent (FetchContent, or local).
+static vmsdk::info_field::Integer bounded_content_fetch_requests(
+    "coordinator", "bounded_content_fetch_requests",
+    vmsdk::info_field::IntegerBuilder()
+        .Dev()
+        .Computed([]() -> long long {
+          return Metrics::GetStats().bounded_content_fetch_requests;
+        })
+        .VisibleIf([]() -> bool {
+          return ValkeySearch::Instance().UsingCoordinator();
+        }));
+
+// FetchContent requests that failed.
+static vmsdk::info_field::Integer bounded_content_fetch_failures(
+    "coordinator", "bounded_content_fetch_failures",
+    vmsdk::info_field::IntegerBuilder()
+        .Dev()
+        .Computed([]() -> long long {
+          return Metrics::GetStats().bounded_content_fetch_failures;
+        })
+        .VisibleIf([]() -> bool {
+          return ValkeySearch::Instance().UsingCoordinator();
+        }));
+
 static vmsdk::info_field::Integer coordinator_last_time_since_healthy_metadata(
     "coordinator", "coordinator_last_time_since_healthy_metadata",
     vmsdk::info_field::IntegerBuilder()

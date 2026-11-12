@@ -103,6 +103,11 @@ target_link_libraries(multi_search PUBLIC vmsdklib)
 
 set(SRCS_FANOUT ${CMAKE_CURRENT_LIST_DIR}/fanout.cc
                 ${CMAKE_CURRENT_LIST_DIR}/fanout.h
+                ${CMAKE_CURRENT_LIST_DIR}/fanout_merge.h
+                ${CMAKE_CURRENT_LIST_DIR}/fanout_content_limit.cc
+                ${CMAKE_CURRENT_LIST_DIR}/fanout_content_limit.h
+                ${CMAKE_CURRENT_LIST_DIR}/content_bounded_fanout.cc
+                ${CMAKE_CURRENT_LIST_DIR}/content_bounded_fanout.h
                 ${CMAKE_CURRENT_LIST_DIR}/primary_info_fanout_operation.cc
                 ${CMAKE_CURRENT_LIST_DIR}/primary_info_fanout_operation.h
                 ${CMAKE_CURRENT_LIST_DIR}/cluster_info_fanout_operation.cc
@@ -122,6 +127,7 @@ target_link_libraries(fanout PUBLIC vector_base)
 target_link_libraries(fanout PUBLIC string_interning)
 target_link_libraries(fanout PUBLIC vmsdklib)
 target_link_libraries(fanout PUBLIC valkey_module)
+target_link_libraries(fanout PUBLIC metrics)
 
 set(SRCS_RESPONSE_GENERATOR ${CMAKE_CURRENT_LIST_DIR}/response_generator.cc
                             ${CMAKE_CURRENT_LIST_DIR}/response_generator.h)

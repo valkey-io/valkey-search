@@ -9,7 +9,6 @@
 
 #include <netinet/in.h>
 
-#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -33,8 +32,9 @@
 #include "src/coordinator/coordinator.pb.h"
 #include "src/coordinator/search_converter.h"
 #include "src/coordinator/util.h"
-#include "src/indexes/scoring/scorer.h"
 #include "src/indexes/vector_base.h"
+#include "src/query/content_bounded_fanout.h"
+#include "src/query/fanout_merge.h"
 #include "src/query/multi_search.h"
 #include "src/query/search.h"
 #include "src/utils/string_interning.h"
@@ -53,23 +53,15 @@ namespace valkey_search::query::fanout {
 
 CONTROLLED_BOOLEAN(ForceInvalidSlotFingerprint, false);
 
-struct NeighborComparator {
-  bool operator()(const indexes::Neighbor &a,
-                  const indexes::Neighbor &b) const {
-    // Max heap on distance, to pop off the furthest vector during KNN
-    // aggregation. Hybrid text=>[KNN] sets score to text relevance, so key on
-    // distance (not score) to evict correctly. Non-vector queries all have
-    // distance 0 and are never evicted (see AddResult), falling to the
-    // tie-break.
-    if (a.distance != b.distance) {
-      return a.distance < b.distance;
-    }
-    // Secondary sort: by key for consistent ordering when distances are equal.
-    // The full string compare is required because for external keys there is no
-    // guarantee of the stability of the InternedStringPtr across invocations.
-    return a.external_id->Str() > b.external_id->Str();
+uint64_t TargetSlotFingerprint(const vmsdk::cluster_map::NodeInfo &node,
+                               uint64_t fallback) {
+  if (ForceInvalidSlotFingerprint.GetValue()) {
+    // test only: set an invalid slot fingerprint and force failure
+    return 0;
   }
-};
+  // avoid accessing node.shard if it is not valid in unit tests
+  return node.shard != nullptr ? node.shard->slots_fingerprint : fallback;
+}
 
 // SearchPartitionResultsTracker is a thread-safe class that tracks the results
 // of a query fanout. It aggregates the results from multiple nodes and returns
@@ -145,33 +137,7 @@ struct SearchPartitionResultsTracker {
     while (response.neighbors_size() > 0) {
       auto neighbor_entry = std::unique_ptr<coordinator::NeighborEntry>(
           response.mutable_neighbors()->ReleaseLast());
-      RecordsMap attribute_contents;
-      for (const auto &attribute_content :
-           neighbor_entry->attribute_contents()) {
-        auto identifier =
-            vmsdk::MakeUniqueValkeyString(attribute_content.identifier());
-        auto identifier_view = vmsdk::ToStringView(identifier.get());
-        attribute_contents.emplace(
-            identifier_view, RecordsMapValue(std::move(identifier),
-                                             vmsdk::MakeUniqueValkeyString(
-                                                 attribute_content.content())));
-      }
-      indexes::Neighbor neighbor{
-          StringInternStore::Intern(neighbor_entry->key()),
-          neighbor_entry->distance(), std::move(attribute_contents)};
-      // Single-VR model: the VR distance is carried in Neighbor::distance
-      // above. Cluster merge concatenates per-shard matches; the merged set is
-      // ordered like any non-vector result.
-      // The wire format is unchanged; a compound-OR match with no VR distance
-      // is transmitted as a +inf distance, so reconstruct has_vr_distance from
-      // the bit pattern rather than adding a proto field. Only +inf is the
-      // marker, since no radius includes a +inf distance; an IP distance of
-      // -inf is a VR distance and is kept. Compare the bits: -ffast-math makes
-      // float comparisons with infinity unreliable.
-      neighbor.has_vr_distance =
-          std::bit_cast<uint32_t>(neighbor_entry->distance()) !=
-          std::bit_cast<uint32_t>(indexes::scoring::PositiveInf());
-      neighbor.score = neighbor_entry->score();
+      auto neighbor = DecodeNeighborEntry(*neighbor_entry);
       AddResult(neighbor);
     }
   }
@@ -367,6 +333,11 @@ absl::Status PerformSearchFanoutAsync(
     vmsdk::ThreadPool *thread_pool) {
   // Queue depth admission check is in commands.cc (before BlockedClient
   // creation) so that returning an error doesn't crash the blocked client.
+  if (auto plan = PlanBoundedContentFanout(*parameters, search_targets)) {
+    return PerformBoundedContentFanoutAsync(
+        search_targets, coordinator_client_pool, std::move(parameters),
+        std::move(*plan), thread_pool);
+  }
   auto request = coordinator::ParametersToGRPCSearchRequest(*parameters);
   uint64_t index_size = parameters->index_schema->GetDbKeyInfoSize();
   uint32_t min_index_size =
@@ -428,14 +399,8 @@ absl::Status PerformSearchFanoutAsync(
     auto request_copy =
         std::make_unique<coordinator::SearchIndexPartitionRequest>();
     request_copy->CopyFrom(*request);
-
-    if (ForceInvalidSlotFingerprint.GetValue()) {
-      // test only: set an invalid slot fingerprint and force failure
-      request_copy->set_slot_fingerprint(0);
-    } else if (node.shard != nullptr) {
-      // avoid accessing node.shard if it is not valid in unit tests
-      request_copy->set_slot_fingerprint(node.shard->slots_fingerprint);
-    }
+    request_copy->set_slot_fingerprint(
+        TargetSlotFingerprint(node, request->slot_fingerprint()));
 
     // At 30 requests, it takes ~600 micros to enqueue all the requests.
     // Putting this into the background thread pool will save us time on

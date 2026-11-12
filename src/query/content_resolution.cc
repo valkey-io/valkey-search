@@ -7,10 +7,13 @@
 
 #include "src/query/content_resolution.h"
 
+#include <algorithm>
+#include <cstddef>
 #include <optional>
 #include <string>
 #include <utility>
 
+#include "absl/types/span.h"
 #include "src/commands/ft_search.h"
 #include "src/index_schema.h"
 #include "src/query/response_generator.h"
@@ -18,6 +21,14 @@
 #include "vmsdk/src/managed_pointers.h"
 
 namespace valkey_search::query {
+
+void SeedContentFetch(SearchParameters &params,
+                      std::vector<indexes::Neighbor> candidates) {
+  // Every candidate is a global winner: resolve content for all of them.
+  params.content_limit.reset();
+  params.search_result.neighbors = std::move(candidates);
+  params.search_result.total_count = params.search_result.neighbors.size();
+}
 
 void ResolveContent(std::unique_ptr<SearchParameters> params) {
   vmsdk::VerifyMainThread();
@@ -35,10 +46,20 @@ void ResolveContent(std::unique_ptr<SearchParameters> params) {
     return;
   }
 
-  // 3. If kContentionCheckRequired, check for in-flight mutations
+  // Bounded content fan-out: only the first `content_limit` results (the head)
+  // are resolved here; the rest go back to the coordinator as key and score,
+  // and are resolved on demand if they win (see query/fanout_content_limit.h).
+  // Without a content limit the head is every result.
+  const size_t result_count = params->search_result.neighbors.size();
+  const size_t head = std::min<size_t>(
+      params->content_limit.value_or(result_count), result_count);
+
+  // 3. If kContentionCheckRequired, check for in-flight mutations. Only the
+  // head is read below, so only the head needs its mutations applied first.
   if (params->GetContentProcessing() == kContentionCheckRequired) {
     if (params->index_schema->PerformKeyContentionCheck(
-            params->search_result.neighbors, std::move(params))) {
+            absl::MakeConstSpan(params->search_result.neighbors).first(head),
+            std::move(params))) {
       // Contention found — params has been moved into the mutation queue.
       // ConsumeTrackedMutatedAttribute will call ResolveContent again
       // via RunByMain when the mutation completes.
@@ -64,7 +85,7 @@ void ResolveContent(std::unique_ptr<SearchParameters> params) {
     return;
   }
   auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
-  const auto& attribute_data_type =
+  const auto &attribute_data_type =
       params->index_schema->GetAttributeDataType();
   size_t original_size = params->search_result.neighbors.size();
 
@@ -78,7 +99,7 @@ void ResolveContent(std::unique_ptr<SearchParameters> params) {
 
   query::ProcessNeighborsForReply(ctx.get(), attribute_data_type,
                                   params->search_result.neighbors, *params,
-                                  vector_identifier);
+                                  vector_identifier, head);
 
   // 5. Adjust search_result.total_count for removed neighbors
   size_t removed = original_size - params->search_result.neighbors.size();

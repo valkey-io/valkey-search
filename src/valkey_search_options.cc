@@ -549,6 +549,31 @@ static auto fanout_uniformity_min_index_size =
         .Dev()  // can only be set in debug mode
         .Build();
 
+/// Register the "fanout-bounded-content" flag.
+/// Bounded content fan-out (valkey-search#1324): a cluster FT.SEARCH that
+/// returns content asks each shard for K candidates but content for only an
+/// estimated share of them, and fetches any winner that arrived without
+/// content in a second round. See query/fanout_content_limit.h.
+constexpr absl::string_view kFanoutBoundedContentConfig{
+    "fanout-bounded-content"};
+static auto fanout_bounded_content =
+    config::BooleanBuilder(kFanoutBoundedContentConfig, false).Build();
+
+/// Register the "fanout-content-refetch-ratio" flag.
+/// Bounded content fan-out: the target fraction of queries that may need the
+/// second round. 0 never needs it (content for all K, as without bounding);
+/// higher values move less content at the cost of more second rounds.
+constexpr absl::string_view kFanoutContentRefetchRatioConfig{
+    "fanout-content-refetch-ratio"};
+constexpr double kDefaultFanoutContentRefetchRatio{0.1};
+constexpr double kMinimumFanoutContentRefetchRatio{0.0};
+constexpr double kMaximumFanoutContentRefetchRatio{1.0};
+static auto fanout_content_refetch_ratio =
+    config::DoubleBuilder(
+        kFanoutContentRefetchRatioConfig, kDefaultFanoutContentRefetchRatio,
+        kMinimumFanoutContentRefetchRatio, kMaximumFanoutContentRefetchRatio)
+        .Build();
+
 /// Register the "--async-fanout-threshold" flag. Controls the threshold
 /// for async fanout operations (minimum number of targets to use async)
 constexpr absl::string_view kAsyncFanoutThresholdConfig{
@@ -786,6 +811,14 @@ vmsdk::config::Number &GetFanoutUniformityMinIndexSize() {
 vmsdk::config::Number &GetMaxMutationQueueSizeOnRestore() {
   return dynamic_cast<vmsdk::config::Number &>(
       *max_mutation_queue_size_on_restore);
+}
+
+const vmsdk::config::Boolean &GetFanoutBoundedContent() {
+  return dynamic_cast<const vmsdk::config::Boolean &>(*fanout_bounded_content);
+}
+
+double GetFanoutContentRefetchRatio() {
+  return fanout_content_refetch_ratio->GetValue();
 }
 
 vmsdk::config::Number &GetAsyncFanoutThreshold() {

@@ -390,8 +390,8 @@ absl::StatusOr<RecordsMap> GetContent(
     auto itr = content.find(sortby_identifier);
     if (itr != content.end()) {
       if (parameters.all_content) {
-        // JSON only: RediSearch shows the sort field under its alias in a whole
-        // record, so this copy is returned and counted.
+        // Reached by JSON only. RediSearch shows the sort field under its
+        // alias in a whole record, so this copy is returned and counted.
         return_content.emplace(
             parameters.sortby_parameter->field,
             RecordsMapValue(

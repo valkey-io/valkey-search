@@ -943,9 +943,14 @@ std::optional<std::string> OldShardSortByRefileKey(
   if (key.lookup_key == parameters.sortby_parameter->field) {
     return std::nullopt;
   }
-  // The shard fetched a returned field itself, so absent means not in the key.
   for (const auto &attribute : parameters.return_attributes) {
-    if (vmsdk::ToStringView(attribute.identifier.get()) == key.lookup_key) {
+    const auto identifier = vmsdk::ToStringView(attribute.identifier.get());
+    // Fetched by the shard itself, so absent means not in the key.
+    if (identifier == key.lookup_key) {
+      return std::nullopt;
+    }
+    // The alias entry may be that returned field's value, not the sort value.
+    if (identifier == parameters.sortby_parameter->field) {
       return std::nullopt;
     }
   }
@@ -954,9 +959,8 @@ std::optional<std::string> OldShardSortByRefileKey(
 
 namespace {
 
-// Whether the KNN index pre-fill adds the SORTBY value to each row.
-bool KnnPrefillAddsSortKey(const SearchParameters &parameters,
-                           const SortByKey &key) {
+// Whether the KNN index pre-fill must give each row its SORTBY value.
+bool KnnPrefillNeedsSortKey(const SearchParameters &parameters) {
   if (parameters.IsNonVectorQuery() || parameters.no_content ||
       parameters.all_content || parameters.return_attributes.empty() ||
       !parameters.sortby_parameter.has_value()) {
@@ -974,12 +978,7 @@ bool KnnPrefillAddsSortKey(const SearchParameters &parameters,
       field == GetVrScoreFieldName(parameters)) {
     return false;
   }
-  return std::none_of(
-      parameters.return_attributes.begin(), parameters.return_attributes.end(),
-      [&](const ReturnAttribute &attr) {
-        return attr.identifier.get() &&
-               vmsdk::ToStringView(attr.identifier.get()) == key.lookup_key;
-      });
+  return true;
 }
 
 }  // namespace
@@ -1002,25 +1001,43 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
   struct AttributeInfo {
     absl::string_view identifier;
     indexes::IndexBase *index;
-    // A missing sort value leaves the row unsorted rather than sending it to
-    // the key fetch, which would change its RETURN numbers.
+    // When the index has no value for the row, the key has none it accepted
+    // either, and reading it would only change how RETURN numbers print.
     bool sort_only{false};
   };
   std::vector<AttributeInfo> attributes;
   std::optional<SortByKey> sortby_key;
-  if (parameters.sortby_parameter.has_value()) {
+  if (KnnPrefillNeedsSortKey(parameters)) {
     const std::string &sortby_field = parameters.sortby_parameter->field;
     sortby_key.emplace(*parameters.index_schema, sortby_field);
-    if (KnnPrefillAddsSortKey(parameters, *sortby_key)) {
-      auto index = parameters.index_schema->GetIndex(sortby_field);
-      // The parser and the shard's fingerprint check make this unreachable.
-      DCHECK(index.ok()) << index.status();
-      if (!index.ok()) {
-        return results;
-      }
+    auto index = parameters.index_schema->GetIndex(sortby_field);
+    // The parser and the shard's fingerprint check make this unreachable.
+    DCHECK(index.ok()) << index.status();
+    if (!index.ok()) {
+      return results;
+    }
+    // A row keeps one entry per field, from the first RETURN attribute on it.
+    auto first_on_field = std::find_if(
+        parameters.return_attributes.begin(),
+        parameters.return_attributes.end(), [&](const ReturnAttribute &attr) {
+          return attr.identifier.get() &&
+                 vmsdk::ToStringView(attr.identifier.get()) ==
+                     sortby_key->lookup_key;
+        });
+    if (first_on_field == parameters.return_attributes.end()) {
       attributes.push_back(AttributeInfo{.identifier = sortby_key->lookup_key,
                                          .index = index.value().get(),
                                          .sort_only = true});
+    } else if (first_on_field->attribute_alias.get()) {
+      auto returned_index = parameters.index_schema->GetIndex(
+          vmsdk::ToStringView(first_on_field->attribute_alias.get()));
+      const auto sort_type = index.value()->GetIndexerType();
+      // Another index on the same field, a NUMERIC for a TAG sort say, keeps
+      // different text than the sort attribute's own.
+      if (!returned_index.ok() ||
+          returned_index.value()->GetIndexerType() != sort_type) {
+        return results;
+      }
     }
   }
   for (auto &attribute : parameters.return_attributes) {
@@ -1079,9 +1096,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
             // would answer a different question than RediSearch does. Fall
             // through to the main-thread key fetch, the same way a text
             // attribute does.
-            if (!attribute_info.sort_only) {
-              any_value_missing = true;
-            }
+            any_value_missing = true;
             break;
           }
           // Serving the indexed copy is only correct when it is byte-identical
@@ -1112,9 +1127,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
         }
         case indexes::IndexerType::kText: {
           // Text indexes don't store retrievable raw values
-          if (!attribute_info.sort_only) {
-            any_value_missing = true;
-          }
+          any_value_missing = true;
           break;
         }
         default:

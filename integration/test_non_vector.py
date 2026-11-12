@@ -1288,7 +1288,7 @@ class TestSortByAlias(ValkeySearchTestCaseDebugMode):
             assert [n - b for n, b in zip(uses(), before)] == [per_reply] * 2
 
     def test_sortby_knn_prefill(self):
-        # RETURN n keeps the index's 12-digit form on every row, sorted or not.
+        # KNN with RETURN sorts rows the index can fill and rows it cannot.
         client: Valkey = self.server.get_new_client()
         assert client.execute_command(
             "FT.CREATE", "sbk_h", "ON", "HASH", "PREFIX", "1", "sbkh:",
@@ -1318,25 +1318,66 @@ class TestSortByAlias(ValkeySearchTestCaseDebugMode):
         IndexingTestHelper.wait_for_indexing_complete_on_node(client, "sbk_h")
         IndexingTestHelper.wait_for_indexing_complete_on_node(client, "sbk_j")
         knn = ["*=>[KNN 4 @v $q]", "PARAMS", "2", "q", vec]
-        n_of = {"1": b"0.123456789012", "2": b"0.223456789012",
-                "3": b"0.323456789012", "4": b"0.423456789012"}
-        # ft_search_sortkey_nil decides how an absent sort key prints.
-        for release, absent in (("1.2.1", b"#"), ("1.3.0", None)):
+        indexed = {"1": b"0.123456789012", "2": b"0.223456789012",
+                   "3": b"0.323456789012", "4": b"0.423456789012"}
+        stored = {i: n.encode() for i, _, n, _, _ in docs}
+        # The index holds no TEXT, so a TEXT sort reads each row from the key
+        # and its RETURN numbers are the stored bytes.
+        for release, absent, text in (("1.2.1", b"#", b"#"),
+                                      ("1.3.0", None, b"$")):
             assert client.execute_command(
                 "CONFIG", "SET", "search.emulate-release", release) == b"OK"
             for idx, prefix in (("sbk_h", "sbkh:"), ("sbk_j", "sbkj:")):
-                # The index keeps no TEXT, so these stay in KNN order.
-                for field, order, sort_keys in (
-                        ("s", "2314", [b"#5", b"#6", b"#7", absent]),
-                        ("t", "1234", [absent] * 4)):
+                for field, rows in (
+                        ("s", [("2", b"#5", indexed), ("3", b"#6", indexed),
+                               ("1", b"#7", indexed), ("4", absent, indexed)]),
+                        ("t", [("2", text + b"alpha", stored),
+                               ("3", text + b"bravo", stored),
+                               ("1", text + b"charlie", stored),
+                               ("4", text + b"delta", stored)])):
                     result = client.execute_command(
                         "FT.SEARCH", idx, *knn, "SORTBY", field, "ASC",
                         "WITHSORTKEYS", "RETURN", "1", "n", "DIALECT", "2")
                     expected = [4]
-                    for i, sort_key in zip(order, sort_keys):
+                    for i, sort_key, n_of in rows:
                         expected += [(prefix + i).encode(), sort_key,
                                      [b"n", n_of[i]]]
                     assert result == expected, (release, idx, field, result)
+
+    def test_sortby_knn_field_indexed_twice(self):
+        # Field a is x and z NUMERIC and y TAG; y sorts as text, not as x's
+        # number.
+        client: Valkey = self.server.get_new_client()
+        assert client.execute_command(
+            "FT.CREATE", "sbt_idx", "ON", "HASH", "PREFIX", "1", "sbt:",
+            "SCHEMA", "a", "AS", "x", "NUMERIC", "a", "AS", "y", "TAG",
+            "a", "AS", "z", "NUMERIC", "v", "VECTOR", "FLAT", "6", "TYPE",
+            "FLOAT32", "DIM", "2", "DISTANCE_METRIC", "L2") == b"OK"
+        for i, a in ((1, ".6"), (2, "0.5"), (3, "+0.55")):
+            assert client.execute_command(
+                "HSET", f"sbt:{i}", "a", a, "v",
+                struct.pack("<2f", float(i), 0.0)) == 2
+        IndexingTestHelper.wait_for_indexing_complete_on_node(client, "sbt_idx")
+        knn = ["*=>[KNN 3 @v $q]", "PARAMS", "2", "q",
+               struct.pack("<2f", 0.0, 0.0)]
+        for release, prefix in (("1.2.1", b"#"), ("1.3.0", b"$")):
+            assert client.execute_command(
+                "CONFIG", "SET", "search.emulate-release", release) == b"OK"
+            for query in (["*"], knn):
+                result = client.execute_command(
+                    "FT.SEARCH", "sbt_idx", *query, "SORTBY", "y", "ASC",
+                    "WITHSORTKEYS", "RETURN", "1", "x", "DIALECT", "2")
+                expected = [3]
+                for i, a in ((3, b"+0.55"), (1, b".6"), (2, b"0.5")):
+                    expected += [f"sbt:{i}".encode(), prefix + a, [b"x", a]]
+                assert result == expected, (release, query, result)
+            # A NUMERIC on the same field: the index's text is z's own.
+            result = client.execute_command(
+                "FT.SEARCH", "sbt_idx", *knn, "SORTBY", "z", "ASC", "RETURN",
+                "1", "x", "DIALECT", "2")
+            assert result == [3, b"sbt:2", [b"x", b"0.5"],
+                              b"sbt:3", [b"x", b"0.55"],
+                              b"sbt:1", [b"x", b"0.6"]], (release, result)
 
     def test_sortby_alias_stray_field(self):
         # An undeclared field named like the alias is not the attribute.

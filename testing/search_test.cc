@@ -1268,6 +1268,124 @@ TEST_F(KnnSortByPrefillTest, OldCoordinatorGetsNoSortValueFromTheIndex) {
   }
 }
 
+// The index never holds TEXT, so those rows are read from the key to sort.
+TEST_F(KnnSortByPrefillTest, OnlySortValuesTheIndexCannotHoldAreReadFromKey) {
+  auto index_schema = CreateIndexSchema("test_schema").value();
+  data_model::NumericIndex numeric_index_proto;
+  auto n_index = std::make_shared<indexes::Numeric>(numeric_index_proto);
+  auto s_index = std::make_shared<indexes::Numeric>(numeric_index_proto);
+  VMSDK_EXPECT_OK(index_schema->AddIndex("n", "n", n_index));
+  VMSDK_EXPECT_OK(index_schema->AddIndex("s", "s", s_index));
+  index_schema->CreateTextIndexSchema();
+  VMSDK_EXPECT_OK(
+      index_schema->AddIndex("t", "t",
+                             std::make_shared<indexes::Text>(
+                                 CreateTextIndexProto(/*with_suffix_trie=*/true,
+                                                      /*no_stem=*/true, 1.0),
+                                 index_schema->GetTextIndexSchema())));
+  EXPECT_CALL(*index_schema, GetIdentifier(testing::_))
+      .WillRepeatedly([&](absl::string_view alias) {
+        return index_schema->IndexSchema::GetIdentifier(alias);
+      });
+  auto with_s = StringInternStore::Intern("with_s");
+  auto without_s = StringInternStore::Intern("without_s");
+  VMSDK_EXPECT_OK(testing_infra::AddRecord(*n_index, with_s, "1"));
+  VMSDK_EXPECT_OK(testing_infra::AddRecord(*n_index, without_s, "2"));
+  VMSDK_EXPECT_OK(testing_infra::AddRecord(*s_index, with_s, "7"));
+
+  for (const std::string sortby : {"s", "t"}) {
+    UnitTestSearchParameters parameters;
+    parameters.index_schema = index_schema;
+    parameters.attribute_alias = "v";
+    parameters.sortby_parameter = query::SortByParameter{.field = sortby};
+    parameters.sortby_by_lookup_key = true;
+    parameters.return_attributes.push_back(query::ReturnAttribute{
+        .identifier = vmsdk::MakeUniqueValkeyString("n"),
+        .attribute_alias = vmsdk::MakeUniqueValkeyString("n"),
+        .alias = vmsdk::MakeUniqueValkeyString("n")});
+    std::vector<indexes::Neighbor> neighbors;
+    neighbors.push_back(indexes::Neighbor{with_s, 0.1});
+    neighbors.push_back(indexes::Neighbor{without_s, 0.2});
+    auto got = query::MaybeAddIndexedContent(std::move(neighbors), parameters);
+    VMSDK_EXPECT_OK(got);
+    ASSERT_EQ(got->size(), 2);
+    if (sortby == "s") {
+      ASSERT_TRUE((*got)[0].attribute_contents.has_value());
+      ASSERT_TRUE((*got)[1].attribute_contents.has_value());
+      std::unordered_map<std::string, std::string> with{{"n", "1"}, {"s", "7"}};
+      std::unordered_map<std::string, std::string> without{{"n", "2"}};
+      EXPECT_EQ(ToStringMap(*(*got)[0].attribute_contents), with);
+      EXPECT_EQ(ToStringMap(*(*got)[1].attribute_contents), without);
+    } else {
+      EXPECT_FALSE((*got)[0].attribute_contents.has_value());
+      EXPECT_FALSE((*got)[1].attribute_contents.has_value());
+    }
+  }
+}
+
+// Field a is indexed as x and z NUMERIC and as y TAG.
+TEST_F(KnnSortByPrefillTest, FieldIndexedTwiceGivesOnlyItsOwnSortValue) {
+  auto index_schema = CreateIndexSchema("test_schema").value();
+  data_model::NumericIndex numeric_index_proto;
+  data_model::TagIndex tag_index_proto;
+  tag_index_proto.set_separator(",");
+  auto x_index = std::make_shared<indexes::Numeric>(numeric_index_proto);
+  auto y_index = std::make_shared<indexes::Tag>(tag_index_proto);
+  VMSDK_EXPECT_OK(index_schema->AddIndex("x", "a", x_index));
+  auto z_index = std::make_shared<indexes::Numeric>(numeric_index_proto);
+  VMSDK_EXPECT_OK(index_schema->AddIndex("y", "a", y_index));
+  VMSDK_EXPECT_OK(index_schema->AddIndex("z", "a", z_index));
+  EXPECT_CALL(*index_schema, GetIdentifier(testing::_))
+      .WillRepeatedly([&](absl::string_view alias) {
+        return index_schema->IndexSchema::GetIdentifier(alias);
+      });
+  auto key = StringInternStore::Intern("k1");
+  VMSDK_EXPECT_OK(testing_infra::AddRecord(*x_index, key, ".6"));
+  VMSDK_EXPECT_OK(testing_infra::AddRecord(*y_index, key, ".6"));
+  VMSDK_EXPECT_OK(testing_infra::AddRecord(*z_index, key, ".6"));
+
+  struct Case {
+    std::string sortby;
+    std::vector<std::string> returned;
+    std::optional<std::string> expected_a;
+  };
+  for (const auto &c : std::vector<Case>{{"y", {"x"}, std::nullopt},
+                                         {"y", {"x", "y"}, std::nullopt},
+                                         {"x", {"y"}, std::nullopt},
+                                         {"y", {"y", "x"}, ".6"},
+                                         {"y", {"y"}, ".6"},
+                                         {"x", {"x"}, "0.6"},
+                                         {"z", {"x"}, "0.6"}}) {
+    UnitTestSearchParameters parameters;
+    parameters.index_schema = index_schema;
+    parameters.attribute_alias = "v";
+    parameters.sortby_parameter = query::SortByParameter{.field = c.sortby};
+    parameters.sortby_by_lookup_key = true;
+    for (const auto &returned : c.returned) {
+      parameters.return_attributes.push_back(query::ReturnAttribute{
+          .identifier = vmsdk::MakeUniqueValkeyString("a"),
+          .attribute_alias = vmsdk::MakeUniqueValkeyString(returned),
+          .alias = vmsdk::MakeUniqueValkeyString(returned)});
+    }
+    std::vector<indexes::Neighbor> neighbors;
+    neighbors.push_back(indexes::Neighbor{key, 0.1});
+    auto got = query::MaybeAddIndexedContent(std::move(neighbors), parameters);
+    VMSDK_EXPECT_OK(got);
+    ASSERT_EQ(got->size(), 1);
+    std::string where = "SORTBY " + c.sortby + " RETURN";
+    for (const auto &returned : c.returned) {
+      where += " " + returned;
+    }
+    if (!c.expected_a.has_value()) {
+      EXPECT_FALSE((*got)[0].attribute_contents.has_value()) << where;
+      continue;
+    }
+    ASSERT_TRUE((*got)[0].attribute_contents.has_value()) << where;
+    std::unordered_map<std::string, std::string> expected{{"a", *c.expected_a}};
+    EXPECT_EQ(ToStringMap(*(*got)[0].attribute_contents), expected) << where;
+  }
+}
+
 class OldShardSortByRefileKeyTest : public ValkeySearchTest {};
 
 TEST_F(OldShardSortByRefileKeyTest, OnlyHashRowsSortedOnAnAliasAreRefiled) {
@@ -1299,10 +1417,11 @@ TEST_F(OldShardSortByRefileKeyTest, OnlyHashRowsSortedOnAnAliasAreRefiled) {
     EXPECT_EQ(query::OldShardSortByRefileKey(parameters), c.expected)
         << c.sortby.value_or("<none>") << " all_content=" << c.all_content;
   }
-  // RETURN of the sort field: an older shard sent it if the key has it.
+  // RETURN of the sort field: an older shard sent it if the key has it. A
+  // field named like the alias: the shard's alias entry may be that field.
   for (const auto &[returned, expected] :
        std::vector<std::pair<std::string, std::optional<std::string>>>{
-           {"a", std::nullopt}, {"n", "a"}}) {
+           {"a", std::nullopt}, {"n", "a"}, {"s", std::nullopt}}) {
     UnitTestSearchParameters parameters;
     parameters.index_schema = index_schema;
     parameters.sortby_parameter = query::SortByParameter{.field = "s"};

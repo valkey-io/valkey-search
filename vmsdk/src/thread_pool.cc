@@ -75,8 +75,9 @@ void *RunWorkerThread(void *arg) {
 namespace vmsdk {
 
 ThreadPool::ThreadPool(const std::string &name_prefix, size_t num_threads,
-                       size_t sample_queue_size)
+                       size_t sample_queue_size, absl::Duration join_timeout)
     : initial_thread_count_(num_threads),
+      join_timeout_(join_timeout),
       priority_tasks_(static_cast<int>(ThreadPool::Priority::kMax) + 1),
       name_prefix_(name_prefix),
       sample_queue_size_(sample_queue_size),
@@ -147,7 +148,7 @@ absl::Status ThreadPool::MarkForStop(StopMode stop_mode) {
 
 ThreadPool::~ThreadPool() { JoinWorkers(); }
 
-void ThreadPool::JoinWorkers() {
+bool ThreadPool::JoinWorkers() {
   {
     absl::MutexLock lock(&queue_mutex_);
     if (!stop_mode_.has_value()) {
@@ -157,8 +158,7 @@ void ThreadPool::JoinWorkers() {
     suspend_workers_ = false;
   }
 
-  // Wait up to 5s for every worker in threads_ to flag itself joinable.
-  const absl::Time deadline = absl::Now() + absl::Seconds(5);
+  const absl::Time deadline = absl::Now() + join_timeout_;
   auto count_unjoinable = [this]() {
     return threads_.CountIf(
         [](const std::shared_ptr<Thread> &t) { return !t->IsJoinable(); });
@@ -174,15 +174,16 @@ void ThreadPool::JoinWorkers() {
       }
     });
     VMSDK_LOG(WARNING, nullptr)
-        << "ThreadPool shutdown timed out after 5s waiting for workers to exit;"
+        << "ThreadPool shutdown timed out waiting for workers to exit;"
         << " hung threads: " << absl::StrJoin(hung, ", ");
-    CHECK(false) << "ThreadPool shutdown timeout: " << hung.size()
-                 << " worker(s) did not become joinable within 5s";
+    JoinTerminatedWorkers();
+    return false;
   }
   started_ = false;
   JoinTerminatedWorkers();
   CHECK(threads_.IsEmpty())
       << "threads_ not empty after JoinTerminatedWorkers in JoinWorkers";
+  return true;
 }
 
 void ThreadPool::JoinTerminatedWorkers() {

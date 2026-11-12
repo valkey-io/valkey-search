@@ -129,9 +129,12 @@ EvaluationResult TermPredicate::Evaluate(
     }
     // Search for stem variants - these should all exist from ingestion
     for (const auto &variant : stem_variants) {
-      TryAddWordKeyIteratorForPrefilter(text_index, variant, target_key,
-                                        stem_field_mask, require_positions,
-                                        key_iterators);
+      if (TryAddWordKeyIteratorForPrefilter(text_index, variant, target_key,
+                                            stem_field_mask, require_positions,
+                                            key_iterators) &&
+          !require_positions) {
+        return EvaluationResult(true);
+      }
     }
   }
   if (key_iterators.empty()) {

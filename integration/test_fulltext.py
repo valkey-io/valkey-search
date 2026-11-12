@@ -2493,12 +2493,14 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         client.execute_command("CONFIG SET search.prefiltering-threshold-ratio 0")
         client.execute_command(
             "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA",
-            "content", "TEXT", "NOSTEM", "price", "NUMERIC", "cat", "TAG",
+            "content", "TEXT", "price", "NUMERIC", "cat", "TAG",
             "vec", "VECTOR", "HNSW", "6", "TYPE", "FLOAT32", "DIM", "2", "DISTANCE_METRIC", "L2")
         vec = struct.pack("<2f", 0.0, 0.0)
         client.execute_command("HSET", "doc:0", "content", "I love ocean waves", "price", 10, "cat", "a", "vec", vec)
         client.execute_command("HSET", "doc:1", "content", "love songs", "price", 10, "cat", "a", "vec", vec)
-        for i in range(2, 10):
+        client.execute_command("HSET", "doc:2", "content", "running ocean", "price", 10, "cat", "a", "vec", vec)
+        client.execute_command("HSET", "doc:3", "content", "runs away", "price", 10, "cat", "a", "vec", vec)
+        for i in range(4, 10):
             client.execute_command("HSET", f"doc:{i}", "content", "unrelated words", "price", 10, "cat", "a", "vec", vec)
         IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
 
@@ -2518,6 +2520,7 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
             ("love ocean @cat:{a}", ()),
             ("lov* ocean", ()),
             ("(love | songs) ocean", ()),
+            ("runs ocean", ()),
         ]
         for query, extra in queries:
             plain = client.execute_command("FT.SEARCH", "idx", query, "NOCONTENT", "LIMIT", "0", "100", "DIALECT", "2", *extra)

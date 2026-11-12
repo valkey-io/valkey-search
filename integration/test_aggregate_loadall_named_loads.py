@@ -99,6 +99,28 @@ class TestAggregateLoadallNamedLoads(ValkeySearchTestCaseDebugMode):
         assert [sorted(r[::2]) for r in reply[1:]] == [
             [b"__score", b"__score", b"extra", b"g"]] * 2
 
+    def test_apply_into_a_named_load_column_shows_below_1_3_0(self):
+        """Below 1.3.0 a named load's own column is hidden, but an APPLY that
+        writes into that column replaces the raw value with a computed one,
+        which 1.2.1 and main both show (greptile P1 on r3f6104e)."""
+        client = self._client("1.0.0")
+        client.execute_command(
+            "FT.CREATE", "ja", "ON", "JSON", "PREFIX", "1", "ja:", "SCHEMA",
+            "$.n", "AS", "n", "NUMERIC")
+        client.execute_command("JSON.SET", "ja:1", "$", '{"n":5}')
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "ja")
+        reply = client.execute_command(
+            "FT.AGGREGATE", "ja", "*", "LOAD", "*", "LOAD", "1", "@n",
+            "APPLY", "7", "AS", "n")
+        row = dict(zip(reply[1][::2], reply[1][1::2]))
+        assert row.get(b"$.n") == b"7", row
+        # A fresh APPLY name is shown; the named load's own column stays hidden.
+        reply = client.execute_command(
+            "FT.AGGREGATE", "ja", "*", "LOAD", "*", "LOAD", "1", "@n",
+            "APPLY", "@n*2", "AS", "d")
+        row = dict(zip(reply[1][::2], reply[1][1::2]))
+        assert row.get(b"d") == b"10" and b"$.n" not in row, row
+
     def test_plain_named_load_is_not_counted(self):
         # A HASH text field reads the same at every release.
         client = self._client("1.0.0")

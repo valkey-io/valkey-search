@@ -1484,6 +1484,16 @@ void AggregateParameters::ReplyRecords(ValkeyModuleCtx *ctx, RecordSet &records,
       [](const auto &stage) {
         return dynamic_cast<const GroupBy *>(stage.get()) != nullptr;
       });
+  // A named load's column is hidden below 1.3.0, but an APPLY that writes into
+  // that column replaces the raw value with a computed one, which 1.2.1 shows.
+  absl::flat_hash_set<size_t> legacy_applied;
+  if (hide_legacy_loads) {
+    for (const auto &stage : parameters.stages_) {
+      if (const auto *apply = dynamic_cast<const Apply *>(stage.get())) {
+        legacy_applied.insert(apply->name_->record_index_);
+      }
+    }
+  }
   for (size_t n = 0; n < count; ++n) {
     auto rec = records.pop_front();
     ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_ARRAY_LEN);
@@ -1496,7 +1506,8 @@ void AggregateParameters::ReplyRecords(ValkeyModuleCtx *ctx, RecordSet &records,
         continue;
       }
       const auto &name = parameters.record_info_by_index_[i].output_name_;
-      if (hide_legacy_loads && parameters.legacy_loadall_hidden_.contains(i)) {
+      if (hide_legacy_loads && parameters.legacy_loadall_hidden_.contains(i) &&
+          !legacy_applied.contains(i)) {
         continue;
       }
       if (yields_to_stored.contains(i) &&

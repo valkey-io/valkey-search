@@ -22,6 +22,8 @@
 #include "absl/status/status.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
+#include "absl/time/clock.h"
+#include "absl/time/time.h"
 #include "grpcpp/support/status.h"
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/coordinator.pb.h"
@@ -149,6 +151,7 @@ class BoundedContentFanout
         client_pool_(client_pool),
         thread_pool_(thread_pool),
         cancellation_token_(parameters->cancellation_token),
+        deadline_(absl::Now() + absl::Milliseconds(parameters->timeout_ms)),
         outcomes_(parameters->enable_partial_results,
                   parameters->enable_consistency),
         parameters_(std::move(parameters)),
@@ -203,8 +206,9 @@ class BoundedContentFanout
   bool RemoveUnresolvableCandidates() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
   // Builds the next fetch round; returns its request count (0: none needed).
   size_t PlanFetchRound() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
-  void DropKeyOnlyCandidatesPastTheWindow()
-      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+  // Removes the candidates the reply cannot use: key-only ones past the
+  // window, or every key-only one once the query is cancelled.
+  void DropKeyOnlyCandidates() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
   size_t WindowEnd() const ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
   void Complete();
 
@@ -215,6 +219,10 @@ class BoundedContentFanout
   coordinator::ClientPool *const client_pool_;
   vmsdk::ThreadPool *const thread_pool_;
   const cancel::Token cancellation_token_;
+  // The query's deadline. A fetch carries the time left until it, not the
+  // query's full timeout: the shard starts its timeout when the fetch
+  // arrives.
+  const absl::Time deadline_;
 
   absl::Mutex mutex_;
   ShardOutcomes outcomes_ ABSL_GUARDED_BY(mutex_);
@@ -478,6 +486,8 @@ size_t BoundedContentFanout::PlanFetchRound() {
     return 0;
   }
   std::vector<size_t> fetch_of_shard(targets_.size(), SIZE_MAX);
+  const int64_t remaining_ms =
+      std::max<int64_t>(1, absl::ToInt64Milliseconds(deadline_ - absl::Now()));
   size_t missing = 0;
   // Every candidate up to the end of the reply window, not only those in it:
   // a candidate inside the offset that no longer matches must not take up a
@@ -495,6 +505,7 @@ size_t BoundedContentFanout::PlanFetchRound() {
       auto *query = request->mutable_query();
       query->CopyFrom(*request_);
       query->clear_content_limit();
+      query->set_timeout_ms(static_cast<uint64_t>(remaining_ms));
       query->set_slot_fingerprint(targets_[candidate.shard].slot_fingerprint);
       pending_fetches_.push_back({candidate.shard, std::move(request)});
     }
@@ -609,7 +620,12 @@ void BoundedContentFanout::FetchLocally(
 
 void BoundedContentFanout::OnLocalFetchDone(
     size_t shard, std::unique_ptr<SearchParameters> local) {
-  const absl::Status status = local->search_result.status;
+  absl::Status status = local->search_result.status;
+  // A cancelled fetch returns its candidates unresolved, which would read as
+  // no longer matching. Fail it instead, as the remote fetch does.
+  if (status.ok() && local->cancellation_token->IsCancelled()) {
+    status = absl::DeadlineExceededError(kTimeoutMsg);
+  }
   auto fetched = std::move(local->search_result.neighbors);
   if (RecordFetchResult(shard, status, std::move(fetched), std::move(local))) {
     ContinueRefetch();
@@ -658,13 +674,17 @@ void BoundedContentFanout::KeepAlive(std::unique_ptr<SearchParameters> local) {
   local_search_ = std::move(local);
 }
 
-void BoundedContentFanout::DropKeyOnlyCandidatesPastTheWindow() {
+void BoundedContentFanout::DropKeyOnlyCandidates() {
   // Every candidate in the window has content now. Candidates past it are
   // kept as backfill for winners the reply path might still drop; one
   // without content cannot serve as that, and the reply path would count it
-  // as a removed result and lower total_count.
+  // as a removed result and lower total_count. A cancelled query stops
+  // fetching, so its window may still hold candidates without content: they
+  // are left out of the partial reply, but they matched, so they stay
+  // counted.
+  const size_t first = cancellation_token_->IsCancelled() ? 0 : WindowEnd();
   candidates_.erase(
-      std::remove_if(candidates_.begin() + WindowEnd(), candidates_.end(),
+      std::remove_if(candidates_.begin() + first, candidates_.end(),
                      [](const Candidate &candidate) {
                        return !candidate.neighbor.attribute_contents;
                      }),
@@ -679,7 +699,7 @@ void BoundedContentFanout::Complete() {
     if (status.ok()) {
       candidates_.erase(candidates_.begin() + EligibleCount(),
                         candidates_.end());
-      DropKeyOnlyCandidatesPastTheWindow();
+      DropKeyOnlyCandidates();
       std::vector<indexes::Neighbor> neighbors;
       neighbors.reserve(candidates_.size());
       for (auto &candidate : candidates_) {

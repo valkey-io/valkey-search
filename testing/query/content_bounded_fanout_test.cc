@@ -13,6 +13,8 @@
 #include <vector>
 
 #include "absl/status/status.h"
+#include "absl/time/clock.h"
+#include "absl/time/time.h"
 #include "gmock/gmock.h"
 #include "grpcpp/support/status.h"
 #include "gtest/gtest.h"
@@ -21,6 +23,7 @@
 #include "src/coordinator/util.h"
 #include "src/query/fanout_content_limit.h"
 #include "src/query/search.h"
+#include "src/utils/cancel.h"
 #include "src/valkey_search_options.h"
 #include "testing/common.h"
 #include "testing/coordinator/common.h"
@@ -119,6 +122,7 @@ class BoundedContentFanoutTest : public ValkeySearchTest {
     auto search = std::make_unique<CapturingSearch>(&completed_);
     search->limit = LimitParameter{offset, count};
     search->enable_partial_results = partial_results;
+    cancellation_token_ = search->cancellation_token;
     BoundedContentPlan plan{offset + count,
                             ShardLimits(kShards, content_limit)};
     VMSDK_EXPECT_OK(PerformBoundedContentFanoutAsync(
@@ -160,6 +164,7 @@ class BoundedContentFanoutTest : public ValkeySearchTest {
       searches_[kShards];
   std::vector<Pending<coordinator::FetchContentRequest>> fetches_[kShards];
   std::unique_ptr<SearchParameters> completed_;
+  cancel::Token cancellation_token_;
 };
 
 TEST_F(BoundedContentFanoutTest, EvenDataCompletesInOneRound) {
@@ -358,6 +363,48 @@ TEST_F(BoundedContentFanoutTest, FailedFetchMovesOnToOtherShardsUnderPartial) {
   EXPECT_TRUE(completed_->search_result.status.ok());
   EXPECT_THAT(Keys(completed_->search_result), ElementsAre("a", "x"));
   EXPECT_EQ(completed_->search_result.total_count, 4u);  // 5 less "b".
+}
+
+TEST_F(BoundedContentFanoutTest,
+       TimeoutBetweenRoundsRepliesOnlyResolvedCandidates) {
+  Start(0, 2, 1, /*partial_results=*/true);
+  coordinator::SearchIndexPartitionResponse r0, r1;
+  AddResult(r0, "a", 9, true);
+  AddResult(r0, "b", 8, false);
+  r0.set_total_count(2);
+  AddResult(r1, "c", 7, true);
+  r1.set_total_count(1);
+  Reply(searches_[0], r0);
+  cancellation_token_->Cancel();  // The query times out before round 1 ends.
+  Reply(searches_[1], r1);
+
+  // No fetch round: "b" is left out of the partial reply, but it matched, so
+  // it is still counted.
+  EXPECT_TRUE(fetches_[0].empty());
+  ASSERT_NE(completed_, nullptr);
+  EXPECT_TRUE(completed_->search_result.status.ok());
+  EXPECT_THAT(Keys(completed_->search_result), ElementsAre("a", "c"));
+  for (const auto &neighbor : completed_->search_result.neighbors) {
+    EXPECT_TRUE(neighbor.attribute_contents.has_value());
+  }
+  EXPECT_EQ(completed_->search_result.total_count, 3u);
+}
+
+TEST_F(BoundedContentFanoutTest, FetchCarriesTheTimeLeftNotTheFullTimeout) {
+  Start(0, 2, 1);
+  const uint64_t timeout_ms = searches_[0][0].request->timeout_ms();
+  coordinator::SearchIndexPartitionResponse r0, r1;
+  AddResult(r0, "a", 9, true);
+  AddResult(r0, "b", 8, false);
+  Reply(searches_[0], r0);
+  absl::SleepFor(absl::Milliseconds(100));
+  Reply(searches_[1], r1);
+
+  ASSERT_EQ(fetches_[0].size(), 1u);
+  const uint64_t fetch_timeout_ms =
+      fetches_[0][0].request->query().timeout_ms();
+  EXPECT_GT(fetch_timeout_ms, 0u);
+  EXPECT_LE(fetch_timeout_ms, timeout_ms - 100);
 }
 
 TEST_F(BoundedContentFanoutTest, RecomputedScoreReranksAndFetchesTheNext) {

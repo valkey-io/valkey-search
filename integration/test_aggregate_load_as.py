@@ -10,14 +10,24 @@ was supported such a load failed outright, so there is no prior behavior to
 preserve.
 """
 
+import struct
+
 import pytest
 import valkey
+from utils import IndexingTestHelper
 from valkey.client import Valkey
 from valkey_search_test_case import ValkeySearchTestCaseDebugMode
 from valkeytestframework.conftest import resource_port_tracker
 
 FIX_RELEASE = "1.3.0"
 LEGACY_RELEASE = "1.0.0"
+
+
+def pairs(reply):
+    """Each row as a list of (field, value) pairs; unlike rows(), keeps a
+    repeated field visible."""
+    return [[(row[i].decode(), row[i + 1]) for i in range(0, len(row), 2)]
+            for row in reply[1:]]
 
 
 def rows(reply):
@@ -157,6 +167,21 @@ class TestAggregateLoadAs(ValkeySearchTestCaseDebugMode):
                 "LOAD", "3", "$.price", "AS", "cost",
             )
 
+    def test_load_as_legacy_error_matches_main(self):
+        client = self._client(emulate_release=LEGACY_RELEASE)
+        self._make_hash(client)
+        self._make_json(client)
+        counter = "search_compatibility-ft_aggregate_load_as"
+        for index, field in (("idx_hash", "@price"), ("idx_json", "$.price")):
+            before = client.info("SEARCH").get(counter, 0)
+            with pytest.raises(valkey.exceptions.ResponseError,
+                               match=r"^Index field `AS` does not exist$"):
+                client.execute_command(
+                    "FT.AGGREGATE", index, "@price:[-inf inf]",
+                    "LOAD", "3", field, "AS", "cost",
+                )
+            assert client.info("SEARCH").get(counter, 0) - before == 1
+
     def test_rename_hides_declared_attribute(self):
         """A rename can shadow a declared attribute: `@price AS qty` makes the
         name `qty` resolve to price's value, not the schema's qty."""
@@ -174,19 +199,26 @@ class TestAggregateLoadAs(ValkeySearchTestCaseDebugMode):
             # qty == price's value (10), NOT the schema qty (5); r == 110.
             assert result[0] == {"qty": b"10", "r": b"110"}
 
-    def test_duplicate_output_name_errors(self):
-        """Intentionally stricter than RediSearch (which keeps the first claim of
-        an output name and drops the rest): a LOAD clause that names the same
-        output twice is a syntax error whenever an AS rename is involved."""
+    def _make_hash_with_extra(self, client):
+        """`extra` is stored but not in the schema, so main rejects any
+        command that loads it."""
+        self._make_hash(client)
+        client.execute_command("HSET", "h:1", "extra", "e")
+
+    def _make_json_with_extra(self, client):
+        self._make_json(client)
+        client.execute_command(
+            "JSON.SET", "j:1", "$", '{"price":10,"qty":5,"extra":"e"}')
+
+    def test_duplicate_output_name_in_one_clause_errors(self):
+        """Main's rule: one clause claiming an output name twice with a
+        rename involved is an error."""
         collisions = [
-            # Two AS clauses targeting the same alias.
             ("LOAD", "6", "@price", "AS", "x", "@qty", "AS", "x"),
-            # A rename onto the name of a field loaded earlier in the clause.
             ("LOAD", "4", "@qty", "@price", "AS", "qty"),
-            # ... and the same collision in the opposite order.
             ("LOAD", "4", "@price", "AS", "qty", "@qty"),
-            # A rename onto the key field when the key is also loaded.
             ("LOAD", "4", "@__key", "@price", "AS", "__key"),
+            ("LOAD", "6", "@price", "AS", "x", "@price", "AS", "x"),
         ]
         for make, idx in ((self._make_hash, "idx_hash"), (self._make_json, "idx_json")):
             client = self._client()
@@ -197,6 +229,220 @@ class TestAggregateLoadAs(ValkeySearchTestCaseDebugMode):
                     client.execute_command(
                         "FT.AGGREGATE", idx, "@price:[-inf inf]", *load,
                     )
+
+    def test_ambiguous_names_error_only_with_a_newly_loadable_field(self):
+        """With declared attributes only, these commands keep the replies they
+        get without the ambiguity check, repeated names included, as measured
+        against the release before this change; with an undeclared field they
+        are rejected. `KEY` stands for the key name."""
+        cases = [
+            # Two clauses claiming one output name.
+            (("LOAD", "3", "@extra", "AS", "x", "LOAD", "3", "@qty", "AS", "x"),
+             ("LOAD", "3", "@price", "AS", "x", "LOAD", "3", "@qty", "AS", "x"),
+             [("x", b"10"), ("x", b"5")], "Duplicate"),
+            # A rename onto a name another entry loads.
+            (("LOAD", "3", "@qty", "AS", "q", "LOAD", "3", "@extra", "AS", "qty"),
+             ("LOAD", "3", "@qty", "AS", "q", "LOAD", "3", "@price", "AS", "qty"),
+             [("q", b"5"), ("qty", b"10")], "`qty` is also loaded"),
+            # A rename onto the key while the key is loaded.
+            (("LOAD", "6", "@__key", "AS", "k", "@extra", "AS", "__key"),
+             ("LOAD", "6", "@__key", "AS", "k", "@price", "AS", "__key"),
+             [("k", "KEY"), ("k", b"10"), ("__key", b"10")],
+             "`__key` is also loaded"),
+            # A rename onto a name an earlier stage made.
+            (("SORTBY", "2", "@qty", "ASC", "LOAD", "3", "@extra", "AS", "qty"),
+             ("SORTBY", "2", "@qty", "ASC", "LOAD", "3", "@price", "AS", "qty"),
+             [("qty", b"5"), ("qty", b"10")],
+             "an earlier stage already uses that name"),
+            # A source that is an earlier entry's output name. `@x` is not
+            # declared, so both forms are new and both are rejected.
+            (("LOAD", "3", "@extra", "AS", "x", "LOAD", "3", "@x", "AS", "y"),
+             None, None, "output name of an earlier LOAD entry"),
+            (("LOAD", "3", "@price", "AS", "x", "LOAD", "3", "@x", "AS", "y"),
+             None, None, "output name of an earlier LOAD entry"),
+            # Read under the same name, it also claims `x` again.
+            (("LOAD", "3", "@price", "AS", "x", "LOAD", "2", "@extra", "@x"),
+             None, None, "output name of an earlier LOAD entry"),
+        ]
+        for make, idx, key in ((self._make_hash_with_extra, "idx_hash", b"h:1"),
+                               (self._make_json_with_extra, "idx_json", b"j:1")):
+            client = self._client()
+            client.execute_command("FLUSHALL", "SYNC")
+            make(client)
+            for rejected, answered, reply, error in cases:
+                with pytest.raises(valkey.exceptions.ResponseError, match=error):
+                    client.execute_command(
+                        "FT.AGGREGATE", idx, "@price:[-inf inf]", *rejected)
+                if answered:
+                    expected = [(f, key if v == "KEY" else v) for f, v in reply]
+                    assert pairs(client.execute_command(
+                        "FT.AGGREGATE", idx, "@price:[-inf inf]", *answered)) == [
+                            expected], answered
+
+    def test_rename_onto_the_json_root_next_to_loadall(self):
+        """On JSON `LOAD *` returns `$`, so a rename onto `$` names two
+        fields. Rejected with an undeclared field; main's reply otherwise."""
+        client = self._client()
+        self._make_json_with_extra(client)
+        doc = b'{"price":10,"qty":5,"extra":"e"}'
+        for loads in [("LOAD", "*", "LOAD", "3", "$.extra", "AS", "$"),
+                      ("LOAD", "3", "$.extra", "AS", "$", "LOAD", "*")]:
+            with pytest.raises(valkey.exceptions.ResponseError,
+                               match="rename onto `\\$`"):
+                client.execute_command(
+                    "FT.AGGREGATE", "idx_json", "@price:[-inf inf]", *loads)
+        assert sorted(pairs(client.execute_command(
+            "FT.AGGREGATE", "idx_json", "@price:[-inf inf]",
+            "LOAD", "*", "LOAD", "3", "@qty", "AS", "$"))[0]) == [
+                ("$", b"5"), ("$", doc)]
+
+    def test_renamed_undeclared_field_is_known_only_by_its_alias(self):
+        """A stage cannot read an undeclared field under the name it was
+        renamed away from, as in RediSearch; a declared attribute still
+        resolves through the schema, as before. HASH only: on JSON an
+        undeclared field is read by its path."""
+        client = self._client()
+        idx = "idx_hash"
+        self._make_hash_with_extra(client)
+        with pytest.raises(valkey.exceptions.ResponseError,
+                           match="`extra` does not exist"):
+            client.execute_command(
+                "FT.AGGREGATE", idx, "@price:[-inf inf]",
+                "LOAD", "3", "@extra", "AS", "x", "APPLY", "@extra", "AS", "y")
+        assert rows(client.execute_command(
+            "FT.AGGREGATE", idx, "@price:[-inf inf]",
+            "LOAD", "3", "@extra", "AS", "x", "APPLY", "@x", "AS", "y")) == [
+                {"x": b"e", "y": b"e"}]
+        assert rows(client.execute_command(
+            "FT.AGGREGATE", idx, "@price:[-inf inf]",
+            "LOAD", "3", "@price", "AS", "x", "APPLY", "@price", "AS", "y")) == [
+                {"x": b"10", "y": b"10"}]
+
+    def test_rename_onto_or_of_the_knn_score_errors_with_a_newly_loadable_field(self):
+        """A score the query emits could also be a stored field of that name.
+        Main answers these shapes with schema fields, so only a command with
+        a field main cannot load is rejected."""
+        client = self._client()
+        client.execute_command(
+            "FT.CREATE", "idx_vec", "ON", "HASH", "PREFIX", "1", "v:",
+            "SCHEMA", "price", "NUMERIC",
+            "vec", "VECTOR", "FLAT", "6", "TYPE", "FLOAT32", "DIM", "2",
+            "DISTANCE_METRIC", "L2")
+        client.execute_command(
+            "HSET", "v:1", "price", "10", "extra", "e",
+            "vec", struct.pack("<2f", 1.0, 0.0))
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx_vec")
+
+        def knn(*load):
+            return client.execute_command(
+                "FT.AGGREGATE", "idx_vec", "*=>[KNN 1 @vec $q AS dist]", *load,
+                "PARAMS", "2", "q", struct.pack("<2f", 0.0, 0.0), "DIALECT", "2")
+
+        for load in [("LOAD", "3", "@extra", "AS", "dist"),
+                     ("LOAD", "4", "@dist", "AS", "d", "@extra")]:
+            with pytest.raises(valkey.exceptions.ResponseError,
+                               match="score name `dist`"):
+                knn(*load)
+        assert pairs(knn("LOAD", "3", "@price", "AS", "dist")) == [
+            [("dist", b"1"), ("dist", b"10")]]
+        assert rows(knn("LOAD", "3", "@dist", "AS", "dist")) == [{"dist": b"1"}]
+        # Main's reply: its second clause renames the column again.
+        assert sorted(pairs(knn(
+            "LOAD", "6", "@dist", "AS", "price", "@price", "AS", "p",
+            "LOAD", "3", "@price", "AS", "p"))[0]) == [
+                ("p", b"10"), ("price", b"1")]
+        with pytest.raises(valkey.exceptions.ResponseError,
+                           match="score name `__score`"):
+            client.execute_command(
+                "FT.AGGREGATE", "idx_vec", "*", "ADDSCORES",
+                "LOAD", "3", "@extra", "AS", "__score")
+        assert pairs(client.execute_command(
+            "FT.AGGREGATE", "idx_vec", "*", "ADDSCORES",
+            "LOAD", "3", "@price", "AS", "__score")) == [
+                [("__score", b"0"), ("__score", b"10")]]
+        with pytest.raises(valkey.exceptions.ResponseError,
+                           match="score name `d`"):
+            client.execute_command(
+                "FT.AGGREGATE", "idx_vec",
+                "@vec:[VECTOR_RANGE 5 $q]=>{$YIELD_DISTANCE_AS: d}",
+                "LOAD", "3", "@extra", "AS", "d",
+                "PARAMS", "2", "q", struct.pack("<2f", 0.0, 0.0), "DIALECT", "2")
+        # FT.HYBRID: a rename onto `__score` while the fused score is loaded.
+        with pytest.raises(valkey.exceptions.ResponseError,
+                           match="`__score` is also loaded"):
+            client.execute_command(
+                "FT.HYBRID", "idx_vec", "SEARCH", "*",
+                "VSIM", "@vec", "$q", "KNN", "2", "K", "1",
+                "LOAD", "6", "@__score", "AS", "s", "@extra", "AS", "__score",
+                "PARAMS", "2", "q", struct.pack("<2f", 0.0, 0.0))
+        # Without ADDSCORES no score is emitted, so the name is free.
+        assert rows(client.execute_command(
+            "FT.AGGREGATE", "idx_vec", "*",
+            "LOAD", "3", "@extra", "AS", "__score")) == [{"__score": b"e"}]
+
+    def test_same_field_under_the_same_name_in_two_clauses_is_a_repeat(self):
+        client = self._client()
+        self._make_hash(client)
+        assert pairs(client.execute_command(
+            "FT.AGGREGATE", "idx_hash", "@price:[-inf inf]",
+            "LOAD", "3", "@price", "AS", "x", "LOAD", "3", "@price", "AS", "x")) == [
+                [("x", b"10")]]
+        assert pairs(client.execute_command(
+            "FT.AGGREGATE", "idx_hash", "@price:[-inf inf]",
+            "LOAD", "1", "@price", "LOAD", "3", "@price", "AS", "price")) == [
+                [("price", b"10")]]
+
+    def test_rename_of_an_earlier_stage_output_errors(self):
+        client = self._client()
+        self._make_hash(client)
+        with pytest.raises(valkey.exceptions.ResponseError,
+                           match="output name of an earlier stage"):
+            client.execute_command(
+                "FT.AGGREGATE", "idx_hash", "@price:[-inf inf]",
+                "APPLY", "@price", "AS", "w", "LOAD", "3", "@w", "AS", "z")
+
+    def test_json_path_after_a_stage_under_its_attribute_name(self):
+        client = self._client()
+        self._make_json(client)
+        assert pairs(client.execute_command(
+            "FT.AGGREGATE", "idx_json", "@price:[-inf inf]",
+            "SORTBY", "2", "@qty", "ASC", "LOAD", "3", "$.qty", "AS", "qty")) == [
+                [("qty", b"5")]]
+
+    def test_loadall_hides_a_stored_field_only_behind_an_emitted_column(self):
+        client = self._client()
+        client.execute_command(
+            "FT.CREATE", "idx_all", "ON", "HASH", "PREFIX", "1", "a:",
+            "SCHEMA", "price", "NUMERIC")
+        client.execute_command("HSET", "a:1", "price", "10", "e", "stored")
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx_all")
+
+        def reply(*args):
+            return sorted(pairs(client.execute_command(
+                "FT.AGGREGATE", "idx_all", "*", *args))[0])
+
+        # A rename with no value leaves the stored field visible.
+        assert reply("LOAD", "*", "LOAD", "3", "@nosuch", "AS", "e") == [
+            ("e", b"stored"), ("price", b"10")]
+        # A rename onto a stored name: the clause written later wins.
+        assert reply("LOAD", "3", "@price", "AS", "e", "LOAD", "*") == [
+            ("e", b"stored"), ("price", b"10")]
+        assert reply("LOAD", "*", "LOAD", "3", "@price", "AS", "e") == [
+            ("e", b"10"), ("price", b"10")]
+        # A later APPLY onto that name still wins.
+        assert reply("LOAD", "3", "@price", "AS", "e", "LOAD", "*",
+                     "APPLY", "1", "AS", "e") == [("e", b"1"), ("price", b"10")]
+        # A column filled by a later stage hides it: one `e`, not two.
+        assert reply("LOAD", "*", "LOAD", "3", "@nosuch", "AS", "e",
+                     "APPLY", "1", "AS", "e") == [("e", b"1"), ("price", b"10")]
+
+    def test_json_loadall_keeps_the_root_beside_a_renamed_root(self):
+        client = self._client()
+        self._make_json(client)
+        assert sorted(pairs(client.execute_command(
+            "FT.AGGREGATE", "idx_json", "@price:[-inf inf]",
+            "LOAD", "*", "LOAD", "3", "$", "AS", "doc"))[0]) == [
+                ("$", b'{"price":10,"qty":5}'), ("doc", b'{"price":10,"qty":5}')]
 
     def test_plain_duplicate_load_is_deduplicated(self):
         """Loading the same field twice without a rename is not an error."""

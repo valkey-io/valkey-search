@@ -1083,6 +1083,94 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         # Load by JSON path without a rename: emitted under the path.
         self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 2 @__key $.n1")
 
+    def test_aggregate_load_non_schema_field(self, key_type, dialect, vector_data_type):
+        # e1 (numeric) and e2 (string) are on every key but not in the schema.
+        self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
+        e1, e2 = ("@e1", "@e2") if key_type == "hash" else ("$.e1", "$.e2")
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 3 @__key {e1} {e2}")
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 2 @__key e2")
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 4 @__key {e1} as x apply @x*2 as y"
+        )
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 4 @__key {e2} as s apply upper(@s) as u"
+        )
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 3 {e2} as s groupby 1 @s reduce count 0 as c"
+        )
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 4 @__key {e2} as s filter @s=='two'"
+        )
+        # A name no key has loads nothing.
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 2 @__key @nosuch")
+        # A LOAD after GROUPBY is rejected.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * groupby 1 @t3 reduce count 0 as c load 1 {e2}"
+        )
+
+    def test_aggregate_load_non_schema_field_on_some_keys(self, key_type, dialect, vector_data_type):
+        # x is on every other key only.
+        self.setup_data("non-schema field", key_type, vector_data_type=vector_data_type)
+        x = "@x" if key_type == "hash" else "$.x"
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 2 @__key {x}")
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 4 @__key {x} as s sortby 4 @s asc @__key asc"
+        )
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 4 @__key {x} as s sortby 4 @s desc @__key asc"
+        )
+
+    def test_aggregate_loadall_with_named_loads(self, key_type, dialect, vector_data_type):
+        # Under LOAD * a rename to a new name adds a column rather than hiding
+        # the field it reads. `@__key` is loaded first because rows are
+        # aligned on it.
+        self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
+        idx = f"{key_type}_idx1"
+        self.check(dialect, f"ft.aggregate {idx} * load * load 1 @__key")
+        self.check(dialect, f"ft.aggregate {idx} * load * load 3 @__key as k sortby 2 @k asc")
+        for loads in [
+            "load * load 3 @e2 as x",
+            "load 3 @e2 as x load *",
+            "load * load 3 @n1 as m",
+            "load 3 @n1 as m load *",
+            "load 3 @e1 as y load * apply @y*2 as z",
+            # A rename with no value does not hide the stored field it names.
+            "load * load 3 @nosuch as t2",
+            "load 3 @nosuch as t2 load *",
+        ]:
+            self.check(dialect, f"ft.aggregate {idx} * load 1 @__key {loads}")
+        # A rename onto the name of a field `LOAD *` also returns: the clause
+        # written later wins.
+        for loads in [
+            "load * load 3 @n1 as e2",
+            "load 3 @n1 as e2 load *",
+            "load * load 3 @n1 as t1",
+            "load * load 3 @n1 as t2 load *",
+        ]:
+            self.check(dialect, f"ft.aggregate {idx} * load 1 @__key {loads}")
+
+    def test_aggregate_load_after_groupby(self, key_type, dialect, vector_data_type):
+        # After GROUPBY each record is a group; any later LOAD is rejected,
+        # including LOAD * and a LOAD in a command that also has LOAD *.
+        self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
+        idx = f"{key_type}_idx1"
+        gb = "groupby 1 @t3 reduce count 0 as c"
+        e2 = "@e2" if key_type == "hash" else "$.e2"
+        for tail in [
+            f"{gb} load *",
+            f"load * {gb} load *",
+            f"load * {gb} load 1 @n1",
+            f"load * {gb} load 1 {e2}",
+            f"{gb} load * load 1 @n1",
+            f"{gb} load 1 @__key",
+            f"{gb} load 1 @t3",
+            f"{gb} load 1 @n1",
+            f"{gb} groupby 1 @c reduce count 0 as k load *",
+            f"apply 1 as y load 1 @n1 {gb}",
+        ]:
+            self.check(dialect, f"ft.aggregate {idx} * {tail}")
+        self.check(dialect, f"ft.aggregate {idx} * load * {gb}")
+
     def test_aggregate_json_field_names(self, key_type, dialect, vector_data_type):
         """Field names in the reply must be the user-facing name, not the
         schema identifier. Only JSON can distinguish the two (its schema is

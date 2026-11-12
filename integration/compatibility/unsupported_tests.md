@@ -98,34 +98,6 @@ Some queries are excluded due to different behavior in escaped character search.
 
 ## 5. FT.HYBRID
 
-### 5.1. Loading a field the index does not have — TODO, marked `xfail`
-
-**Status:** open, and not FT.HYBRID-specific.
-
-Redis lets a `LOAD` clause name a field the index does not have and simply
-returns no column for it. valkey-search rejects the whole command:
-
-```
-127.0.0.1:6379> FT.HYBRID idx SEARCH @title:alpha VSIM @vec $q KNN 2 K 10 LOAD 1 @nosuchfield ...
-(error) Index field `nosuchfield` does not exist
-```
-
-The same input produces the same error from FT.AGGREGATE, so this belongs to
-the aggregate pipeline's LOAD handling rather than to FT.HYBRID. A JSON path
-against a HASH index (`LOAD 1 $.price` on a hash index) names nothing in the
-same way and is rejected the same way. `test_load_unknown_field` sweeps both
-shapes, marked `xfail`.
-
-When the aggregate pipeline accepts an unknown field, these will start
-matching, the run will print `XPASS`, and both the `xfail=True` in
-`generate_hybrid.py::test_load_unknown_field` and this section should be
-removed.
-
-Every other `LOAD` form is compared normally, in `test_load_clause`: field
-subsets, `@__key`, `AS` renames of an existing field, a rename onto another
-field's name, two renames at once, and renames referenced by a following
-`SORTBY`, `APPLY` or `GROUPBY`.
-
 ### 5.2. The suite sweeps HASH keys only — resolved
 
 **Status:** closed. Kept as a heading so the numbering of the sections below
@@ -453,18 +425,16 @@ the renamed field, so the reply carried neither column.
 
 Two further shapes are not swept. `LOAD 6 @__key AS x @__score AS x` claims
 one output name twice; valkey-search rejects that whenever an `AS` is
-involved, which is the deliberate extra strictness the LOAD parser documents
-and the FT.AGGREGATE suite already covers. And an upper-case `@__KEY` or
+involved, which is the extra strictness `COMPATIBILITY.md` documents under
+`compatibility-ft_aggregate_load_as`, and the FT.AGGREGATE suite covers it.
+And an upper-case `@__KEY` or
 `@__SCORE` names nothing on either engine, because both match the reserved
-names case-sensitively -- that reaches 5.1 rather than anything here, and
-`test_load_unknown_field` sweeps it.
+names case-sensitively; `test_load_unknown_field` sweeps it.
 
 Separately, `COMBINE ... YIELD_SCORE_AS hs LOAD 1 @__score` renames the score
-away and leaves `@__score` naming nothing. Redis ignores the unknown entry and
-replies with `hs`; valkey-search rejects the command. That is 5.1 reached
-through the score column. The case is swept in
-`test_load_score_column_that_combine_renamed_away`, `xfail` against the same
-fix as 5.1.
+away and leaves `@__score` naming nothing. Both engines ignore the unknown
+entry and reply with `hs`. The case is swept in
+`test_load_score_column_that_combine_renamed_away`.
 
 ### 5.5c. Malformed COMBINE scalars — not swept
 

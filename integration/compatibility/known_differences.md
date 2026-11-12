@@ -323,6 +323,70 @@ Redis 8 rejects a `$param` inside an APPLY, FILTER or SORTBY expression
 number is a number, any other is a string, as the text would be if written in
 place unquoted.
 
+### 1.18 A stage reading a renamed name that `LOAD *` also loads
+
+When a `LOAD ... AS` rename takes the name of a stored field and a later
+`LOAD *` loads that field, Redis applies the clauses in command order: stages
+after the `LOAD *` see the stored field. valkey-search shows the stored field
+in the reply, but stages still read the renamed value.
+
+```
+HSET d:1 price 10 p1 99
+FT.AGGREGATE idx * LOAD 3 @price AS p1 LOAD * APPLY @p1 AS p2
+
+Redis:          p1 99  p2 99  price 10
+valkey-search:  p1 99  p2 10  price 10
+```
+
+The same holds for `FILTER` and `SORTBY`: they act on the renamed value, which
+the reply does not show. `LOAD 3 @q AS p1 LOAD * FILTER @p1==5` keeps a record
+whose `p1` reads 99, where Redis keeps none.
+
+The rename and the original field share one column, so making stages see the
+stored field would change what `@price` reads too. The command uses one name
+for two fields, so this is best effort under "A note on ambiguous input" in
+`COMPATIBILITY.md`.
+
+### 1.20 A vector field loaded as a column
+
+Redisearch returns a vector field named in a `LOAD` clause as a column of its
+raw bytes. Valkey Search does not support loading a vector field as a column
+and rejects it (`Loading of vector fields is not supported`), whether named
+directly (`LOAD 1 @v`) or next to `LOAD *`. This is a well-formed, unambiguous
+command, so it is an exception to the rule in `COMPATIBILITY.md` that such a
+command must match Redisearch.
+
+```
+FT.CREATE idx ON JSON PREFIX 1 j: SCHEMA $.v AS v VECTOR FLAT 6 TYPE FLOAT32 DIM 2 DISTANCE_METRIC L2
+JSON.SET j:1 $ '{"v":[1,0]}'
+FT.AGGREGATE idx * LOAD * LOAD 1 @v
+
+Redis:          v [1,0], $ {...}
+valkey-search:  error (1.3.0); the `$` document alone (below 1.3.0, as in 1.2.1)
+```
+
+On a HASH index `LOAD *` already returns the vector under its own name, so
+naming it there adds nothing and is accepted.
+
+### 1.19 A rename of a `SORTABLE` field onto a stored name, after `LOAD *`
+
+When a rename written after `LOAD *` takes the name of a stored field, the
+rename wins on both engines, unless the renamed field is declared `SORTABLE`:
+then Redis returns the stored field.
+
+```
+FT.CREATE idx ON HASH SCHEMA price NUMERIC SORTABLE q NUMERIC
+HSET d:1 price 10.50 q 5 p1 99
+FT.AGGREGATE idx * LOAD * LOAD 3 @price AS p1
+
+Redis:          p1 99     price 10.50  q 5
+valkey-search:  p1 10.50  price 10.50  q 5
+```
+
+Redis's rule is measured, not documented. The command uses one name for two
+fields, so this is best effort under "A note on ambiguous input" in
+`COMPATIBILITY.md`.
+
 ## 2. Where the two reference engines disagree
 
 These are not valkey-search defects. They are places where `redis:latest` and

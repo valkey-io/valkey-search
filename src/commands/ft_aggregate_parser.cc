@@ -18,6 +18,7 @@
 #include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
+#include "src/attribute_data_type.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -63,14 +64,152 @@ std::string OutputNameFor(absl::string_view written_name,
       [&]() -> std::string { return std::string(schema_identifier); });
 }
 
+// On JSON, `LOAD *` returns the document under the name `$`.
+bool LoadAllReturnsRoot(const AggregateParameters &parameters) {
+  return parameters.index_schema != nullptr &&
+         parameters.index_schema->GetAttributeDataType().ToProto() ==
+             data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON;
+}
+
+absl::Status RenameOntoRoot() {
+  return absl::InvalidArgumentError(
+      absl::StrCat("LOAD cannot rename onto `", kJsonRootElementQuery,
+                   "`: `LOAD *` also returns it"));
+}
+
+// Reports a LOAD entry whose name could mean two things; RediSearch resolves
+// these by undocumented rules (see COMPATIBILITY.md). Only a rename (1.3.0)
+// can produce them.
+absl::Status CheckAmbiguousName(const AggregateParameters &parameters,
+                                absl::string_view written,
+                                absl::string_view identifier,
+                                absl::string_view alias, bool renamed) {
+  // An alias written as a JSON path names that path's attribute.
+  std::string alias_identifier(alias);
+  if (const auto *index = parameters.parse_vars_.index_interface_;
+      index != nullptr) {
+    if (auto path = index->GetAlias(alias); path.ok()) {
+      alias_identifier = *path;
+    }
+  }
+  for (const auto &earlier : parameters.loads_) {
+    // The same field again is a repeat, not a conflict.
+    if (earlier.identifier == identifier) {
+      continue;
+    }
+    if (earlier.renamed && earlier.alias == written) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("LOAD cannot read `", written,
+                       "`: it is the output name of an earlier LOAD entry"));
+    }
+    // Repeats within one clause were rejected by the caller.
+    if (earlier.alias == alias && (renamed || earlier.renamed)) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Duplicate `AS` alias `", alias, "` across LOAD clauses"));
+    }
+    // A rename onto a name another entry loads (`__key` and the score
+    // included) would mean two columns under one name.
+    if (renamed && alias != identifier &&
+        (earlier.identifier == alias ||
+         earlier.identifier == alias_identifier)) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("LOAD cannot rename onto `", alias, "`: `", alias,
+                       "` is also loaded"));
+    }
+  }
+  if (renamed && alias == kJsonRootElementQuery && parameters.loadall_ &&
+      LoadAllReturnsRoot(parameters)) {
+    return RenameOntoRoot();
+  }
+  if (!renamed || alias == written) {
+    return absl::OkStatus();
+  }
+  // `@w` after `APPLY ... AS w` could mean the APPLY value or a stored `w`,
+  // however the field is spelled.
+  for (absl::string_view name : {written, identifier}) {
+    auto made = parameters.record_indexes_by_alias_.find(name);
+    if (made == parameters.record_indexes_by_alias_.end()) {
+      continue;
+    }
+    for (const auto &stage : parameters.stages_) {
+      const auto *apply = dynamic_cast<const Apply *>(stage.get());
+      if (apply != nullptr && apply->name_->record_index_ == made->second) {
+        return absl::InvalidArgumentError(
+            absl::StrCat("LOAD cannot read `", written,
+                         "`: it is the output name of an earlier stage"));
+      }
+    }
+  }
+  // A stage before this LOAD already made a column of that name. Names an
+  // earlier LOAD entry owns were settled by the loop above.
+  const bool loaded_name =
+      std::any_of(parameters.loads_.begin(), parameters.loads_.end(),
+                  [&](const LoadField &f) { return f.alias == alias; });
+  if (auto taken = parameters.record_indexes_by_alias_.find(alias);
+      !loaded_name && taken != parameters.record_indexes_by_alias_.end() &&
+      taken->second != AggregateParameters::kKeyColumn &&
+      taken->second != AggregateParameters::kScoreColumn) {
+    const auto &column = parameters.record_info_by_index_[taken->second];
+    // A stage column records the schema identifier (a JSON path).
+    std::string source(identifier);
+    if (const auto *index = parameters.parse_vars_.index_interface_;
+        index != nullptr) {
+      if (auto schema_id = index->GetIdentifier(identifier); schema_id.ok()) {
+        source = *schema_id;
+      }
+    }
+    if (column.output_name_ == alias && column.identifier_ != source) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("LOAD cannot rename onto `", alias,
+                       "`: an earlier stage already uses that name"));
+    }
+  }
+  // A distance the query emits: the KNN alias or a VECTOR_RANGE distance.
+  // FT.HYBRID's fused score keeps its own documented rules.
+  absl::string_view knn_name;
+  if (parameters.IsVectorQuery() && !parameters.hybrid_) {
+    knn_name = vmsdk::ToStringView(parameters.score_as.get());
+  }
+  for (absl::string_view name : {written, alias}) {
+    if (name == knn_name || (!parameters.vr_score_field_name_.empty() &&
+                             name == parameters.vr_score_field_name_)) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "LOAD cannot rename to or from the score name `", name, "`"));
+    }
+  }
+  return absl::OkStatus();
+}
+
 std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
   return std::make_unique<vmsdk::ParamParser<AggregateParameters>>(
       [](AggregateParameters &parameters,
          vmsdk::ArgsIterator &itr) -> absl::Status {
         VMSDK_ASSIGN_OR_RETURN(auto count_string, itr.Get());
         itr.Next();
+        const bool after_groupby = std::any_of(
+            parameters.stages_.begin(), parameters.stages_.end(),
+            [](const auto &stage) {
+              return dynamic_cast<const GroupBy *>(stage.get()) != nullptr;
+            });
         if (vmsdk::ToStringView(count_string) == "*") {
           parameters.loadall_ = true;
+          parameters.loadall_after_groupby_ |= after_groupby;
+          parameters.loads_before_loadall_ = parameters.loads_.size();
+          if (parameters.ambiguous_load_name_.ok() &&
+              LoadAllReturnsRoot(parameters) &&
+              std::any_of(parameters.loads_.begin(), parameters.loads_.end(),
+                          [](const LoadField &f) {
+                            return f.renamed && !f.after_groupby &&
+                                   f.alias == kJsonRootElementQuery;
+                          })) {
+            parameters.ambiguous_load_name_ = RenameOntoRoot();
+          }
+          if (!parameters.ambiguous_load_name_.ok() &&
+              std::any_of(
+                  parameters.loads_.begin(), parameters.loads_.end(),
+                  [](const LoadField &f) { return f.newly_loadable; })) {
+            return parameters.ambiguous_load_name_;
+          }
           return absl::OkStatus();
         }
         uint32_t cnt{0};
@@ -79,16 +218,14 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
         // followed by `AS <alias>`; the `AS` keyword and its alias count
         // against the budget (matching RediSearch).
         uint32_t consumed = 0;
-        // Output names claimed so far by this clause, mapped to whether the
-        // claim came from an `AS` rename. A name claimed twice is rejected when
-        // a rename is involved (see below); two plain loads of the same field
-        // keep their long-standing de-duplicating behavior.
-        absl::flat_hash_map<std::string, bool> claimed_names;
         // Columns this LOAD clause has already assigned an output name to. A
         // later entry naming the same field cannot reuse one of these -- it
         // would overwrite the earlier entry's output name -- so it gets a
         // column of its own reading the same field.
         absl::flat_hash_set<size_t> claimed_columns;
+        // An output name claimed twice in one clause is an error when a rename
+        // is involved.
+        absl::flat_hash_map<std::string, bool> claimed_names;
         while (consumed < cnt) {
           std::string load;
           VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, load));
@@ -98,6 +235,7 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
                 "Empty argument in LOAD clause not allowed");
           }
           std::string identifier = load[0] == '@' ? load.substr(1) : load;
+          const std::string written = identifier;
           // `identifier` is what gets fetched; `alias` is the name the column
           // is emitted under, and defaults to the field token exactly as
           // written. Resolving a JSON path below rewrites the former and must
@@ -112,9 +250,11 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
           // unresolved and the load fails outright ("Index field `$.price`
           // does not exist"), so the old behavior is unusable and there is no
           // user base for SemVer to protect.
-          if (!index.GetFieldType(identifier).ok()) {
+          bool in_schema = index.GetFieldType(identifier).ok();
+          if (!in_schema) {
             if (auto resolved = index.GetAlias(identifier); resolved.ok()) {
               identifier = *std::move(resolved);
+              in_schema = true;
             }
           }
 
@@ -153,17 +293,44 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
                     },
                     []() -> absl::StatusOr<bool> { return false; }));
           }
-          // Intentionally stricter than RediSearch (which keeps the first claim
-          // of a name and silently drops the rest): reject a LOAD clause that
-          // names the same output twice when an `AS` rename is involved. Left
-          // to itself such a collision aliases two entries onto one record
-          // column, so the emitted value would depend on fetch order.
           if (auto [it, inserted] = claimed_names.emplace(alias, renamed);
               !inserted && (renamed || it->second)) {
             return absl::InvalidArgumentError(absl::StrCat(
                 "Duplicate `AS` alias `", alias, "` in LOAD clause"));
           }
-          if (renamed) {
+          // FT.HYBRID ignores a late LOAD, so it loads nothing new.
+          const bool newly_loadable =
+              !in_schema && identifier != "__key" &&
+              !(after_groupby && parameters.hybrid_) &&
+              (parameters.score_as == nullptr ||
+               identifier != vmsdk::ToStringView(parameters.score_as.get()));
+          if (!after_groupby && parameters.ambiguous_load_name_.ok()) {
+            parameters.ambiguous_load_name_ = CheckAmbiguousName(
+                parameters, written, identifier, alias, renamed);
+          }
+          // Returned as soon as both are known, so later entries and stages
+          // do not count a command that is rejected.
+          if (!parameters.ambiguous_load_name_.ok() &&
+              (newly_loadable ||
+               std::any_of(
+                   parameters.loads_.begin(), parameters.loads_.end(),
+                   [](const LoadField &f) { return f.newly_loadable; }))) {
+            return parameters.ambiguous_load_name_;
+          }
+          // Later stages resolve names while parsing, so make the column now.
+          // A renamed field outside the schema is known to them only by its
+          // alias, as in RediSearch.
+          const bool alias_only = newly_loadable && renamed && !after_groupby;
+          if (alias_only) {
+            claimed_columns.insert(
+                parameters.AddRenamedRecordAttribute(identifier, alias));
+          } else if (!in_schema && !after_groupby) {
+            VMSDK_RETURN_IF_ERROR(
+                parameters.MakeReference(identifier, true).status());
+          }
+          // FT.HYBRID ignores a late LOAD, its rename included.
+          if (renamed && !alias_only &&
+              !(after_groupby && parameters.hybrid_)) {
             // LOAD precedes APPLY/SORTBY/FILTER in the command, so register
             // the rename now to make `@alias` resolvable in those later
             // stages. Entries that can't be resolved against the index here
@@ -173,10 +340,21 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
             if (ref.ok()) {
               if (auto *attr = dynamic_cast<Attribute *>(ref->get())) {
                 size_t index = attr->record_index_;
-                if (claimed_columns.contains(index)) {
+                auto &columns = parameters.record_info_by_index_;
+                // A repeated field under the same name shows once, as in
+                // RediSearch. A command with an ambiguous LOAD name (see
+                // COMPATIBILITY.md) keeps main's reply, a column per repeat.
+                auto same = parameters.record_indexes_by_alias_.find(alias);
+                if (parameters.ambiguous_load_name_.ok() &&
+                    same != parameters.record_indexes_by_alias_.end() &&
+                    columns[same->second].output_name_ == alias &&
+                    columns[same->second].identifier_ ==
+                        columns[index].identifier_) {
+                  index = same->second;
+                } else if (claimed_columns.contains(index)) {
                   index = parameters.AddRecordAttributeAlias(index, alias);
                 } else {
-                  parameters.record_info_by_index_[index].output_name_ = alias;
+                  columns[index].output_name_ = alias;
                   parameters.record_indexes_by_alias_[alias] = index;
                 }
                 claimed_columns.insert(index);
@@ -186,7 +364,9 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
           parameters.loads_.emplace_back(
               LoadField{.identifier = std::move(identifier),
                         .alias = std::move(alias),
-                        .renamed = renamed});
+                        .renamed = renamed,
+                        .after_groupby = after_groupby,
+                        .newly_loadable = newly_loadable});
         }
         return absl::OkStatus();
       });

@@ -339,11 +339,9 @@ absl::StatusOr<RecordsMap> GetContent(
       *out_verification = std::move(verification);
     }
   }
-  // Every other fetch is projected below, filter or not. `content` cannot be
-  // handed back as it is: a JSON fetch keys it by views of the identifiers it
-  // was asked for, and `sortby_identifier` dies with this function. The
-  // projection also re-keys the sortby field under its alias, where sorting
-  // looks for it.
+  // Every other fetch is projected below, filter or not, so that only the
+  // requested fields are returned and the sortby field is keyed under its
+  // alias, where sorting looks for it.
   if (fetch_whole_hash) {
     // The whole hash was fetched, and the whole hash is what was asked for.
     return content;
@@ -376,11 +374,13 @@ absl::StatusOr<RecordsMap> GetContent(
     if (itr == content.end()) {
       continue;
     }
+    auto id_str =
+        vmsdk::RetainUniqueValkeyString(return_attribute.identifier.get());
+    auto id_view = vmsdk::ToStringView(id_str.get());
     return_content.emplace(
-        vmsdk::ToStringView(return_attribute.identifier.get()),
-        RecordsMapValue(
-            return_attribute.identifier.get(),
-            vmsdk::RetainUniqueValkeyString(itr->second.value.get())));
+        id_view, RecordsMapValue(
+                     std::move(id_str),
+                     vmsdk::RetainUniqueValkeyString(itr->second.value.get())));
   }
 
   // Add sortby field to return_content for sorting, even when return_attributes

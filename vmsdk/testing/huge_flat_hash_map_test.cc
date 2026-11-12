@@ -57,6 +57,11 @@ namespace {
 
 using Peer = HugeFlatHashMapTestPeer;
 
+// The smallest absl capacity that spans more than one probing group (16 slots
+// with SSE2, 8 on ARM). The tests below size their tables so that each event
+// they check happens at least twice on tables at least this large.
+constexpr size_t kMultiGroup = 31;
+
 // Counts backing-array allocations, so an absl-initiated grow is visible.
 size_t g_allocations = 0;
 
@@ -259,8 +264,19 @@ class NoRehashChecker {
     Reset();
   }
 
+  // Backgrounds of more than one probing group that this checker saw
+  // non-empty and later saw drained.
+  size_t Drains() const { return drains_; }
+
   void Check() {
     auto &fg = Peer::Fg(m_);
+    auto &bg = Peer::Bg(m_);
+    if (bg.empty()) {
+      drains_ += draining_;
+      draining_ = false;
+    } else if (bg.capacity() >= kMultiGroup) {
+      draining_ = true;
+    }
     size_t cycles = Peer::Cycles(m_);
     if (cycles != cycles_) {
       ASSERT_EQ(cycles, cycles_ + 1);
@@ -297,6 +313,8 @@ class NoRehashChecker {
 
   M &m_;
   size_t samples_;
+  size_t drains_ = 0;
+  bool draining_ = false;
   size_t cycles_;
   size_t allocations_;
   size_t capacity_;
@@ -318,7 +336,8 @@ class FlatHashMapNoRehashTest : public FlatHashMapTest,
 TEST_P(FlatHashMapNoRehashTest, GrowWithFullAddressCheck) {
   CountedMap m;
   NoRehashChecker checker(m, SIZE_MAX);
-  for (int64_t i = 0; i < 5000; ++i) {
+  for (int64_t i = 0; checker.Drains() < 2; ++i) {
+    ASSERT_LT(i, 100000);
     m[i] = i;
     ASSERT_NO_FATAL_FAILURE(checker.Check()) << i;
     m.find(i / 2);
@@ -326,33 +345,43 @@ TEST_P(FlatHashMapNoRehashTest, GrowWithFullAddressCheck) {
   }
 }
 
+// The capacity a table must grow to so that two shrinks, each to about a
+// quarter, still leave a multi-group background of more than one batch.
+constexpr size_t kTwoShrinks = 1023;
+
 TEST_P(FlatHashMapNoRehashTest, GrowAndShrink) {
   CountedMap m;
   NoRehashChecker checker(m, 64);
   long long rehashes = internal::GetHugeMapRehashCount();
 
-  constexpr int64_t kPeak = 200000;
-  for (int64_t i = 0; i < kPeak; ++i) {
-    m[i] = i;
-    ASSERT_NO_FATAL_FAILURE(checker.Check()) << i;
+  int64_t peak = 0;
+  for (; Peer::Fg(m).capacity() < kTwoShrinks || !Peer::Bg(m).empty(); ++peak) {
+    m[peak] = peak;
+    ASSERT_NO_FATAL_FAILURE(checker.Check()) << peak;
   }
+  EXPECT_GE(checker.Drains(), 2);
   size_t grow_cycles = Peer::Cycles(m);
-  EXPECT_GT(grow_cycles, 0);
   EXPECT_EQ(internal::GetHugeMapRehashCount() - rehashes, grow_cycles);
   size_t peak_capacity = Peer::Fg(m).capacity();
 
-  for (int64_t i = 0; i < kPeak - 1000; ++i) {
-    EXPECT_EQ(m.erase(i), 1);
-    ASSERT_NO_FATAL_FAILURE(checker.Check()) << i;
+  size_t drains = checker.Drains();
+  int64_t erased = 0;
+  while (Peer::Cycles(m) < grow_cycles + 2 || !Peer::Bg(m).empty()) {
+    ASSERT_LT(erased, peak);
+    EXPECT_EQ(m.erase(erased++), 1);
+    ASSERT_NO_FATAL_FAILURE(checker.Check()) << erased;
   }
-  size_t shrink_cycles = Peer::Cycles(m) - grow_cycles;
-  EXPECT_GT(shrink_cycles, 0);
-  EXPECT_LT(Peer::Fg(m).capacity(), peak_capacity / 16);
+  EXPECT_GE(checker.Drains() - drains, 2);
+  EXPECT_LE(Peer::Fg(m).capacity(), peak_capacity / 16);
 
   // Churn: insert/erase near a steady size accumulates tombstones.
   std::mt19937_64 rng(1);
-  for (int64_t i = 0; i < 100000; ++i) {
-    int64_t key = static_cast<int64_t>(rng() % 4000);
+  const int64_t range = 2 * static_cast<int64_t>(m.size());
+  const size_t churn_cycles = Peer::Cycles(m);
+  for (int64_t i = 0;
+       Peer::Cycles(m) < churn_cycles + 2 || !Peer::Bg(m).empty(); ++i) {
+    ASSERT_LT(i, 100000);
+    int64_t key = static_cast<int64_t>(rng() % range);
     if (rng() % 2) {
       m[key] = key;
     } else {
@@ -365,12 +394,20 @@ TEST_P(FlatHashMapNoRehashTest, GrowAndShrink) {
 
 // A sliding window of keys at steady size: every erase is followed by an
 // insert of a new key, which leaves tombstones absl would eventually clean up
-// with a rehash: in place at 3000, by growing at 3500.
+// with a rehash of the 127-slot table the window fills: in place at 93 (absl
+// rehashes in place up to 25/32 full), by growing at 108.
 TEST_P(FlatHashMapNoRehashTest, TombstoneChurn) {
-  for (int64_t window : {3000, 3500}) {
+  for (int64_t window : {93, 108}) {
     CountedMap m;
     NoRehashChecker checker(m, 64);
-    for (int64_t i = 0; i < 300000; ++i) {
+    size_t steady_cycles = 0;
+    for (int64_t i = 0; i <= window || Peer::Cycles(m) < steady_cycles + 2 ||
+                        !Peer::Bg(m).empty();
+         ++i) {
+      ASSERT_LT(i, 100000);
+      if (i == window) {
+        steady_cycles = Peer::Cycles(m);
+      }
       m[i] = i;
       ASSERT_NO_FATAL_FAILURE(checker.Check()) << window << " " << i;
       if (i >= window) {
@@ -390,7 +427,9 @@ TEST_P(FlatHashMapNoRehashTest, ShrinksWhenGrowthDrainsNearlyEmpty) {
     SCOPED_TRACE(by_inserts ? "drained by inserts" : "drained by MigrateSome");
     CountedMap m;
     int64_t next = 0;
-    for (; next < 50000; ++next) {
+    // Large enough that the next growth cycle's background keeps several of
+    // the 1 in 64 entries the erases below leave.
+    for (; next < 256; ++next) {
       m[next] = next;
     }
     NoRehashChecker checker(m, 64);
@@ -444,7 +483,9 @@ TEST_P(FlatHashMapNoRehashTest, ShrinksWhenGrowthDrainsNearlyEmpty) {
 // absl would have to rehash, and then grow the table again.
 TEST_P(FlatHashMapNoRehashTest, IngestDuringShrink) {
   CountedMap m;
-  constexpr int64_t kPeak = 50000;
+  // The shrink's background spans several groups and batches, and the ingest
+  // below grows the shrunken table twice.
+  constexpr int64_t kPeak = 256;
   for (int64_t i = 0; i < kPeak; ++i) {
     m[i] = i;
   }
@@ -468,7 +509,8 @@ TEST_P(FlatHashMapNoRehashTest, IngestDuringShrink) {
     m[i] = i;
     ASSERT_NO_FATAL_FAILURE(checker.Check()) << i;
   }
-  EXPECT_GT(Peer::Cycles(m), cycles + 1);
+  EXPECT_GE(Peer::Cycles(m), cycles + 3);  // The shrink, then two growths.
+  EXPECT_GE(checker.Drains(), 2);
   EXPECT_GT(Peer::Fg(m).capacity(), shrunk_capacity);
   EXPECT_EQ(m.size(), static_cast<size_t>(2 * kPeak - erased));
   for (int64_t i = 0; i < 2 * kPeak; ++i) {
@@ -482,7 +524,7 @@ TEST_P(FlatHashMapNoRehashTest, IngestDuringShrink) {
 TEST_P(FlatHashMapNoRehashTest, EraseAndMigrateDrainsAndShrinks) {
   CountedMap m;
   int64_t next = 0;
-  for (; next < 50000; ++next) {
+  for (; next < 256; ++next) {
     m[next] = next;
   }
   NoRehashChecker checker(m, 64);
@@ -521,37 +563,56 @@ TEST_P(FlatHashMapNoRehashTest, EraseAndMigrateDrainsAndShrinks) {
   }
 }
 
+// Moves the map during two multi-group drains, then checks the drain it was
+// moved in and the next one.
 TEST_P(FlatHashMapNoRehashTest, MoveMidCycle) {
   CountedMap a;
-  for (int64_t i = 0; i < 100000; ++i) {
+  int64_t i = 0;
+  size_t moved_cycles = 0;
+  size_t last_moved_cycle = 0;
+  for (; moved_cycles < 2; ++i) {
+    ASSERT_LT(i, 100000);
     a[i] = i;
     if (!Peer::Bg(a).empty() && Peer::Bg(a).size() % 2 == 0) {
+      if (Peer::Bg(a).capacity() >= kMultiGroup &&
+          Peer::Cycles(a) != last_moved_cycle) {
+        ++moved_cycles;
+        last_moved_cycle = Peer::Cycles(a);
+      }
       CountedMap b(std::move(a));
       a = std::move(b);
     }
   }
+  ASSERT_FALSE(Peer::Bg(a).empty());
   NoRehashChecker checker(a, 64);
-  for (int64_t i = 100000; i < 200000; ++i) {
+  while (checker.Drains() < 2) {
+    ASSERT_LT(i, 200000);
     a[i] = i;
+    ++i;
     ASSERT_NO_FATAL_FAILURE(checker.Check()) << i;
   }
-  EXPECT_EQ(a.size(), 200000);
+  EXPECT_EQ(a.size(), i);
 }
 
 TEST_P(FlatHashMapNoRehashTest, SetGrowAndShrink) {
   CountedSet s;
   NoRehashChecker checker(s, 64);
-  constexpr int64_t kPeak = 100000;
-  for (int64_t i = 0; i < kPeak; ++i) {
-    s.insert(i);
-    ASSERT_NO_FATAL_FAILURE(checker.Check()) << i;
+  int64_t peak = 0;
+  for (; Peer::Fg(s).capacity() < kTwoShrinks || !Peer::Bg(s).empty(); ++peak) {
+    s.insert(peak);
+    ASSERT_NO_FATAL_FAILURE(checker.Check()) << peak;
   }
-  for (int64_t i = 0; i < kPeak - 100; ++i) {
-    EXPECT_EQ(s.erase(i), 1);
-    ASSERT_NO_FATAL_FAILURE(checker.Check()) << i;
+  EXPECT_GE(checker.Drains(), 2);
+  const size_t grow_cycles = Peer::Cycles(s);
+  const size_t drains = checker.Drains();
+  int64_t erased = 0;
+  while (Peer::Cycles(s) < grow_cycles + 2 || !Peer::Bg(s).empty()) {
+    ASSERT_LT(erased, peak);
+    EXPECT_EQ(s.erase(erased++), 1);
+    ASSERT_NO_FATAL_FAILURE(checker.Check()) << erased;
   }
-  EXPECT_EQ(s.size(), 100);
-  EXPECT_GT(Peer::Cycles(s), 0);
+  EXPECT_GE(checker.Drains() - drains, 2);
+  EXPECT_EQ(s.size(), static_cast<size_t>(peak - erased));
 }
 
 INSTANTIATE_TEST_SUITE_P(MigrateBatch, FlatHashMapNoRehashTest,
@@ -563,7 +624,9 @@ std::pair<std::vector<size_t>, std::vector<size_t>> LockstepCycleStarts() {
   Map a;
   Map b;
   std::vector<size_t> starts[2];
-  for (int64_t i = 0; i < (1 << 17); ++i) {
+  // Through the cycles of the 31- and 63-slot tables, the smallest whose
+  // budget is large enough for the two maps' start offsets to differ.
+  for (int64_t i = 0; i < 64; ++i) {
     int which = 0;
     for (Map *m : {&a, &b}) {
       size_t cycles = Peer::Cycles(*m);
@@ -691,11 +754,11 @@ int HashesOf(int64_t key, F op) {
   return g_hashes[key];
 }
 
-// Fills past absl's small tables, then until a cycle leaves a background.
+// Fills until a cycle leaves a background of more than one probing group.
 template <typename M>
 int64_t FillPastSmallUntilBackground(M &m) {
   int64_t next = 0;
-  for (; next < 1000 || Peer::Bg(m).empty(); ++next) {
+  for (; Peer::Bg(m).empty() || Peer::Bg(m).capacity() < kMultiGroup; ++next) {
     if constexpr (requires { m[next]; }) {
       m[next] = next;
     } else {
@@ -775,7 +838,8 @@ TEST_F(FlatHashMapTest, HashesInputOncePerOperation) {
 // insert, and the ones during a drain.
 TEST_F(FlatHashMapTest, EveryInsertHashesOnce) {
   HashCountedMap m;
-  for (int64_t k = 0; k < 20000; ++k) {
+  // Through the cycles, and drains, of the 31- and 63-slot tables.
+  for (int64_t k = 0; k < 64; ++k) {
     ASSERT_EQ(HashesOf(k, [&] { m[k] = k; }), 1) << k;
   }
   EXPECT_GT(Peer::Cycles(m), 5);
@@ -790,7 +854,7 @@ TEST_F(FlatHashMapTest, MigrationHashesEachEntryOnce) {
   SetBatch(8);
   HashCountedMap m;
   int64_t next = 0;
-  for (; next < 1000; ++next) {
+  for (; next < 32; ++next) {
     m[next] = next;
   }
   // The insert that starts a cycle: its own key, plus the first batch.
@@ -996,7 +1060,9 @@ TEST_F(FlatHashMapTest, CapacityHelpersMatchAbsl) {
 TEST_F(FlatHashMapTest, LargeMapUsesHugePages) {
   {
     Map m;
-    for (int64_t i = 0; i < 300000; ++i) {
+    // Past the drain of the first table of at least 2MB (131071 slots) into
+    // the second, so huge-page regions are allocated twice and freed once.
+    for (int64_t i = 0; i < (1 << 17); ++i) {
       m[i] = i;
     }
     EXPECT_GT(external(), 0);
@@ -1084,7 +1150,7 @@ TEST_F(FlatHashMapTest, EraseWhileIterating) {
         n = FillPastSmallUntilBackground(m);
         ASSERT_FALSE(Peer::Bg(m).empty());
       } else {
-        for (; n < 5000; ++n) {
+        for (; n < 64; ++n) {
           m[n] = n;
         }
         m.MigrateSome(SIZE_MAX);
@@ -1128,7 +1194,8 @@ TEST_F(FlatHashMapTest, EraseWhileIterating) {
 
 TEST_F(FlatHashMapTest, EraseIteratorDefersShrinkToMigrateSome) {
   Map m;
-  for (int64_t i = 0; i < 50000; ++i) {
+  // A 1023-slot table: a sixteenth of it still exceeds the shrink's.
+  for (int64_t i = 0; i < 512; ++i) {
     m[i] = i;
   }
   m.MigrateSome(SIZE_MAX);
@@ -1152,7 +1219,8 @@ TEST_F(FlatHashMapTest, EraseIteratorDefersShrinkToMigrateSome) {
 // table stops reporting NeedsMigration() without any MigrateSome() call.
 TEST_F(FlatHashMapTest, EraseIteratorDefersShrinkToInsert) {
   Map m;
-  for (int64_t i = 0; i < 50000; ++i) {
+  // A 1023-slot table: a sixteenth of it still exceeds the shrink's.
+  for (int64_t i = 0; i < 512; ++i) {
     m[i] = i;
   }
   m.MigrateSome(SIZE_MAX);
@@ -1182,7 +1250,7 @@ TEST_F(FlatHashMapTest, ExtractMovesTheElementOutAndMigrates) {
   SetBatch(8);
   Set s;
   int64_t next = 0;
-  for (; next < 1000; ++next) {
+  for (; next < 32; ++next) {
     s.insert(next);
   }
   const size_t cycles = Peer::Cycles(s);
@@ -1190,7 +1258,8 @@ TEST_F(FlatHashMapTest, ExtractMovesTheElementOutAndMigrates) {
     ASSERT_LT(next, 1000000);
     s.insert(next++);
   }
-  ASSERT_GT(Peer::Bg(s).size(), 100);
+  // Room for the three extracts below, each with its batch of 8.
+  ASSERT_GT(Peer::Bg(s).size(), 3 * (1 + 8));
 
   // From bg_: the migration cursor's element, then another.
   for (int i = 0; i < 2; ++i) {
@@ -1236,7 +1305,7 @@ TEST_F(FlatHashMapTest, InsertIntoFullForegroundChecks) {
   EXPECT_DEATH(m.MigrateSome(1), "insert would make absl rehash");
 
   Map full;
-  for (int64_t i = 0; i < 1000; ++i) {
+  for (int64_t i = 0; i < 64; ++i) {
     full[i] = i;
   }
   full.MigrateSome(SIZE_MAX);
@@ -1249,8 +1318,9 @@ TEST_F(FlatHashMapTest, InsertIntoFullForegroundChecks) {
 }
 
 // Not a correctness test: reports what an advisory MigrateSome() costs per
-// entry on a table well past the CPU caches.
-TEST_F(FlatHashMapTest, MigrateSomeCost) {
+// entry on a table well past the CPU caches. Disabled, so not run by ctest;
+// run it with --gtest_also_run_disabled_tests.
+TEST_F(FlatHashMapTest, DISABLED_MigrateSomeCost) {
   SetBatch(1);
   Map m;
   int64_t next = 0;

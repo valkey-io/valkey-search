@@ -250,6 +250,9 @@ TEST_P(FTCreateParserTest, ParseParams) {
         auto tag_proto = index_schema_proto->attributes(i).index().tag_index();
         EXPECT_EQ(tag_proto.separator(),
                   test_case.tag_parameters[tag_index].separator);
+        EXPECT_TRUE(tag_proto.has_explicit_separator());
+        EXPECT_EQ(tag_proto.explicit_separator(),
+                  test_case.tag_parameters[tag_index].explicit_separator);
         EXPECT_EQ(tag_proto.case_sensitive(),
                   test_case.tag_parameters[tag_index].case_sensitive);
         ++tag_index;
@@ -409,6 +412,7 @@ INSTANTIATE_TEST_SUITE_P(
              }},
              .tag_parameters = {{
                  .separator = "|",
+                 .explicit_separator = true,
                  .case_sensitive = true,
              }},
              .expected =
@@ -454,10 +458,12 @@ INSTANTIATE_TEST_SUITE_P(
              }},
              .tag_parameters = {{
                                     .separator = "|",
+                                    .explicit_separator = true,
                                     .case_sensitive = true,
                                 },
                                 {
                                     .separator = "$",
+                                    .explicit_separator = true,
                                     .case_sensitive = false,
                                 },
                                 {
@@ -548,6 +554,7 @@ INSTANTIATE_TEST_SUITE_P(
              }},
              .tag_parameters = {{
                  .separator = "@",
+                 .explicit_separator = true,
                  .case_sensitive = false,
              }},
              .expected =

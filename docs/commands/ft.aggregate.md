@@ -60,35 +60,27 @@ FT.AGGREGATE <index-name> <query>
 - `LIMIT <offset> <count>` (optional): The working set is trimmed, see [LIMIT Stage](#limit-stage) for details.
 - `SORTBY <count> <expression> [ASC | DESC] [<expression> [ASC | DESC] ...] [MAX <num>]` (optional): The working set is sorted. See [SORTBY Stage](#sortby-stage) for more details.
 
-# Result
+## Processing Stages
 
-The output is an array. The first element of this array is a scalar number with no particular meaning and should be ignored. The remainder of the array is one element for each record output by the final processing stage.
-
-Each record is represented by an array which contains the field/value pairs of each record.
-
-If `WITHCURSOR` is specified the output is a two element array. The first element is an array whose first element is the number of records returned, followed by one element for each returned record. The second element is the cursor id to pass to [`FT.CURSOR READ`](ft.cursor.md), or 0 if all records were returned, in which case no cursor is created.
-
-# Processing Stages
-
-## APPLY Stage
+### APPLY Stage
 
 The `APPLY` stage processes each record of the working set in sequence. For each record the expression is computed with output being set into the record with the provided field name. It is allowed to overwrite an existing field. The apply stage does not change the number of records in the working set.
 
-## FILTER Stage
+### FILTER Stage
 
 The `FILTER` stage processes each record of the working set in sequence. For each record the expression is computed. If the expression evaluates to zero then the record is discarded else the record remains.
 
-## LIMIT Stage
+### LIMIT Stage
 
 The `LIMIT` stage discards records from the working set based on the provided offset and count.
 
-## SORTBY Stage
+### SORTBY Stage
 
 The `SORTBY` stage reorders the records in accordance with a sort key. A sort key can be constructed using a number of expressions optionally combined with a direction.
 
 If the MAX clause is present, then the output is trimmed after the first N records. It is more efficient to use the MAX clause than to follow the `SORTBY` stage with a limit stage.
 
-## GROUPBY Stage
+### GROUPBY Stage
 
 The `GROUPBY` stage organizes the input records into buckets based on the values of the specified fields.
 For each unique combination of values a separate bucket is created to hold all records that have that combination of values.
@@ -99,7 +91,7 @@ The second section is the output of the reducers for that bucket. Reducers provi
 
 The output of the `GROUPBY`stage is one record for each unique bucket.
 
-### Reducers
+#### Reducers
 
 The following reducer functions are available. The reducer functions that take an input expression will convert that expression into a number.
 
@@ -116,3 +108,27 @@ The following reducer functions are available. The reducer functions that take a
 | FIRST_VALUE 3 <expression> BY <expression> | The value of the first expression from the record with the smallest comparison expression (ascending). Ties broken by first-encountered order. |
 | FIRST_VALUE 4 <expression> BY <expression> ASC\|DESC | The value of the first expression from the record with the minimum (ASC) or maximum (DESC) comparison expression. Ties broken by first-encountered order. Invalid keyword arguments (e.g., wrong BY token or unrecognized direction) produce a parse-time error. |
 | RANDOM_SAMPLE 2 <expression> <sample_size> | A random sample of values from the expression using reservoir sampling. Returns an array of up to sample_size elements (maximum 1000). Nil values are excluded. Output is non-deterministic. |
+
+## Reply
+
+There are two reply formats depending on whether the `WITHCURSOR` option was specified.
+
+If `WITHCURSOR` was not specified, then the output is an array of N+1 elements, where N is the number of records output by the final processing stage:
+
+| Element | Type    | Contents                                 |
+| :------ | :------ | :--------------------------------------- |
+| `[0]`   | Integer | N, the number of records that follow.    |
+| `[1]`   | Array   | The first record: its field/value pairs. |
+| ...     |         |                                          |
+| `[N]`   | Array   | The last record: its field/value pairs.  |
+
+If `WITHCURSOR` was specified, then the output is an array of two elements:
+
+| Element  | Type    | Contents                                                                                                                                              |
+| :------- | :------ | :---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `[0]`    | Array   | The records returned by this reply, in N+1 elements:                                                                                                  |
+| `[0][0]` | Integer | N, the number of records returned.                                                                                                                    |
+| `[0][1]` | Array   | The first record: its field/value pairs.                                                                                                              |
+| ...      |         |                                                                                                                                                       |
+| `[0][N]` | Array   | The last record: its field/value pairs.                                                                                                               |
+| `[1]`    | Integer | The cursor id to pass to [`FT.CURSOR READ`](ft.cursor.md), or 0 if this reply contains all the remaining records, in which case no cursor is created. |

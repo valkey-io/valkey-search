@@ -131,7 +131,8 @@ struct AggregateParameters : public expr::Expression::CompileContext,
     auto it = parse_vars.params.find(s);
     if (it != parse_vars.params.end()) {
       it->second.first++;
-      return expr::Value(it->second.second);
+      // Owned copy: the map views argv, and a WITHCURSOR reply outlives argv.
+      return expr::Value(std::string(it->second.second));
     } else {
       return absl::NotFoundError(absl::StrCat("parameter ", s, " not found."));
     }
@@ -141,9 +142,12 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   // LIMIT offset & count.
   bool RequiresCompleteResults() const override;
 
-  // SORTBY does not lead to content fetching in the no content case unlike
-  // FT.SEARCH.
-  bool NoProcessingRequired() const override { return no_content; }
+  // VECTOR_RANGE must still fetch its filter field to revalidate membership
+  // and yielded distance across concurrent mutations, even when the pipeline
+  // otherwise uses only synthetic fields.
+  bool NoProcessingRequired() const override {
+    return no_content && !has_vector_range;
+  }
 
   //
   // Number of records required as output of the query phase.

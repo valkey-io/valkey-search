@@ -10,6 +10,7 @@
 #include <iostream>
 #include <limits>
 #include <map>
+#include <string>
 #include <vector>
 
 #include "gmock/gmock.h"
@@ -546,6 +547,19 @@ TEST_F(AggregateTest, AddScoresFlagParses) {
       ValkeyModule_FreeString(nullptr, arg);
     }
   }
+}
+
+// GetParam must return a value that owns its bytes: the params map views the
+// command's argv, which is freed before a WITHCURSOR reply is sent.
+TEST_F(AggregateTest, GetParamReturnsOwnedCopy) {
+  AggregateParameters params(0);
+  std::string argv_value = "param-value";
+  params.parse_vars.params["p"] = {0, argv_value};
+  auto value = params.GetParam("p");
+  VMSDK_EXPECT_OK(value);
+  // Simulate argv being freed and its memory reused.
+  argv_value.replace(0, argv_value.size(), argv_value.size(), 'X');
+  EXPECT_EQ(value->AsString(), "param-value");
 }
 
 TEST_F(AggregateTest, GetSerializationRange_NoStages) {

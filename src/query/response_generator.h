@@ -46,26 +46,25 @@ struct FilterVerification {
   // fast (no-mutation) path and wherever Neighbor.score is a KNN distance,
   // which must never be overwritten with a relevance score.
   std::optional<float> recomputed_score;
+  // Set when a mutated survivor's current VECTOR_RANGE distance was checked.
+  // A missing value means it now matches only through another branch.
+  bool vector_range_distance_recomputed{false};
+  std::optional<float> recomputed_vector_range_distance;
 };
 
 // Re-checks `n` against the predicate in `parameters` using `records`, the
 // content just fetched for it, and recomputes its score when the document
 // changed since the search scored it. A document that has not been mutated
-// since then returns a match with no recomputed score, which is the common
+// since then returns a match with no recomputed values, which is the common
 // case and costs one integer compare.
 //
 // `query_ctx` is built here on the first mutated document and reused for the
 // rest of the reply. Runs on the main thread and never takes the time-sliced
 // mutex.
-//
-// `recompute_score_override` decides whether a changed document is rescored.
-// Left unset it follows the query's own shape, rescoring unless the score is a
-// KNN distance. FT.HYBRID sets it per arm, because an arm's score is a raw
-// distance only when that arm is a pure vector search.
 FilterVerification VerifyFilter(
     const query::SearchParameters &parameters, const RecordsMap &records,
-    const indexes::Neighbor &n, std::unique_ptr<query::QueryContext> &query_ctx,
-    std::optional<bool> recompute_score_override = std::nullopt);
+    const indexes::Neighbor &n,
+    std::unique_ptr<query::QueryContext> &query_ctx);
 
 // Adds all local content for neighbors to the list of neighbors.
 // Skipping neighbors if one of the following:

@@ -118,6 +118,43 @@ DEV_INTEGER_COUNTER(query_stats, query_text_proximity_count);
 DEV_INTEGER_COUNTER(query_stats, query_numeric_count);
 DEV_INTEGER_COUNTER(query_stats, query_tag_count);
 DEV_INTEGER_COUNTER(query_stats, nonvector_results_fetched_limited_count);
+// Queries containing VECTOR_RANGE that a shard truncated at
+// search.max-nonvector-search-results-fetched, counted once per query when an
+// additional match proved the truncation.
+static vmsdk::info_field::Integer vector_range_results_fetched_limited_count(
+    "query", "vector_range_results_fetched_limited_count",
+    vmsdk::info_field::IntegerBuilder().App());
+// HNSW VECTOR_RANGE searches answered by an exact scan, one counter per reason.
+DEV_INTEGER_COUNTER(query_stats, vector_range_exact_fallback_cap_zero_count);
+DEV_INTEGER_COUNTER(query_stats,
+                    vector_range_exact_fallback_cosine_full_radius_count);
+DEV_INTEGER_COUNTER(query_stats,
+                    vector_range_exact_fallback_non_finite_distance_count);
+DEV_INTEGER_COUNTER(query_stats,
+                    vector_range_exact_fallback_shell_filled_count);
+
+static vmsdk::info_field::Integer *VectorRangeFallbackCounter(
+    indexes::RangeFallback fallback) {
+  switch (fallback) {
+    case indexes::RangeFallback::kNone:
+      return nullptr;
+    case indexes::RangeFallback::kCapZero:
+      return &vector_range_exact_fallback_cap_zero_count;
+    case indexes::RangeFallback::kCosineFullRadius:
+      return &vector_range_exact_fallback_cosine_full_radius_count;
+    case indexes::RangeFallback::kNonFiniteDistance:
+      return &vector_range_exact_fallback_non_finite_distance_count;
+    case indexes::RangeFallback::kShellFilled:
+      return &vector_range_exact_fallback_shell_filled_count;
+  }
+  return nullptr;
+}
+
+static void RecordVectorRangeFallback(indexes::RangeFallback fallback) {
+  if (auto *counter = VectorRangeFallbackCounter(fallback)) {
+    counter->Increment();
+  }
+}
 
 class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
  public:
@@ -187,6 +224,48 @@ class VectorRangeFetcher : public indexes::EntriesFetcherBase {
   };
 
   std::vector<indexes::Neighbor> neighbors_;
+};
+
+// Presents INKEYS directly as the candidate source. Unlike an inline HNSW
+// filter, this makes work proportional to the caller's restricted set rather
+// than to the graph size.
+class InkeysFetcher : public indexes::EntriesFetcherBase {
+ public:
+  using Keys = absl::flat_hash_set<std::string>;
+
+  explicit InkeysFetcher(const Keys &inkeys) : inkeys_(inkeys) {}
+
+  size_t Size() const override { return inkeys_.size(); }
+  std::unique_ptr<indexes::EntriesFetcherIteratorBase> Begin() override {
+    return std::make_unique<Iterator>(inkeys_);
+  }
+
+ private:
+  class Iterator : public indexes::EntriesFetcherIteratorBase {
+   public:
+    explicit Iterator(const Keys &keys)
+        : current_(keys.begin()), end_(keys.end()) {
+      LoadKey();
+    }
+    bool Done() const override { return current_ == end_; }
+    void Next() override {
+      ++current_;
+      LoadKey();
+    }
+    const InternedStringPtr &operator*() const override { return key_; }
+
+   private:
+    void LoadKey() {
+      key_ = current_ == end_ ? InternedStringPtr{}
+                              : StringInternStore::Intern(*current_);
+    }
+
+    Keys::const_iterator current_;
+    const Keys::const_iterator end_;
+    InternedStringPtr key_;
+  };
+
+  const Keys &inkeys_;
 };
 
 absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
@@ -281,6 +360,101 @@ inline bool NeedsDeduplication(QueryOperations query_operations) {
   return has_or || has_tag || has_negate;
 }
 
+// Whether evaluating `predicate` as a primary candidate source can reach a
+// non-negated VECTOR_RANGE leaf and call SearchRange.
+bool MayExecuteVectorRange(const Predicate *predicate, bool negate) {
+  if (predicate->GetType() == PredicateType::kComposedAnd ||
+      predicate->GetType() == PredicateType::kComposedOr) {
+    auto *composed = static_cast<const ComposedPredicate *>(predicate);
+    return std::any_of(composed->GetChildren().begin(),
+                       composed->GetChildren().end(),
+                       [negate](const auto &child) {
+                         return MayExecuteVectorRange(child.get(), negate);
+                       });
+  }
+  if (predicate->GetType() == PredicateType::kNegate) {
+    auto *negated = static_cast<const NegatePredicate *>(predicate);
+    return MayExecuteVectorRange(negated->GetPredicate(), !negate);
+  }
+  return !negate && predicate->GetType() == PredicateType::kVectorRange;
+}
+
+struct PrimaryFilterEstimate {
+  size_t size;
+  bool executes_vector_range;
+  // An HNSW walk's cost follows the matches it finds, so a probe capped at a
+  // sibling's size stays cheap. A FLAT scan visits every vector regardless,
+  // which already costs more than checking that sibling's candidates.
+  bool range_probe_is_cheap{false};
+};
+
+// Estimates the candidate count without running SearchRange. Tag and numeric
+// searches only construct their lightweight fetchers; text already exposes an
+// estimate. The result is used solely to decide whether a VECTOR_RANGE-bearing
+// subtree can beat an already-materialized sibling of an AND.
+PrimaryFilterEstimate EstimatePrimaryFilter(const SearchParameters &parameters,
+                                            const Predicate *predicate,
+                                            bool negate) {
+  const IndexSchema *index_schema = parameters.index_schema.get();
+  const bool is_vec_query = parameters.IsVectorQuery();
+  if (predicate->GetType() == PredicateType::kComposedAnd ||
+      predicate->GetType() == PredicateType::kComposedOr) {
+    auto *composed = static_cast<const ComposedPredicate *>(predicate);
+    const PredicateType effective_type =
+        EvaluateAsComposedPredicate(composed, negate);
+    size_t estimate =
+        effective_type == PredicateType::kComposedAnd ? SIZE_MAX : 0;
+    bool executes_vector_range = false;
+    bool range_probe_is_cheap = false;
+    for (const auto &child : composed->GetChildren()) {
+      auto child_estimate =
+          EstimatePrimaryFilter(parameters, child.get(), negate);
+      executes_vector_range |= child_estimate.executes_vector_range;
+      range_probe_is_cheap |= child_estimate.range_probe_is_cheap;
+      if (effective_type == PredicateType::kComposedAnd) {
+        estimate = std::min(estimate, child_estimate.size);
+      } else if (child_estimate.size > SIZE_MAX - estimate) {
+        estimate = SIZE_MAX;
+      } else {
+        estimate += child_estimate.size;
+      }
+    }
+    return {estimate, executes_vector_range, range_probe_is_cheap};
+  }
+  if (predicate->GetType() == PredicateType::kTag) {
+    auto *tag = static_cast<const TagPredicate *>(predicate);
+    return {tag->GetIndex()->Search(*tag, negate)->Size(), false};
+  }
+  if (predicate->GetType() == PredicateType::kNumeric) {
+    auto *numeric = static_cast<const NumericPredicate *>(predicate);
+    return {numeric->GetIndex()->Search(*numeric, negate)->Size(), false};
+  }
+  if (predicate->GetType() == PredicateType::kText) {
+    auto *text = static_cast<const TextPredicate *>(predicate);
+    return {text->EstimateSize(is_vec_query), false};
+  }
+  if (predicate->GetType() == PredicateType::kNegate) {
+    auto *negated = static_cast<const NegatePredicate *>(predicate);
+    return EstimatePrimaryFilter(parameters, negated->GetPredicate(), !negate);
+  }
+  CHECK(predicate->GetType() == PredicateType::kVectorRange);
+  CHECK(index_schema != nullptr) << "IndexSchema required for vector range";
+  if (!negate) {
+    auto *vr = static_cast<const VectorRangePredicate *>(predicate);
+    auto index_result = index_schema->GetIndex(vr->GetAlias());
+    if (index_result.ok()) {
+      auto *vector_index =
+          dynamic_cast<indexes::VectorBase *>(index_result.value().get());
+      if (vector_index != nullptr && !vr->GetQueryVector().empty()) {
+        return {vector_index->GetTrackedKeyCount(), true,
+                vector_index->GetIndexerType() == indexes::IndexerType::kHNSW};
+      }
+    }
+  }
+  // Negated or invalid VECTOR_RANGE evaluation uses the universal fetcher.
+  return {indexes::UniversalSetFetcher(index_schema).Size(), false};
+}
+
 // Builds TextIterator for text predicates. Returns pair of iterator and
 // estimated size.
 // or_weight_multiplier lands on this node only; children are built with 1.0f.
@@ -372,7 +546,11 @@ BuildTextIterator(const Predicate *predicate, bool negate,
 size_t EvaluateFilterAsPrimary(
     const SearchParameters &parameters, const Predicate *predicate,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
-    bool negate, float or_weight_multiplier) {
+    bool negate, float or_weight_multiplier, bool *truncated,
+    size_t range_probe_limit) {
+  if (truncated != nullptr) {
+    *truncated = false;
+  }
   const QueryOperations query_operations =
       parameters.filter_parse_results.query_operations;
   const IndexSchema *index_schema = parameters.index_schema.get();
@@ -406,16 +584,83 @@ size_t EvaluateFilterAsPrimary(
         return size;
       }
       size_t min_size = SIZE_MAX;
+      size_t best_child_index = SIZE_MAX;
+      bool best_truncated = false;
       std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> best_fetchers;
-      for (const auto &child : composed_predicate->GetChildren()) {
-        std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> child_fetchers;
-        size_t child_size =
-            EvaluateFilterAsPrimary(parameters, child.get(), child_fetchers,
-                                    negate, or_weight_multiplier);
-        if (child_size < min_size) {
-          min_size = child_size;
-          best_fetchers = std::move(child_fetchers);
+      auto consider_child =
+          [&](size_t child_index, size_t child_size, bool child_truncated,
+              std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>
+                  child_fetchers) {
+            if (min_size == SIZE_MAX || (best_truncated && !child_truncated) ||
+                (best_truncated == child_truncated &&
+                 (child_size < min_size || (child_size == min_size &&
+                                            child_index < best_child_index)))) {
+              min_size = child_size;
+              best_child_index = child_index;
+              best_truncated = child_truncated;
+              best_fetchers = std::move(child_fetchers);
+            }
+          };
+
+      // SearchRange materializes every matching vector. Defer the one child
+      // subtree that can execute it while a cheap recursive estimate is
+      // compared with the other AND siblings. The parser permits at most one
+      // VECTOR_RANGE predicate per query.
+      const Predicate *deferred_vector_range_child = nullptr;
+      size_t deferred_vector_range_child_index = SIZE_MAX;
+      size_t deferred_vector_range_estimate = SIZE_MAX;
+      bool deferred_range_probe_is_cheap = false;
+      const auto &children = composed_predicate->GetChildren();
+      for (size_t child_index = 0; child_index < children.size();
+           ++child_index) {
+        const auto &child = children[child_index];
+        if (parameters.has_vector_range &&
+            MayExecuteVectorRange(child.get(), negate)) {
+          auto estimate =
+              EstimatePrimaryFilter(parameters, child.get(), negate);
+          if (estimate.executes_vector_range) {
+            deferred_vector_range_child = child.get();
+            deferred_vector_range_child_index = child_index;
+            deferred_vector_range_estimate = estimate.size;
+            deferred_range_probe_is_cheap = estimate.range_probe_is_cheap;
+            continue;
+          }
         }
+        std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> child_fetchers;
+        bool child_truncated = false;
+        size_t child_size = EvaluateFilterAsPrimary(
+            parameters, child.get(), child_fetchers, negate,
+            or_weight_multiplier, &child_truncated, range_probe_limit);
+        consider_child(child_index, child_size, child_truncated,
+                       std::move(child_fetchers));
+      }
+      if (deferred_vector_range_child != nullptr) {
+        // The estimate is an upper bound: a small radius can match far fewer
+        // keys than the field holds. When it cannot rule the range out, run it
+        // in full. Otherwise, for HNSW, probe it capped at the best complete
+        // sibling's size: the walk stops once it has more matches than that
+        // sibling, so a broad radius costs little and a narrow one can still
+        // win. A FLAT scan costs a distance per vector either way, more than
+        // checking the sibling, so it is skipped.
+        const bool run_in_full = min_size == SIZE_MAX || best_truncated ||
+                                 deferred_vector_range_estimate <= min_size;
+        // An empty sibling already decides the AND.
+        if (run_in_full || (deferred_range_probe_is_cheap && min_size > 0)) {
+          const size_t child_limit =
+              run_in_full ? range_probe_limit
+                          : std::min(range_probe_limit, min_size);
+          std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>
+              child_fetchers;
+          bool child_truncated = false;
+          size_t child_size = EvaluateFilterAsPrimary(
+              parameters, deferred_vector_range_child, child_fetchers, negate,
+              or_weight_multiplier, &child_truncated, child_limit);
+          consider_child(deferred_vector_range_child_index, child_size,
+                         child_truncated, std::move(child_fetchers));
+        }
+      }
+      if (truncated != nullptr) {
+        *truncated = best_truncated;
       }
       AppendQueue(entries_fetchers, best_fetchers);
       return min_size;
@@ -426,12 +671,19 @@ size_t EvaluateFilterAsPrimary(
       const float child_multiplier =
           or_weight_multiplier * composed_predicate->GetWeight();
       size_t total_size = 0;
+      bool any_child_truncated = false;
       for (const auto &child : composed_predicate->GetChildren()) {
         std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> child_fetchers;
+        bool child_truncated = false;
         size_t child_size = EvaluateFilterAsPrimary(
-            parameters, child.get(), child_fetchers, negate, child_multiplier);
+            parameters, child.get(), child_fetchers, negate, child_multiplier,
+            &child_truncated, range_probe_limit);
         AppendQueue(entries_fetchers, child_fetchers);
         total_size += child_size;
+        any_child_truncated |= child_truncated;
+      }
+      if (truncated != nullptr) {
+        *truncated = any_child_truncated;
       }
       return total_size;
     }
@@ -468,7 +720,7 @@ size_t EvaluateFilterAsPrimary(
     auto negate_predicate = dynamic_cast<const NegatePredicate *>(predicate);
     size_t result = EvaluateFilterAsPrimary(
         parameters, negate_predicate->GetPredicate(), entries_fetchers, !negate,
-        or_weight_multiplier);
+        or_weight_multiplier, truncated, range_probe_limit);
     return result;
   }
   if (predicate->GetType() == PredicateType::kVectorRange) {
@@ -487,13 +739,22 @@ size_t EvaluateFilterAsPrimary(
         auto *vector_index =
             dynamic_cast<indexes::VectorBase *>(index_result.value().get());
         if (vector_index != nullptr && !vr_pred->GetQueryVector().empty()) {
+          indexes::RangeQuery range{
+              .radius = static_cast<float>(vr_pred->GetRadius()),
+              .epsilon = vr_pred->GetSearchEpsilon(),
+              .ef_runtime = vr_pred->GetEfRuntime()};
+          if (range_probe_limit != SIZE_MAX) {
+            range.probe_limit = range_probe_limit;
+          }
           auto range_result = vector_index->SearchRange(
-              vr_pred->GetQueryVector(),
-              static_cast<float>(vr_pred->GetRadius()),
-              parameters.cancellation_token);
+              vr_pred->GetQueryVector(), range, parameters.cancellation_token);
           if (range_result.ok()) {
-            auto fetcher =
-                std::make_unique<VectorRangeFetcher>(std::move(*range_result));
+            RecordVectorRangeFallback(range_result->fallback);
+            if (truncated != nullptr) {
+              *truncated = range_result->truncated;
+            }
+            auto fetcher = std::make_unique<VectorRangeFetcher>(
+                std::move(range_result->neighbors));
             size_t size = fetcher->Size();
             entries_fetchers.push(std::move(fetcher));
             return size;
@@ -789,7 +1050,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
     const SearchParameters &parameters, QueryContext &query_ctx) {
   // The type check is not redundant with has_vector_range: a negated VR
   // query has has_vector_range == true but root->GetType() == kNegate.
-  if (parameters.has_vector_range &&
+  if (!parameters.inkeys.has_value() && parameters.has_vector_range &&
       parameters.filter_parse_results.root_predicate != nullptr &&
       parameters.filter_parse_results.root_predicate->GetType() ==
           PredicateType::kVectorRange) {
@@ -800,30 +1061,41 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
       auto *vector_index =
           dynamic_cast<indexes::VectorBase *>(index_result.value().get());
       if (vector_index != nullptr) {
-        // epsilon is stored on the predicate but intentionally not forwarded
-        // to SearchRange; the range traversal does not yet honor it.
+        const indexes::RangeQuery range{
+            .radius = static_cast<float>(vr_pred->GetRadius()),
+            .epsilon = vr_pred->GetSearchEpsilon(),
+            .ef_runtime = vr_pred->GetEfRuntime()};
         VMSDK_ASSIGN_OR_RETURN(
-            auto raw_neighbors,
-            vector_index->SearchRange(vr_pred->GetQueryVector(),
-                                      static_cast<float>(vr_pred->GetRadius()),
+            auto range_result,
+            vector_index->SearchRange(vr_pred->GetQueryVector(), range,
                                       parameters.cancellation_token));
+        RecordVectorRangeFallback(range_result.fallback);
+        if (range_result.truncated) {
+          vector_range_results_fetched_limited_count.Increment();
+        }
         // Key order keeps SORTBY ties and FT.AGGREGATE working sets
         // deterministic regardless of scan order.
-        std::sort(raw_neighbors.begin(), raw_neighbors.end(),
+        std::sort(range_result.neighbors.begin(), range_result.neighbors.end(),
                   [](const indexes::Neighbor &a, const indexes::Neighbor &b) {
                     return a.external_id->Str() < b.external_id->Str();
                   });
-        return raw_neighbors;
+        return std::move(range_result.neighbors);
       }
     }
   }
 
-  // Compound predicate tree (the VR predicate under AND/OR with non-VR
-  // predicates, or negated): evaluate the full tree, including the distance
-  // check, for each fetched key.
+  // Non-fast-path queries evaluate the full predicate tree per candidate.
+  // INKEYS is already the smallest complete source for a query restricted to
+  // that set, so do not traverse HNSW or broad sibling fetchers first.
   std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
   size_t qualified_entries = 0;
-  if (parameters.filter_parse_results.is_match_all) {
+  bool child_truncated = false;
+  const bool direct_inkeys = parameters.inkeys.has_value();
+  if (direct_inkeys) {
+    auto inkeys_fetcher = std::make_unique<InkeysFetcher>(*parameters.inkeys);
+    qualified_entries = inkeys_fetcher->Size();
+    entries_fetchers.push(std::move(inkeys_fetcher));
+  } else if (parameters.filter_parse_results.is_match_all) {
     auto universal_fetcher = std::make_unique<indexes::UniversalSetFetcher>(
         parameters.index_schema.get());
     qualified_entries = universal_fetcher->Size();
@@ -831,22 +1103,25 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
   } else {
     qualified_entries = EvaluateFilterAsPrimary(
         parameters, parameters.filter_parse_results.root_predicate.get(),
-        entries_fetchers, false);
+        entries_fetchers, false, /*or_weight_multiplier=*/1.0f,
+        &child_truncated);
   }
 
-  const size_t max_keys = static_cast<size_t>(
+  const size_t max_results = static_cast<size_t>(
       options::GetMaxNonVectorSearchResultsFetched().GetValue());
   std::vector<indexes::Neighbor> neighbors;
-  neighbors.reserve(std::min(qualified_entries, kInitialNeighborReserveSize));
-  bool fetch_limited = false;
+  neighbors.reserve(
+      std::min({qualified_entries, kInitialNeighborReserveSize, max_results}));
+  bool final_truncated = false;
+  bool cancelled = false;
 
   // Deduplication setup
   bool needs_dedup =
       NeedsDeduplication(parameters.filter_parse_results.query_operations);
   absl::flat_hash_set<const char *> result_keys;
   if (needs_dedup) {
-    result_keys.reserve(
-        std::min(qualified_entries, kInitialNeighborReserveSize));
+    result_keys.reserve(std::min(
+        {qualified_entries, kInitialNeighborReserveSize, max_results}));
   }
 
   // TODO: this drain duplicates EvaluatePrefilteredKeys; it exists only
@@ -854,7 +1129,8 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
   // rides on. Fold it in when the drain loops are unified.
   indexes::PrefilterEvaluator key_evaluator(
       query_ctx, parameters.filter_parse_results.query_operations,
-      *parameters.index_schema);
+      *parameters.index_schema,
+      /*source_resolves_text=*/!direct_inkeys);
 
   // Resolve the single VR predicate and index once. In a compound OR, an
   // EvaluateFull short-circuit on any non-VR child (text, tag, or numeric)
@@ -862,27 +1138,15 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
   // when it lies within the radius; Redisearch yields the distance regardless
   // of which branch matched, so recompute it per key below. The recompute only
   // runs when HasVrScore() is false, so gating on has_vector_range is cheap.
-  const VectorRangePredicate *vr_predicate = nullptr;
+  const VectorRangePredicate *vr_predicate =
+      GetVectorRangePredicate(parameters);
   indexes::VectorBase *vr_vector_index = nullptr;
-  if (parameters.has_vector_range &&
-      parameters.filter_parse_results.root_predicate) {
-    // Single-VR invariant: parse-time rejection (PreParseQueryString) enforces
-    // at most one VECTOR_RANGE predicate per query, so the first node found is
-    // authoritative — there is nothing to disambiguate.
-    ForEachVectorRangePredicate(
-        parameters.filter_parse_results.root_predicate.get(),
-        [&](VectorRangePredicate *vr) -> absl::Status {
-          if (vr_predicate == nullptr) vr_predicate = vr;
-          return absl::OkStatus();
-        })
-        .IgnoreError();
-    if (vr_predicate != nullptr) {
-      auto index_result =
-          parameters.index_schema->GetIndex(vr_predicate->GetAlias());
-      if (index_result.ok()) {
-        vr_vector_index =
-            dynamic_cast<indexes::VectorBase *>(index_result.value().get());
-      }
+  if (vr_predicate != nullptr) {
+    auto index_result =
+        parameters.index_schema->GetIndex(vr_predicate->GetAlias());
+    if (index_result.ok()) {
+      vr_vector_index =
+          dynamic_cast<indexes::VectorBase *>(index_result.value().get());
     }
   }
 
@@ -892,18 +1156,38 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
     auto iterator = fetcher->Begin();
     while (!iterator->Done()) {
       const auto &key = **iterator;
-      if (needs_dedup && result_keys.contains(key->Str().data())) {
+      // INKEYS is fanned to every shard, so direct candidates include keys
+      // that do not belong to this local index. Exclude them before evaluating
+      // negation, which would otherwise turn a missing VECTOR_RANGE value into
+      // a match and later violate the Neighbor membership invariant.
+      if (direct_inkeys &&
+          !parameters.index_schema->GetIndexKeyInfo().contains(key)) {
         iterator->Next();
+        if (parameters.cancellation_token->IsCancelled()) {
+          cancelled = true;
+          break;
+        }
+        continue;
+      }
+      // Keys outside INKEYS are skipped before they can take a slot under the
+      // cap, as in EvaluatePrefilteredKeys.
+      if ((needs_dedup && result_keys.contains(key->Str().data())) ||
+          (parameters.inkeys.has_value() &&
+           !parameters.inkeys->contains(key->Str()))) {
+        iterator->Next();
+        if (parameters.cancellation_token->IsCancelled()) {
+          cancelled = true;
+          break;
+        }
         continue;
       }
       BACKGROUND_PAUSEPOINT("search_prefilter_eval");
       auto eval_result = key_evaluator.EvaluateFull(
           *parameters.filter_parse_results.root_predicate, key);
       if (eval_result.matches) {
-        if (neighbors.size() >= max_keys) {
-          // This fetcher is scanned to the end, but the fetchers after it
-          // (e.g. the remaining OR branches) are dropped by the break below.
-          fetch_limited = true;
+        if (neighbors.size() >= max_results) {
+          final_truncated = true;
+          break;
         }
         // Single-VR model: EvaluateFull propagates the matched VectorRange
         // distance up through AND/OR composition, so write it straight into
@@ -943,16 +1227,17 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
       }
       iterator->Next();
       if (parameters.cancellation_token->IsCancelled()) {
+        cancelled = true;
         break;
       }
     }
-    if (fetch_limited) {
+    if (cancelled || final_truncated) {
       break;
     }
   }
 
-  if (fetch_limited) {
-    nonvector_results_fetched_limited_count.Increment();
+  if (child_truncated || final_truncated) {
+    vector_range_results_fetched_limited_count.Increment();
   }
 
   // Key order keeps SORTBY ties and FT.AGGREGATE working sets deterministic
@@ -1510,8 +1795,17 @@ bool ShouldReturnNoResults(const SearchParameters &parameters) {
          parameters.limit.number == 0;
 }
 
-void RecordNonVectorResultsFetchedLimited() {
-  nonvector_results_fetched_limited_count.Increment();
+int64_t GetNonVectorResultsFetchedLimitedCount() {
+  return nonvector_results_fetched_limited_count.Get();
+}
+
+int64_t GetVectorRangeResultsFetchedLimitedCount() {
+  return vector_range_results_fetched_limited_count.Get();
+}
+
+int64_t GetVectorRangeFallbackCount(indexes::RangeFallback fallback) {
+  const auto *counter = VectorRangeFallbackCounter(fallback);
+  return counter == nullptr ? 0 : counter->Get();
 }
 
 SearchResult::SearchResult()
@@ -1866,6 +2160,25 @@ size_t CountVectorRangePredicates(const Predicate *predicate) {
   return count;
 }
 
+const VectorRangePredicate *GetVectorRangePredicate(
+    const SearchParameters &parameters) {
+  if (!parameters.has_vector_range ||
+      !parameters.filter_parse_results.root_predicate) {
+    return nullptr;
+  }
+  const VectorRangePredicate *result = nullptr;
+  ForEachVectorRangePredicate(
+      parameters.filter_parse_results.root_predicate.get(),
+      [&](VectorRangePredicate *vr) -> absl::Status {
+        if (result == nullptr) {
+          result = vr;
+        }
+        return absl::OkStatus();
+      })
+      .IgnoreError();
+  return result;
+}
+
 // Return the score field name for the single VR predicate in the query: the
 // name given by $yield_distance_as (or AS) if set, otherwise "". Returns ""
 // when the query has no VR predicate. Single-VR only: the first VR predicate
@@ -1879,26 +2192,11 @@ size_t CountVectorRangePredicates(const Predicate *predicate) {
 // ft_aggregate registration/write), keeping the distance a pure filter unless
 // yielded via an alias.
 std::string GetVrScoreFieldName(const SearchParameters &parameters) {
-  if (!parameters.has_vector_range ||
-      !parameters.filter_parse_results.root_predicate) {
+  const auto *vr = GetVectorRangePredicate(parameters);
+  if (vr == nullptr || !vr->GetScoreAs().has_value()) {
     return "";
   }
-  std::string field_name;
-  bool found = false;
-  ForEachVectorRangePredicate(
-      parameters.filter_parse_results.root_predicate.get(),
-      [&](VectorRangePredicate *vr) -> absl::Status {
-        if (!found) {
-          found = true;
-          const auto &score_as = vr->GetScoreAs();
-          if (score_as.has_value()) {
-            field_name = score_as.value();
-          }
-        }
-        return absl::OkStatus();
-      })
-      .IgnoreError();
-  return field_name;
+  return vr->GetScoreAs().value();
 }
 
 absl::StatusOr<absl::string_view> SubstituteParam(
@@ -2259,6 +2557,21 @@ absl::Status PostParseVectorRangeParameters(
                 "VECTOR_RANGE radius must be non-negative");
           }
           vr_pred->SetRadius(radius);
+        }
+
+        // Resolve EF_RUNTIME if it was specified as a $param. The coordinator
+        // fans out the resolved value.
+        if (!vr_pred->GetEfRuntimeParamName().empty()) {
+          VMSDK_ASSIGN_OR_RETURN(
+              auto ef_string,
+              SubstituteParam(
+                  parameters,
+                  absl::StrCat("$", vr_pred->GetEfRuntimeParamName())),
+              _.SetPrepend()
+                  << "Error resolving vector range EF_RUNTIME parameter: ");
+          VMSDK_ASSIGN_OR_RETURN(auto ef_runtime,
+                                 ParseVectorRangeEfRuntime(ef_string));
+          vr_pred->SetEfRuntime(ef_runtime);
         }
 
         // Resolve the vector blob parameter from PARAMS.

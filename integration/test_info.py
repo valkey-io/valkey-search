@@ -159,6 +159,7 @@ class TestAppMetrics(ValkeySearchTestCaseDebugMode):
             "result_record_dropped_count",
             "successful_requests_count",
             "vector_requests_count",
+            "vector_range_results_fetched_limited_count",
             "rdb_load_failure_cnt",
             "rdb_load_success_cnt",
             "rdb_save_failure_cnt",

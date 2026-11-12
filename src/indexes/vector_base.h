@@ -438,6 +438,13 @@ struct TrackedKeyMetadata {
   float magnitude;
 };
 
+// A vector index's key maps, saved ahead of the index content so the index can
+// check each node's key against the keyspace while the node is being loaded.
+struct TrackedKeys {
+  InternedStringHashMap<TrackedKeyMetadata> metadata_by_key;
+  absl::flat_hash_map<uint64_t, InternedStringPtr> key_by_internal_id;
+};
+
 class VectorBase : public IndexBase {
  public:
   absl::StatusOr<indexes::RecordResult> AddRecord(const InternedStringPtr &key,
@@ -464,6 +471,9 @@ class VectorBase : public IndexBase {
   absl::Status LoadTrackedKeys(ValkeyModuleCtx *ctx,
                                const AttributeDataType *attribute_data_type,
                                SupplementalContentChunkIter &&iter);
+  // Reads a section written by SaveTrackedKeys into the key maps.
+  static absl::StatusOr<TrackedKeys> LoadKeyLabels(
+      SupplementalContentChunkIter &&iter);
 
   uint32_t GetMutationWeight() const override;
 
@@ -728,6 +738,18 @@ class VectorBase : public IndexBase {
   virtual VectorRecord &GetVectorLockFree(uint64_t internal_id) const = 0;
   virtual VectorRecord &GetVector(uint64_t internal_id) const = 0;
 
+  // The keyspace's shared copy of `key`'s vector if it still equals `saved`,
+  // the vector the RDB holds for the key; nullopt if the key changed since.
+  std::optional<VectorRecord> ShareIfUnchangedSinceSave(
+      ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
+      const InternedStringPtr &key, absl::string_view saved) const;
+  void AdoptTrackedKeys(TrackedKeys &&tracked_keys)
+      ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
+  // Set by a load that took the key maps from the key labels section and
+  // resolved every node's vector, so LoadTrackedKeys skips the older copy.
+  bool vectors_resolved_on_load_{false};
+  size_t keys_changed_since_save_{0};
+
   int db_num_;
   int dimensions_;
   std::string attribute_identifier_;
@@ -779,7 +801,7 @@ class PrefilterEvaluator : public query::Evaluator {
   PrefilterEvaluator(query::QueryContext &query_ctx,
                      QueryOperations query_operations,
                      const IndexSchema &index_schema,
-                     bool source_resolves_text = true);
+                     bool source_resolves_text);
   bool Evaluate(const query::Predicate &predicate,
                 const InternedStringPtr &key);
   // Like Evaluate(), but returns the full EvaluationResult so that callers
@@ -791,7 +813,7 @@ class PrefilterEvaluator : public query::Evaluator {
     CHECK(key_);
     return *key_;
   }
-  bool IsPrefilterEvaluator() const override { return source_resolves_text_; }
+  bool SourceResolvesText() const override { return source_resolves_text_; }
 
  private:
   query::EvaluationResult EvaluateTags(

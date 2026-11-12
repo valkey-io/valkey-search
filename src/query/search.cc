@@ -165,7 +165,8 @@ class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
       const std::optional<absl::flat_hash_set<std::string>> &inkeys)
       : filter_predicate_(filter_predicate),
         vector_index_(vector_index),
-        evaluator_(query_ctx, query_operations, index_schema),
+        evaluator_(query_ctx, query_operations, index_schema,
+                   /*source_resolves_text=*/false),
         inkeys_(inkeys) {}
   ~InlineVectorFilter() override = default;
 
@@ -805,7 +806,7 @@ void EvaluatePrefilteredKeys(
                       parameters.filter_parse_results.is_match_all);
   indexes::PrefilterEvaluator key_evaluator(
       query_ctx, parameters.filter_parse_results.query_operations,
-      *parameters.index_schema);
+      *parameters.index_schema, /*source_resolves_text=*/true);
   while (!entries_fetchers.empty()) {
     auto fetcher = std::move(entries_fetchers.front());
     entries_fetchers.pop();

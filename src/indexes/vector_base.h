@@ -442,8 +442,10 @@ struct TrackedKeyMetadata {
 // A vector index's key maps, saved ahead of the index content so the index can
 // check each node's key against the keyspace while the node is being loaded.
 struct TrackedKeys {
-  InternedStringHashMap<TrackedKeyMetadata> metadata_by_key;
-  absl::flat_hash_map<uint64_t, InternedStringPtr> key_by_internal_id;
+  vmsdk::HugeFlatHashMap<InternedStringPtr, TrackedKeyMetadata,
+                         InternedStringPtrHash, InternedStringPtrEq>
+      metadata_by_key;
+  vmsdk::HugeFlatHashMap<uint64_t, InternedStringPtr> key_by_internal_id;
 };
 
 class VectorBase : public IndexBase {

@@ -387,14 +387,14 @@ absl::StatusOr<std::optional<uint64_t>> VectorBase::UnTrackKey(
     return std::nullopt;
   }
   auto id = it->second.internal_id;
-  tracked_metadata_by_key_.erase(it);
+  tracked_metadata_by_key_.erase_and_migrate(it);
   auto key_by_internal_id_it = key_by_internal_id_.find(id);
   if (key_by_internal_id_it == key_by_internal_id_.end()) {
     return absl::InvalidArgumentError(
         "Error while untracking key - key was not found in key_by_internal_id_ "
         "but in internal_by_key_");
   }
-  key_by_internal_id_.erase(key_by_internal_id_it);
+  key_by_internal_id_.erase_and_migrate(key_by_internal_id_it);
   return id;
 }
 

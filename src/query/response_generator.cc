@@ -379,11 +379,13 @@ absl::StatusOr<RecordsMap> GetContent(
     if (itr == content.end()) {
       continue;
     }
+    auto id_str =
+        vmsdk::RetainUniqueValkeyString(return_attribute.identifier.get());
+    auto id_view = vmsdk::ToStringView(id_str.get());
     return_content.emplace(
-        vmsdk::ToStringView(return_attribute.identifier.get()),
-        RecordsMapValue(
-            return_attribute.identifier.get(),
-            vmsdk::RetainUniqueValkeyString(itr->second.value.get())));
+        id_view, RecordsMapValue(
+                     std::move(id_str),
+                     vmsdk::RetainUniqueValkeyString(itr->second.value.get())));
   }
 
   if (parameters.sortby_parameter.has_value()) {

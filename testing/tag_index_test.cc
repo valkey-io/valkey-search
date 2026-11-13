@@ -6,16 +6,20 @@
  */
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
+#include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
+#include "absl/strings/string_view.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "src/commands/filter_parser.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/tag.h"
 #include "src/query/predicate.h"
+#include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
 #include "testing/common.h"
 #include "vmsdk/src/testing_infra/utils.h"
@@ -120,6 +124,113 @@ TEST_F(TagIndexTest, InvalidUtf8IsNotIndexed) {
   EXPECT_EQ(entries_fetcher->Size(), 0);
 
   VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue(saved_emulate_release));
+}
+
+class JsonTagIndexTest : public vmsdk::ValkeyTest {
+ public:
+  void SetUp() override {
+    vmsdk::ValkeyTest::SetUp();
+    saved_emulate_release_ = options::GetEmulateRelease().GetValue();
+    Reset(std::nullopt);
+  }
+  void Reset(std::optional<bool> explicit_separator) {
+    data_model::TagIndex tag_index_proto;
+    tag_index_proto.set_separator(",");
+    if (explicit_separator.has_value()) {
+      tag_index_proto.set_explicit_separator(*explicit_separator);
+    }
+    index = std::make_unique<IndexTeser<Tag, data_model::TagIndex>>(
+        tag_index_proto, /*json=*/true);
+  }
+  void TearDown() override {
+    VMSDK_EXPECT_OK(
+        options::GetEmulateRelease().SetValue(saved_emulate_release_));
+    vmsdk::ValkeyTest::TearDown();
+  }
+  void SetRelease(uint8_t minor) {
+    VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue({1, minor, 0}));
+  }
+  absl::flat_hash_set<absl::string_view> Tags(absl::string_view key) {
+    bool case_sensitive;
+    return index->GetValue(StringInternStore::Intern(key), case_sensitive)
+        .value_or(absl::flat_hash_set<absl::string_view>{});
+  }
+  std::unique_ptr<IndexTeser<Tag, data_model::TagIndex>> index;
+  vmsdk::ValkeyVersion saved_emulate_release_{0};
+};
+
+TEST_F(JsonTagIndexTest, StoresDecodedTags) {
+  SetRelease(3);
+  EXPECT_TRUE(index->AddRecord("k", R"([["a","b, c","a"]])").value());
+  EXPECT_THAT(Tags("k"), testing::UnorderedElementsAre("a", "b", "c"));
+  EXPECT_EQ(index->GetTagValueDocCount("b"), 1);
+  auto key = StringInternStore::Intern("k");
+  EXPECT_EQ(index->GetPrefixMatchDocCount("c*", BorrowedInternedStringPtr(key)),
+            1);
+  EXPECT_FALSE(index->AddRecord("empty", "[null]").value());
+}
+
+TEST_F(JsonTagIndexTest, IndexedAsBeforeBelow1_3_0) {
+  SetRelease(2);
+  EXPECT_TRUE(index->AddRecord("k", R"([["a","b"]])").value());
+  EXPECT_THAT(Tags("k"), testing::UnorderedElementsAre(R"(["a")", R"("b"])"));
+}
+
+TEST_F(JsonTagIndexTest, GateSwitchRemovesOldTags) {
+  SetRelease(2);
+  EXPECT_TRUE(index->AddRecord("m", R"([["a","b"]])").value());
+  EXPECT_TRUE(index->AddRecord("r", R"([["a","b"]])").value());
+  SetRelease(3);
+  EXPECT_TRUE(index->ModifyRecord("m", R"([["a","b"]])").value());
+  EXPECT_TRUE(index->RemoveRecord("r").value());
+  EXPECT_EQ(index->GetTagValueDocCount(R"(["a")"), 0);
+  EXPECT_EQ(index->GetTagValueDocCount(R"("b"])"), 0);
+  EXPECT_THAT(Tags("m"), testing::UnorderedElementsAre("a", "b"));
+}
+
+TEST_F(JsonTagIndexTest, InvalidValue) {
+  SetRelease(3);
+  EXPECT_EQ(index->AddRecordResult("k", "[5]").value(),
+            RecordResult::kInvalidData);
+  EXPECT_TRUE(index->AddRecord("m", R"(["a"])").value());
+  EXPECT_EQ(index->ModifyRecordResult("m", "[[true]]").value(),
+            RecordResult::kInvalidData);
+  EXPECT_EQ(index->GetTagValueDocCount("a"), 0);
+  EXPECT_EQ(index->GetTrackedKeyCount(), 0);
+  EXPECT_EQ(index->GetUnTrackedKeyCount(), 2);
+
+  SetRelease(2);
+  EXPECT_TRUE(index->AddRecord("before", "[5]").value());
+}
+
+TEST_F(JsonTagIndexTest, LegacyPathIndexesNothing) {
+  data_model::TagIndex tag_index_proto;
+  tag_index_proto.set_separator(",");
+  index = std::make_unique<IndexTeser<Tag, data_model::TagIndex>>(
+      tag_index_proto, /*json=*/true, /*json_legacy_path=*/true);
+  SetRelease(3);
+  EXPECT_EQ(index->AddRecordResult("k", R"(["a","c"])").value(),
+            RecordResult::kMissing);
+  SetRelease(2);
+  EXPECT_TRUE(index->AddRecord("k", R"(["a","c"])").value());
+}
+
+TEST_F(JsonTagIndexTest, SeparatorPolicy) {
+  const std::string value = R"([" a , b "])";
+  SetRelease(3);
+  for (auto explicit_separator : {std::optional<bool>(), std::optional(true)}) {
+    Reset(explicit_separator);
+    EXPECT_TRUE(index->AddRecord("k", value).value());
+    EXPECT_THAT(Tags("k"), testing::UnorderedElementsAre("a", "b"));
+  }
+  Reset(false);
+  EXPECT_TRUE(index->AddRecord("k", value).value());
+  EXPECT_THAT(Tags("k"), testing::ElementsAre(" a , b "));
+
+  SetRelease(2);
+  Reset(false);
+  EXPECT_TRUE(index->AddRecord("k", value).value());
+  EXPECT_THAT(Tags("k"), testing::UnorderedElementsAre("a", "b"));
 }
 
 TEST_F(TagIndexTest, RemoveRecordAndSearchTest) {
@@ -541,6 +652,13 @@ TEST_F(TagIndexTest, ParseSearchTagsEmptyString) {
   auto result = indexes::Tag::ParseSearchTags("", '|');
   ASSERT_TRUE(result.ok());
   EXPECT_TRUE(result.value().empty());
+}
+
+TEST_F(TagIndexTest, ParseSearchTagsKeepsEscapedTrailingWhitespace) {
+  auto result = indexes::Tag::ParseSearchTags(R"( \ a\  | b\\ )", '|');
+  ASSERT_TRUE(result.ok());
+  EXPECT_THAT(result.value(),
+              testing::UnorderedElementsAre(R"(\ a\ )", R"(b\\)"));
 }
 
 TEST_F(TagIndexTest, ParseSearchTagsWhitespaceOnly) {

@@ -1066,6 +1066,13 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
       vmsdk::UniqueValkeyString attribute_value = nullptr;
       switch (attribute_info.index->GetIndexerType()) {
         case indexes::IndexerType::kTag: {
+          if (parameters.index_schema->GetAttributeDataType().ToProto() ==
+              data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON) {
+            // A JSON TAG index holds decoded tags, not the field's value, so
+            // read it from the key.
+            any_value_missing = true;
+            break;
+          }
           auto tag_index = dynamic_cast<indexes::Tag *>(attribute_info.index);
           auto tag_value_ptr = tag_index->GetRawValue(neighbor.external_id);
           if (tag_value_ptr) {
@@ -1383,6 +1390,7 @@ struct ScoreContext {
   QueryContext &query_ctx;
   // Main thread only: the fetched record, which supplies tag membership.
   const RecordsMap *records = nullptr;
+  const RawAttributeReader *read_raw = nullptr;
 
   // The current document's own tree, fetched on the first expansion leaf that
   // misses its representative and reused by the rest of that document's walk.
@@ -1525,8 +1533,10 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       // Membership from the bag in the read phase, from the fetched record's
       // tags on the main thread (TagLeaf::Value).
       std::optional<absl::flat_hash_set<absl::string_view>> doc_tags;
+      InternedStringPtr doc_tags_storage;
       if (score_ctx.records != nullptr) {
-        doc_tags = ReadRecordTags(*score_ctx.records, *tag_pred);
+        doc_tags = ReadRecordTags(*score_ctx.records, *score_ctx.read_raw,
+                                  *tag_pred, doc_tags_storage);
         if (!doc_tags) return 0.0f;
       }
       const bool case_sensitive = tag_index->IsCaseSensitive();
@@ -1663,7 +1673,15 @@ void ApplyHybridTextScore(const SearchParameters &parameters,
 }
 
 std::optional<absl::flat_hash_set<absl::string_view>> ReadRecordTags(
-    const RecordsMap &records, const TagPredicate &predicate) {
+    const RecordsMap &records, RawAttributeReader read_raw,
+    const TagPredicate &predicate, InternedStringPtr &storage) {
+  const indexes::Tag *index = predicate.GetIndex();
+  if (index->WantsRawAttribute()) {
+    auto raw =
+        read_raw(vmsdk::ToStringView(predicate.GetRetainedIdentifier().get()));
+    if (!raw) return std::nullopt;
+    return index->ParseRecord(vmsdk::ToStringView(raw.get()), storage);
+  }
   auto record = records.find(
       vmsdk::ToStringView(predicate.GetRetainedIdentifier().get()));
   if (record == records.end()) return std::nullopt;
@@ -1677,12 +1695,13 @@ std::optional<absl::flat_hash_set<absl::string_view>> ReadRecordTags(
 std::optional<float> RecomputeDocumentScore(const Predicate *root_predicate,
                                             const InternedStringPtr &key,
                                             QueryContext &query_ctx,
-                                            const RecordsMap &records) {
+                                            const RecordsMap &records,
+                                            RawAttributeReader read_raw) {
   CHECK(query_ctx.ShortLocks());
   if (options::IsScoringDisabled() || query_ctx.Stats().total_docs == 0) {
     return std::nullopt;
   }
-  ScoreContext score_ctx{query_ctx, &records};
+  ScoreContext score_ctx{query_ctx, &records, &read_raw};
   return ScoreDocument(root_predicate, BorrowedInternedStringPtr(key),
                        score_ctx);
 }

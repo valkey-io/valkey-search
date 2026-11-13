@@ -2358,16 +2358,19 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         assert client.execute_command("FT.SEARCH", "idx", b"\xff\xfe")[0] == 0
         assert client.execute_command("FT.SEARCH", "idx",  b"%invalid\xff%")[0] == 0
         # When `\` is not punctuation, the byte after it is kept in the term.
-        # A malformed byte there becomes U+FFFD, as anywhere else in a query,
-        # so fuzzy search (code points, for French) must match nothing rather
-        # than crash.
+        # A malformed byte there becomes U+FFFD, as anywhere else in a query.
+        # French fuzzy search compares code points, so U+FFFD counts as one
+        # character: "fo\uFFFDo" is one edit from "foo" and must match, without
+        # crashing.
         client.execute_command("FT.CREATE", "idx_no_backslash", "ON", "HASH",
                                "LANGUAGE", "FRENCH", "PUNCTUATION", " ",
                                "PREFIX", "1", "fr:",
                                "SCHEMA", "content", "TEXT")
         IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx_no_backslash")
         client.execute_command("HSET", "fr:1", "content", "foo")
-        assert client.execute_command("FT.SEARCH", "idx_no_backslash", b"%fo\\\xffo%")[0] == 0
+        assert client.execute_command("FT.SEARCH", "idx_no_backslash", b"%fo\\\xffo%")[0] == 1
+        # Two edits away: still no crash, and no match.
+        assert client.execute_command("FT.SEARCH", "idx_no_backslash", b"%fo\\\xffxx%")[0] == 0
         assert client.execute_command("FT.SEARCH", "idx", b"@category:{invalid\xc3}")[0] == 1
         with pytest.raises(ResponseError) as e:
             client.execute_command("FT.SEARCH", "idx", b"@price:invalid\xc3 invalid\xc3]")

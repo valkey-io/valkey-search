@@ -239,10 +239,12 @@ absl::StatusOr<RecordsMap> JsonAttributeDataType::FetchAllAttributes(
     if (!str.ok()) {
       continue;
     }
-    auto id_str = vmsdk::MakeUniqueValkeyString(identifier);
-    auto id_view = vmsdk::ToStringView(id_str.get());
+    // The caller's view may not outlive the map.
+    auto owned_identifier = vmsdk::MakeUniqueValkeyString(identifier);
+    auto identifier_view = vmsdk::ToStringView(owned_identifier.get());
     key_value_content.emplace(
-        id_view, RecordsMapValue(std::move(id_str), std::move(str.value())));
+        identifier_view,
+        RecordsMapValue(std::move(owned_identifier), std::move(str.value())));
   }
   return key_value_content;
 }

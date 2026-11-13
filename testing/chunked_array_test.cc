@@ -176,18 +176,39 @@ TEST_F(ChunkedArrayTest, FailedGrowthRollsBack) {
   EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), used_before);
 }
 
-// Consecutive mappings are placed next to each other so the kernel merges
-// them, and freeing one from the middle still works.
+// True when the `bytes` directly below `p` are unmapped.
+bool BelowIsFree(char *p, size_t bytes) {
+#ifdef MAP_FIXED_NOREPLACE
+  void *want = p - bytes;
+  void *map = mmap(want, bytes, PROT_NONE,
+                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+  if (map != MAP_FAILED) {
+    munmap(map, bytes);
+  }
+  return map == want;
+#else
+  return false;
+#endif
+}
+
+// A mapping is placed directly below the previous one when that space is free,
+// so the kernel merges them, and freeing one from the middle still works.
+// Other mappings in the process may occupy that space; the allocator then
+// maps elsewhere, so adjacency is only checked when the space was free.
 TEST_F(ChunkedArrayTest, MappingsAreAdjacent) {
   InstallExternalMemoryApis();
   const size_t bytes = vmsdk::kHugePageSize;
   char *a = vmsdk::AllocateHugePages(bytes);
+  bool below_a_free = BelowIsFree(a, bytes);
   char *b = vmsdk::AllocateHugePages(bytes);
+  bool below_b_free = BelowIsFree(b, bytes);
   char *c = vmsdk::AllocateHugePages(bytes);
-#ifdef MAP_FIXED_NOREPLACE
-  EXPECT_EQ(b + bytes, a);
-  EXPECT_EQ(c + bytes, b);
-#endif
+  if (below_a_free) {
+    EXPECT_EQ(b + bytes, a);
+  }
+  if (below_b_free) {
+    EXPECT_EQ(c + bytes, b);
+  }
   for (char *p : {a, b, c}) {
     EXPECT_EQ(reinterpret_cast<uintptr_t>(p) % vmsdk::kHugePageSize, 0u);
     memset(p, 0x5a, bytes);

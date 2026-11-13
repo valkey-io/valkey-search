@@ -30,7 +30,20 @@ namespace valkey_search {
 
 namespace {
 
-class AllocatorTest : public vmsdk::ValkeyTestWithParam<bool> {};
+// These tests size chunks for the heap path. The test module installs the
+// external memory APIs, which would otherwise switch them to huge pages;
+// HugePageAllocatorTest covers that path.
+class AllocatorTest : public vmsdk::ValkeyTestWithParam<bool> {
+ protected:
+  void SetUp() override {
+    vmsdk::ValkeyTestWithParam<bool>::SetUp();
+    vmsdk::SetHugePageAllocationEnabled(false);
+  }
+  void TearDown() override {
+    vmsdk::SetHugePageAllocationEnabled(true);
+    vmsdk::ValkeyTestWithParam<bool>::TearDown();
+  }
+};
 
 TEST_P(AllocatorTest, BasicFixedSizeAllocator) {
   const size_t size = 11;

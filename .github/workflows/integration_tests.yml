@@ -23,7 +23,11 @@ concurrency:
 
 jobs:
   integration-tests:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
 
     steps:
     # Checkout the code from the repository
@@ -42,9 +46,9 @@ jobs:
       uses: actions/cache/restore@v4
       with:
         path: .ccache
-        key: ccache-integration-plain-${{ github.sha }}
+        key: ccache-integration-plain-${{ runner.arch }}-${{ github.sha }}
         restore-keys: |
-          ccache-integration-plain-
+          ccache-integration-plain-${{ runner.arch }}-
 
 
     - name: Run Integration Tests
@@ -67,7 +71,7 @@ jobs:
       uses: actions/cache/save@v4
       with:
         path: .ccache
-        key: ccache-integration-plain-${{ github.sha }}
+        key: ccache-integration-plain-${{ runner.arch }}-${{ github.sha }}
 
     - name: Update Test Results Permissions
       if: always()
@@ -78,7 +82,7 @@ jobs:
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: integration-test-results
+        name: integration-test-results-${{ runner.arch }}
         path: test-results
 
     # Fail the job if tests failed

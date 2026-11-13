@@ -324,14 +324,15 @@ absl::Status ParseLanguage(vmsdk::ArgsIterator &itr,
   data_model::Language language{data_model::Language::LANGUAGE_ENGLISH};
   VMSDK_ASSIGN_OR_RETURN(auto res, ParseParam(kLanguageParam, false, itr,
                                               language, *kLanguageByStr));
+  if (res) {
+    index_schema_proto.set_language(language);
+  }
   VMSDK_ASSIGN_OR_RETURN(
       res, vmsdk::IsParamKeyMatch(kLanguageFieldParam, false, itr));
   if (res) {
     return absl::InvalidArgumentError(
         NotSupportedParamErrorMsg(kLanguageFieldParam));
   }
-
-  index_schema_proto.set_language(language);
   return absl::OkStatus();
 }
 absl::Status ParseScore(vmsdk::ArgsIterator &itr,

@@ -2006,7 +2006,7 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         out of the index prefix must not crash in MoveKey -> UnshareWithValkey."""
         self.client.execute_command("DEBUG", "SET-ACTIVE-EXPIRE", "0")
         index = self.build_index()
-        index.create(self.client)
+        index.create(self.client, wait_for_backfill=True)
 
         # Case 1: Explicit HDEL followed by RENAME out of prefix
         self.client.hset("doc:0", mapping={"vec": vector(0), "other": "x"})

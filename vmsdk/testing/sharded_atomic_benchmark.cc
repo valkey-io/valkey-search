@@ -9,6 +9,8 @@
 
 #include "benchmark/benchmark.h"
 #include "vmsdk/src/sharded_atomic.h"
+// Installs ValkeyModule_Alloc before main, which ShardedAtomic allocates with.
+#include "vmsdk/src/testing_infra/module.h"  // IWYU pragma: keep
 
 namespace vmsdk {
 

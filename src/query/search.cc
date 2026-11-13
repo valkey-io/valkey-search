@@ -902,6 +902,88 @@ CalcBestMatchingInkeys(const SearchParameters &parameters,
   return results;
 }
 
+SortByKey::SortByKey(const IndexSchema &schema,
+                     absl::string_view sortby_alias) {
+  if (schema.GetAttributeDataType().ToProto() ==
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON) {
+    lookup_key = std::string(sortby_alias);
+  } else {
+    auto resolved = schema.GetIdentifier(sortby_alias);
+    // A non-attribute name (KNN score, VR distance) is never read from the map.
+    lookup_key =
+        resolved.ok() ? *std::move(resolved) : std::string(sortby_alias);
+  }
+}
+
+void RefileAliasSortByValue(RecordsMap &contents, absl::string_view lookup_key,
+                            absl::string_view alias) {
+  if (contents.contains(lookup_key)) {
+    return;
+  }
+  auto alias_it = contents.find(alias);
+  if (alias_it == contents.end()) {
+    return;
+  }
+  // Copied, not retained: the coordinator runs this off the main thread.
+  auto owned_key = vmsdk::MakeUniqueValkeyString(lookup_key);
+  auto key_view = vmsdk::ToStringView(owned_key.get());
+  contents.emplace(
+      key_view,
+      RecordsMapValue(std::move(owned_key),
+                      vmsdk::MakeUniqueValkeyString(
+                          vmsdk::ToStringView(alias_it->second.value.get()))));
+}
+
+std::optional<std::string> OldShardSortByRefileKey(
+    const SearchParameters &parameters) {
+  if (!parameters.sortby_parameter.has_value() || parameters.all_content) {
+    return std::nullopt;
+  }
+  // JSON uses the alias on every version.
+  SortByKey key(*parameters.index_schema, parameters.sortby_parameter->field);
+  if (key.lookup_key == parameters.sortby_parameter->field) {
+    return std::nullopt;
+  }
+  for (const auto &attribute : parameters.return_attributes) {
+    const auto identifier = vmsdk::ToStringView(attribute.identifier.get());
+    // Fetched by the shard itself, so absent means not in the key.
+    if (identifier == key.lookup_key) {
+      return std::nullopt;
+    }
+    // The alias entry may be that returned field's value, not the sort value.
+    if (identifier == parameters.sortby_parameter->field) {
+      return std::nullopt;
+    }
+  }
+  return std::move(key.lookup_key);
+}
+
+namespace {
+
+// Whether the KNN index pre-fill must give each row its SORTBY value.
+bool KnnPrefillNeedsSortKey(const SearchParameters &parameters) {
+  if (parameters.IsNonVectorQuery() || parameters.no_content ||
+      parameters.all_content || parameters.return_attributes.empty() ||
+      !parameters.sortby_parameter.has_value()) {
+    return false;
+  }
+  // An older coordinator cannot read this value, and under the alias it could
+  // take another RETURN attribute's slot.
+  if (!parameters.sortby_by_lookup_key) {
+    return false;
+  }
+  // Sorted from Neighbor::distance, not from attribute_contents.
+  const std::string &field = parameters.sortby_parameter->field;
+  if ((parameters.score_as &&
+       field == vmsdk::ToStringView(parameters.score_as.get())) ||
+      field == GetVrScoreFieldName(parameters)) {
+    return false;
+  }
+  return true;
+}
+
+}  // namespace
+
 absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
     absl::StatusOr<std::vector<indexes::Neighbor>> results,
     const SearchParameters &parameters) {
@@ -918,10 +1000,47 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
     return results;
   }
   struct AttributeInfo {
-    const ReturnAttribute *attribute;
+    absl::string_view identifier;
     indexes::IndexBase *index;
+    // When the index has no value for the row, the key has none it accepted
+    // either, and reading it would only change how RETURN numbers print.
+    bool sort_only{false};
   };
   std::vector<AttributeInfo> attributes;
+  std::optional<SortByKey> sortby_key;
+  if (KnnPrefillNeedsSortKey(parameters)) {
+    const std::string &sortby_field = parameters.sortby_parameter->field;
+    sortby_key.emplace(*parameters.index_schema, sortby_field);
+    auto index = parameters.index_schema->GetIndex(sortby_field);
+    // The parser and the shard's fingerprint check make this unreachable.
+    DCHECK(index.ok()) << index.status();
+    if (!index.ok()) {
+      return results;
+    }
+    // A row keeps one entry per field, from the first RETURN attribute on it.
+    auto first_on_field = std::find_if(
+        parameters.return_attributes.begin(),
+        parameters.return_attributes.end(), [&](const ReturnAttribute &attr) {
+          return attr.identifier.get() &&
+                 vmsdk::ToStringView(attr.identifier.get()) ==
+                     sortby_key->lookup_key;
+        });
+    if (first_on_field == parameters.return_attributes.end()) {
+      attributes.push_back(AttributeInfo{.identifier = sortby_key->lookup_key,
+                                         .index = index.value().get(),
+                                         .sort_only = true});
+    } else if (first_on_field->attribute_alias.get()) {
+      auto returned_index = parameters.index_schema->GetIndex(
+          vmsdk::ToStringView(first_on_field->attribute_alias.get()));
+      const auto sort_type = index.value()->GetIndexerType();
+      // Another index on the same field, a NUMERIC for a TAG sort say, keeps
+      // different text than the sort attribute's own.
+      if (!returned_index.ok() ||
+          returned_index.value()->GetIndexerType() != sort_type) {
+        return results;
+      }
+    }
+  }
   for (auto &attribute : parameters.return_attributes) {
     if (!attribute.attribute_alias.get()) {
       // Any attribute that is not indexed will result in all attributes being
@@ -933,7 +1052,9 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
     if (!index.ok()) {
       return results;
     }
-    attributes.push_back(AttributeInfo{&attribute, index.value().get()});
+    attributes.push_back(AttributeInfo{
+        .identifier = vmsdk::ToStringView(attribute.identifier.get()),
+        .index = index.value().get()});
   }
   for (auto &neighbor : *results) {
     if (neighbor.attribute_contents.has_value()) {
@@ -1016,13 +1137,13 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
       }
 
       if (attribute_value != nullptr) {
-        auto identifier = vmsdk::MakeUniqueValkeyString(
-            vmsdk::ToStringView(attribute_info.attribute->identifier.get()));
+        auto identifier =
+            vmsdk::MakeUniqueValkeyString(attribute_info.identifier);
         auto identifier_view = vmsdk::ToStringView(identifier.get());
         neighbor.attribute_contents->emplace(
             identifier_view,
             RecordsMapValue(std::move(identifier), std::move(attribute_value)));
-      } else {
+      } else if (!attribute_info.sort_only) {
         // Mark this neighbor as needing content retrieval via the main thread
         // (e.g. the attribute value may exist but not be indexed due to type
         // mismatch).

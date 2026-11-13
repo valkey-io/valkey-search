@@ -26,6 +26,7 @@
 #include "absl/synchronization/mutex.h"
 #include "gtest/gtest_prod.h"
 #include "src/utils/allocator.h"
+#include "vmsdk/src/huge/flat_hash_map.h"
 #include "vmsdk/src/memory_tracker.h"
 
 namespace valkey_search {
@@ -1035,6 +1036,14 @@ class StringInternStore {
     return str_to_interned_.size();
   }
 
+  // Advisory HugeFlatHashSet migration (see vmsdk/src/huge/flat_hash_map.h).
+  // NeedsMigration() is lock-free; MigrateSome() takes the store's mutex only
+  // when there is something to migrate.
+  static bool NeedsMigration() ABSL_NO_THREAD_SAFETY_ANALYSIS {
+    return Instance().str_to_interned_.NeedsMigration();
+  }
+  static void MigrateSome(size_t n);
+
   struct Stats {
     struct BucketStats {
       size_t count_{0};      // Number of entries in this bucket
@@ -1067,8 +1076,8 @@ class StringInternStore {
       return lhs->Str() == rhs->Str();
     }
   };
-  absl::flat_hash_set<InternedStringPtr, InternedStringPtrFullHash,
-                      InternedStringPtrFullEqual>
+  vmsdk::HugeFlatHashSet<InternedStringPtr, InternedStringPtrFullHash,
+                         InternedStringPtrFullEqual>
       str_to_interned_ ABSL_GUARDED_BY(mutex_);
   mutable absl::Mutex mutex_;
 

@@ -155,6 +155,28 @@ class TestFtHybridLoadProjection(_LoadProjectionTests,
         self._seed(client, client, key_type)
         return client
 
+    def test_json_named_load_returns_value(self):
+        """The reply reads each LOAD column after the request's own copy of
+        the identifier is gone, so the content must own its keys."""
+        client: Valkey = self.server.get_new_client()
+        client.execute_command(
+            "FT.CREATE", "jidx", "ON", "JSON", "PREFIX", "1", "j:", "SCHEMA",
+            "$.title", "AS", "title", "TEXT",
+            "$.price", "AS", "price", "NUMERIC",
+            "$.vec", "AS", "vec", "VECTOR", "HNSW", "6", "TYPE", "FLOAT32",
+            "DIM", "4", "DISTANCE_METRIC", "L2")
+        for i in range(1, 4):
+            client.execute_command("JSON.SET", f"j:{i}", "$", json.dumps({
+                "title": "alpha", "price": i,
+                "vec": [float(i), 0.0, 0.0, 0.0]}))
+        reply = client.execute_command(
+            "FT.HYBRID", "jidx", "SEARCH", "@title:alpha", "VSIM", "@vec",
+            "$q", "COMBINE", "RRF", "2", "CONSTANT", "60",
+            "LOAD", "1", "@price", "PARAMS", "2", "q", Q)
+        assert len(reply) == 4, reply
+        assert sorted(reply[1:]) == [[b"price", b"1"], [b"price", b"2"],
+                                     [b"price", b"3"]], reply
+
 
 class TestFtHybridLoadProjectionCluster(_LoadProjectionTests,
                                         ValkeySearchClusterTestCase):

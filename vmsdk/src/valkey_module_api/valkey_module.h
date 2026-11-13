@@ -1735,6 +1735,10 @@ VALKEYMODULE_API int (*ValkeyModule_DecrExternalMemory)(size_t bytes)
 VALKEYMODULE_API size_t (*ValkeyModule_MallocSize)(void *ptr) VALKEYMODULE_ATTR;
 VALKEYMODULE_API size_t (*ValkeyModule_MallocUsableSize)(void *ptr)
     VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_IncrExternalMemory)(size_t bytes)
+    VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_DecrExternalMemory)(size_t bytes)
+    VALKEYMODULE_ATTR;
 VALKEYMODULE_API size_t (*ValkeyModule_MallocSizeString)(
     ValkeyModuleString *str) VALKEYMODULE_ATTR;
 VALKEYMODULE_API size_t (*ValkeyModule_MallocSizeDict)(ValkeyModuleDict *dict)
@@ -2191,6 +2195,8 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver,
   VALKEYMODULE_GET_API(DecrExternalMemory);
   VALKEYMODULE_GET_API(MallocSize);
   VALKEYMODULE_GET_API(MallocUsableSize);
+  VALKEYMODULE_GET_API(IncrExternalMemory);
+  VALKEYMODULE_GET_API(DecrExternalMemory);
   VALKEYMODULE_GET_API(MallocSizeString);
   VALKEYMODULE_GET_API(MallocSizeDict);
   VALKEYMODULE_GET_API(CreateModuleUser);

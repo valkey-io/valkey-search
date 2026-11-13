@@ -115,6 +115,11 @@ class IndexBase {
 
   virtual void OnSwapDB(int new_db_num) {}
 
+  // NeedsMigration() is lock-free. MigrateSome() must run in the schema's
+  // write phase.
+  virtual bool NeedsMigration() const { return false; }
+  virtual void MigrateSome(size_t n) {}
+
  private:
   IndexerType indexer_type_{IndexerType::kNone};
 };

@@ -1164,6 +1164,51 @@ void IndexSchema::MigrateHugeMaps(size_t n) {
   if (db_key_info.NeedsMigration()) {
     db_key_info.MigrateSome(n);
   }
+  if (writer_migration_scheduled_.load() || !WriterMapsNeedMigration()) {
+    return;
+  }
+  writer_migration_scheduled_.store(true);
+  bool scheduled = mutations_thread_pool_->Schedule(
+      [weak_index_schema = GetWeakPtr(), n]() {
+        auto index_schema = weak_index_schema.lock();
+        if (!index_schema) {
+          return;
+        }
+        index_schema->MigrateWriterMaps(n);
+      },
+      vmsdk::ThreadPool::Priority::kLow);
+  if (!scheduled) {
+    writer_migration_scheduled_.store(false);
+  }
+}
+
+bool IndexSchema::WriterMapsNeedMigration() const {
+  if (index_key_info_.NeedsMigration()) {
+    return true;
+  }
+  for (const auto &[_, attribute] : attributes_) {
+    if (attribute.GetIndex()->NeedsMigration()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void IndexSchema::MigrateWriterMaps(size_t n) {
+  if (!is_destructing_) {
+    vmsdk::WriterMutexLock lock(&time_sliced_mutex_);
+    {
+      absl::MutexLock records_lock(&mutated_records_mutex_);
+      index_key_info_.MigrateSome(n);
+    }
+    for (const auto &[_, attribute] : attributes_) {
+      auto index = attribute.GetIndex();
+      if (index->NeedsMigration()) {
+        index->MigrateSome(n);
+      }
+    }
+  }
+  writer_migration_scheduled_.store(false);
 }
 
 uint32_t IndexSchema::PerformBackfill(ValkeyModuleCtx *ctx,

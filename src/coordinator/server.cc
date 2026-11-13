@@ -202,7 +202,10 @@ class ShardReplyTask {
 
 void ShardReplyDispatcher::Dispatch(
     std::unique_ptr<RemoteResponderSearch> operation) {
-  if (pool_ == nullptr || !options::GetBackgroundShardReply().GetValue()) {
+  // A one-thread pool is also running the searches, so a reply queued there
+  // waits behind them while main sits idle. Reply inline instead.
+  if (pool_ == nullptr || pool_->Size() <= 1 ||
+      !options::GetBackgroundShardReply().GetValue()) {
     operation->SendReply();
     return;
   }

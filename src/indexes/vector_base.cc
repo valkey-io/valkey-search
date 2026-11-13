@@ -10,10 +10,12 @@
 #include <sys/types.h>
 
 #include <algorithm>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -36,6 +38,7 @@
 #include "src/indexes/fp16.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
+#include "src/indexes/scoring/scorer.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text/text_index.h"
 #include "src/query/predicate.h"
@@ -48,6 +51,7 @@
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/status/status_macros.h"
+#include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -146,10 +150,12 @@ std::vector<char> NormalizeVector(absl::string_view record,
 
 PrefilterEvaluator::PrefilterEvaluator(query::QueryContext &query_ctx,
                                        QueryOperations query_operations,
-                                       const IndexSchema &index_schema)
+                                       const IndexSchema &index_schema,
+                                       bool source_resolves_text)
     : query::Evaluator(query_operations),
       query_ctx_(query_ctx),
-      index_schema_(index_schema) {}
+      index_schema_(index_schema),
+      source_resolves_text_(source_resolves_text) {}
 
 bool PrefilterEvaluator::Evaluate(const query::Predicate &predicate,
                                   const InternedStringPtr &key) {
@@ -381,14 +387,14 @@ absl::StatusOr<std::optional<uint64_t>> VectorBase::UnTrackKey(
     return std::nullopt;
   }
   auto id = it->second.internal_id;
-  tracked_metadata_by_key_.erase(it);
+  tracked_metadata_by_key_.erase_and_migrate(it);
   auto key_by_internal_id_it = key_by_internal_id_.find(id);
   if (key_by_internal_id_it == key_by_internal_id_.end()) {
     return absl::InvalidArgumentError(
         "Error while untracking key - key was not found in key_by_internal_id_ "
         "but in internal_by_key_");
   }
-  key_by_internal_id_.erase(key_by_internal_id_it);
+  key_by_internal_id_.erase_and_migrate(key_by_internal_id_it);
   return id;
 }
 
@@ -486,10 +492,13 @@ absl::Status VectorBase::LoadTrackedKeys(
     ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
     SupplementalContentChunkIter &&iter) {
   absl::WriterMutexLock lock(&key_to_metadata_mutex_);
-
+  size_t keys_changed_since_save = keys_changed_since_save_;
   while (iter.HasNext()) {
     VMSDK_ASSIGN_OR_RETURN(auto metadata_str, iter.Next(),
                            _ << "Error loading metadata");
+    if (vectors_resolved_on_load_) {
+      continue;  // The key labels section already provided the key maps.
+    }
     data_model::TrackedKeyMetadata tracked_key_metadata;
     if (!tracked_key_metadata.ParseFromString(metadata_str->binary_content())) {
       return absl::InvalidArgumentError("Error parsing metadata from proto");
@@ -501,27 +510,97 @@ absl::Status VectorBase::LoadTrackedKeys(
           .magnitude = tracked_key_metadata.magnitude()}});
     key_by_internal_id_.insert(
         {tracked_key_metadata.internal_id(), interned_key});
-
-    auto key = vmsdk::MakeUniqueValkeyString(interned_key->Str());
-    auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
-        ctx, key.get(), VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
-    CHECK(key_obj) << "Failed to open key during LoadTrackedKeys: "
-                   << interned_key->Str();
-    auto attribute_status = attribute_data_type->GetAttribute(
-        ctx, key_obj.get(), interned_key->Str(), attribute_identifier_);
-    CHECK(attribute_status.ok());
-    auto attribute_val = std::move(attribute_status.value());
-    if (attribute_data_type->AttributesProvidedAsString() && attribute_val) {
-      attribute_val = NormalizeStringAttribute(std::move(attribute_val));
+    auto &saved_vector = GetVectorLockFree(tracked_key_metadata.internal_id());
+    auto shared = ShareIfUnchangedSinceSave(
+        ctx, attribute_data_type, interned_key,
+        absl::string_view(saved_vector.GetRawVector(), GetVectorDataSize()));
+    if (!shared) {
+      // Keep the saved vector, which matches the node's graph edges; the
+      // queued change re-indexes or removes the key after the load.
+      ++keys_changed_since_save;
+      continue;
     }
-    auto vector_record_with_size = VectorRegistry::Instance().DedupOrConstruct(
-        interned_key, attribute_val.get(), attribute_data_type->ToProto(),
-        db_num_, this);
-    auto &save_vector = GetVectorLockFree(tracked_key_metadata.internal_id());
-    save_vector = std::move(vector_record_with_size.vector_record);
+    saved_vector = std::move(*shared);
+  }
+  if (keys_changed_since_save > 0) {
+    VMSDK_LOG(NOTICE, ctx)
+        << keys_changed_since_save
+        << " indexed keys changed after the index was saved (expired, deleted "
+           "or updated); keeping their saved vectors until the change is "
+           "applied after the load";
   }
   inc_id_ = GetMaxLoadedLabel() + 1;
   return absl::OkStatus();
+}
+
+absl::StatusOr<TrackedKeys> VectorBase::LoadKeyLabels(
+    SupplementalContentChunkIter &&iter) {
+  TrackedKeys tracked_keys;
+  while (iter.HasNext()) {
+    VMSDK_ASSIGN_OR_RETURN(auto metadata_str, iter.Next(),
+                           _ << "Error loading key labels");
+    data_model::TrackedKeyMetadata tracked_key_metadata;
+    if (!tracked_key_metadata.ParseFromString(metadata_str->binary_content())) {
+      return absl::InvalidArgumentError("Error parsing key label from proto");
+    }
+    auto interned_key = StringInternStore::Intern(tracked_key_metadata.key());
+    tracked_keys.metadata_by_key.insert(
+        {interned_key,
+         {.internal_id = tracked_key_metadata.internal_id(),
+          .magnitude = tracked_key_metadata.magnitude()}});
+    tracked_keys.key_by_internal_id.insert(
+        {tracked_key_metadata.internal_id(), interned_key});
+  }
+  return tracked_keys;
+}
+
+void VectorBase::AdoptTrackedKeys(TrackedKeys &&tracked_keys) {
+  absl::WriterMutexLock lock(&key_to_metadata_mutex_);
+  tracked_metadata_by_key_ = std::move(tracked_keys.metadata_by_key);
+  key_by_internal_id_ = std::move(tracked_keys.key_by_internal_id);
+  inc_id_ = GetMaxLoadedLabel() + 1;
+}
+
+std::optional<VectorRecord> VectorBase::ShareIfUnchangedSinceSave(
+    ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
+    const InternedStringPtr &key, absl::string_view saved) const {
+  auto key_str = vmsdk::MakeUniqueValkeyString(key->Str());
+  auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
+      ctx, key_str.get(), VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
+  if (!key_obj) {
+    return std::nullopt;
+  }
+  auto attribute_val =
+      attribute_data_type
+          ->GetAttribute(ctx, key_obj.get(), key->Str(), attribute_identifier_)
+          .value_or(vmsdk::UniqueValkeyString());
+  if (attribute_data_type->AttributesProvidedAsString() && attribute_val) {
+    attribute_val = NormalizeStringAttribute(std::move(attribute_val));
+  }
+  if (!attribute_val) {
+    return std::nullopt;
+  }
+  absl::string_view vector = vmsdk::ToStringView(attribute_val.get());
+  if (!IsValidSizeVector(vector)) {
+    return std::nullopt;
+  }
+  // A normalized index saves every vector normalized (see SaveIndexImpl), so
+  // the keyspace vector is normalized the same way before comparing.
+  std::vector<char> normalized;
+  absl::string_view comparable = vector;
+  if (normalize_) {
+    normalized =
+        NormalizeVector(vector, GetVectorDataType(),
+                        CalcReciprocalMagnitude(vector, GetVectorDataType()));
+    comparable = absl::string_view(normalized.data(), normalized.size());
+  }
+  if (comparable != saved) {
+    return std::nullopt;
+  }
+  return VectorRegistry::Instance()
+      .DedupOrConstruct(key, attribute_val.get(),
+                        attribute_data_type->ToProto(), db_num_, this)
+      .vector_record;
 }
 
 std::unique_ptr<data_model::Index> VectorBase::ToProto() const {
@@ -581,6 +660,12 @@ absl::StatusOr<float> VectorBase::RecomputeDistance(
   return ComputeDistance(query, vector_record, query_magnitude);
 }
 
+absl::StatusOr<float> VectorBase::RecomputeRangeDistance(
+    absl::string_view record, absl::string_view query) const {
+  VMSDK_ASSIGN_OR_RETURN(float distance, RecomputeDistance(record, query));
+  return ClampCosineDistance(distance);
+}
+
 bool VectorBase::AddPrefilteredKey(
     absl::string_view query, float query_magnitude,
     const InternedStringPtr &key, uint64_t count,
@@ -636,15 +721,46 @@ absl::Status VectorBase::ForEachUnTrackedKey(
   return absl::OkStatus();
 }
 
-std::vector<Neighbor> VectorBase::SearchRangeExhaustive(
+absl::StatusOr<float> VectorBase::ValidateRangeSearchInputs(
+    absl::string_view query, const RangeQuery &range) const {
+  if (!IsValidSizeVector(query)) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Vector blob size (", query.size(),
+        ") does not match index dimensions (", GetVectorDataSize(), ")"));
+  }
+  const float radius = range.radius;
+  if (scoring::IsNaN(radius)) {
+    return absl::InvalidArgumentError(
+        "VECTOR_RANGE radius is not a valid number");
+  }
+  if (scoring::IsNegativeNonZero(radius)) {
+    return absl::InvalidArgumentError(
+        "VECTOR_RANGE radius must be non-negative");
+  }
+  // The HNSW shell arithmetic requires a finite, non-negative epsilon; the
+  // query path passes VectorRangePredicate::GetSearchEpsilon(), which is.
+  if (scoring::IsNaN(range.epsilon) || scoring::IsInf(range.epsilon) ||
+      scoring::IsNegativeNonZero(range.epsilon)) {
+    return absl::InvalidArgumentError(
+        "VECTOR_RANGE epsilon must be a finite non-negative number");
+  }
+  if (scoring::IsInf(radius)) {
+    return std::numeric_limits<float>::max();
+  }
+  // Normalize -0 to +0 so shell arithmetic and diagnostics have one zero.
+  return scoring::IsZero(radius) ? 0.0f : radius;
+}
+
+RangeResult VectorBase::SearchRangeExhaustive(
     absl::string_view query, float radius, cancel::Token &cancellation_token,
-    hnswlib::BaseFilterFunctor *filter) const {
+    size_t max_results, hnswlib::BaseFilterFunctor *filter) const {
   auto nq = NormalizeQueryIfNeeded(query);
   const float query_magnitude =
       normalize_ ? CalcReciprocalMagnitude(nq.view, GetVectorDataType())
                  : kDefaultMagnitude;
-  std::vector<Neighbor> neighbors;
-  neighbors.reserve(kRangeReserve);
+  RangeResult result;
+  std::vector<Neighbor> &neighbors = result.neighbors;
+  neighbors.reserve(std::min(kRangeReserve, max_results));
   for (const auto &[key, metadata] : tracked_metadata_by_key_) {
     if (cancellation_token->IsCancelled()) {
       break;
@@ -658,10 +774,14 @@ std::vector<Neighbor> VectorBase::SearchRangeExhaustive(
     }
     float distance = RangeDistance(nq.view, query_magnitude, vector_record);
     if (distance <= radius) {
+      if (neighbors.size() >= max_results) {
+        result.truncated = true;
+        break;
+      }
       neighbors.emplace_back(key, distance);
     }
   }
-  return neighbors;
+  return result;
 }
 
 template absl::StatusOr<std::vector<Neighbor>> VectorBase::CreateReply<float>(

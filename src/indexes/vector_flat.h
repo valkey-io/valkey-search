@@ -56,12 +56,15 @@ class VectorFlat : public VectorType<T> {
       absl::string_view attribute_identifier,
       data_model::AttributeDataType attribute_data_type,
       int db_num) ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  // With `key_labels`, each node takes the keyspace's shared copy of its
+  // vector when it is unchanged since the save, instead of a saved copy, and
+  // the index takes over the key maps.
   static absl::StatusOr<std::shared_ptr<VectorFlat<T>>> LoadFromRDB(
       ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
       const data_model::VectorIndex &vector_index_proto,
       absl::string_view attribute_identifier,
-      SupplementalContentChunkIter &&iter,
-      int db_num) ABSL_NO_THREAD_SAFETY_ANALYSIS;
+      SupplementalContentChunkIter &&iter, int db_num,
+      TrackedKeys *key_labels = nullptr) ABSL_NO_THREAD_SAFETY_ANALYSIS;
   ~VectorFlat() override = default;
 
   const hnswlib::SpaceInterface<float> *GetSpace() const {
@@ -89,10 +92,10 @@ class VectorFlat : public VectorType<T> {
 
   // Lock-free search optimization, as for Search: reads the FLAT store and the
   // tracked-key maps under the phase lock only.
-  absl::StatusOr<std::vector<Neighbor>> SearchRange(
-      absl::string_view query, float radius, cancel::Token &cancellation_token,
-      std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr) override
-      ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  absl::StatusOr<RangeResult> SearchRange(absl::string_view query,
+                                          const RangeQuery &range,
+                                          cancel::Token &cancellation_token)
+      override ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
  protected:
   absl::Status ResizeIfFull() ABSL_LOCKS_EXCLUDED(resize_mutex_);

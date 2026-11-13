@@ -7,6 +7,7 @@
 
 #include "src/coordinator/search_converter.h"
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <utility>
@@ -23,6 +24,7 @@
 #include "src/indexes/numeric.h"
 #include "src/indexes/scoring/scorer.h"
 #include "src/indexes/tag.h"
+#include "src/indexes/vector_base.h"
 #include "src/query/predicate.h"
 #include "src/query/search.h"
 #include "src/schema_manager.h"
@@ -31,6 +33,22 @@
 #include "vmsdk/src/type_conversions.h"
 
 namespace valkey_search::coordinator {
+
+namespace {
+
+absl::Status ValidateVectorRangeRadius(double radius) {
+  if (indexes::scoring::IsNaN(radius)) {
+    return absl::InvalidArgumentError(
+        "VECTOR_RANGE radius is not a valid number");
+  }
+  if (indexes::scoring::IsNegativeNonZero(radius)) {
+    return absl::InvalidArgumentError(
+        "VECTOR_RANGE radius must be non-negative");
+  }
+  return absl::OkStatus();
+}
+
+}  // namespace
 
 void SortByToGRPC(const std::optional<query::SortByParameter>& sortby,
                   SearchIndexPartitionRequest* request) {
@@ -270,8 +288,22 @@ static absl::StatusOr<std::unique_ptr<query::Predicate>> BuildPredicateFromGRPC(
     }
     case Predicate::kVectorRange: {
       const auto& vr = predicate.vector_range();
+      VMSDK_RETURN_IF_ERROR(ValidateVectorRangeRadius(vr.radius()));
       VMSDK_ASSIGN_OR_RETURN(auto identifier,
                              index_schema->GetIdentifier(vr.attribute_alias()));
+      VMSDK_ASSIGN_OR_RETURN(auto index,
+                             index_schema->GetIndex(vr.attribute_alias()));
+      auto* vector_index = dynamic_cast<indexes::VectorBase*>(index.get());
+      if (vector_index == nullptr) {
+        return absl::InvalidArgumentError(absl::StrCat(
+            "'", vr.attribute_alias(), "' is not indexed as a vector field"));
+      }
+      if (!vector_index->IsValidSizeVector(vr.query_vector())) {
+        return absl::InvalidArgumentError(
+            absl::StrCat("Vector blob size (", vr.query_vector().size(),
+                         ") does not match index dimensions (",
+                         vector_index->GetVectorDataSize(), ")"));
+      }
       attribute_identifiers.insert(identifier);
       std::optional<std::string> score_as;
       if (vr.has_score_as()) {
@@ -289,6 +321,12 @@ static absl::StatusOr<std::unique_ptr<query::Predicate>> BuildPredicateFromGRPC(
       }
       if (!vr.radius_param_name().empty()) {
         vr_predicate->SetRadiusParamName(vr.radius_param_name());
+      }
+      // Not range-checked, as KNN's ef is not: the shard clamps it to
+      // [1, search.max-nonvector-search-results-fetched], so a coordinator
+      // with a different search.max-vector-ef-runtime cannot fail the query.
+      if (vr.has_ef_runtime()) {
+        vr_predicate->SetEfRuntime(vr.ef_runtime());
       }
       return vr_predicate;
     }
@@ -325,6 +363,7 @@ absl::Status GRPCSearchRequestToParameters(
   parameters->limit = query::LimitParameter{request.limit().first_index(),
                                             request.limit().number()};
   parameters->no_content = request.no_content();
+  parameters->force_content_processing = request.force_content_processing();
   parameters->enable_partial_results = request.enable_partial_results();
   parameters->enable_consistency = request.enable_consistency();
   if (request.has_root_filter_predicate()) {
@@ -373,6 +412,7 @@ absl::Status GRPCSearchRequestToParameters(
   parameters->all_content =
       request.all_content() ||
       (!request.no_content() && parameters->return_attributes.empty());
+  parameters->sortby_by_lookup_key = request.accepts_sortby_lookup_key();
   return absl::OkStatus();
 }
 
@@ -522,6 +562,10 @@ static std::unique_ptr<Predicate> BuildGRPCPredicate(
         proto->mutable_vector_range()->set_radius_param_name(
             std::string(vr_predicate->GetRadiusParamName()));
       }
+      if (vr_predicate->GetEfRuntime().has_value()) {
+        proto->mutable_vector_range()->set_ef_runtime(
+            vr_predicate->GetEfRuntime().value());
+      }
       return proto;
     }
   }
@@ -545,14 +589,17 @@ std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
   request->mutable_limit()->set_number(parameters.limit.number);
   request->set_timeout_ms(parameters.timeout_ms);
   request->set_no_content(parameters.no_content);
+  request->set_force_content_processing(!parameters.NoProcessingRequired());
   request->set_all_content(parameters.all_content);
+  request->set_accepts_sortby_lookup_key(true);
   request->set_enable_partial_results(parameters.enable_partial_results);
   request->set_enable_consistency(parameters.enable_consistency);
   if (parameters.filter_parse_results.root_predicate != nullptr) {
-    request->set_allocated_root_filter_predicate(
-        PredicateToGRPCPredicate(
-            *parameters.filter_parse_results.root_predicate)
-            .release());
+    auto predicate = PredicateToGRPCPredicate(
+        *parameters.filter_parse_results.root_predicate);
+    if (predicate != nullptr) {
+      request->mutable_root_filter_predicate()->Swap(predicate.get());
+    }
   } else {
     request->clear_root_filter_predicate();
   }

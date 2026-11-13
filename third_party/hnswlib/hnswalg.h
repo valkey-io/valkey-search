@@ -553,6 +553,16 @@ class HierarchicalNSW
          ((!isIdAllowed) || (*isIdAllowed)(GetExternalLabel(ep_id))))) {
       const StoredVectorT &ep_data = GetDataByInternalId(ep_id);
       dist_t dist = EvaluateDistance<kNormalized>(data_point, ep_data);
+      if (!bare_bone_search && stop_condition &&
+          stop_condition->observe_distance(dist)) {
+        visited_list_pool_->releaseVisitedList(vl);
+        return top_candidates;
+      }
+      if (!bare_bone_search && stop_condition &&
+          stop_condition->observe_result(dist)) {
+        visited_list_pool_->releaseVisitedList(vl);
+        return top_candidates;
+      }
       lowerBound = dist;
       top_candidates.emplace(dist, ep_id);
       if (!bare_bone_search && stop_condition) {
@@ -567,7 +577,8 @@ class HierarchicalNSW
 
     visited_array[ep_id] = visited_array_tag;
 
-    while (!candidate_set.empty()) {
+    bool stop_search = false;
+    while (!candidate_set.empty() && !stop_search) {
       std::pair<dist_t, tableint> current_node_pair = candidate_set.top();
       dist_t candidate_dist = -current_node_pair.first;
 
@@ -681,6 +692,11 @@ class HierarchicalNSW
         tableint candidate_id = unv[k];
         const char *vec = vp[k];
         dist_t dist = EvaluateDistance<kNormalized>(data_point, vec);
+        if (!bare_bone_search && stop_condition &&
+            stop_condition->observe_distance(dist)) {
+          stop_search = true;
+          break;
+        }
 
         bool flag_consider_candidate;
         if (!bare_bone_search && stop_condition) {
@@ -692,6 +708,17 @@ class HierarchicalNSW
         }
 
         if (flag_consider_candidate) {
+          const bool is_result =
+              bare_bone_search ||
+              (!isMarkedDeleted(candidate_id) &&
+               ((!isIdAllowed) ||
+                (*isIdAllowed)(GetExternalLabel(candidate_id))));
+          if (!bare_bone_search && stop_condition && is_result &&
+              stop_condition->observe_result(dist)) {
+            stop_search = true;
+            break;
+          }
+
           candidate_set.emplace(-dist, candidate_id);
 #ifdef USE_PREFETCH
           __builtin_prefetch(
@@ -700,10 +727,7 @@ class HierarchicalNSW
               0, 3);              ////////////////////////
 #endif
 
-          if (bare_bone_search ||
-              (!isMarkedDeleted(candidate_id) &&
-               ((!isIdAllowed) ||
-                (*isIdAllowed)(GetExternalLabel(candidate_id))))) {
+          if (is_result) {
             top_candidates.emplace(dist, candidate_id);
             if (!bare_bone_search && stop_condition) {
               stop_condition->add_point_to_result(
@@ -1231,7 +1255,7 @@ class HierarchicalNSW
              sizeof(labeltype));
       new (GetDataPtrByInternalId(i)) StoredVectorT(generator(
           absl::string_view(chunk->data() + size_links_level0_, vector_size_),
-          isMarkedDeleted(i)));
+          isMarkedDeleted(i), id));
       cur_element_count_++;
       memcpy((*data_level0_memory_)[i] + label_offset_, (char *)&id,
              sizeof(labeltype));
@@ -1997,12 +2021,16 @@ class HierarchicalNSW
   std::vector<std::pair<dist_t, labeltype>> searchStopConditionClosest(
       const QueryVectorT &query_data,
       BaseSearchStopCondition<dist_t> &stop_condition,
-      BaseFilterFunctor *isIdAllowed = nullptr) const {
+      BaseFilterFunctor *isIdAllowed = nullptr,
+      BaseCancellationFunctor *isCancelled = nullptr) const {
     std::vector<std::pair<dist_t, labeltype>> result;
     if (cur_element_count_ == 0) return result;
 
     tableint currObj = enterpoint_node_.load(std::memory_order_acquire);
     dist_t curdist = EvaluateDistance(query_data, GetDataByInternalId(currObj));
+    if (stop_condition.observe_distance(curdist)) {
+      return result;
+    }
 
     for (int level = element_levels_[currObj]; level > 0; level--) {
       bool changed = true;
@@ -2021,6 +2049,9 @@ class HierarchicalNSW
           if (cand < 0 || cand > max_elements_)
             throw std::runtime_error("cand error");
           dist_t d = EvaluateDistance(query_data, GetDataByInternalId(cand));
+          if (stop_condition.observe_distance(d)) {
+            return result;
+          }
 
           if (d < curdist) {
             curdist = d;
@@ -2036,12 +2067,13 @@ class HierarchicalNSW
                         CompareByFirst>
         top_candidates;
     top_candidates = searchBaseLayerST<false>(
-        currObj, query_data, 0, isIdAllowed, nullptr, &stop_condition);
+        currObj, query_data, 0, isIdAllowed, isCancelled, &stop_condition);
 
     size_t sz = top_candidates.size();
     result.resize(sz);
     while (!top_candidates.empty()) {
-      result[--sz] = top_candidates.top();
+      const auto &[dist, id] = top_candidates.top();
+      result[--sz] = {dist, GetExternalLabel(id)};
       top_candidates.pop();
     }
 

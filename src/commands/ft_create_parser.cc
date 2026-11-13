@@ -324,14 +324,15 @@ absl::Status ParseLanguage(vmsdk::ArgsIterator &itr,
   data_model::Language language{data_model::Language::LANGUAGE_ENGLISH};
   VMSDK_ASSIGN_OR_RETURN(auto res, ParseParam(kLanguageParam, false, itr,
                                               language, *kLanguageByStr));
+  if (res) {
+    index_schema_proto.set_language(language);
+  }
   VMSDK_ASSIGN_OR_RETURN(
       res, vmsdk::IsParamKeyMatch(kLanguageFieldParam, false, itr));
   if (res) {
     return absl::InvalidArgumentError(
         NotSupportedParamErrorMsg(kLanguageFieldParam));
   }
-
-  index_schema_proto.set_language(language);
   return absl::OkStatus();
 }
 absl::Status ParseScore(vmsdk::ArgsIterator &itr,
@@ -442,7 +443,15 @@ absl::Status ParseNumeric(vmsdk::ArgsIterator &itr,
 vmsdk::KeyValueParser<FTCreateTagParameters> CreateTagParser() {
   vmsdk::KeyValueParser<FTCreateTagParameters> parser;
   parser.AddParamParser(
-      kSeparatorParam, GENERATE_VALUE_PARSER(FTCreateTagParameters, separator));
+      kSeparatorParam,
+      std::make_unique<vmsdk::ParamParser<FTCreateTagParameters>>(
+          [](FTCreateTagParameters &params,
+             vmsdk::ArgsIterator &itr) -> absl::Status {
+            VMSDK_RETURN_IF_ERROR(
+                vmsdk::ParseParamValue(itr, params.separator));
+            params.explicit_separator = true;
+            return absl::OkStatus();
+          }));
   parser.AddParamParser(
       kCaseSensitiveParam,
       GENERATE_FLAG_PARSER(FTCreateTagParameters, case_sensitive));
@@ -465,6 +474,7 @@ absl::Status ParseTag(vmsdk::ArgsIterator &itr, data_model::Index &index_proto,
                      parameters.separator, "`"));
   }
   tag_index_proto->set_separator(parameters.separator);
+  tag_index_proto->set_explicit_separator(parameters.explicit_separator);
   tag_index_proto->set_case_sensitive(parameters.case_sensitive);
   index_proto.set_allocated_tag_index(tag_index_proto.release());
   return absl::OkStatus();

@@ -11,11 +11,13 @@
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <queue>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <tuple>
 #include <unordered_set>
 #include <utility>
@@ -47,6 +49,7 @@
 #include "src/metrics.h"
 #include "src/query/predicate.h"
 #include "src/utils/string_interning.h"
+#include "src/valkey_search_options.h"
 #include "testing/common.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/type_conversions.h"
@@ -1221,6 +1224,229 @@ TEST_P(IndexedContentTest, MaybeAddIndexedContentTest) {
   }
 }
 
+class KnnSortByPrefillTest : public ValkeySearchTest {};
+
+// Collision schema: attribute b's field is a, attribute c's field is b.
+TEST_F(KnnSortByPrefillTest, OldCoordinatorGetsNoSortValueFromTheIndex) {
+  auto index_schema = CreateIndexSchema("test_schema").value();
+  data_model::NumericIndex numeric_index_proto;
+  auto b_index = std::make_shared<indexes::Numeric>(numeric_index_proto);
+  auto c_index = std::make_shared<indexes::Numeric>(numeric_index_proto);
+  VMSDK_EXPECT_OK(index_schema->AddIndex("b", "a", b_index));
+  VMSDK_EXPECT_OK(index_schema->AddIndex("c", "b", c_index));
+  // The mock returns the alias unchanged by default.
+  EXPECT_CALL(*index_schema, GetIdentifier(testing::_))
+      .WillRepeatedly([&](absl::string_view alias) {
+        return index_schema->IndexSchema::GetIdentifier(alias);
+      });
+  auto key = StringInternStore::Intern("k1");
+  VMSDK_EXPECT_OK(testing_infra::AddRecord(*b_index, key, "7"));
+  VMSDK_EXPECT_OK(testing_infra::AddRecord(*c_index, key, "500"));
+
+  for (bool new_coordinator : {true, false}) {
+    UnitTestSearchParameters parameters;
+    parameters.index_schema = index_schema;
+    parameters.attribute_alias = "v";
+    parameters.sortby_parameter = query::SortByParameter{.field = "b"};
+    parameters.sortby_by_lookup_key = new_coordinator;
+    parameters.return_attributes.push_back(query::ReturnAttribute{
+        .identifier = vmsdk::MakeUniqueValkeyString("b"),
+        .attribute_alias = vmsdk::MakeUniqueValkeyString("c"),
+        .alias = vmsdk::MakeUniqueValkeyString("c")});
+    std::vector<indexes::Neighbor> neighbors;
+    neighbors.push_back(indexes::Neighbor{key, 0.1});
+    auto got = query::MaybeAddIndexedContent(std::move(neighbors), parameters);
+    VMSDK_EXPECT_OK(got);
+    ASSERT_EQ(got->size(), 1);
+    ASSERT_TRUE((*got)[0].attribute_contents.has_value());
+    std::unordered_map<std::string, std::string> expected{{"b", "500"}};
+    if (new_coordinator) {
+      expected.emplace("a", "7");
+    }
+    EXPECT_EQ(ToStringMap(*(*got)[0].attribute_contents), expected)
+        << "new_coordinator=" << new_coordinator;
+  }
+}
+
+// The index never holds TEXT, so those rows are read from the key to sort.
+TEST_F(KnnSortByPrefillTest, OnlySortValuesTheIndexCannotHoldAreReadFromKey) {
+  auto index_schema = CreateIndexSchema("test_schema").value();
+  data_model::NumericIndex numeric_index_proto;
+  auto n_index = std::make_shared<indexes::Numeric>(numeric_index_proto);
+  auto s_index = std::make_shared<indexes::Numeric>(numeric_index_proto);
+  VMSDK_EXPECT_OK(index_schema->AddIndex("n", "n", n_index));
+  VMSDK_EXPECT_OK(index_schema->AddIndex("s", "s", s_index));
+  index_schema->CreateTextIndexSchema();
+  VMSDK_EXPECT_OK(
+      index_schema->AddIndex("t", "t",
+                             std::make_shared<indexes::Text>(
+                                 CreateTextIndexProto(/*with_suffix_trie=*/true,
+                                                      /*no_stem=*/true, 1.0),
+                                 index_schema->GetTextIndexSchema())));
+  EXPECT_CALL(*index_schema, GetIdentifier(testing::_))
+      .WillRepeatedly([&](absl::string_view alias) {
+        return index_schema->IndexSchema::GetIdentifier(alias);
+      });
+  auto with_s = StringInternStore::Intern("with_s");
+  auto without_s = StringInternStore::Intern("without_s");
+  VMSDK_EXPECT_OK(testing_infra::AddRecord(*n_index, with_s, "1"));
+  VMSDK_EXPECT_OK(testing_infra::AddRecord(*n_index, without_s, "2"));
+  VMSDK_EXPECT_OK(testing_infra::AddRecord(*s_index, with_s, "7"));
+
+  for (const std::string sortby : {"s", "t"}) {
+    UnitTestSearchParameters parameters;
+    parameters.index_schema = index_schema;
+    parameters.attribute_alias = "v";
+    parameters.sortby_parameter = query::SortByParameter{.field = sortby};
+    parameters.sortby_by_lookup_key = true;
+    parameters.return_attributes.push_back(query::ReturnAttribute{
+        .identifier = vmsdk::MakeUniqueValkeyString("n"),
+        .attribute_alias = vmsdk::MakeUniqueValkeyString("n"),
+        .alias = vmsdk::MakeUniqueValkeyString("n")});
+    std::vector<indexes::Neighbor> neighbors;
+    neighbors.push_back(indexes::Neighbor{with_s, 0.1});
+    neighbors.push_back(indexes::Neighbor{without_s, 0.2});
+    auto got = query::MaybeAddIndexedContent(std::move(neighbors), parameters);
+    VMSDK_EXPECT_OK(got);
+    ASSERT_EQ(got->size(), 2);
+    if (sortby == "s") {
+      ASSERT_TRUE((*got)[0].attribute_contents.has_value());
+      ASSERT_TRUE((*got)[1].attribute_contents.has_value());
+      std::unordered_map<std::string, std::string> with{{"n", "1"}, {"s", "7"}};
+      std::unordered_map<std::string, std::string> without{{"n", "2"}};
+      EXPECT_EQ(ToStringMap(*(*got)[0].attribute_contents), with);
+      EXPECT_EQ(ToStringMap(*(*got)[1].attribute_contents), without);
+    } else {
+      EXPECT_FALSE((*got)[0].attribute_contents.has_value());
+      EXPECT_FALSE((*got)[1].attribute_contents.has_value());
+    }
+  }
+}
+
+// Field a is indexed as x and z NUMERIC and as y TAG.
+TEST_F(KnnSortByPrefillTest, FieldIndexedTwiceGivesOnlyItsOwnSortValue) {
+  auto index_schema = CreateIndexSchema("test_schema").value();
+  data_model::NumericIndex numeric_index_proto;
+  data_model::TagIndex tag_index_proto;
+  tag_index_proto.set_separator(",");
+  auto x_index = std::make_shared<indexes::Numeric>(numeric_index_proto);
+  auto y_index = std::make_shared<indexes::Tag>(tag_index_proto);
+  VMSDK_EXPECT_OK(index_schema->AddIndex("x", "a", x_index));
+  auto z_index = std::make_shared<indexes::Numeric>(numeric_index_proto);
+  VMSDK_EXPECT_OK(index_schema->AddIndex("y", "a", y_index));
+  VMSDK_EXPECT_OK(index_schema->AddIndex("z", "a", z_index));
+  EXPECT_CALL(*index_schema, GetIdentifier(testing::_))
+      .WillRepeatedly([&](absl::string_view alias) {
+        return index_schema->IndexSchema::GetIdentifier(alias);
+      });
+  auto key = StringInternStore::Intern("k1");
+  VMSDK_EXPECT_OK(testing_infra::AddRecord(*x_index, key, ".6"));
+  VMSDK_EXPECT_OK(testing_infra::AddRecord(*y_index, key, ".6"));
+  VMSDK_EXPECT_OK(testing_infra::AddRecord(*z_index, key, ".6"));
+
+  struct Case {
+    std::string sortby;
+    std::vector<std::string> returned;
+    std::optional<std::string> expected_a;
+  };
+  for (const auto &c : std::vector<Case>{{"y", {"x"}, std::nullopt},
+                                         {"y", {"x", "y"}, std::nullopt},
+                                         {"x", {"y"}, std::nullopt},
+                                         {"y", {"y", "x"}, ".6"},
+                                         {"y", {"y"}, ".6"},
+                                         {"x", {"x"}, "0.6"},
+                                         {"z", {"x"}, "0.6"}}) {
+    UnitTestSearchParameters parameters;
+    parameters.index_schema = index_schema;
+    parameters.attribute_alias = "v";
+    parameters.sortby_parameter = query::SortByParameter{.field = c.sortby};
+    parameters.sortby_by_lookup_key = true;
+    for (const auto &returned : c.returned) {
+      parameters.return_attributes.push_back(query::ReturnAttribute{
+          .identifier = vmsdk::MakeUniqueValkeyString("a"),
+          .attribute_alias = vmsdk::MakeUniqueValkeyString(returned),
+          .alias = vmsdk::MakeUniqueValkeyString(returned)});
+    }
+    std::vector<indexes::Neighbor> neighbors;
+    neighbors.push_back(indexes::Neighbor{key, 0.1});
+    auto got = query::MaybeAddIndexedContent(std::move(neighbors), parameters);
+    VMSDK_EXPECT_OK(got);
+    ASSERT_EQ(got->size(), 1);
+    std::string where = "SORTBY " + c.sortby + " RETURN";
+    for (const auto &returned : c.returned) {
+      where += " " + returned;
+    }
+    if (!c.expected_a.has_value()) {
+      EXPECT_FALSE((*got)[0].attribute_contents.has_value()) << where;
+      continue;
+    }
+    ASSERT_TRUE((*got)[0].attribute_contents.has_value()) << where;
+    std::unordered_map<std::string, std::string> expected{{"a", *c.expected_a}};
+    EXPECT_EQ(ToStringMap(*(*got)[0].attribute_contents), expected) << where;
+  }
+}
+
+class OldShardSortByRefileKeyTest : public ValkeySearchTest {};
+
+TEST_F(OldShardSortByRefileKeyTest, OnlyHashRowsSortedOnAnAliasAreRefiled) {
+  auto index_schema = CreateIndexSchema("test_schema").value();
+  data_model::NumericIndex numeric_index_proto;
+  VMSDK_EXPECT_OK(index_schema->AddIndex(
+      "s", "a", std::make_shared<indexes::Numeric>(numeric_index_proto)));
+  VMSDK_EXPECT_OK(index_schema->AddIndex(
+      "n", "n", std::make_shared<indexes::Numeric>(numeric_index_proto)));
+  EXPECT_CALL(*index_schema, GetIdentifier(testing::_))
+      .WillRepeatedly([&](absl::string_view alias) {
+        return index_schema->IndexSchema::GetIdentifier(alias);
+      });
+  struct Case {
+    std::optional<std::string> sortby;
+    bool all_content;
+    std::optional<std::string> expected;
+  };
+  for (const auto &c : std::vector<Case>{{"s", false, "a"},
+                                         {"s", true, std::nullopt},
+                                         {"n", false, std::nullopt},
+                                         {std::nullopt, false, std::nullopt}}) {
+    UnitTestSearchParameters parameters;
+    parameters.index_schema = index_schema;
+    parameters.all_content = c.all_content;
+    if (c.sortby.has_value()) {
+      parameters.sortby_parameter = query::SortByParameter{.field = *c.sortby};
+    }
+    EXPECT_EQ(query::OldShardSortByRefileKey(parameters), c.expected)
+        << c.sortby.value_or("<none>") << " all_content=" << c.all_content;
+  }
+  // RETURN of the sort field: an older shard sent it if the key has it. A
+  // field named like the alias: the shard's alias entry may be that field.
+  for (const auto &[returned, expected] :
+       std::vector<std::pair<std::string, std::optional<std::string>>>{
+           {"a", std::nullopt}, {"n", "a"}, {"s", std::nullopt}}) {
+    UnitTestSearchParameters parameters;
+    parameters.index_schema = index_schema;
+    parameters.sortby_parameter = query::SortByParameter{.field = "s"};
+    parameters.return_attributes.push_back(query::ReturnAttribute{
+        .identifier = vmsdk::MakeUniqueValkeyString(returned),
+        .alias = vmsdk::MakeUniqueValkeyString(returned)});
+    EXPECT_EQ(query::OldShardSortByRefileKey(parameters), expected)
+        << "RETURN " << returned;
+  }
+  // Every version files a JSON row's sort value under the alias.
+  ValkeyModuleCtx fake_ctx;
+  EXPECT_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
+      .WillRepeatedly(testing::Return(&fake_ctx));
+  auto json_schema =
+      MockIndexSchema::Create(&fake_ctx, "json_schema", {"json:"},
+                              std::make_unique<JsonAttributeDataType>())
+          .value();
+  VMSDK_EXPECT_OK(json_schema->AddIndex(
+      "s", "$.a", std::make_shared<indexes::Numeric>(numeric_index_proto)));
+  UnitTestSearchParameters json_parameters;
+  json_parameters.index_schema = json_schema;
+  json_parameters.sortby_parameter = query::SortByParameter{.field = "s"};
+  EXPECT_EQ(query::OldShardSortByRefileKey(json_parameters), std::nullopt);
+}
+
 static const char kTestVector0[401] =
     "00000000000000000000000000000000000000000000000000"
     "00000000000000000000000000000000000000000000000000"
@@ -1582,6 +1808,960 @@ TEST_F(GetVrScoreFieldNameTest, SingleVrUnderComposedAnd) {
   auto params = MakeParamsWithVrPredicates(std::move(root));
   EXPECT_TRUE(params.has_vector_range);
   EXPECT_EQ(query::GetVrScoreFieldName(params), "dist");
+}
+
+// $EPSILON and EF_RUNTIME reach the HNSW range walk, alone and under AND. The
+// graph is the path start - bridge-1 - bridge-2 - target (M 2), with field
+// EF_RUNTIME 1. Both bridges have squared distance 1.53 from the query against
+// radius 1. The first bridge fills the one-entry outside-shell beam and the
+// equal-distance second bridge cannot improve it, so the default shell misses
+// target. $EPSILON 0.6 puts both bridges in the shell; alternatively,
+// EF_RUNTIME 2 admits both to the beam. Under AND the walk's result is the
+// candidate set only while it is smaller than the tag's (all four keys); the
+// default-control AND query missing target shows that it is.
+TEST_F(ValkeySearchTest, VectorRangeEpsilonReachesTheHnswWalk) {
+  auto schema = CreateIndexSchema(kIndexSchemaName).value();
+  EXPECT_CALL(*schema, GetIdentifier(::testing::_))
+      .Times(::testing::AnyNumber());
+  auto vector_index =
+      indexes::VectorHNSW<float>::Create(
+          CreateHNSWVectorIndexProto(kVectorDimensions,
+                                     data_model::DISTANCE_METRIC_L2, 4,
+                                     /*m=*/2, 200, /*ef_runtime=*/1),
+          "vector_attribute_identifier",
+          data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
+          .value();
+  VMSDK_EXPECT_OK(schema->AddIndex(kVectorAttributeAlias, kVectorAttributeAlias,
+                                   vector_index));
+  auto tag_index = std::make_shared<indexes::Tag>(
+      CreateTagIndexProto(/*separator=*/",", /*case_sensitive=*/false));
+  VMSDK_EXPECT_OK(schema->AddIndex("tag", "tag", tag_index));
+  // Inserted first, start is the entry point.
+  const std::pair<const char *, std::pair<float, float>> kKeys[] = {
+      {"start", {-0.9f, 0.0f}},
+      {"bridge-1", {-0.3f, 1.2f}},
+      {"bridge-2", {0.3f, 1.2f}},
+      {"target", {0.9f, 0.0f}}};
+  for (const auto &[key, xy] : kKeys) {
+    std::vector<float> v(kVectorDimensions, 0.0f);
+    v[0] = xy.first;
+    v[1] = xy.second;
+    auto interned = StringInternStore::Intern(key);
+    schema->SetIndexMutationSequenceNumber(interned, 0);
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(*vector_index, interned,
+                                                   VectorToStr(v)));
+    VMSDK_EXPECT_OK(tag_index->AddRecord(
+        interned, AttributeData(vmsdk::MakeUniqueValkeyString("a"))));
+  }
+  const std::vector<float> query_vector(kVectorDimensions, 0.0f);
+  auto search = [&](absl::string_view filter) {
+    UnitTestSearchParameters params;
+    params.index_schema_name = kIndexSchemaName;
+    params.index_schema = schema;
+    params.dialect = kDialect;
+    TextParsingOptions options{};
+    params.filter_parse_results =
+        std::move(FilterParser(*schema, filter, options).Parse().value());
+    params.has_vector_range = true;
+    query::Predicate *vr = params.filter_parse_results.root_predicate.get();
+    if (vr->GetType() == query::PredicateType::kComposedAnd) {
+      for (const auto &child :
+           static_cast<query::ComposedPredicate *>(vr)->GetChildren()) {
+        if (child->GetType() == query::PredicateType::kVectorRange) {
+          vr = child.get();
+        }
+      }
+    }
+    static_cast<query::VectorRangePredicate *>(vr)->SetQueryVector(
+        std::string(VectorToStr(query_vector)));
+    VMSDK_EXPECT_OK(Search(params, query::SearchMode::kLocal));
+    std::vector<std::string> keys;
+    for (const auto &neighbor : params.search_result.neighbors) {
+      keys.emplace_back(neighbor.external_id->Str());
+    }
+    return keys;
+  };
+  EXPECT_THAT(search("@vector:[VECTOR_RANGE 1 $q]=>{$EPSILON: 0.6}"),
+              ::testing::ElementsAre("start", "target"));
+  EXPECT_THAT(search("@vector:[VECTOR_RANGE 1 $q]"), ::testing::SizeIs(1))
+      << "the walk entered at bridge rather than start, or did not stop";
+  EXPECT_THAT(search("@vector:[VECTOR_RANGE 1 $q]=>{$EPSILON: 0.6} @tag:{a}"),
+              ::testing::ElementsAre("start", "target"));
+  EXPECT_THAT(search("@vector:[VECTOR_RANGE 1 $q] @tag:{a}"),
+              ::testing::SizeIs(1))
+      << "the AND did not take the walk's result as its candidate set, the "
+         "walk entered at bridge rather than start, or it did not stop";
+  EXPECT_THAT(search("@vector:[VECTOR_RANGE 1 $q EF_RUNTIME 2]"),
+              ::testing::ElementsAre("start", "target"));
+  EXPECT_THAT(search("@vector:[VECTOR_RANGE 1 $q EF_RUNTIME 2] @tag:{a}"),
+              ::testing::ElementsAre("start", "target"));
+}
+
+TEST_F(ValkeySearchTest,
+       CompoundVectorRangeAndPrefersCompleteFetcherOverTruncatedVector)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  constexpr int kCap = 3;
+  auto &fetch_cap = options::GetMaxNonVectorSearchResultsFetched();
+  const auto saved_cap = fetch_cap.GetValue();
+  absl::Cleanup restore = [&] {
+    VMSDK_EXPECT_OK(fetch_cap.SetValue(saved_cap));
+  };
+  VMSDK_EXPECT_OK(fetch_cap.SetValue(kCap));
+
+  auto schema = CreateIndexSchema(kIndexSchemaName).value();
+  EXPECT_CALL(*schema, GetIdentifier(::testing::_))
+      .Times(::testing::AnyNumber());
+  auto vector_index =
+      indexes::VectorFlat<float>::Create(
+          CreateFlatVectorIndexProto(kVectorDimensions,
+                                     data_model::DISTANCE_METRIC_L2,
+                                     /*initial_cap=*/10, /*block_size=*/10),
+          kVectorAttributeAlias, data_model::ATTRIBUTE_DATA_TYPE_HASH, 0)
+          .value();
+  VMSDK_EXPECT_OK(schema->AddIndex(kVectorAttributeAlias, kVectorAttributeAlias,
+                                   vector_index));
+  auto tag_index = std::make_shared<indexes::Tag>(
+      CreateTagIndexProto(/*separator=*/",", /*case_sensitive=*/false));
+  VMSDK_EXPECT_OK(schema->AddIndex("tag", "tag", tag_index));
+
+  const std::vector<float> zero(kVectorDimensions, 0.0f);
+  for (int i = 0; i < 5; ++i) {
+    auto key = StringInternStore::Intern(absl::StrCat("v", i));
+    schema->SetIndexMutationSequenceNumber(key, 0);
+    VMSDK_EXPECT_OK(
+        testing_infra::AddVectorRecord(*vector_index, key, VectorToStr(zero)));
+    if (i >= kCap) {
+      VMSDK_EXPECT_OK(tag_index->AddRecord(
+          key, AttributeData(vmsdk::MakeUniqueValkeyString("keep"))));
+    }
+  }
+  // Match the vector index's cardinality so the planner evaluates the range
+  // child on an estimate tie, then rejects its truncated candidate set in
+  // favor of this complete tag source.
+  for (int i = 0; i < 3; ++i) {
+    auto key = StringInternStore::Intern(absl::StrCat("tag-only-", i));
+    schema->SetIndexMutationSequenceNumber(key, 0);
+    VMSDK_EXPECT_OK(tag_index->AddRecord(
+        key, AttributeData(vmsdk::MakeUniqueValkeyString("keep"))));
+  }
+
+  cancel::Token direct_token = cancel::Make(1000000, nullptr);
+  auto vector_candidates = vector_index->SearchRange(
+      VectorToStr(zero), {.radius = 1.0f, .epsilon = 0.01f}, direct_token);
+  ASSERT_TRUE(vector_candidates.ok()) << vector_candidates.status();
+  EXPECT_EQ(vector_candidates->neighbors.size(), static_cast<size_t>(kCap));
+  EXPECT_TRUE(vector_candidates->truncated);
+
+  UnitTestSearchParameters params;
+  params.index_schema = schema;
+  params.dialect = kDialect;
+  TextParsingOptions parsing_options{};
+  params.filter_parse_results =
+      std::move(FilterParser(*schema, "@vector:[VECTOR_RANGE 1 $q] @tag:{keep}",
+                             parsing_options)
+                    .Parse()
+                    .value());
+  params.has_vector_range = true;
+  auto *root = static_cast<query::ComposedPredicate *>(
+      params.filter_parse_results.root_predicate.get());
+  for (const auto &child : root->GetChildren()) {
+    if (child->GetType() == query::PredicateType::kVectorRange) {
+      static_cast<query::VectorRangePredicate *>(child.get())
+          ->SetQueryVector(std::string(VectorToStr(zero)));
+    }
+  }
+
+  const int64_t counter_before =
+      query::GetVectorRangeResultsFetchedLimitedCount();
+  query::QueryContext query_ctx(*schema,
+                                indexes::scoring::GetScorer(params.scorer));
+  auto result = query::SearchVectorRangeQuery(params, query_ctx);
+  ASSERT_TRUE(result.ok()) << result.status();
+  std::vector<std::string> keys;
+  for (const auto &neighbor : *result) {
+    keys.emplace_back(neighbor.external_id->Str());
+    EXPECT_TRUE(neighbor.has_vr_distance);
+  }
+  EXPECT_THAT(keys, ::testing::ElementsAre("v3", "v4"));
+  EXPECT_EQ(query::GetVectorRangeResultsFetchedLimitedCount(), counter_before);
+}
+
+TEST_F(ValkeySearchTest, CompoundVectorRangeOrHonorsHardCap)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  auto &fetch_cap = options::GetMaxNonVectorSearchResultsFetched();
+  const auto saved_cap = fetch_cap.GetValue();
+  absl::Cleanup restore = [&] {
+    VMSDK_EXPECT_OK(fetch_cap.SetValue(saved_cap));
+  };
+  VMSDK_EXPECT_OK(fetch_cap.SetValue(3));
+
+  auto schema = CreateIndexSchema(kIndexSchemaName).value();
+  EXPECT_CALL(*schema, GetIdentifier(::testing::_))
+      .Times(::testing::AnyNumber());
+  auto vector_index =
+      indexes::VectorFlat<float>::Create(
+          CreateFlatVectorIndexProto(kVectorDimensions,
+                                     data_model::DISTANCE_METRIC_L2,
+                                     /*initial_cap=*/10, /*block_size=*/10),
+          kVectorAttributeAlias, data_model::ATTRIBUTE_DATA_TYPE_HASH, 0)
+          .value();
+  VMSDK_EXPECT_OK(schema->AddIndex(kVectorAttributeAlias, kVectorAttributeAlias,
+                                   vector_index));
+  auto tag_index = std::make_shared<indexes::Tag>(
+      CreateTagIndexProto(/*separator=*/",", /*case_sensitive=*/false));
+  VMSDK_EXPECT_OK(schema->AddIndex("tag", "tag", tag_index));
+  auto late_tag_index = std::make_shared<indexes::Tag>(
+      CreateTagIndexProto(/*separator=*/",", /*case_sensitive=*/false));
+  VMSDK_EXPECT_OK(schema->AddIndex("late_tag", "late_tag", late_tag_index));
+
+  const std::vector<float> zero(kVectorDimensions, 0.0f);
+  for (int i = 0; i < 6; ++i) {
+    auto key = StringInternStore::Intern(absl::StrCat("v", i));
+    schema->SetIndexMutationSequenceNumber(key, 0);
+    VMSDK_EXPECT_OK(
+        testing_infra::AddVectorRecord(*vector_index, key, VectorToStr(zero)));
+    VMSDK_EXPECT_OK(tag_index->AddRecord(
+        key, AttributeData(vmsdk::MakeUniqueValkeyString(
+                 i == 0 ? "special,duplicates" : "ordinary,duplicates"))));
+  }
+  auto tag_only = StringInternStore::Intern("a-special");
+  schema->SetIndexMutationSequenceNumber(tag_only, 0);
+  VMSDK_EXPECT_OK(tag_index->AddRecord(
+      tag_only, AttributeData(vmsdk::MakeUniqueValkeyString("special"))));
+  VMSDK_EXPECT_OK(late_tag_index->AddRecord(
+      tag_only, AttributeData(vmsdk::MakeUniqueValkeyString("special"))));
+
+  class CancelAfterPolls : public cancel::Base {
+   public:
+    explicit CancelAfterPolls(int grace) : grace_(grace) {}
+    bool IsCancelled() override { return ++polls_ > grace_; }
+    void Cancel() override { grace_ = 0; }
+    int polls() const { return polls_; }
+
+   private:
+    int grace_;
+    int polls_{0};
+  };
+
+  auto search = [&](absl::string_view filter, cancel::Token token) {
+    UnitTestSearchParameters params;
+    if (token != nullptr) {
+      params.cancellation_token = std::move(token);
+    }
+    params.index_schema = schema;
+    params.dialect = kDialect;
+    TextParsingOptions parsing_options{};
+    params.filter_parse_results = std::move(
+        FilterParser(*schema, filter, parsing_options).Parse().value());
+    params.has_vector_range = true;
+    auto *root = static_cast<query::ComposedPredicate *>(
+        params.filter_parse_results.root_predicate.get());
+    for (const auto &child : root->GetChildren()) {
+      if (child->GetType() == query::PredicateType::kVectorRange) {
+        static_cast<query::VectorRangePredicate *>(child.get())
+            ->SetQueryVector(std::string(VectorToStr(zero)));
+      }
+    }
+    query::QueryContext query_ctx(*schema,
+                                  indexes::scoring::GetScorer(params.scorer));
+    auto result = query::SearchVectorRangeQuery(params, query_ctx);
+    EXPECT_TRUE(result.ok()) << result.status();
+    absl::flat_hash_map<std::string, bool> found;
+    if (result.ok()) {
+      for (const auto &neighbor : *result) {
+        found.emplace(neighbor.external_id->Str(), neighbor.has_vr_distance);
+      }
+    }
+    return found;
+  };
+
+  const int64_t counter_before =
+      query::GetVectorRangeResultsFetchedLimitedCount();
+  const auto vector_first =
+      search("@vector:[VECTOR_RANGE 1 $q] | @tag:{special}", cancel::Token{});
+  ASSERT_EQ(vector_first.size(), 3u);
+  EXPECT_THAT(vector_first,
+              ::testing::UnorderedElementsAre(::testing::Pair("v0", true),
+                                              ::testing::Pair("v1", true),
+                                              ::testing::Pair("v2", true)));
+  EXPECT_EQ(query::GetVectorRangeResultsFetchedLimitedCount(),
+            counter_before + 1);
+
+  const auto tag_first =
+      search("@tag:{special} | @vector:[VECTOR_RANGE 1 $q]", cancel::Token{});
+  ASSERT_EQ(tag_first.size(), 3u);
+  EXPECT_THAT(tag_first,
+              ::testing::UnorderedElementsAre(
+                  ::testing::Pair("a-special", false),
+                  ::testing::Pair("v0", true), ::testing::Pair("v1", true)));
+  EXPECT_EQ(query::GetVectorRangeResultsFetchedLimitedCount(),
+            counter_before + 2);
+
+  // Under the cap, the late fetcher contributes a-special, and only it.
+  VMSDK_EXPECT_OK(fetch_cap.SetValue(10));
+  const int64_t counter_before_duplicate_only =
+      query::GetVectorRangeResultsFetchedLimitedCount();
+  constexpr absl::string_view kThreeFetchers =
+      "@vector:[VECTOR_RANGE 1 $q] | @tag:{duplicates} | @late_tag:{special}";
+  auto never =
+      std::make_shared<CancelAfterPolls>(std::numeric_limits<int>::max());
+  const auto complete = search(kThreeFetchers, never);
+  ASSERT_EQ(complete.size(), 7u);
+  ASSERT_TRUE(complete.contains("a-special"));
+  const int all_polls = never->polls();
+
+  // A cancelled query keeps what it collected before the poll that reported
+  // cancellation and polls no further: cancelled at the last poll it has
+  // already collected a-special; cancelled in the duplicates fetcher it never
+  // reaches the late fetcher.
+  for (const int grace : {all_polls - 1, 12}) {
+    SCOPED_TRACE(absl::StrCat("grace ", grace, " of ", all_polls, " polls"));
+    ASSERT_LT(grace, all_polls);
+    auto token = std::make_shared<CancelAfterPolls>(grace);
+    const auto partial = search(kThreeFetchers, token);
+    EXPECT_EQ(token->polls(), grace + 1);
+    for (const auto &[key, has_vr_distance] : partial) {
+      EXPECT_TRUE(complete.contains(key)) << key;
+    }
+    EXPECT_EQ(partial.contains("a-special"), grace == all_polls - 1);
+    if (grace < all_polls - 1) {
+      EXPECT_LT(partial.size(), complete.size());
+    }
+  }
+  EXPECT_EQ(query::GetVectorRangeResultsFetchedLimitedCount(),
+            counter_before_duplicate_only);
+}
+
+// Five keys lie in the ball and the cap is 3. INKEYS must be applied before
+// the cap, as KNN and the non-vector drain do: a post-filter over the first
+// three in-range keys returns nothing for an in-set key beyond them. {v2, v3,
+// v4} is exactly the cap and verifies that direct checks do not truncate it.
+TEST_F(ValkeySearchTest, VectorRangeAppliesInkeysBeforeHardCap)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  constexpr int kCap = 3;
+  auto &fetch_cap = options::GetMaxNonVectorSearchResultsFetched();
+  const auto saved_cap = fetch_cap.GetValue();
+  absl::Cleanup restore = [&] {
+    VMSDK_EXPECT_OK(fetch_cap.SetValue(saved_cap));
+  };
+  VMSDK_EXPECT_OK(fetch_cap.SetValue(kCap));
+
+  for (bool hnsw : {false, true}) {
+    const std::string schema_name = hnsw ? "inkeys_hnsw" : "inkeys_flat";
+    SCOPED_TRACE(schema_name);
+    auto schema = CreateIndexSchema(schema_name).value();
+    EXPECT_CALL(*schema, GetIdentifier(::testing::_))
+        .Times(::testing::AnyNumber());
+    std::shared_ptr<indexes::VectorBase> vector_index;
+    if (hnsw) {
+      vector_index =
+          indexes::VectorHNSW<float>::Create(
+              CreateHNSWVectorIndexProto(kVectorDimensions,
+                                         data_model::DISTANCE_METRIC_L2, 10,
+                                         /*m=*/16, 200, /*ef_runtime=*/10),
+              kVectorAttributeAlias, data_model::ATTRIBUTE_DATA_TYPE_HASH, 0)
+              .value();
+    } else {
+      vector_index =
+          indexes::VectorFlat<float>::Create(
+              CreateFlatVectorIndexProto(kVectorDimensions,
+                                         data_model::DISTANCE_METRIC_L2,
+                                         /*initial_cap=*/10, /*block_size=*/10),
+              kVectorAttributeAlias, data_model::ATTRIBUTE_DATA_TYPE_HASH, 0)
+              .value();
+    }
+    VMSDK_EXPECT_OK(schema->AddIndex(kVectorAttributeAlias,
+                                     kVectorAttributeAlias, vector_index));
+    auto tag_index = std::make_shared<indexes::Tag>(
+        CreateTagIndexProto(/*separator=*/",", /*case_sensitive=*/false));
+    VMSDK_EXPECT_OK(schema->AddIndex("tag", "tag", tag_index));
+    // v0..v4 at squared distance 0.01..0.25 from the query, far at 100.
+    for (int i = 0; i <= 5; ++i) {
+      std::vector<float> v(kVectorDimensions, 0.0f);
+      v[0] = i < 5 ? 0.1f * (i + 1) : 10.0f;
+      auto key =
+          StringInternStore::Intern(i < 5 ? absl::StrCat("v", i) : "far");
+      schema->SetIndexMutationSequenceNumber(key, 0);
+      VMSDK_EXPECT_OK(
+          testing_infra::AddVectorRecord(*vector_index, key, VectorToStr(v)));
+      VMSDK_EXPECT_OK(tag_index->AddRecord(
+          key, AttributeData(vmsdk::MakeUniqueValkeyString("a"))));
+    }
+    // These keys are outside the radius. Sparse INKEYS evaluation must not
+    // walk or scan them before checking the one requested key.
+    constexpr int kExtraKeys = 300;
+    for (int i = 0; i < kExtraKeys; ++i) {
+      std::vector<float> v(kVectorDimensions, 0.0f);
+      v[0] = 20.0f + static_cast<float>(i);
+      auto key = StringInternStore::Intern(absl::StrCat("extra", i));
+      schema->SetIndexMutationSequenceNumber(key, 0);
+      VMSDK_EXPECT_OK(
+          testing_infra::AddVectorRecord(*vector_index, key, VectorToStr(v)));
+      VMSDK_EXPECT_OK(tag_index->AddRecord(
+          key, AttributeData(vmsdk::MakeUniqueValkeyString("a"))));
+    }
+    const std::vector<float> zero(kVectorDimensions, 0.0f);
+
+    class CountingToken : public cancel::Base {
+     public:
+      bool IsCancelled() override {
+        ++polls;
+        return false;
+      }
+      void Cancel() override {}
+      int polls{0};
+    };
+    auto search = [&](absl::string_view filter,
+                      absl::flat_hash_set<std::string> inkeys,
+                      int *polls = nullptr) {
+      auto counting = std::make_shared<CountingToken>();
+      UnitTestSearchParameters params;
+      params.index_schema_name = schema_name;
+      params.index_schema = schema;
+      params.dialect = kDialect;
+      params.inkeys = std::move(inkeys);
+      params.cancellation_token = counting;
+      TextParsingOptions parsing_options{};
+      params.filter_parse_results = std::move(
+          FilterParser(*schema, filter, parsing_options).Parse().value());
+      params.has_vector_range = true;
+      query::Predicate *vr = params.filter_parse_results.root_predicate.get();
+      if (vr->GetType() != query::PredicateType::kVectorRange) {
+        for (const auto &child :
+             static_cast<query::ComposedPredicate *>(vr)->GetChildren()) {
+          if (child->GetType() == query::PredicateType::kVectorRange) {
+            vr = child.get();
+          }
+        }
+      }
+      static_cast<query::VectorRangePredicate *>(vr)->SetQueryVector(
+          std::string(VectorToStr(zero)));
+      VMSDK_EXPECT_OK(Search(params, query::SearchMode::kLocal));
+      std::vector<std::string> keys;
+      for (const auto &neighbor : params.search_result.neighbors) {
+        keys.emplace_back(neighbor.external_id->Str());
+      }
+      if (polls != nullptr) {
+        *polls = counting->polls;
+      }
+      return keys;
+    };
+
+    for (absl::string_view filter :
+         {"@vector:[VECTOR_RANGE 1 $q]",
+          "@vector:[VECTOR_RANGE 1 $q] | @tag:{none}",
+          "@vector:[VECTOR_RANGE 1 $q] @tag:{a}"}) {
+      SCOPED_TRACE(filter);
+      int64_t counter = query::GetVectorRangeResultsFetchedLimitedCount();
+      for (const char *key : {"v0", "v4"}) {
+        int polls = 0;
+        EXPECT_THAT(search(filter, {key}, &polls), ::testing::ElementsAre(key));
+        EXPECT_LE(polls, 3) << "sparse INKEYS scanned unrelated index keys";
+        EXPECT_EQ(query::GetVectorRangeResultsFetchedLimitedCount(), counter)
+            << "a query with one in-range key in INKEYS is not truncated";
+      }
+      EXPECT_THAT(search(filter, {"far"}), ::testing::IsEmpty());
+      EXPECT_THAT(search(filter, {"v2", "v3", "v4"}),
+                  ::testing::ElementsAre("v2", "v3", "v4"));
+      EXPECT_EQ(query::GetVectorRangeResultsFetchedLimitedCount(), counter);
+      EXPECT_THAT(search(filter, {"v0", "v1", "v3", "v4"}),
+                  ::testing::AllOf(::testing::SizeIs(kCap),
+                                   ::testing::Each(::testing::AnyOf(
+                                       "v0", "v1", "v3", "v4"))));
+      EXPECT_EQ(query::GetVectorRangeResultsFetchedLimitedCount(), counter + 1);
+    }
+  }
+}
+
+// A schema with vector field kVectorAttributeAlias, holding `vectors` as keys
+// v0, v1, ..., and tag field "tag", where every key is tagged "keep". Each call
+// creates a schema of its own name.
+std::shared_ptr<MockIndexSchema> MakeVectorRangeSchema(
+    bool hnsw, data_model::DistanceMetric metric,
+    const std::vector<std::vector<float>> &vectors) {
+  static int schemas = 0;
+  auto schema =
+      CreateIndexSchema(absl::StrCat("vector_range_schema_", ++schemas))
+          .value();
+  EXPECT_CALL(*schema, GetIdentifier(::testing::_))
+      .Times(::testing::AnyNumber());
+  const int capacity = static_cast<int>(vectors.size()) + 1;
+  std::shared_ptr<indexes::VectorBase> vector_index;
+  if (hnsw) {
+    vector_index =
+        indexes::VectorHNSW<float>::Create(
+            CreateHNSWVectorIndexProto(kVectorDimensions, metric, capacity,
+                                       /*m=*/16, 200, /*ef_runtime=*/10),
+            kVectorAttributeAlias, data_model::ATTRIBUTE_DATA_TYPE_HASH, 0)
+            .value();
+  } else {
+    vector_index =
+        indexes::VectorFlat<float>::Create(
+            CreateFlatVectorIndexProto(kVectorDimensions, metric, capacity,
+                                       /*block_size=*/10),
+            kVectorAttributeAlias, data_model::ATTRIBUTE_DATA_TYPE_HASH, 0)
+            .value();
+  }
+  VMSDK_EXPECT_OK(schema->AddIndex(kVectorAttributeAlias, kVectorAttributeAlias,
+                                   vector_index));
+  auto tag_index = std::make_shared<indexes::Tag>(
+      CreateTagIndexProto(/*separator=*/",", /*case_sensitive=*/false));
+  VMSDK_EXPECT_OK(schema->AddIndex("tag", "tag", tag_index));
+  for (size_t i = 0; i < vectors.size(); ++i) {
+    auto key = StringInternStore::Intern(absl::StrCat("v", i));
+    schema->SetIndexMutationSequenceNumber(key, 0);
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(*vector_index, key,
+                                                   VectorToStr(vectors[i])));
+    VMSDK_EXPECT_OK(tag_index->AddRecord(
+        key, AttributeData(vmsdk::MakeUniqueValkeyString("keep"))));
+  }
+  return schema;
+}
+
+// Runs `filter`, whose one VECTOR_RANGE searches at `query`, and returns the
+// number of keys returned.
+size_t CountVectorRangeMatches(
+    const std::shared_ptr<MockIndexSchema> &schema, absl::string_view filter,
+    const std::vector<float> &query, cancel::Token token = cancel::Token{},
+    std::vector<std::string> *matched_keys = nullptr) {
+  UnitTestSearchParameters params;
+  if (token != nullptr) {
+    params.cancellation_token = std::move(token);
+  }
+  params.index_schema = schema;
+  params.dialect = kDialect;
+  TextParsingOptions parsing_options{};
+  params.filter_parse_results =
+      std::move(FilterParser(*schema, filter, parsing_options).Parse().value());
+  params.has_vector_range = true;
+  const auto *vr = query::GetVectorRangePredicate(params);
+  EXPECT_NE(vr, nullptr);
+  if (vr == nullptr) {
+    return 0;
+  }
+  const_cast<query::VectorRangePredicate *>(vr)->SetQueryVector(
+      std::string(VectorToStr(query)));
+  query::QueryContext query_ctx(*schema,
+                                indexes::scoring::GetScorer(params.scorer));
+  auto result = query::SearchVectorRangeQuery(params, query_ctx);
+  EXPECT_TRUE(result.ok()) << result.status();
+  if (result.ok() && matched_keys != nullptr) {
+    for (const auto &neighbor : *result) {
+      matched_keys->emplace_back(neighbor.external_id->Str());
+    }
+  }
+  return result.ok() ? result->size() : 0;
+}
+
+// A selective sibling should drive an AND without materializing a broad
+// VECTOR_RANGE merely to compare candidate counts. FLAT polls once per stored
+// vector, so the token exposes an eager range scan without timing assertions.
+TEST_F(ValkeySearchTest, VectorRangeAndSkipsRangeSearchWhenTagIsSmaller)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  constexpr int kKeys = 2000;
+  std::vector<std::vector<float>> vectors(
+      kKeys, std::vector<float>(kVectorDimensions, 0.0f));
+  auto schema = MakeVectorRangeSchema(
+      /*hnsw=*/false, data_model::DISTANCE_METRIC_L2, vectors);
+  auto tag_index =
+      std::dynamic_pointer_cast<indexes::Tag>(schema->GetIndex("tag").value());
+  ASSERT_NE(tag_index, nullptr);
+  auto rare = StringInternStore::Intern("v7");
+  VMSDK_EXPECT_OK(tag_index->ModifyRecord(
+      rare, AttributeData(vmsdk::MakeUniqueValkeyString("keep,rare"))));
+
+  class CountingToken : public cancel::Base {
+   public:
+    bool IsCancelled() override {
+      ++polls;
+      return false;
+    }
+    void Cancel() override {}
+    int polls{0};
+  };
+  const std::vector<float> query(kVectorDimensions, 0.0f);
+  for (absl::string_view filter :
+       {"@tag:{rare} @vector:[VECTOR_RANGE 1e30 $q]",
+        "@vector:[VECTOR_RANGE 1e30 $q] @tag:{rare}",
+        "@tag:{rare} (@vector:[VECTOR_RANGE 1e30 $q] @tag:{keep})",
+        "(@vector:[VECTOR_RANGE 1e30 $q] @tag:{keep}) @tag:{rare}",
+        "@tag:{rare} (@vector:[VECTOR_RANGE 1e30 $q] | @tag:{none})",
+        "(@vector:[VECTOR_RANGE 1e30 $q] | @tag:{none}) @tag:{rare}"}) {
+    SCOPED_TRACE(filter);
+    auto counting = std::make_shared<CountingToken>();
+    std::vector<std::string> matched_keys;
+    EXPECT_EQ(
+        CountVectorRangeMatches(schema, filter, query, counting, &matched_keys),
+        1u);
+    EXPECT_THAT(matched_keys, ::testing::ElementsAre("v7"));
+    EXPECT_LT(counting->polls, kKeys / 10)
+        << "the AND planner scanned VECTOR_RANGE while the tag selects one "
+           "key";
+  }
+  // A sparse radius gives a capped probe no early stop: a FLAT scan would
+  // visit every vector, so the planner must still check the one tagged key.
+  std::vector<float> far(kVectorDimensions, 0.0f);
+  far[0] = 1000.0f;
+  auto counting = std::make_shared<CountingToken>();
+  EXPECT_EQ(
+      CountVectorRangeMatches(schema, "@tag:{rare} @vector:[VECTOR_RANGE 1 $q]",
+                              far, counting),
+      0u);
+  EXPECT_LT(counting->polls, kKeys / 10)
+      << "the AND planner scanned FLAT for a sparse radius";
+}
+
+// The vector field's size is only an upper bound on what a radius matches. A
+// small radius under a broad, but not universal, tag must still drive the AND:
+// the range is probed rather than skipped, so the planner checks its few
+// matches instead of every tagged key.
+TEST_F(ValkeySearchTest, VectorRangeAndKeepsSmallRadiusUnderBroadTag)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  constexpr int kKeys = 1000;
+  constexpr int kTagged = 900;
+  std::vector<std::vector<float>> vectors;
+  for (int i = 0; i < kKeys; ++i) {
+    std::vector<float> v(kVectorDimensions, 0.0f);
+    v[0] = static_cast<float>(i);
+    vectors.push_back(std::move(v));
+  }
+  auto schema = MakeVectorRangeSchema(
+      /*hnsw=*/true, data_model::DISTANCE_METRIC_L2, vectors);
+  auto tag_index =
+      std::dynamic_pointer_cast<indexes::Tag>(schema->GetIndex("tag").value());
+  ASSERT_NE(tag_index, nullptr);
+  for (int i = kTagged; i < kKeys; ++i) {
+    VMSDK_EXPECT_OK(tag_index->ModifyRecord(
+        StringInternStore::Intern(absl::StrCat("v", i)),
+        AttributeData(vmsdk::MakeUniqueValkeyString("other"))));
+  }
+  const std::vector<float> query(kVectorDimensions, 0.0f);
+  // Squared L2 radius 9.5 holds v0..v3.
+  for (absl::string_view filter :
+       {"@tag:{keep} @vector:[VECTOR_RANGE 9.5 $q]",
+        "@vector:[VECTOR_RANGE 9.5 $q] @tag:{keep}"}) {
+    SCOPED_TRACE(filter);
+    UnitTestSearchParameters params;
+    params.index_schema = schema;
+    params.dialect = kDialect;
+    TextParsingOptions parsing_options{};
+    params.filter_parse_results = std::move(
+        FilterParser(*schema, filter, parsing_options).Parse().value());
+    params.has_vector_range = true;
+    const auto *vr = query::GetVectorRangePredicate(params);
+    ASSERT_NE(vr, nullptr);
+    const_cast<query::VectorRangePredicate *>(vr)->SetQueryVector(
+        std::string(VectorToStr(query)));
+
+    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> fetchers;
+    bool truncated = false;
+    const size_t candidates = query::EvaluateFilterAsPrimary(
+        params, params.filter_parse_results.root_predicate.get(), fetchers,
+        /*negate=*/false, /*or_weight_multiplier=*/1.0f, &truncated);
+    EXPECT_FALSE(truncated);
+    EXPECT_GT(candidates, 0u);
+    EXPECT_LE(candidates, 4u)
+        << "the AND planner checked the broad tag instead of the small radius";
+
+    std::vector<std::string> matched_keys;
+    EXPECT_EQ(CountVectorRangeMatches(schema, filter, query, cancel::Token{},
+                                      &matched_keys),
+              4u);
+    EXPECT_THAT(matched_keys,
+                ::testing::UnorderedElementsAre("v0", "v1", "v2", "v3"));
+  }
+}
+
+// A capped probe that cannot decide must lose to its sibling rather than pay
+// for the exact scan an uncapped HNSW search would fall back to. Every key but
+// one lies just outside the radius and inside its epsilon shell, so a walk
+// capped at the rare tag's two candidates fills the shell without a witness.
+TEST_F(ValkeySearchTest, VectorRangeAndProbeSkipsExactFallback)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  constexpr int kKeys = 200;
+  std::vector<std::vector<float>> vectors;
+  for (int i = 0; i < kKeys; ++i) {
+    std::vector<float> v(kVectorDimensions, 0.0f);
+    // v0 at squared distance 0.25; the rest at 1.21, inside the 1.5 shell.
+    v[0] = i == 0 ? 0.5f : 1.1f;
+    v[1] = 0.001f * static_cast<float>(i);
+    vectors.push_back(std::move(v));
+  }
+  auto schema = MakeVectorRangeSchema(
+      /*hnsw=*/true, data_model::DISTANCE_METRIC_L2, vectors);
+  auto tag_index =
+      std::dynamic_pointer_cast<indexes::Tag>(schema->GetIndex("tag").value());
+  ASSERT_NE(tag_index, nullptr);
+  for (const char *key : {"v0", "v1"}) {
+    VMSDK_EXPECT_OK(tag_index->ModifyRecord(
+        StringInternStore::Intern(key),
+        AttributeData(vmsdk::MakeUniqueValkeyString("keep,rare"))));
+  }
+  const std::vector<float> query(kVectorDimensions, 0.0f);
+  const int64_t shell_filled_before =
+      query::GetVectorRangeFallbackCount(indexes::RangeFallback::kShellFilled);
+  std::vector<std::string> matched_keys;
+  EXPECT_EQ(
+      CountVectorRangeMatches(
+          schema, "@tag:{rare} @vector:[VECTOR_RANGE 1 $q]=>{$EPSILON: 0.5}",
+          query, cancel::Token{}, &matched_keys),
+      1u);
+  EXPECT_THAT(matched_keys, ::testing::ElementsAre("v0"));
+  EXPECT_EQ(
+      query::GetVectorRangeFallbackCount(indexes::RangeFallback::kShellFilled),
+      shell_filled_before)
+      << "the AND planner's probe fell back to an exact scan";
+}
+
+// A probe caps the results it keeps, not the beam. The graph is a chain from
+// start through three bridges at increasing distance outside the radius to
+// target, with field EF_RUNTIME 1, so only EF_RUNTIME 3 reaches target. A probe
+// capped at the two tagged keys must still walk with EF 3: a narrower beam
+// would report start alone as a complete candidate set and drop target from the
+// AND.
+TEST_F(ValkeySearchTest, VectorRangeAndProbeKeepsQueryEfRuntime)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  auto schema = CreateIndexSchema("probe_ef_schema").value();
+  EXPECT_CALL(*schema, GetIdentifier(::testing::_))
+      .Times(::testing::AnyNumber());
+  auto vector_index =
+      indexes::VectorHNSW<float>::Create(
+          CreateHNSWVectorIndexProto(kVectorDimensions,
+                                     data_model::DISTANCE_METRIC_L2, 5,
+                                     /*m=*/2, 200, /*ef_runtime=*/1),
+          kVectorAttributeAlias,
+          data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
+          .value();
+  VMSDK_EXPECT_OK(schema->AddIndex(kVectorAttributeAlias, kVectorAttributeAlias,
+                                   vector_index));
+  auto tag_index = std::make_shared<indexes::Tag>(
+      CreateTagIndexProto(/*separator=*/",", /*case_sensitive=*/false));
+  VMSDK_EXPECT_OK(schema->AddIndex("tag", "tag", tag_index));
+  // Bridges lie at increasing squared distances about 1.31, 1.35 and 1.38 from
+  // the query, outside radius 1 and its default shell, so an EF 2 beam rejects
+  // the third. Each bridge is nearer start than target is, so the HNSW
+  // neighbor heuristic prunes a direct start-target link. Inserted first,
+  // start is the entry point.
+  const std::pair<const char *, std::pair<float, float>> kKeys[] = {
+      {"start", {-0.95f, 0.0f}},
+      {"bridge-1", {-0.45f, 1.0507f}},
+      {"bridge-2", {0.0f, 1.1619f}},
+      {"bridge-3", {0.45f, 1.0851f}},
+      {"target", {0.95f, 0.0f}}};
+  for (const auto &[key, xy] : kKeys) {
+    std::vector<float> v(kVectorDimensions, 0.0f);
+    v[0] = xy.first;
+    v[1] = xy.second;
+    auto interned = StringInternStore::Intern(key);
+    schema->SetIndexMutationSequenceNumber(interned, 0);
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(*vector_index, interned,
+                                                   VectorToStr(v)));
+    const bool pair =
+        std::string_view(key) == "start" || std::string_view(key) == "target";
+    VMSDK_EXPECT_OK(tag_index->AddRecord(
+        interned,
+        AttributeData(vmsdk::MakeUniqueValkeyString(pair ? "pair" : "other"))));
+  }
+  const std::vector<float> zero(kVectorDimensions, 0.0f);
+  cancel::Token never = cancel::Make(1000000, nullptr);
+  auto walk = [&](size_t ef, std::optional<size_t> probe_limit) {
+    indexes::RangeQuery range{
+        .radius = 1.0f, .epsilon = 0.01f, .ef_runtime = ef};
+    range.probe_limit = probe_limit;
+    auto result = vector_index->SearchRange(VectorToStr(zero), range, never);
+    EXPECT_TRUE(result.ok()) << result.status();
+    return result.ok() ? std::move(*result) : indexes::RangeResult{};
+  };
+  // The fixture needs EF 3: EF 2 stops at start, EF 3 reaches target.
+  ASSERT_EQ(walk(2, std::nullopt).neighbors.size(), 1u);
+  ASSERT_EQ(walk(3, std::nullopt).neighbors.size(), 2u);
+  // Capped at 2, the EF 3 probe either finds both or reports it is undecided.
+  const auto probe = walk(3, 2);
+  EXPECT_TRUE(probe.truncated || probe.neighbors.size() == 2u)
+      << "the probe narrowed the beam to its result cap and reported "
+      << probe.neighbors.size() << " key(s) as complete";
+
+  std::vector<std::string> matched_keys;
+  EXPECT_EQ(CountVectorRangeMatches(
+                schema, "@vector:[VECTOR_RANGE 1 $q EF_RUNTIME 3] @tag:{pair}",
+                zero, cancel::Token{}, &matched_keys),
+            2u);
+  EXPECT_THAT(matched_keys, ::testing::UnorderedElementsAre("start", "target"));
+}
+
+// `inside` keys at squared L2 distance 0.01 * (i + 1)^2 from the origin, all
+// within radius 1, followed by `far` keys at squared distance 100 or more.
+std::vector<std::vector<float>> VectorsNearOrigin(int inside, int far) {
+  std::vector<std::vector<float>> vectors;
+  for (int i = 0; i < inside + far; ++i) {
+    std::vector<float> v(kVectorDimensions, 0.0f);
+    v[0] = i < inside ? 0.1f * (i + 1) : 10.0f + i;
+    vectors.push_back(std::move(v));
+  }
+  return vectors;
+}
+
+// The App truncation counter moves once for a VECTOR_RANGE query that the
+// shard truncated, and not for one whose matches exactly fill the cap, on
+// every path: FLAT, the HNSW walk and its exact scans, and the compound drain.
+// The developer non-vector counter does not move for any of them.
+TEST_F(ValkeySearchTest, VectorRangeTruncationCounterCountsTruncatedQueries)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  constexpr int kCap = 3;
+  auto &fetch_cap = options::GetMaxNonVectorSearchResultsFetched();
+  const auto saved_cap = fetch_cap.GetValue();
+  absl::Cleanup restore = [&] {
+    VMSDK_EXPECT_OK(fetch_cap.SetValue(saved_cap));
+  };
+  VMSDK_EXPECT_OK(fetch_cap.SetValue(kCap));
+  const std::vector<float> origin(kVectorDimensions, 0.0f);
+  std::vector<float> unit(kVectorDimensions, 0.0f);
+  unit[0] = 1.0f;
+  struct Case {
+    const char *name;
+    bool hnsw;
+    data_model::DistanceMetric metric;
+    const char *filter;
+  };
+  const Case kCases[] = {
+      {"flat", false, data_model::DISTANCE_METRIC_L2,
+       "@vector:[VECTOR_RANGE 1 $q]"},
+      {"hnsw walk", true, data_model::DISTANCE_METRIC_L2,
+       "@vector:[VECTOR_RANGE 1 $q]"},
+      {"hnsw cosine scan", true, data_model::DISTANCE_METRIC_COSINE,
+       "@vector:[VECTOR_RANGE 2 $q]"},
+      {"compound and", false, data_model::DISTANCE_METRIC_L2,
+       "@vector:[VECTOR_RANGE 1 $q] @tag:{keep}"},
+      {"compound or", true, data_model::DISTANCE_METRIC_L2,
+       "@vector:[VECTOR_RANGE 1 $q] | @tag:{none}"},
+  };
+  for (const Case &c : kCases) {
+    const bool cosine = c.metric == data_model::DISTANCE_METRIC_COSINE;
+    for (int inside : {kCap, kCap + 1}) {
+      SCOPED_TRACE(absl::StrCat(c.name, ", ", inside, " matches"));
+      // Every COSINE key is within radius 2, so that index has no far keys.
+      auto schema = MakeVectorRangeSchema(
+          c.hnsw, c.metric, VectorsNearOrigin(inside, cosine ? 0 : 20));
+      const int64_t app_before =
+          query::GetVectorRangeResultsFetchedLimitedCount();
+      const int64_t dev_before =
+          query::GetNonVectorResultsFetchedLimitedCount();
+      EXPECT_EQ(
+          CountVectorRangeMatches(schema, c.filter, cosine ? unit : origin),
+          static_cast<size_t>(kCap));
+      EXPECT_EQ(query::GetVectorRangeResultsFetchedLimitedCount(),
+                app_before + (inside > kCap ? 1 : 0));
+      EXPECT_EQ(query::GetNonVectorResultsFetchedLimitedCount(), dev_before);
+    }
+  }
+}
+
+// Each HNSW exact-scan reason moves its own developer counter and no other.
+TEST_F(ValkeySearchTest, VectorRangeExactFallbackCountersCountTheirReason)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  constexpr int kCap = 3;
+  auto &fetch_cap = options::GetMaxNonVectorSearchResultsFetched();
+  const auto saved_cap = fetch_cap.GetValue();
+  absl::Cleanup restore = [&] {
+    VMSDK_EXPECT_OK(fetch_cap.SetValue(saved_cap));
+  };
+  using indexes::RangeFallback;
+  constexpr RangeFallback kReasons[] = {
+      RangeFallback::kCapZero, RangeFallback::kCosineFullRadius,
+      RangeFallback::kNonFiniteDistance, RangeFallback::kShellFilled};
+  std::vector<float> origin(kVectorDimensions, 0.0f);
+  std::vector<float> unit(kVectorDimensions, 0.0f);
+  unit[0] = 1.0f;
+  // An infinite IP query is at NaN from every key with a zero first component.
+  std::vector<float> infinite(kVectorDimensions, 0.0f);
+  infinite[0] = indexes::scoring::PositiveInf();
+  std::vector<std::vector<float>> off_axis = VectorsNearOrigin(5, 0);
+  for (auto &v : off_axis) {
+    std::swap(v[0], v[1]);
+  }
+  struct Case {
+    RangeFallback expected;
+    int cap;
+    data_model::DistanceMetric metric;
+    std::vector<std::vector<float>> vectors;
+    const char *filter;
+    const std::vector<float> &query;
+  };
+  const Case kCases[] = {
+      {RangeFallback::kNone, kCap, data_model::DISTANCE_METRIC_L2,
+       VectorsNearOrigin(kCap + 1, 20), "@vector:[VECTOR_RANGE 1 $q]", origin},
+      {RangeFallback::kCapZero, 0, data_model::DISTANCE_METRIC_L2,
+       VectorsNearOrigin(2, 20), "@vector:[VECTOR_RANGE 1 $q]", origin},
+      {RangeFallback::kCosineFullRadius, kCap,
+       data_model::DISTANCE_METRIC_COSINE, VectorsNearOrigin(2, 0),
+       "@vector:[VECTOR_RANGE 2 $q]", unit},
+      {RangeFallback::kNonFiniteDistance, kCap, data_model::DISTANCE_METRIC_IP,
+       off_axis, "@vector:[VECTOR_RANGE 0 $q]", infinite},
+      {RangeFallback::kShellFilled, kCap, data_model::DISTANCE_METRIC_L2,
+       VectorsNearOrigin(kCap, 20), "@vector:[VECTOR_RANGE 1 $q]", origin},
+  };
+  for (const Case &c : kCases) {
+    SCOPED_TRACE(
+        absl::StrCat("expected reason ", static_cast<int>(c.expected)));
+    VMSDK_EXPECT_OK(fetch_cap.SetValue(c.cap));
+    auto schema = MakeVectorRangeSchema(/*hnsw=*/true, c.metric, c.vectors);
+    std::vector<int64_t> before;
+    for (RangeFallback reason : kReasons) {
+      before.push_back(query::GetVectorRangeFallbackCount(reason));
+    }
+    CountVectorRangeMatches(schema, c.filter, c.query);
+    for (size_t i = 0; i < std::size(kReasons); ++i) {
+      EXPECT_EQ(query::GetVectorRangeFallbackCount(kReasons[i]) - before[i],
+                kReasons[i] == c.expected ? 1 : 0)
+          << "reason " << static_cast<int>(kReasons[i]);
+    }
+  }
+}
+
+// Once an additional unique match proves a compound VECTOR_RANGE query
+// truncated, the drain stops: it polls the token once per fetched key, so it
+// polls about the cap's worth of keys, not every key the OR branch matches.
+TEST_F(ValkeySearchTest, CompoundVectorRangeDrainStopsAtTheWitness)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  constexpr int kCap = 3;
+  constexpr int kTagged = 100;
+  auto &fetch_cap = options::GetMaxNonVectorSearchResultsFetched();
+  const auto saved_cap = fetch_cap.GetValue();
+  absl::Cleanup restore = [&] {
+    VMSDK_EXPECT_OK(fetch_cap.SetValue(saved_cap));
+  };
+  VMSDK_EXPECT_OK(fetch_cap.SetValue(kCap));
+  // Two vector keys, both outside the radius; every key matches the tag.
+  auto schema = MakeVectorRangeSchema(
+      /*hnsw=*/false, data_model::DISTANCE_METRIC_L2, VectorsNearOrigin(0, 2));
+  auto tag_index =
+      std::dynamic_pointer_cast<indexes::Tag>(schema->GetIndex("tag").value());
+  ASSERT_NE(tag_index, nullptr);
+  for (int i = 0; i < kTagged; ++i) {
+    auto key = StringInternStore::Intern(absl::StrCat("t", i));
+    schema->SetIndexMutationSequenceNumber(key, 0);
+    VMSDK_EXPECT_OK(tag_index->AddRecord(
+        key, AttributeData(vmsdk::MakeUniqueValkeyString("keep"))));
+  }
+  class CountingToken : public cancel::Base {
+   public:
+    bool IsCancelled() override {
+      ++polls;
+      return false;
+    }
+    void Cancel() override {}
+    int polls{0};
+  };
+  auto counting = std::make_shared<CountingToken>();
+  const int64_t before = query::GetVectorRangeResultsFetchedLimitedCount();
+  EXPECT_EQ(CountVectorRangeMatches(
+                schema, "@vector:[VECTOR_RANGE 1 $q] | @tag:{keep}",
+                std::vector<float>(kVectorDimensions, 0.0f), counting),
+            static_cast<size_t>(kCap));
+  EXPECT_EQ(query::GetVectorRangeResultsFetchedLimitedCount(), before + 1);
+  // The FLAT scan polls once per stored vector, the drain once per key it
+  // advances past.
+  EXPECT_LE(counting->polls, 2 + kCap + 1);
 }
 
 class ScoreTextQueryTestBase : public ValkeySearchTest {
@@ -2206,7 +3386,8 @@ TEST_F(ScoreTextQueryTestBase, StemInflectionMatchesInPerKeyOr) {
       *schema,
       indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std));
   indexes::PrefilterEvaluator evaluator(query_ctx, parsed->query_operations,
-                                        *schema);
+                                        *schema,
+                                        /*source_resolves_text=*/false);
   vmsdk::ReaderMutexLock lock(&schema->GetTimeSlicedMutex());
   auto matches = [&](const char *k) {
     return evaluator.Evaluate(*parsed->root_predicate,
@@ -2671,8 +3852,7 @@ TEST_F(ScoreTextQueryTestBase, ExpansionRepresentativeSuffixAndFuzzy) {
 
 // The point of the context: filtering and scoring together walk the trees once
 // per term leaf per query, however many candidates there are. Stemming is on so
-// the leaf carries every group kind, and the negation makes the prefilter
-// evaluate the text child instead of trusting the entries fetcher.
+// the leaf carries every group kind.
 TEST_F(ScoreTextQueryTestBase, TermLeavesWalkTreesOncePerQuery) {
   std::vector<std::tuple<std::string, std::string, std::string>> docs;
   for (int i = 0; i < 100; ++i) {
@@ -2689,7 +3869,8 @@ TEST_F(ScoreTextQueryTestBase, TermLeavesWalkTreesOncePerQuery) {
   auto walks_for = [&](int candidates) {
     query::QueryContext query_ctx(*schema, scorer);
     indexes::PrefilterEvaluator evaluator(query_ctx, parsed->query_operations,
-                                          *schema);
+                                          *schema,
+                                          /*source_resolves_text=*/false);
     std::vector<InternedStringPtr> keys;
     std::vector<indexes::BorrowedNeighbor> matched;
     vmsdk::ReaderMutexLock lock(&schema->GetTimeSlicedMutex());
@@ -2723,7 +3904,8 @@ TEST_F(ScoreTextQueryTestBase, EvaluateFullRefetchesPerKeyTreeForEachKey) {
   ASSERT_TRUE(parsed.ok()) << parsed.status();
   query::QueryContext query_ctx(*schema, scorer);
   indexes::PrefilterEvaluator evaluator(query_ctx, parsed->query_operations,
-                                        *schema);
+                                        *schema,
+                                        /*source_resolves_text=*/false);
   const auto d0 = StringInternStore::Intern("d0");
   const auto d1 = StringInternStore::Intern("d1");
   vmsdk::ReaderMutexLock lock(&schema->GetTimeSlicedMutex());
@@ -2753,7 +3935,8 @@ TEST_F(ScoreTextQueryTestBase, TagValuesLookedUpOncePerQuery) {
   auto lookups_for = [&](int candidates) {
     query::QueryContext query_ctx(*schema, scorer);
     indexes::PrefilterEvaluator evaluator(query_ctx, parsed->query_operations,
-                                          *schema);
+                                          *schema,
+                                          /*source_resolves_text=*/false);
     std::vector<InternedStringPtr> keys;
     std::vector<indexes::BorrowedNeighbor> matched;
     vmsdk::ReaderMutexLock lock(&schema->GetTimeSlicedMutex());
@@ -2821,9 +4004,11 @@ TEST_F(ScoreTextQueryTestBase, MainThreadLockModesMatchBackground) {
       query::QueryContext background(*schema, scorer);
       query::QueryContext main(*schema, scorer, query::LockMode::kShortLocks);
       indexes::PrefilterEvaluator bg_eval(background, parsed->query_operations,
-                                          *schema);
+                                          *schema,
+                                          /*source_resolves_text=*/false);
       indexes::PrefilterEvaluator main_eval(main, parsed->query_operations,
-                                            *schema);
+                                            *schema,
+                                            /*source_resolves_text=*/false);
       for (const auto &k : {"d1", "d2", "d3", "d4"}) {
         auto key = StringInternStore::Intern(k);
         std::vector<indexes::BorrowedNeighbor> bg_cands{
@@ -2938,6 +4123,57 @@ TEST_F(ScoreTextQueryTestBase, TagPrefixSkipsEmptyTagsWhenPickingValue) {
   ASSERT_TRUE(lead && plain);
   EXPECT_GT(*lead, 0.0f);
   EXPECT_FLOAT_EQ(*lead, *plain);
+}
+
+// A RecordsMap whose keys view strings the map owns.
+RecordsMap OwnedRecordsMap(
+    const std::vector<std::pair<std::string, std::string>> &entries) {
+  RecordsMap map;
+  for (const auto &[key, value] : entries) {
+    auto owned_key = vmsdk::MakeUniqueValkeyString(key);
+    auto key_view = vmsdk::ToStringView(owned_key.get());
+    map.emplace(key_view,
+                RecordsMapValue(std::move(owned_key),
+                                vmsdk::MakeUniqueValkeyString(value)));
+  }
+  return map;
+}
+
+class RefileAliasSortByValueTest : public ValkeySearchTest {};
+
+// An older shard sends the HASH sort value under the alias.
+TEST_F(RefileAliasSortByValueTest, CopiesAliasEntryUnderLookupKey) {
+  auto contents = OwnedRecordsMap({{"s", "5"}, {"n", "1"}});
+  query::RefileAliasSortByValue(contents, "a", "s");
+  EXPECT_EQ(ToStringMap(contents),
+            (std::unordered_map<std::string, std::string>{
+                {"s", "5"}, {"n", "1"}, {"a", "5"}}));
+}
+
+// The coordinator handles shard replies on a gRPC thread.
+TEST_F(RefileAliasSortByValueTest, RunsOffTheMainThread) {
+  auto contents = OwnedRecordsMap({{"s", "5"}});
+  std::thread([&] {
+    query::RefileAliasSortByValue(contents, "a", "s");
+  }).join();
+  EXPECT_EQ(
+      ToStringMap(contents),
+      (std::unordered_map<std::string, std::string>{{"s", "5"}, {"a", "5"}}));
+}
+
+TEST_F(RefileAliasSortByValueTest, KeepsExistingLookupKey) {
+  auto contents = OwnedRecordsMap({{"a", "5"}, {"s", "9"}});
+  query::RefileAliasSortByValue(contents, "a", "s");
+  EXPECT_EQ(
+      ToStringMap(contents),
+      (std::unordered_map<std::string, std::string>{{"a", "5"}, {"s", "9"}}));
+}
+
+TEST_F(RefileAliasSortByValueTest, NoAliasEntryLeavesRowUnchanged) {
+  auto contents = OwnedRecordsMap({{"n", "1"}});
+  query::RefileAliasSortByValue(contents, "a", "s");
+  EXPECT_EQ(ToStringMap(contents),
+            (std::unordered_map<std::string, std::string>{{"n", "1"}}));
 }
 
 }  // namespace

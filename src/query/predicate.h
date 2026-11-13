@@ -7,7 +7,9 @@
 
 #ifndef VALKEYSEARCH_SRC_QUERY_PREDICATE_H_
 #define VALKEYSEARCH_SRC_QUERY_PREDICATE_H_
+#include <bit>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -17,6 +19,7 @@
 
 #include "absl/functional/function_ref.h"
 #include "absl/strings/string_view.h"
+#include "src/indexes/scoring/scorer.h"
 #include "src/indexes/text/language.h"
 #include "src/indexes/text/text_iterator.h"
 #include "src/query/resolved_leaf.h"
@@ -118,7 +121,10 @@ class Evaluator {
       const VectorRangePredicate& predicate) = 0;
   // Access target key for proximity validation (only for Text)
   virtual const InternedStringPtr& GetTargetKey() const = 0;
-  virtual bool IsPrefilterEvaluator() const { return false; }
+  // True when the candidate keys came from entries fetchers that already
+  // applied every AND-ed text predicate, so the tree may skip re-evaluating
+  // them.
+  virtual bool SourceResolvesText() const { return false; }
   valkey_search::QueryOperations GetQueryOperations() const {
     return query_operations_;
   }
@@ -240,11 +246,28 @@ class VectorRangePredicate : public Predicate {
   double GetRadius() const { return radius_; }
   absl::string_view GetVectorParamName() const { return vector_param_name_; }
   const std::optional<std::string>& GetScoreAs() const { return score_as_; }
-  // epsilon is parsed, validated, stored, and serialized on the wire, but it is
-  // not forwarded to the range traversal (see SearchVectorRangeQuery); the HNSW
-  // range search does not yet honor it. Kept so queries carrying $epsilon parse
-  // and round-trip unchanged.
+  // nullopt when the query gives no $epsilon; kept as given so the predicate
+  // round-trips on the wire.
   std::optional<double> GetEpsilon() const { return epsilon_; }
+  // The HNSW traversal shell factor: $epsilon, or 0.01 as in RediSearch.
+  // Either signed zero stays zero. Anything else outside [0, FLT_MAX] becomes
+  // the largest float, which saturates the shell: NaN, +inf and values beyond
+  // float range (which Redis accepts, and older nodes forward unchecked), and
+  // negative values (which only a hand-crafted request carries). A tiny
+  // positive double may narrow to float zero, matching Redis acceptance.
+  // Comparing the bits catches NaN under -ffast-math and keeps the narrowing
+  // cast in range.
+  float GetSearchEpsilon() const {
+    constexpr double kMaxEpsilon = std::numeric_limits<float>::max();
+    const double epsilon = epsilon_.value_or(0.01);
+    if (indexes::scoring::IsZero(epsilon)) {
+      return 0.0f;
+    }
+    return std::bit_cast<uint64_t>(epsilon) >
+                   std::bit_cast<uint64_t>(kMaxEpsilon)
+               ? std::numeric_limits<float>::max()
+               : static_cast<float>(epsilon);
+  }
 
   void SetQueryVector(std::string query);
   absl::string_view GetQueryVector() const { return query_vector_; }
@@ -253,6 +276,11 @@ class VectorRangePredicate : public Predicate {
     score_as_ = std::move(score_as);
   }
   void SetEpsilon(std::optional<double> epsilon) { epsilon_ = epsilon; }
+  // Per-query HNSW beam; nullopt uses the field's EF_RUNTIME.
+  std::optional<size_t> GetEfRuntime() const { return ef_runtime_; }
+  void SetEfRuntime(std::optional<size_t> ef_runtime) {
+    ef_runtime_ = ef_runtime;
+  }
   // An infinite radius, or one too large for a float, is stored as the
   // largest float. It matches every finite distance, while the +inf that
   // VectorBase::ClampCosineDistance reports for a NaN or +inf distance stays
@@ -268,6 +296,14 @@ class VectorRangePredicate : public Predicate {
   void SetRadiusParamName(std::string name) {
     radius_param_name_ = std::move(name);
   }
+  // Returns the PARAMS key for EF_RUNTIME, if it was specified as $param.
+  // Empty if EF_RUNTIME was a literal or absent.
+  absl::string_view GetEfRuntimeParamName() const {
+    return ef_runtime_param_name_;
+  }
+  void SetEfRuntimeParamName(std::string name) {
+    ef_runtime_param_name_ = std::move(name);
+  }
 
  private:
   std::string alias_;
@@ -276,8 +312,10 @@ class VectorRangePredicate : public Predicate {
   std::string vector_param_name_;
   std::optional<std::string> score_as_;
   std::optional<double> epsilon_;
+  std::optional<size_t> ef_runtime_;
   std::string query_vector_;
-  std::string radius_param_name_;  // non-empty when radius is a $param
+  std::string radius_param_name_;      // non-empty when radius is a $param
+  std::string ef_runtime_param_name_;  // non-empty when EF_RUNTIME is a $param
 };
 
 using FieldMaskPredicate = uint64_t;

@@ -111,6 +111,26 @@ indexes::VectorRecordWithSize VectorRegistry::DedupOrConstruct(
   return result;
 }
 
+indexes::VectorRecord VectorRegistry::DedupTombstoneOnLoad(
+    int db_num, const InternedStringPtr &attribute_identifier,
+    absl::string_view vector, FixedSizeAllocator *allocator) {
+  vmsdk::VerifyMainThread();
+  auto &tombstones = loaded_tombstones_[{db_num, attribute_identifier}];
+  auto it = tombstones.find(vector);
+  if (it != tombstones.end()) {
+    return it->second;
+  }
+  auto record = indexes::VectorRecord::Construct(vector, 1.0f, allocator);
+  tombstones.emplace(absl::string_view(record.GetRawVector(), vector.size()),
+                     record);
+  return record;
+}
+
+void VectorRegistry::OnLoadingEnded() {
+  vmsdk::VerifyMainThread();
+  loaded_tombstones_.clear();
+}
+
 std::optional<indexes::VectorRecordWithSize>
 VectorRegistry::ExtractTrackedRecord(
     int db_num, const InternedStringPtr &key,

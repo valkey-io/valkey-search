@@ -2028,6 +2028,26 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         assert self.client.ping()
         waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0)
 
+    def test_tombstones_stay_shared_across_reload(self):
+        """Tombstones shared by two indexes stay shared after a reload (#1668)."""
+        indexes = [self.build_index(name=name) for name in ("idx_a", "idx_b")]
+        for index in indexes:
+            index.create(self.client)
+        for i in range(10):
+            self.client.hset(f"doc:{i}", mapping={"vec": vector(i)})
+        for i in range(5):
+            self.client.delete(f"doc:{i}")
+        for index in indexes:
+            waiters.wait_for_equal(lambda: index.info(self.client).num_docs, 5)
+        before = self.registry_stat("active_allocations")
+
+        self.save_flush_restore()
+        for index in indexes:
+            waiters.wait_for_equal(lambda: index.info(self.client).num_docs, 5)
+        waiters.wait_for_equal(
+            lambda: self.registry_stat("active_allocations"), before
+        )
+
 
 class TestVectorRegistryPersistence(ValkeySearchTestCaseDebugMode):
     """Save on one server, load on another.

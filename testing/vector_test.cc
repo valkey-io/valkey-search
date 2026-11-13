@@ -2948,6 +2948,64 @@ TEST_F(VectorIndexTest, LoadTrackedKeysWithoutKeyspaceVector) {
   }
 }
 
+// Copies are counted by the index allocators, which sanitizer builds lack.
+#ifndef SAN_BUILD
+TEST_F(VectorIndexTest, HnswTombstonesStaySharedAcrossSaveAndLoad) {
+  constexpr size_t kLive = 5;
+  constexpr size_t kDeleted = 5;
+  for (auto distance_metric :
+       {data_model::DISTANCE_METRIC_L2, data_model::DISTANCE_METRIC_IP}) {
+    SCOPED_TRACE(testing::Message() << "distance_metric: " << distance_metric);
+    VectorRegistry::Instance().OnFlushDB(nullptr);
+    auto proto =
+        CreateHNSWVectorIndexProto(kDimensions, distance_metric, kInitialCap,
+                                   kM, kEFConstruction, kEFRuntime);
+    auto vectors =
+        DeterministicallyGenerateVectors(kLive + kDeleted, kDimensions, 10.0);
+    auto vector_copies = [](VectorBase &a, VectorBase &b) {
+      return a.GetVectorAllocator()->ActiveAllocations() +
+             b.GetVectorAllocator()->ActiveAllocations();
+    };
+    FakeSafeRDB rdb_a;
+    FakeSafeRDB rdb_b;
+    data_model::VectorIndex proto_a;
+    data_model::VectorIndex proto_b;
+    {
+      auto a = VectorHNSW<float>::Create(proto, attribute_identifier,
+                                         attribute_data_type, 0);
+      auto b = VectorHNSW<float>::Create(proto, attribute_identifier,
+                                         attribute_data_type, 0);
+      VMSDK_EXPECT_OK(a);
+      VMSDK_EXPECT_OK(b);
+      for (size_t i = 0; i < vectors.size(); ++i) {
+        VERIFY_ADD(a->get(), vectors, i, ExpectedResults::kSuccess);
+        VERIFY_ADD(b->get(), vectors, i, ExpectedResults::kSuccess);
+      }
+      for (size_t i = 0; i < kDeleted; ++i) {
+        VMSDK_EXPECT_OK((*a)->RemoveRecord(IndexToKey(i), DeletionType::kNone));
+        VMSDK_EXPECT_OK((*b)->RemoveRecord(IndexToKey(i), DeletionType::kNone));
+      }
+      EXPECT_EQ(vector_copies(**a, **b), kLive + kDeleted);
+      VMSDK_EXPECT_OK((*a)->SaveIndex(RDBChunkOutputStream(&rdb_a)));
+      VMSDK_EXPECT_OK((*b)->SaveIndex(RDBChunkOutputStream(&rdb_b)));
+      proto_a = (*a)->ToProto()->vector_index();
+      proto_b = (*b)->ToProto()->vector_index();
+    }
+    auto loaded_a = VectorHNSW<float>::LoadFromRDB(
+        &fake_ctx_, &hash_attribute_data_type_, proto_a, attribute_identifier,
+        SupplementalContentChunkIter(&rdb_a), 0);
+    auto loaded_b = VectorHNSW<float>::LoadFromRDB(
+        &fake_ctx_, &hash_attribute_data_type_, proto_b, attribute_identifier,
+        SupplementalContentChunkIter(&rdb_b), 0);
+    VMSDK_EXPECT_OK(loaded_a);
+    VMSDK_EXPECT_OK(loaded_b);
+    VectorRegistry::Instance().OnLoadingEnded();
+    // Without tracked keys the live vectors stay per index.
+    EXPECT_EQ(vector_copies(**loaded_a, **loaded_b), 2 * kLive + kDeleted);
+  }
+}
+#endif  // !SAN_BUILD
+
 // verify reclaimable_memory is correctly synchronized and writes are not lost
 // lost writes can lead to negative integer underflow issue
 TEST_F(VectorIndexTest, ReclaimableMemoryRaceReturnsToBaseline)

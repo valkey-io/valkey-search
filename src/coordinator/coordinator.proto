@@ -201,6 +201,9 @@ message SearchIndexPartitionRequest {
   // Preserves a derived command's NoProcessingRequired() decision after the
   // shard reconstructs this request as base SearchParameters.
   bool force_content_processing = 26;
+  // Set by coordinators that read a HASH row's SORTBY value under the hash
+  // field; for one that does not, the shard files it under the alias.
+  bool accepts_sortby_lookup_key = 27;
 }
 
 message InkeysFilter {
@@ -217,6 +220,9 @@ message NeighborEntry {
 message SearchIndexPartitionResponse {
   repeated NeighborEntry neighbors = 1;
   uint64 total_count = 2;
+  // Set by shards that file SORTBY values under SortByKey's name; for one that
+  // does not, the coordinator re-files them from the alias.
+  bool sortby_keyed_by_lookup_key = 3;
 }
 
 message AttributeContentEntry {

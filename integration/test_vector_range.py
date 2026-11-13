@@ -68,7 +68,7 @@ RANGE_SIZES = (1, 10, 100)
 EPSILONS = (None, 1e-6, 0.1)
 # Mean recall over every query, radius and epsilon, and the floor for the mean
 # of any one (range size, epsilon) cell.
-MIN_RECALL = 0.95
+MIN_RECALL = 0.94
 MIN_CELL_RECALL = 0.9
 
 

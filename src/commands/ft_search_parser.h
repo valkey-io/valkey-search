@@ -68,6 +68,7 @@ struct SearchCommand : public QueryCommand {
     bool sort_by_vec_score{false};
     bool nil_absent_sort_key{false};
     std::string sort_key_prefix;
+    std::optional<query::SortByKey> sortby_key;
     // The single VR distance field name (query::GetVrScoreFieldName).
     // Empty unless the query named the distance ($yield_distance_as or AS).
     std::string vr_field;
@@ -94,6 +95,10 @@ struct SearchCommand : public QueryCommand {
   // replied with their length up front rather than VALKEYMODULE_POSTPONED_LEN
   // (each postponed length costs the server a reply-list node).
   size_t RowElementCount() const;
+  // Same as the public ReplyRows, with the row format computed once by the
+  // caller: GetRowFormat() counts compatibility uses.
+  void ReplyRows(ValkeyModuleCtx *ctx, const query::SearchResult &search_result,
+                 size_t start, size_t end, const RowFormat &format) const;
 };
 
 }  // namespace valkey_search

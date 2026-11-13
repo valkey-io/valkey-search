@@ -25,7 +25,7 @@ The search module uses the Valkey configuration mechanism. Thus each of the name
 | search.high-priority-weight                   | Number  |               | Weight for high priority tasks in thread pools; low priority = 100 - this value                                                   |
 | search.ft-info-timeout-ms                     | Number  |               | Timeout in milliseconds for FT.INFO fanout command                                                                                |
 | search.ft-info-rpc-timeout-ms                 | Number  |               | RPC timeout in milliseconds for FT.INFO fanout command                                                                            |
-| search.local-fanout-queue-wait-threshold      | Number  |               | Queue wait threshold in milliseconds for preferring local node in fanout operations                                               |
+| search.local-fanout-queue-wait-threshold      | Number  |               | Queue wait threshold in milliseconds for preferring the local replica in READONLY fanout                                          |
 | search.thread-pool-wait-time-samples          | Number  |               | Sample queue size for thread pool wait time tracking                                                                              |
 | search.max-term-expansions                    | Number  |               | Maximum number of words to search in text operations (prefix, suffix, fuzzy) to limit memory usage                                |
 | search.tag-min-prefix-length                  | Number  |               | Minimum number of characters required before trailing `*` in TAG wildcard queries (length excludes `*`)                          |

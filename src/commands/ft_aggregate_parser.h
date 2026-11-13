@@ -193,6 +193,13 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   //
   absl::flat_hash_set<std::string> record_identifiers_;
   //
+  // The names stages write (APPLY and REDUCE outputs), and the names read
+  // before any stage writes them: `@name` in a stage, and the source of a
+  // `LOAD ... AS` rename.
+  //
+  absl::flat_hash_set<std::string> written_names_;
+  absl::flat_hash_set<std::string> read_names_;
+  //
   // Maps indexes in a record into metadata for that index
   //
   std::vector<AttributeRecordInfo> record_info_by_index_;

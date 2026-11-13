@@ -402,6 +402,11 @@ vmsdk::KeyValueParser<AggregateParameters> CreateAggregateParser() {
 absl::StatusOr<std::unique_ptr<expr::Expression::AttributeReference>>
 AggregateParameters::MakeReference(const absl::string_view name, bool create) {
   DBG << "MakeReference : " << name << " Create:" << create << "\n";
+  if (create) {
+    written_names_.emplace(name);
+  } else if (!written_names_.contains(name)) {
+    read_names_.emplace(name);
+  }
   auto it = record_indexes_by_alias_.find(name);
   if (it != record_indexes_by_alias_.end()) {
     return std::make_unique<Attribute>(

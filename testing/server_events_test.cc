@@ -10,6 +10,7 @@
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "testing/common.h"
+#include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"

@@ -168,6 +168,15 @@ int OnLoadDone(absl::Status status, ValkeyModuleCtx *ctx,
   VMSDK_LOG(WARNING, ctx) << status.message().data();
   return VALKEYMODULE_ERR;
 }
+
+int OnUnloadDone(absl::Status status, ValkeyModuleCtx *ctx,
+                 [[maybe_unused]] const Options &options) {
+  if (status.ok()) {
+    return VALKEYMODULE_OK;
+  }
+  VMSDK_LOG(WARNING, ctx) << status.message().data();
+  return VALKEYMODULE_ERR;
+}
 }  // namespace module
 static absl::flat_hash_set<std::string> loaded_modules;
 void SetModuleLoaded(const std::string &name, bool remove) {

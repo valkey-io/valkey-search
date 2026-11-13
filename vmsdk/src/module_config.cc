@@ -8,6 +8,8 @@
 
 #include <absl/base/no_destructor.h>
 
+#include <array>
+
 #include "absl/log/check.h"
 #include "absl/strings/ascii.h"
 #include "absl/strings/numbers.h"
@@ -109,11 +111,66 @@ std::vector<const char *> ToCharPtrPtrVec(const std::vector<std::string> &vec) {
   }
   return arrptr;
 }
+
+constexpr std::array<std::string_view, 4> kLogLevelNames = {
+    VALKEYMODULE_LOGLEVEL_WARNING,
+    VALKEYMODULE_LOGLEVEL_NOTICE,
+    VALKEYMODULE_LOGLEVEL_VERBOSE,
+    VALKEYMODULE_LOGLEVEL_DEBUG,
+};
+
+constexpr std::array<int, 4> kLogLevelValues = {
+    static_cast<int>(LogLevel::kWarning),
+    static_cast<int>(LogLevel::kNotice),
+    static_cast<int>(LogLevel::kVerbose),
+    static_cast<int>(LogLevel::kDebug),
+};
+
+absl::Status ValidateLogLevel(const int value) {
+  if (value >= static_cast<int>(LogLevel::kWarning) &&
+      value <= static_cast<int>(LogLevel::kDebug)) {
+    return absl::OkStatus();
+  }
+  return absl::OutOfRangeError(
+      absl::StrFormat("Log level of: %d is out of range", value));
+}
 }  // namespace
+
+ConfigBuilder<int> LogLevelBuilder(std::string_view name,
+                                   LogLevel default_level) {
+  auto *entry = new Enum(
+      name, static_cast<int>(default_level),
+      std::vector<std::string_view>(kLogLevelNames.begin(),
+                                    kLogLevelNames.end()),
+      std::vector<int>(kLogLevelValues.begin(), kLogLevelValues.end()));
+  std::string config_name(name);
+  entry->SetModifyCallback([config_name = std::move(config_name)](int value) {
+    auto res = ValidateLogLevel(value);
+    if (!res.ok()) {
+      VMSDK_LOG(WARNING, nullptr)
+          << "Invalid value: '" << value << "' provided to enum: '"
+          << config_name << "'. " << res.message();
+      return;
+    }
+    auto log_level_str = kLogLevelNames[value];
+    res = vmsdk::InitLogging(nullptr, std::string(log_level_str));
+    if (!res.ok()) {
+      VMSDK_LOG(WARNING, nullptr)
+          << "Failed to initialize log with new value: " << log_level_str
+          << ". " << res.message();
+    }
+  });
+  entry->SetValidateCallback(ValidateLogLevel);
+  return {entry};
+}
 
 ModuleConfigManager &ModuleConfigManager::Instance() {
   static ModuleConfigManager module_config_manager;
   return module_config_manager;
+}
+
+void ModuleConfigManager::SetValidationCallback(ValidateCB validate_callback) {
+  validate_callback_ = std::move(validate_callback);
 }
 
 void ModuleConfigManager::RegisterConfig(Registerable *config_item) {
@@ -179,7 +236,11 @@ absl::Status ModuleConfigManager::ParseAndLoadArgv(ValkeyModuleCtx *ctx,
   // so the result doesn't depend on argument order. If debug-mode is given
   // more than once, the last value applies to every argument.
   VMSDK_RETURN_IF_ERROR(apply_argv(/*debug_mode_only=*/true));
-  return apply_argv(/*debug_mode_only=*/false);
+  VMSDK_RETURN_IF_ERROR(apply_argv(/*debug_mode_only=*/false));
+  if (validate_callback_) {
+    VMSDK_RETURN_IF_ERROR(validate_callback_());
+  }
+  return absl::OkStatus();
 }
 
 absl::Status ModuleConfigManager::UpdateConfigFromKeyVal(

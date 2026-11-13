@@ -143,6 +143,7 @@ vmsdk::module::Options options = {
         [](ValkeyModuleCtx *ctx,
            [[maybe_unused]] const vmsdk::module::Options &options) {
           valkey_search::ValkeySearch::Instance().OnUnload(ctx);
+          return absl::OkStatus();
         },
 };
 VALKEY_MODULE(options, kModuleName, kModuleVersion);

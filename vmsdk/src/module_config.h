@@ -94,9 +94,14 @@ inline absl::string_view RedactIfNeeded(absl::string_view data) {
 /// CONFIG SET search.config-name <value>
 /// CONFIG GET search.config-name
 /// ```
+/// Configuration name for the module log level.
+constexpr absl::string_view kLogLevel{"log-level"};
+
 class Registerable;
 class ModuleConfigManager {
  public:
+  using ValidateCB = std::function<absl::Status()>;
+
   ModuleConfigManager() = default;
 
   static ModuleConfigManager &Instance();
@@ -108,6 +113,11 @@ class ModuleConfigManager {
   /// Parse and load command line arguments
   absl::Status ParseAndLoadArgv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                                 int argc);
+
+  /// Register a module-level validation callback invoked at the end of
+  /// `ParseAndLoadArgv` after all command-line options have been applied.
+  void SetValidationCallback(ValidateCB validate_callback);
+
   /// Call this method to register a configuration item with this manager. This
   /// method is mainly used by the constructor of `ConfigBase` so users should
   /// not call it directly.
@@ -127,6 +137,7 @@ class ModuleConfigManager {
                                       std::string_view key,
                                       std::string_view value);
   absl::flat_hash_map<std::string, Registerable *> entries_;
+  ValidateCB validate_callback_;
   friend class Configbase;
 };
 
@@ -636,6 +647,11 @@ template <typename... Args>
 ConfigBuilder<vmsdk::ValkeyVersion> VersionBuilder(Args &&...args) {
   return Builder<vmsdk::ValkeyVersion>(std::forward<Args>(args)...);
 }
+
+/// Wrapper for building an Enum configuration entry that controls the module
+/// log level and automatically applies changes via `vmsdk::InitLogging`.
+ConfigBuilder<int> LogLevelBuilder(std::string_view name = kLogLevel,
+                                   LogLevel default_level = LogLevel::kNotice);
 
 #define CHECK_RANGE(MIN, MAX, CONFIG_NAME)                         \
   [](const int value) {                                            \

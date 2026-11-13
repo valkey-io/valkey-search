@@ -190,6 +190,13 @@ else()
     # Fix wrong detection of fdopen on macOS
     find_and_replace("${MODULES_DIR}/grpc/third_party/zlib/zutil.h"
                      "ifndef fdopen" "if 0")
+    if(NOT OPENSSL_ROOT_DIR)
+      if(EXISTS "/opt/homebrew/opt/openssl@3")
+        set(OPENSSL_ROOT_DIR "/opt/homebrew/opt/openssl@3" CACHE PATH "")
+      elseif(EXISTS "/usr/local/opt/openssl@3")
+        set(OPENSSL_ROOT_DIR "/usr/local/opt/openssl@3" CACHE PATH "")
+      endif()
+    endif()
   endif()
 
   checkout_submodule_branch(
@@ -231,6 +238,9 @@ else()
       -DgRPC_BUILD_TESTS=OFF
       -DgRPC_SSL_PROVIDER=package
   )
+  if(OPENSSL_ROOT_DIR)
+    list(APPEND GRPC_CMAKE_ARGS -DOPENSSL_ROOT_DIR=${OPENSSL_ROOT_DIR})
+  endif()
 
   add_subdirectory(${MODULES_DIR}/highwayhash ${CMAKE_BINARY_DIR}/highwayhash)
   build_submodule(${MODULE_GOOGLE_TEST} "${GOOGLE_TEST_CMAKE_ARGS}"

@@ -110,20 +110,13 @@ class TestFtHybridLoadProjection(_LoadProjectionTests,
             client.execute_command("JSON.SET", f"j:{i}", "$", json.dumps({
                 "title": "alpha", "price": i,
                 "vec": [float(i), 0.0, 0.0, 0.0]}))
-        waiters.wait_for_true(
-            lambda: client.execute_command(
-                "FT.SEARCH", "jidx", "@title:alpha", "NOCONTENT",
-                "LIMIT", "0", "0")[0] == 3,
-            timeout=10)
         reply = client.execute_command(
             "FT.HYBRID", "jidx", "SEARCH", "@title:alpha", "VSIM", "@vec",
             "$q", "COMBINE", "RRF", "2", "CONSTANT", "60",
             "LOAD", "1", "@price", "PARAMS", "2", "q", Q)
         assert len(reply) == 4, reply
-        for rec in reply[1:]:
-            fields = dict(zip(rec[::2], rec[1::2]))
-            loaded = [v for k, v in fields.items() if not k.startswith(b"__")]
-            assert loaded == [fields[b"__key"][len(b"j:"):]], rec
+        assert sorted(reply[1:]) == [[b"price", b"1"], [b"price", b"2"],
+                                     [b"price", b"3"]], reply
 
 
 class TestFtHybridLoadProjectionCluster(_LoadProjectionTests,

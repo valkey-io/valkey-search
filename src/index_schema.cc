@@ -1159,6 +1159,13 @@ void IndexSchema::BackfillScanCallback(ValkeyModuleCtx *ctx,
 CONTROLLED_BOOLEAN(StopBackfill, false);
 CONTROLLED_BOOLEAN(ForceRDBLoadFailure, false);
 
+void IndexSchema::MigrateHugeMaps(size_t n) {
+  auto &db_key_info = db_key_info_.Get();
+  if (db_key_info.NeedsMigration()) {
+    db_key_info.MigrateSome(n);
+  }
+}
+
 uint32_t IndexSchema::PerformBackfill(ValkeyModuleCtx *ctx,
                                       uint32_t batch_size) {
   auto &backfill_job = backfill_job_.Get();

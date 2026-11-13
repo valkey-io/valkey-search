@@ -250,6 +250,9 @@ class IndexSchema : public KeyspaceEventSubscription,
 
   uint32_t PerformBackfill(ValkeyModuleCtx *ctx, uint32_t batch_size);
 
+  // Called from server cron.
+  void MigrateHugeMaps(size_t n);
+
   bool IsBackfillInProgress() const {
     auto &backfill_job = backfill_job_.Get();
     return backfill_job.has_value() &&

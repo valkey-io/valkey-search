@@ -1,0 +1,59 @@
+name: ICU cache
+description: Restore, or save, the ICU static libraries that build.sh builds into <build-dir>/icu/install/lib.
+
+inputs:
+  build-dir:
+    description: Build directory relative to the workspace, for example .build-release.
+    required: true
+  save:
+    description: Save instead of restore. Skipped unless all three libraries were built.
+    default: "false"
+
+outputs:
+  cache-hit:
+    description: Whether the restore found an exact match.
+    value: ${{ steps.restore.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    - name: Compute ICU cache key
+      id: key
+      shell: bash
+      env:
+        BUILD_DIR: ${{ inputs.build-dir }}
+      run: echo "key=$(bash ci/icu_cache_key.sh "$BUILD_DIR")" >> "$GITHUB_OUTPUT"
+
+    - name: Restore ICU libraries
+      id: restore
+      if: inputs.save != 'true'
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: |
+          ${{ inputs.build-dir }}/icu/install/lib/libicudata.a
+          ${{ inputs.build-dir }}/icu/install/lib/libicui18n.a
+          ${{ inputs.build-dir }}/icu/install/lib/libicuuc.a
+        key: ${{ steps.key.outputs.key }}
+
+    - name: Check ICU libraries were built
+      id: built
+      if: inputs.save == 'true'
+      shell: bash
+      env:
+        LIB_DIR: ${{ inputs.build-dir }}/icu/install/lib
+      run: |
+        complete=true
+        for lib in libicudata.a libicui18n.a libicuuc.a; do
+          [ -s "$LIB_DIR/$lib" ] || complete=false
+        done
+        echo "complete=$complete" >> "$GITHUB_OUTPUT"
+
+    - name: Save ICU libraries
+      if: inputs.save == 'true' && steps.built.outputs.complete == 'true'
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: |
+          ${{ inputs.build-dir }}/icu/install/lib/libicudata.a
+          ${{ inputs.build-dir }}/icu/install/lib/libicui18n.a
+          ${{ inputs.build-dir }}/icu/install/lib/libicuuc.a
+        key: ${{ steps.key.outputs.key }}

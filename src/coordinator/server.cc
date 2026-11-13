@@ -7,6 +7,7 @@
 
 #include "src/coordinator/server.h"
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -138,22 +139,28 @@ class RemoteResponderSearch : public query::SearchParameters {
   // would be wrong with no error anywhere to say so. So partial-results
   // tolerance, which is about losing a whole shard, does not apply per arm.
   bool multi_arm{false};
+  // Sends replies for main-thread completions; owned by Service.
+  ShardReplyDispatcher *reply_dispatcher{nullptr};
   void QueryCompleteBackground(
       std::unique_ptr<SearchParameters> self) override {
     CHECK(!vmsdk::IsMainThread());
     CHECK(NoProcessingRequired());
-    QueryCompleteImpl();
+    SendReply();
   }
 
   void QueryCompleteMainThread(
       std::unique_ptr<SearchParameters> self) override {
     CHECK(vmsdk::IsMainThread());
     CHECK(!NoProcessingRequired());
-    QueryCompleteImpl();
+    CHECK(this == self.get());
+    CHECK(reply_dispatcher != nullptr);
+    // Nothing here needs main, so the dispatcher may free it off main.
+    reply_dispatcher->Dispatch(std::unique_ptr<RemoteResponderSearch>(
+        static_cast<RemoteResponderSearch *>(self.release())));
   }
 
- private:
-  void QueryCompleteImpl() {
+  // Serializes the result and finishes the gRPC arm.
+  void SendReply() {
     if (!search_result.status.ok() && (!enable_partial_results || multi_arm)) {
       (*on_done)(ToGrpcStatus(search_result.status));
       RecordSearchMetrics(true, std::move(latency_sample));
@@ -172,6 +179,45 @@ class RemoteResponderSearch : public query::SearchParameters {
     RecordSearchMetrics(false, std::move(latency_sample));
   }
 };
+
+namespace {
+// Pool task: sends the reply, then frees the operation on the pool thread.
+class ShardReplyTask {
+ public:
+  ShardReplyTask(std::unique_ptr<RemoteResponderSearch> operation,
+                 std::atomic<size_t> *queued)
+      : operation_(std::move(operation)), queued_(queued) {}
+
+  void operator()() {
+    // Decrement first: once the reply is sent, Service may be destroyed.
+    queued_->fetch_sub(1, std::memory_order_relaxed);
+    operation_->SendReply();
+    operation_.reset();
+  }
+
+ private:
+  std::unique_ptr<RemoteResponderSearch> operation_;
+  std::atomic<size_t> *queued_;
+};
+}  // namespace
+
+void ShardReplyDispatcher::Dispatch(
+    std::unique_ptr<RemoteResponderSearch> operation) {
+  // A one-thread pool is also running the searches, so a reply queued there
+  // waits behind them while main sits idle. Reply inline instead.
+  if (pool_ == nullptr || pool_->Size() <= 1 ||
+      !options::GetBackgroundShardReply().GetValue()) {
+    operation->SendReply();
+    return;
+  }
+  queued_.fetch_add(1, std::memory_order_relaxed);
+  auto refused = vmsdk::ScheduleOrReturn(
+      *pool_, ShardReplyTask(std::move(operation), &queued_),
+      vmsdk::ThreadPool::Priority::kHigh);
+  if (refused) {
+    (*refused)();
+  }
+}
 
 grpc::Status Service::PerformSlotConsistencyCheck(
     uint64_t expected_slot_fingerprint) {
@@ -208,6 +254,7 @@ void Service::EnqueueSearchRequest(
     ArmCompletionCallback on_done) {
   search_operation->response = response;
   search_operation->latency_sample = std::move(latency_sample);
+  search_operation->reply_dispatcher = &reply_dispatcher_;
   // Keep a handle on the (move-only) completion callback. The operation is
   // about to be moved into SearchAsync, so on failure it is gone and cannot be
   // asked for its callback back; sharing it is what lets this frame finish the
@@ -263,11 +310,16 @@ void Service::SearchOneArm(grpc::CallbackServerContext *context,
     // Server-side queue depth check: reject partition requests when the reader
     // thread pool is overloaded. Without this, coordinators keep sending work
     // to an already-saturated node while its pair in the shard sits idle.
+    // Queued replies are not search load, so leave them out.
     auto configured_limit = options::GetMaxQueryQueueDepth().GetValue();
-    if (configured_limit > 0 && (ForceServerQueueDepthExceeded.GetValue() ||
-                                 reader_thread_pool_->QueueSize() >=
-                                     static_cast<size_t>(configured_limit))) {
-      return absl::ResourceExhaustedError(query::kQueueDepthMsg);
+    if (configured_limit > 0) {
+      size_t queued = reader_thread_pool_->QueueSize();
+      size_t replies = reply_dispatcher_.QueuedCount();
+      size_t searches = queued > replies ? queued - replies : 0;
+      if (ForceServerQueueDepthExceeded.GetValue() ||
+          searches >= static_cast<size_t>(configured_limit)) {
+        return absl::ResourceExhaustedError(query::kQueueDepthMsg);
+      }
     }
     EnqueueSearchRequest(std::move(search_operation), reader_thread_pool_,
                          detached_ctx_.get(), response,

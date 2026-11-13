@@ -8,6 +8,8 @@
 #ifndef VALKEYSEARCH_SRC_COORDINATOR_SERVER_H_
 #define VALKEYSEARCH_SRC_COORDINATOR_SERVER_H_
 
+#include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <utility>
@@ -34,12 +36,26 @@ struct RemoteResponderSearch;
 // counter for multi-arm).
 using ArmCompletionCallback = absl::AnyInvocable<void(grpc::Status)>;
 
+// Sends shard replies inline or on a pool, per background-shard-reply.
+class ShardReplyDispatcher {
+ public:
+  explicit ShardReplyDispatcher(vmsdk::ThreadPool* pool) : pool_(pool) {}
+  void Dispatch(std::unique_ptr<RemoteResponderSearch> operation);
+  // Replies queued on the pool but not started yet (approximate).
+  size_t QueuedCount() const { return queued_.load(std::memory_order_relaxed); }
+
+ private:
+  vmsdk::ThreadPool* pool_;
+  std::atomic<size_t> queued_{0};
+};
+
 class Service final : public Coordinator::CallbackService {
  public:
   Service(vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx,
           vmsdk::ThreadPool* reader_thread_pool)
       : detached_ctx_(std::move(detached_ctx)),
-        reader_thread_pool_(reader_thread_pool) {}
+        reader_thread_pool_(reader_thread_pool),
+        reply_dispatcher_(reader_thread_pool) {}
   Service(const Service&) = delete;
   Service& operator=(const Service&) = delete;
 
@@ -99,6 +115,7 @@ class Service final : public Coordinator::CallbackService {
 
   vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx_;
   vmsdk::ThreadPool* reader_thread_pool_;
+  ShardReplyDispatcher reply_dispatcher_;
 };
 
 class Server {

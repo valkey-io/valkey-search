@@ -7,6 +7,7 @@ from valkey.exceptions import ResponseError, ConnectionError
 import pytest
 from indexes import *
 from ft_info_parser import FTInfoParser
+from utils import run_in_thread
 
 MAX_RETRIES = "4294967295"
 
@@ -133,6 +134,46 @@ class TestFanoutBase(ValkeySearchClusterTestCaseDebugMode):
         assert fingerprint != int(info["index_fingerprint"])
         assert version < int(info["index_version"])
 
+    def test_background_reply_after_dropindex(self):
+        """A shard's background reply for a dropped index still frees safely.
+
+        The reply task frees the responder on a reader thread, and here it
+        holds the last IndexSchema reference, so ~IndexSchema runs there.
+        """
+        cluster: ValkeyCluster = self.new_cluster_client()
+        node0: Valkey = self.new_client_for_primary(0)
+        # A one-thread pool replies inline on main, skipping that path.
+        assert int(node0.execute_command(
+            "CONFIG", "GET", "search.reader-threads")[1]) > 1
+        node0.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:",
+            "SCHEMA", "n", "NUMERIC")
+        for i in range(10):
+            cluster.hset(f"doc:{i}", "n", i)
+        for node in self.nodes:
+            node.client.execute_command(
+                "CONFIG", "SET", "search.background-shard-reply", "yes")
+            node.client.execute_command(
+                "FT._DEBUG", "PAUSEPOINT", "SET", "background_search_completing")
+        thread, _, err = run_in_thread(
+            lambda: self.new_client_for_primary(0).execute_command(
+                "FT.SEARCH", "idx", "@n:[0 +inf]"))
+        for node in self.nodes:
+            waiters.wait_for_true(lambda: node.client.execute_command(
+                "FT._DEBUG", "PAUSEPOINT", "TEST",
+                "background_search_completing") > 0)
+        node0.execute_command("FT.DROPINDEX", "idx")
+        for node in self.nodes:
+            waiters.wait_for_true(lambda: not index_on_node(node.client, "idx"))
+        for node in self.nodes:
+            node.client.execute_command(
+                "FT._DEBUG", "PAUSEPOINT", "RESET", "background_search_completing")
+        thread.join()
+        # Partial results (default on) turn each shard's not-found into empty.
+        assert err[0] is None
+        for node in self.nodes:
+            assert node.client.ping()
+
 def search_command(index: str) -> list[str]:
     return [
         "FT.SEARCH",
@@ -216,6 +257,98 @@ class TestFanout(ValkeySearchClusterTestCase):
         client.execute_command("CONFIG", "SET", "search.thread-pool-wait-time-samples", "10000")
         result = client.execute_command("CONFIG", "GET", "search.thread-pool-wait-time-samples")
         assert result[1] == b"10000"
+
+    def test_async_fanout_and_background_reply(self):
+        """Results do not depend on which thread does the gRPC work.
+
+        async-fanout-threshold moves the coordinator's per-shard sends to a
+        reader thread once the fanout has that many targets (default 1).
+        background-shard-reply (default yes) moves a
+        shard's reply to a reader thread when its search completes on the main
+        thread, i.e. after content resolution. FT.SEARCH with content and
+        FT.HYBRID (whose remote arms always resolve content) take that path;
+        FT.SEARCH NOCONTENT completes on a reader thread and is the control.
+        """
+        index = "idx"
+        docs = 30
+        query_vec = float_to_bytes([1.0, 2.0, 3.0, 4.0])
+        cluster = self.new_cluster_client()
+        client = self.new_client_for_primary(0)
+        client.execute_command(
+            "FT.CREATE", index, "ON", "HASH", "PREFIX", "1", "doc:",
+            "SCHEMA", "title", "TEXT", "n", "NUMERIC", "SORTABLE",
+            "vec", "VECTOR", "HNSW", "6",
+            "TYPE", "FLOAT32", "DIM", "4", "DISTANCE_METRIC", "L2")
+        for i in range(1, docs + 1):
+            cluster.hset(f"doc:{i}", mapping={
+                "title": f"hello world {i}",
+                "n": i,
+                "vec": float_to_bytes([float(i), float(i * 2), float(i * 3),
+                                       float(i * 4)])})
+        waiters.wait_for_true(
+            lambda: client.execute_command(
+                "FT.SEARCH", index, "@title:hello",
+                "NOCONTENT", "LIMIT", "0", "0")[0] == docs,
+            timeout=15)
+        # The coordinator only sends asynchronously from a pool of 2+ threads.
+        assert int(client.execute_command(
+            "CONFIG", "GET", "search.reader-threads")[1]) > 1
+
+        # Each query returns a value independent of the order shards reply in,
+        # so runs can be compared for equality.
+        def run_all():
+            content = client.execute_command(
+                "FT.SEARCH", index, "@title:hello", "SORTBY", "n", "ASC",
+                "RETURN", "2", "title", "n", "LIMIT", "0", "100")
+            nocontent = client.execute_command(
+                "FT.SEARCH", index, "@title:hello", "NOCONTENT",
+                "LIMIT", "0", "100")
+            hybrid = client.execute_command(
+                "FT.HYBRID", index,
+                "SEARCH", "@title:hello",
+                "VSIM", "@vec", "$q", "KNN", "2", "K", "5",
+                "COMBINE", "RRF", "2", "WINDOW", "1000",
+                "LIMIT", "0", "100",
+                "PARAMS", "2", "q", query_vec)
+            # Keys only: text-score ties across shards can rank in
+            # reply-arrival order, which varies run to run, so fused scores
+            # are not compared.
+            hybrid_keys = [
+                {bytes(row[i]): row[i + 1]
+                 for i in range(0, len(row), 2)}[b"__key"]
+                for row in hybrid[1:]]
+            return {
+                "search_content": content,
+                "search_nocontent": (nocontent[0], sorted(nocontent[1:])),
+                "hybrid": (hybrid[0], sorted(hybrid_keys)),
+            }
+
+        baseline = run_all()
+        assert baseline["search_content"][0] == docs
+        assert baseline["search_nocontent"][0] == docs
+        assert baseline["hybrid"][0] > 0
+
+        # Remote RPC arms per run_all: one per remote shard for each FT.SEARCH,
+        # two (one per arm) for FT.HYBRID.
+        arms_per_run = (self.CLUSTER_SIZE - 1) * (1 + 1 + 2)
+
+        for threshold, background_reply in [
+                ("30", "no"), ("1", "no"), ("30", "yes"), ("1", "yes")]:
+            for node in self.nodes:
+                node.client.execute_command(
+                    "CONFIG", "SET", "search.async-fanout-threshold", threshold)
+                node.client.execute_command(
+                    "CONFIG", "SET", "search.background-shard-reply",
+                    background_reply)
+            for _ in range(5):
+                before = sum_of_remote_searches(self.nodes)
+                assert run_all() == baseline, (
+                    f"threshold={threshold} background_reply={background_reply}")
+                # A background reply records its metric after sending, so the
+                # shard may count it just after the coordinator has replied.
+                waiters.wait_for_equal(
+                    lambda: sum_of_remote_searches(self.nodes),
+                    before + arms_per_run, timeout=5)
 
 def load_fingerprint_version_from_rdb(test):
     client = test.new_client_for_primary(0)

@@ -22,6 +22,7 @@ The search module uses the Valkey configuration mechanism. Thus each of the name
 | search.enable-partial-results                 | Boolean |      yes      | Default option for delivering partial results when timeout occurs (uses SOMESHARDS if not explicitly provided)                    |
 | search.enable-consistent-results              | Boolean |      no       | Default option for delivering consistent results when timeout occurs (uses CONSISTENT if not explicitly provided)                 |
 | search.search-result-background-cleanup       | Boolean |               | Enable search result cleanup on background thread                                                                                 |
+| search.background-shard-reply                 | Boolean |      yes      | Send a shard's fanout reply from a reader thread instead of the main thread, once the main thread has fetched the content         |
 | search.high-priority-weight                   | Number  |               | Weight for high priority tasks in thread pools; low priority = 100 - this value                                                   |
 | search.ft-info-timeout-ms                     | Number  |               | Timeout in milliseconds for FT.INFO fanout command                                                                                |
 | search.ft-info-rpc-timeout-ms                 | Number  |               | RPC timeout in milliseconds for FT.INFO fanout command                                                                            |

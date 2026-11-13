@@ -228,6 +228,19 @@ using Func = Value (*)(Expression::EvalContext &ctx,
 // A null is a value, so it exists.
 Value FuncExists(const Value &o) { return Value(!o.IsNil() || o.IsNull()); }
 
+// Unlike ordinary functions, case() must not evaluate both result expressions:
+// a non-selected expression may refer to a field that is absent from the
+// current record.
+Value ProxyCase(Expression::EvalContext &ctx, const Expression::Record &record,
+                const absl::InlinedVector<expr::ExprPtr, 4> &params) {
+  CHECK(params.size() == 3);
+  auto condition = params[0]->Evaluate(ctx, record);
+  if (EndsCall(condition)) {
+    return condition;
+  }
+  return params[*condition.AsBool() ? 1 : 2]->Evaluate(ctx, record);
+}
+
 Value ProxyConcat(Expression::EvalContext &ctx,
                   const Expression::Record &record,
                   const absl::InlinedVector<expr::ExprPtr, 4> &params) {
@@ -296,6 +309,7 @@ constexpr auto kStr = Expression::Type::kString;
 static std::map<std::string, FunctionTableEntry> function_table{
     {"exists",
      {1, 1, &MonadicFunctionProxy<FuncExists, kMissingIsAnArgument>, kNum}},
+    {"case", {3, 3, &ProxyCase, kNum}},
 
     {"abs", {1, 1, &MonadicFunctionProxy<FuncAbs>, kNum}},
     {"ceil", {1, 1, &MonadicFunctionProxy<FuncCeil>, kNum}},
@@ -469,13 +483,29 @@ struct Compiler {
     Dyadic::ValueFunc func;
     Dyadic::ValueFunc number_func = nullptr;  // either operand is a number
     Dyadic::ValueFunc string_func = nullptr;  // either operand is a string
+    Dyadic::ValueFunc mixed_func = nullptr;   // either operand is kMixed
   };
+
+  // A number value makes the comparison numeric, otherwise it compares
+  // strings: what Redisearch does for every comparison at run time.
+  template <Dyadic::ValueFunc number_func, Dyadic::ValueFunc string_func>
+  static Value CompareByValue(const Value &l, const Value &r) {
+    // The numeric functions compare an array element by element; the string
+    // ones would read every array as "".
+    auto numeric = [](const Value &v) {
+      return v.IsDouble() || v.IsBool() || v.IsArray();
+    };
+    return numeric(l) || numeric(r) ? number_func(l, r) : string_func(l, r);
+  }
 
   static Dyadic::ValueFunc SelectFunc(const DyadicOp &op, Expression::Type l,
                                       Expression::Type r) {
     using Type = Expression::Type;
     if (op.number_func && (l == Type::kNumber || r == Type::kNumber)) {
       return op.number_func;
+    }
+    if (op.mixed_func && (l == Type::kMixed || r == Type::kMixed)) {
+      return op.mixed_func;
     }
     if (op.string_func && (l == Type::kString || r == Type::kString)) {
       return op.string_func;
@@ -665,8 +695,15 @@ struct Compiler {
                 [] { return false; })) {
           func = entry->typed_function;
         }
-        return std::make_unique<FunctionCall>(std::move(name), func,
-                                              entry->result, std::move(params));
+        auto type = entry->result;
+        if (name == "case") {
+          const auto if_true = params[1]->GetResultType();
+          type = if_true == params[2]->GetResultType()
+                     ? if_true
+                     : Expression::Type::kMixed;
+        }
+        return std::make_unique<FunctionCall>(std::move(name), func, type,
+                                              std::move(params));
       } else if (!params.empty() && !s_.PopByte(',')) {
         DBG << "func_call found comma\n";
         return absl::NotFoundError(
@@ -749,19 +786,31 @@ struct Compiler {
   }
   absl::StatusOr<ExprPtr> CmpOp(CompileContext &ctx) {
     static std::vector<DyadicOp> apply_ops{
-        {"<=", &FuncLe, &FuncNumLe, &FuncStrLe},
-        {"<", &FuncLt, &FuncNumLt, &FuncStrLt},
-        {"==", &FuncEq, &FuncNumEq, &FuncStrEq},
-        {"!=", &FuncNe, &FuncNumNe, &FuncStrNe},
-        {">=", &FuncGe, &FuncNumGe, &FuncStrGe},
-        {">", &FuncGt, &FuncNumGt, &FuncStrGt}};
+        {"<=", &FuncLe, &FuncNumLe, &FuncStrLe,
+         &CompareByValue<&FuncNumLe, &FuncStrLe>},
+        {"<", &FuncLt, &FuncNumLt, &FuncStrLt,
+         &CompareByValue<&FuncNumLt, &FuncStrLt>},
+        {"==", &FuncEq, &FuncNumEq, &FuncStrEq,
+         &CompareByValue<&FuncNumEq, &FuncStrEq>},
+        {"!=", &FuncNe, &FuncNumNe, &FuncStrNe,
+         &CompareByValue<&FuncNumNe, &FuncStrNe>},
+        {">=", &FuncGe, &FuncNumGe, &FuncStrGe,
+         &CompareByValue<&FuncNumGe, &FuncStrGe>},
+        {">", &FuncGt, &FuncNumGt, &FuncStrGt,
+         &CompareByValue<&FuncNumGt, &FuncStrGt>}};
     static std::vector<DyadicOp> filter_ops{
-        {"<=", &FilterFuncLe, &FilterFuncNumLe, &FilterFuncStrLe},
-        {"<", &FilterFuncLt, &FilterFuncNumLt, &FilterFuncStrLt},
-        {"==", &FilterFuncEq, &FilterFuncNumEq, &FilterFuncStrEq},
-        {"!=", &FilterFuncNe, &FilterFuncNumNe, &FilterFuncStrNe},
-        {">=", &FilterFuncGe, &FilterFuncNumGe, &FilterFuncStrGe},
-        {">", &FilterFuncGt, &FilterFuncNumGt, &FilterFuncStrGt}};
+        {"<=", &FilterFuncLe, &FilterFuncNumLe, &FilterFuncStrLe,
+         &CompareByValue<&FilterFuncNumLe, &FilterFuncStrLe>},
+        {"<", &FilterFuncLt, &FilterFuncNumLt, &FilterFuncStrLt,
+         &CompareByValue<&FilterFuncNumLt, &FilterFuncStrLt>},
+        {"==", &FilterFuncEq, &FilterFuncNumEq, &FilterFuncStrEq,
+         &CompareByValue<&FilterFuncNumEq, &FilterFuncStrEq>},
+        {"!=", &FilterFuncNe, &FilterFuncNumNe, &FilterFuncStrNe,
+         &CompareByValue<&FilterFuncNumNe, &FilterFuncStrNe>},
+        {">=", &FilterFuncGe, &FilterFuncNumGe, &FilterFuncStrGe,
+         &CompareByValue<&FilterFuncNumGe, &FilterFuncStrGe>},
+        {">", &FilterFuncGt, &FilterFuncNumGt, &FilterFuncStrGt,
+         &CompareByValue<&FilterFuncNumGt, &FilterFuncStrGt>}};
     // Pre-1.3.0 comparisons decide numeric vs string from the runtime Values.
     static std::vector<DyadicOp> legacy_apply_ops{
         {"<=", &FuncLe}, {"<", &FuncLt},  {"==", &FuncEq},

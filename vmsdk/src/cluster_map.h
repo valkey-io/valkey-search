@@ -60,7 +60,7 @@ struct NodeInfo {
   // Pointer to the shard this node belongs to
   const ShardInfo* shard = nullptr;
 
-  auto operator<=>(const NodeInfo&) const = default;
+  bool operator==(const NodeInfo&) const = default;
 
   friend std::ostream& operator<<(std::ostream& os, const NodeInfo& target) {
     os << "NodeInfo{role: " << (target.is_primary ? "primary" : "replica")

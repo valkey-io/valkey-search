@@ -12,6 +12,7 @@ RUN_BUILD="yes"
 DUMP_TEST_ERRORS_STDOUT="no"
 INTEGRATION_TEST="no"
 SAN_BUILD="no"
+COVERAGE_BUILD="no"
 USE_SYSTEM_MODULES="auto"
 ARGV=$@
 EXIT_CODE=0
@@ -40,6 +41,7 @@ Usage: build.sh [options...]
     --no-system-modules               Disable system dependencies and force building from submodules.
     --asan                            Build with address sanitizer enabled.
     --tsan                            Build with thread sanitizer enabled.
+    --coverage                        Build with code coverage instrumentation enabled.
     --retries=N                       Attempt to run integration tests N times. Default is 1.
     --jobs=N                          Limit the build workers to N. Default: use all available cores.
 
@@ -84,7 +86,11 @@ while [ $# -gt 0 ]; do
     --clean)
         shift || true
         CMAKE_TARGET="clean"
-        echo "Will run 'make clean'"
+        if [[ "${CMAKE_GENERATOR}" == "Ninja" ]]; then
+            echo "Will run 'ninja clean'"
+        else
+            echo "Will run 'make clean'"
+        fi
         ;;
     --debug)
         shift || true
@@ -189,8 +195,29 @@ while [ $# -gt 0 ]; do
         shift || true
         echo "Using extra cmake arguments: ${CMAKE_EXTRA_ARGS}"
         ;;
+    --coverage)
+        CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DENABLE_COVERAGE=ON"
+        COVERAGE_BUILD="yes"
+        shift || true
+        echo "Using extra cmake arguments: ${CMAKE_EXTRA_ARGS}"
+        ;;
     --jobs=*)
-        JOBS=${1#*=}
+        JOBS="${1#*=}"
+        if [[ -z "${JOBS}" ]]; then
+            echo "Error: --jobs requires a value" >&2
+            print_usage
+            exit 1
+        fi
+        shift || true
+        ;;
+    --jobs)
+        if [[ -z "${2:-}" || "$2" =~ ^- ]]; then
+            echo "Error: --jobs requires a value" >&2
+            print_usage
+            exit 1
+        fi
+        shift
+        JOBS="$1"
         shift || true
         ;;
     --verbose | -v)
@@ -241,6 +268,7 @@ elif [[ "${SAN_BUILD}" == "thread" ]]; then
     export TSAN_BUILD=1
 fi
 export ROOT_DIR
+export BUILD_DIR_SUFFIX
 . "${ROOT_DIR}/scripts/common.rc"
 
 if [[ "${CMAKE_GENERATOR}" == "Ninja" ]]; then
@@ -556,6 +584,10 @@ if [[ "${SAN_BUILD}" != "no" ]]; then
     else
         BUILD_DIR=${BUILD_DIR}-tsan
     fi
+fi
+if [[ "${COVERAGE_BUILD}" == "yes" ]]; then
+    printf "${BOLD_PINK}coverage build is enabled${RESET}\n"
+    BUILD_DIR=${BUILD_DIR}-coverage
 fi
 
 check_and_clean_on_branch_change

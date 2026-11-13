@@ -109,8 +109,10 @@ RUN echo "$USER_NAME ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers || true;
 USER $USER_NAME
 ENV HOME=/home/$USER_NAME
 
-# Add an alias for 'vi' to point to 'vim' if 'vi' doesn't exist
-RUN echo 'if ! command -v vi &> /dev/null; then alias vi="vim"; fi' >> /home/$USER_NAME/.bashrc
+# Add an alias for 'vi' to point to 'vim' if 'vi' doesn't exist, and set a
+# distinct prompt so interactive shells clearly indicate the devcontainer.
+RUN echo 'if ! command -v vi &> /dev/null; then alias vi="vim"; fi' >> /home/$USER_NAME/.bashrc && \
+    printf '%s\n' 'PS1="\[\033[01;35m\][devcontainer]\[\033[00m\] \[\033[01;36m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ "' >> /home/$USER_NAME/.bashrc
 
 # Ensure the history file exists and configure permissions
 RUN touch /home/$USER_NAME/.bash_history && \

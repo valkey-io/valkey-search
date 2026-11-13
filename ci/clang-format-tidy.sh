@@ -31,18 +31,16 @@ fi
 
 # Helper function to find the best compilation database file
 get_tidy_db_file() {
-  if [ -f ".build-release-container/compile_commands.json" ]; then
-    echo ".build-release-container/compile_commands.json"
-  elif [ -f ".build-debug-container/compile_commands.json" ]; then
-    echo ".build-debug-container/compile_commands.json"
-  elif [ -f ".build-release/compile_commands.json" ]; then
-    echo ".build-release/compile_commands.json"
-  elif [ -f ".build-debug/compile_commands.json" ]; then
-    echo ".build-debug/compile_commands.json"
-  elif [ -f "compile_commands.json" ]; then
+  local config db_file
+  for config in release debug; do
+    db_file=".build-${config}${BUILD_DIR_SUFFIX:-}/compile_commands.json"
+    if [ -f "$db_file" ]; then
+      echo "$db_file"
+      return
+    fi
+  done
+  if [ -f "compile_commands.json" ]; then
     echo "compile_commands.json"
-  else
-    echo ""
   fi
 }
 
@@ -115,36 +113,19 @@ get_header_filter() {
   echo "${escaped_base}\.(cc|cpp|h|hpp)$"
 }
 
-# Helper function to setup the compilation database with adjusted paths (for source files)
+# Helper function to locate the compilation database directory (for source files)
 setup_tidy_db() {
   local db_file
   db_file=$(get_tidy_db_file)
   TIDY_DB_DIR="."
-  TEMP_DB_DIR=""
-  
+
   if [ -z "$db_file" ]; then
     echo "Warning: No compilation database found. clang-tidy checks may fail." >&2
     return
   fi
-  
+
   if [ -f "$db_file" ]; then
-    local host_dir
-    host_dir=$(grep -m1 '"directory":' "$db_file" | sed -E 's/.*"directory": "([^"]*)".*/\1/')
-    local build_dir_name
-    build_dir_name=$(basename "$host_dir")
-    local host_root
-    host_root=$(echo "$host_dir" | sed "s|/$build_dir_name$||")
-    local container_root
-    container_root=$(pwd)
-    
-    if [ "$host_root" != "$container_root" ]; then
-      echo "Adjusting compile_commands.json paths for container environment..."
-      TEMP_DB_DIR=$(mktemp -d)
-      sed "s|$host_root|$container_root|g" "$db_file" > "$TEMP_DB_DIR/compile_commands.json"
-      TIDY_DB_DIR="$TEMP_DB_DIR"
-    else
-      TIDY_DB_DIR=$(dirname "$db_file")
-    fi
+    TIDY_DB_DIR=$(dirname "$db_file")
   fi
 }
 
@@ -177,7 +158,6 @@ if [ "$FIX" = true ]; then
       setup_tidy_db
       echo "Running clang-tidy with fixes on $FILE..."
       clang-tidy -p "$TIDY_DB_DIR" "${TIDY_ARGS[@]}" "$FILE" || echo "clang-tidy reported errors during fixing."
-      if [ -n "$TEMP_DB_DIR" ]; then rm -rf "$TEMP_DB_DIR"; fi
     fi
   fi
   
@@ -234,10 +214,8 @@ if [ "$FORMAT_ONLY" = false ] && [[ "$FILE" =~ \.(cc|cpp|h|hpp)$ ]]; then
     echo "Running clang-tidy on $FILE..."
     if ! clang-tidy -p "$TIDY_DB_DIR" "${TIDY_ARGS[@]}" -warnings-as-errors='*' "$FILE"; then
       echo "clang-tidy failed for $FILE" >&2
-      if [ -n "$TEMP_DB_DIR" ]; then rm -rf "$TEMP_DB_DIR"; fi
       exit 1
     fi
-    if [ -n "$TEMP_DB_DIR" ]; then rm -rf "$TEMP_DB_DIR"; fi
   fi
   echo "clang-tidy check passed."
 fi

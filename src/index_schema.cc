@@ -38,6 +38,7 @@
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
+#include "src/indexes/sparse.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
 #include "src/indexes/text/language_registry.h"
@@ -217,6 +218,8 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
     indexes::TrackedKeys *key_labels = nullptr) {
   const auto &index = attribute.index();
   switch (index.index_type_case()) {
+    case data_model::Index::IndexTypeCase::kSparseIndex:
+      return std::make_shared<indexes::Sparse>();
     case data_model::Index::IndexTypeCase::kTagIndex: {
       return std::make_shared<indexes::Tag>(index.tag_index());
     }

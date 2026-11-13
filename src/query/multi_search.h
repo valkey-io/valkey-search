@@ -144,6 +144,8 @@ struct MultiSearchParameters {
   // Recorded at parse time because `arms` is emptied at dispatch (each
   // MultiArmShim is moved into SearchAsync), so it cannot be re-derived later.
   std::vector<bool> per_arm_score_is_distance;
+  // Sparse distances are -dot; their similarity is the unmodified dot product.
+  std::vector<bool> per_arm_sparse;
   // The metric each distance came from, captured for the same reason:
   // turning a distance into a similarity depends on it, and by fusion
   // time the arm is gone. UNSPECIFIED for an arm carrying a relevance

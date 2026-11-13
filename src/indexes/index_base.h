@@ -33,7 +33,16 @@ class TextIterator;
 }  // namespace valkey_search::indexes::text
 
 namespace valkey_search::indexes {
-enum class IndexerType { kHNSW, kFlat, kNumeric, kTag, kVector, kNone, kText };
+enum class IndexerType {
+  kHNSW,
+  kFlat,
+  kNumeric,
+  kTag,
+  kVector,
+  kNone,
+  kText,
+  kSparse
+};
 
 inline bool IsVectorIndex(IndexerType type) {
   return type == IndexerType::kVector || type == IndexerType::kHNSW ||
@@ -43,7 +52,7 @@ inline bool IsVectorIndex(IndexerType type) {
 inline void AssertValidIndexerType(IndexerType type) {
   CHECK(type == IndexerType::kTag || type == IndexerType::kText ||
         type == IndexerType::kNone || type == IndexerType::kNumeric ||
-        type == IndexerType::kVector)
+        type == IndexerType::kVector || type == IndexerType::kSparse)
       << "Unexpected indexer type: " << static_cast<int>(type);
 }
 
@@ -71,7 +80,8 @@ const absl::NoDestructor<absl::flat_hash_map<absl::string_view, IndexerType>>
     kIndexerTypeByStr({{"VECTOR", IndexerType::kVector},
                        {"TAG", IndexerType::kTag},
                        {"NUMERIC", IndexerType::kNumeric},
-                       {"TEXT", IndexerType::kText}});
+                       {"TEXT", IndexerType::kText},
+                       {"SPARSE", IndexerType::kSparse}});
 
 class IndexBase {
  public:

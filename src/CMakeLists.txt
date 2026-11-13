@@ -217,6 +217,7 @@ target_link_libraries(index_schema PUBLIC metrics)
 target_link_libraries(index_schema PUBLIC rdb_serialization)
 target_link_libraries(index_schema PUBLIC index_base)
 target_link_libraries(index_schema PUBLIC numeric)
+target_link_libraries(index_schema PUBLIC sparse)
 target_link_libraries(index_schema PUBLIC tag)
 target_link_libraries(index_schema PUBLIC text)
 

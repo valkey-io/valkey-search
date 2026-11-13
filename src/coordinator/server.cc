@@ -154,7 +154,8 @@ class RemoteResponderSearch : public query::SearchParameters {
 
  private:
   void QueryCompleteImpl() {
-    if (!search_result.status.ok() && (!enable_partial_results || multi_arm)) {
+    if (!search_result.status.ok() && (!enable_partial_results || multi_arm ||
+                                       sparse_query_validation_failed)) {
       (*on_done)(ToGrpcStatus(search_result.status));
       RecordSearchMetrics(true, std::move(latency_sample));
       return;

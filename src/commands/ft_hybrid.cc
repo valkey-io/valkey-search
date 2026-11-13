@@ -22,6 +22,7 @@
 #include "src/coordinator/client_pool.h"
 #include "src/expr/expr.h"
 #include "src/expr/value.h"
+#include "src/indexes/sparse.h"
 #include "src/metrics.h"
 #include "src/query/content_resolution.h"
 #include "src/query/fanout.h"
@@ -108,8 +109,14 @@ std::vector<indexes::Neighbor> BuildFusedNeighbors(
       auto metric = i < params.per_arm_distance_metric.size()
                         ? params.per_arm_distance_metric[i]
                         : data_model::DISTANCE_METRIC_UNSPECIFIED;
-      ConvertVectorArmScoresToSimilarity(params.per_arm_results[i].neighbors,
-                                         metric);
+      if (i < params.per_arm_sparse.size() && params.per_arm_sparse[i]) {
+        for (auto &neighbor : params.per_arm_results[i].neighbors) {
+          neighbor.score = -neighbor.distance;
+        }
+      } else {
+        ConvertVectorArmScoresToSimilarity(params.per_arm_results[i].neighbors,
+                                           metric);
+      }
     }
     rank_fusion::ArmInput in;
     in.neighbors = &params.per_arm_results[i].neighbors;
@@ -408,9 +415,11 @@ void RevalidateArmsBeforeFusion(MultiSearchParameters &params) {
         i < params.per_arm_score_is_distance.size() &&
         params.per_arm_score_is_distance[i];
     indexes::VectorBase *vector_index = nullptr;
+    bool sparse = false;
     if (arm_score_is_distance) {
       auto index = params.index_schema->GetIndex(arm->attribute_alias);
       if (index.ok()) {
+        sparse = (*index)->GetIndexerType() == indexes::IndexerType::kSparse;
         vector_index = dynamic_cast<indexes::VectorBase *>(index->get());
       }
     }
@@ -424,7 +433,7 @@ void RevalidateArmsBeforeFusion(MultiSearchParameters &params) {
     // from this same attribute_alias, so reaching here means the schema
     // changed underneath the query.
     const bool can_recompute_distance = arm_score_is_distance &&
-                                        vector_index != nullptr &&
+                                        (sparse || vector_index != nullptr) &&
                                         vector_identifier[i].has_value();
     std::unique_ptr<query::QueryContext> query_ctx;
     std::vector<char> drop(neighbors.size(), 0);
@@ -472,8 +481,11 @@ void RevalidateArmsBeforeFusion(MultiSearchParameters &params) {
           ++dropped;
           continue;
         }
-        auto distance = vector_index->RecomputeDistance(
-            vmsdk::ToStringView(record->second.value.get()), arm->query);
+        auto bytes = vmsdk::ToStringView(record->second.value.get());
+        auto distance =
+            sparse
+                ? indexes::Sparse::RecomputeDistance(bytes, arm->sparse_query)
+                : vector_index->RecomputeDistance(bytes, arm->query);
         if (!distance.ok()) {
           // The field is there but cannot be turned into a distance -- the
           // mutation wrote a vector of the wrong length, so it no longer

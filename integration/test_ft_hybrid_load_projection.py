@@ -76,8 +76,13 @@ class _LoadProjectionTests:
             *tail,
             "LIMIT", "0", "100",
             "PARAMS", "2", "q", Q)
-        return [{rec[i]: rec[i + 1] for i in range(0, len(rec), 2)}
-                for rec in reply[1:]]
+        rows = []
+        for rec in reply[1:]:
+            names = rec[0::2]
+            # A dict would hide a column the reply carries twice.
+            assert len(set(names)) == len(names), rec
+            rows.append(dict(zip(names, rec[1::2])))
+        return rows
 
     def _fields(self, client: Valkey, *tail) -> set:
         """Every column name the reply carried, across all rows."""
@@ -119,8 +124,7 @@ class _LoadProjectionTests:
                              ids=["no-load", "named", "load-all"])
     def test_stage_reads_the_field_in_every_load_state(self, key_type, load):
         """A field left out of the fetch reaches the stage as a missing
-        value, so the group key and the sum come out wrong instead of the
-        command failing."""
+        value, so the stage answers wrong instead of the command failing."""
         client = self._setup(key_type)
         rows = self._rows(client, *load, "GROUPBY", "1", "@colour",
                           "REDUCE", "SUM", "1", "@price", "AS", "s")
@@ -132,13 +136,16 @@ class _LoadProjectionTests:
         replace the whole record `LOAD *` asked for."""
         client = self._setup(key_type)
         rows = self._rows(client, "LOAD", "*", "SORTBY", "2", "@price", "DESC")
-        assert [row[b"price"] for row in rows] == [
+        assert [row.get(b"price") for row in rows] == [
             str(i).encode() for i in range(DOCS, 0, -1)], rows
         for row in rows:
             if key_type == "HASH":
                 assert UNASKED in row, row
             else:
                 assert set(row) == {b"$", b"price"}, row
+                document = json.loads(row[b"$"])
+                assert document["junk"] == "SHOULD_NOT_APPEAR", row
+                assert document["price"] == int(row[b"price"]), row
 
 
 class TestFtHybridLoadProjection(_LoadProjectionTests,

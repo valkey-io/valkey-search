@@ -105,3 +105,19 @@ class TestFtDebugCommand(ValkeySearchTestCaseDebugMode):
             restricted_client.execute_command("FT._DEBUG", "HELP")
 
         self.client.execute_command("ACL", "DELUSER", "debug_user")
+
+    def test_tsan_race(self):
+        """
+        FT._DEBUG TSAN_RACE must produce a ThreadSanitizer data race report
+        on TSAN builds, proving that TSAN detects races in the module.
+        """
+        if os.environ.get("SAN_BUILD", "no") != "thread":
+            with pytest.raises(ResponseError, match="Not a TSAN build"):
+                self.client.execute_command("FT._DEBUG", "TSAN_RACE")
+            return
+        report_file = self.client.execute_command("FT._DEBUG", "TSAN_RACE").decode()
+        with open(report_file) as f:
+            report = f.read()
+        os.remove(report_file)
+        assert "WARNING: ThreadSanitizer: data race" in report, report
+        assert "TsanRaceWrite" in report, report

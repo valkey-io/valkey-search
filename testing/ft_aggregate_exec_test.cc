@@ -1575,11 +1575,9 @@ TEST_F(AggregateExecTest, QuantileRangeValidationProperty) {
 
     auto params = std::make_unique<AggregateParameters>(0);
     params->parse_vars_.index_interface_ = &fakeIndex;
-    params->AddRecordAttribute("n1", "n1", "n1",
-                               indexes::IndexerType::kNumeric,
+    params->AddRecordAttribute("n1", "n1", "n1", indexes::IndexerType::kNumeric,
                                expr::Expression::Type::kNumber);
-    params->AddRecordAttribute("n2", "n2", "n2",
-                               indexes::IndexerType::kNumeric,
+    params->AddRecordAttribute("n2", "n2", "n2", indexes::IndexerType::kNumeric,
                                expr::Expression::Type::kNumber);
 
     auto parser = CreateAggregateParser();

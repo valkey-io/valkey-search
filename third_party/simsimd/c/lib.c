@@ -63,30 +63,38 @@ extern "C" {
 #endif
 
 simsimd_capability_t simsimd_capabilities(void) {
+    // VALKEYSEARCH: Atomic access so concurrent first calls don't race.
     static simsimd_capability_t static_capabilities = simsimd_cap_any_k;
-    if (static_capabilities == simsimd_cap_any_k)
-        static_capabilities = simsimd_capabilities_implementation();
-    return static_capabilities;
+    simsimd_capability_t caps = __atomic_load_n(&static_capabilities, __ATOMIC_RELAXED);
+    if (caps == simsimd_cap_any_k) {
+        caps = simsimd_capabilities_implementation();
+        __atomic_store_n(&static_capabilities, caps, __ATOMIC_RELAXED);
+    }
+    return caps;
 }
 
 // Every time a function is called, it checks if the metric is already loaded. If not, it fetches it.
 // If no metric is found, it returns NaN. We can obtain NaN by dividing 0.0 by 0.0, but that annoys
 // the MSVC compiler. Instead we can directly write-in the signaling NaN (0x7FF0000000000001)
 // or the qNaN (0x7FF8000000000000).
+// VALKEYSEARCH: Resolve into a local and publish it atomically. simsimd_find_metric_punned() zeroes its
+// output before searching, so resolving directly into the shared static let a concurrent caller see NULL.
 #define SIMSIMD_METRIC_DECLARATION(name, extension, type)                                                              \
     SIMSIMD_DYNAMIC void simsimd_##name##_##extension(simsimd_##type##_t const* a, simsimd_##type##_t const* b,        \
                                                       simsimd_size_t n, simsimd_distance_t* results) {                 \
         static simsimd_metric_punned_t metric = 0;                                                                     \
-        if (metric == 0) {                                                                                             \
+        simsimd_metric_punned_t found = __atomic_load_n(&metric, __ATOMIC_RELAXED);                                    \
+        if (found == 0) {                                                                                              \
             simsimd_capability_t used_capability;                                                                      \
             simsimd_find_metric_punned(simsimd_metric_##name##_k, simsimd_datatype_##extension##_k,                    \
-                                       simsimd_capabilities(), simsimd_cap_any_k, &metric, &used_capability);          \
-            if (!metric) {                                                                                             \
+                                       simsimd_capabilities(), simsimd_cap_any_k, &found, &used_capability);           \
+            if (!found) {                                                                                              \
                 *(simsimd_u64_t*)results = 0x7FF0000000000001ull;                                                      \
                 return;                                                                                                \
             }                                                                                                          \
+            __atomic_store_n(&metric, found, __ATOMIC_RELAXED);                                                        \
         }                                                                                                              \
-        metric(a, b, n, results);                                                                                      \
+        found(a, b, n, results);                                                                                       \
     }
 
 // Dot products

@@ -73,6 +73,39 @@ class TestLanguageParsing(MultiLanguageTestCase):
             )
         assert b"idx_unknown" not in client.execute_command("FT._LIST")
 
+    def test_language_kept_when_option_follows(self):
+        """FT.CREATE keeps LANGUAGE when PREFIX or SCORE comes after it.
+
+        Expected: the index is French whatever options follow LANGUAGE.
+        """
+        client: Valkey = self.server.get_new_client()
+        trailing_options = {
+            "idx_prefix": ["PREFIX", "1", "fr:"],
+            "idx_score": ["SCORE", "0.5", "PREFIX", "1", "fr:"],
+            "idx_skip": ["SKIPINITIALSCAN", "PREFIX", "1", "fr:"],
+        }
+        for index, options in trailing_options.items():
+            assert client.execute_command(
+                "FT.CREATE", index, "ON", "HASH",
+                "LANGUAGE", "FRENCH", *options,
+                "SCHEMA", "content", "TEXT"
+            ) == b"OK"
+            parser = IndexingTestHelper.get_ft_info(client, index)
+            assert parser.language == "french", (
+                f"{index}: FT.INFO reported {parser.language}"
+            )
+
+        # French stop words apply: "dans" is dropped from the query, so only
+        # "voiture" is required. With English stop words the AND matches
+        # nothing, because no document contains "dans".
+        client.execute_command("HSET", "fr:1", "content", "voiture rapide")
+        for index in trailing_options:
+            IndexingTestHelper.wait_for_backfill_complete_on_node(client, index)
+            result = client.execute_command(
+                "FT.SEARCH", index, "@content:dans voiture"
+            )
+            assert result[0] == 1, f"{index}: {result}"
+
 
 # =============================================================================
 # Parametrized per-language stemming integration

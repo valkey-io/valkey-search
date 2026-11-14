@@ -294,6 +294,26 @@ TEST_F(ValueTest, case_test) {
   }
 }
 
+// lower()/upper() abort the server on a non-UTF-8 byte.
+// Observed: NextUtf8() returns kInvalidCp for a malformed byte, and
+// FuncLower/FuncUpper pass it to PushBackUtf8, which hits CHECK(false).
+// Expected: the malformed byte is copied through unchanged, ASCII letters
+// around it are still case-mapped, and valid multi-byte input is unchanged.
+TEST_F(ValueTest, case_test_invalid_utf8) {
+  std::tuple<std::string, std::string, std::string> testcases[] = {
+      {"\xff", "\xff", "\xff"},
+      {"\xc3", "\xc3", "\xc3"},
+      {std::string("\xc0\x80", 2), std::string("\xc0\x80", 2),
+       std::string("\xc0\x80", 2)},
+      {"aB\xffzY", "ab\xffzy", "AB\xffZY"},
+      {"\xc3\xa9\xff", "\xc3\xa9\xff", "\xc3\xa9\xff"},
+  };
+  for (auto &[in, lower, upper] : testcases) {
+    EXPECT_EQ(Value(lower), FuncLower(Value(in)));
+    EXPECT_EQ(Value(upper), FuncUpper(Value(in)));
+  }
+}
+
 TEST_F(ValueTest, timetest) {
   // 1739565015 corresponds to Fri Feb 14 2025 20:30:15 (GMT). This value
   // is positive, finite, and post-epoch, so all VALKEY_SEARCH_COMPATIBILITY

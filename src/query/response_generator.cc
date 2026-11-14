@@ -158,8 +158,13 @@ class PredicateEvaluator : public query::Evaluator {
       }
       record = converted.get();
     }
-    return EvaluationResult(vector_index->IsRecordWithinVectorRange(
-        vmsdk::ToStringView(record), query_vector, predicate.GetRadius()));
+    auto distance = vector_index->RecomputeRangeDistance(
+        vmsdk::ToStringView(record), query_vector);
+    if (!distance.ok() ||
+        *distance > static_cast<float>(predicate.GetRadius())) {
+      return EvaluationResult(false);
+    }
+    return {true, *distance};
   }
 
  private:
@@ -180,10 +185,10 @@ DEV_INTEGER_COUNTER(query, predicate_revalidation);
 FilterVerification VerifyFilter(const query::SearchParameters &parameters,
                                 const RecordsMap &records,
                                 const indexes::Neighbor &n,
-                                std::unique_ptr<QueryContext> &query_ctx,
-                                std::optional<bool> recompute_score_override) {
+                                std::unique_ptr<QueryContext> &query_ctx) {
   auto predicate = parameters.filter_parse_results.root_predicate.get();
-  if (predicate == nullptr) {
+  // Match-all has no filter to recheck, but its score can still change.
+  if (predicate == nullptr && !parameters.ScoreIsRelevance()) {
     return {true, std::nullopt};
   }
   auto db_seq =
@@ -213,25 +218,42 @@ FilterVerification VerifyFilter(const query::SearchParameters &parameters,
   PredicateEvaluator evaluator(records, n.external_id, *query_ctx,
                                parameters.filter_parse_results.query_operations,
                                index_schema);
-  EvaluationResult result = predicate->Evaluate(evaluator);
+  // A null predicate is a match-all query: every document matches.
+  EvaluationResult result = predicate != nullptr
+                                ? predicate->Evaluate(evaluator)
+                                : EvaluationResult(true);
+  FilterVerification verification{.matches = result.matches};
+  if (!result.matches) {
+    return verification;
+  }
+
+  if (const auto *vr = GetVectorRangePredicate(parameters); vr != nullptr) {
+    verification.vector_range_distance_recomputed = true;
+    if (result.HasVrScore()) {
+      verification.recomputed_vector_range_distance = result.vr_distance;
+    } else {
+      // An OR may have short-circuited through another matching child. Check
+      // the range leaf independently so a current in-range vector gains its
+      // distance and a current out-of-range vector loses a stale one.
+      auto range_result = evaluator.EvaluateVectorRange(*vr);
+      if (range_result.matches && range_result.HasVrScore()) {
+        verification.recomputed_vector_range_distance =
+            range_result.vr_distance;
+      }
+    }
+  }
 
   // The document changed between shard-side scoring and this content fetch, so
   // its carried Neighbor.score is stale; recompute it through the same Scorer
-  // seam ScoreTextQuery uses. A query whose Neighbor.score is a KNN distance
-  // rather than a relevance score is skipped: by default that means a vector
-  // query without a scored predicate (or with vector_score_only), and FT.HYBRID
-  // overrides the choice per arm.
-  const bool recompute_score =
-      recompute_score_override.value_or(parameters.ScoreIsRelevance());
-  if (!result.matches || !recompute_score) {
-    return {result.matches, std::nullopt};
+  // seam ScoreTextQuery uses.
+  if (parameters.ScoreIsRelevance()) {
+    // nullopt (empty corpus / non-match) degrades to 0 rather than dropping the
+    // already-admitted document.
+    verification.recomputed_score =
+        RecomputeDocumentScore(predicate, n.external_id, *query_ctx, records)
+            .value_or(0.0f);
   }
-  // nullopt (empty corpus / non-match) degrades to 0 rather than dropping the
-  // already-admitted document.
-  result.score =
-      RecomputeDocumentScore(predicate, n.external_id, *query_ctx, records)
-          .value_or(0.0f);
-  return {true, result.score};
+  return verification;
 }
 
 // Check if this node owns the slot for the given key in cluster mode
@@ -246,94 +268,11 @@ bool CheckSlotOwnership(ValkeyModuleCtx *ctx, absl::string_view key) {
   return cluster_map->IOwnSlot(static_cast<uint16_t>(slot));
 }
 
-absl::StatusOr<RecordsMap> GetContentNoReturnJson(
-    ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
-    const query::SearchParameters &parameters,
-    const indexes::Neighbor &neighbor,
-    const std::optional<std::string> &vector_identifier,
-    std::unique_ptr<query::QueryContext> &query_ctx,
-    std::optional<float> *out_recomputed_score = nullptr) {
-  auto key = neighbor.external_id->Str();
-  absl::flat_hash_set<absl::string_view> identifiers;
-  identifiers.insert(kJsonRootElementQuery);
-  for (const auto &filter_identifier :
-       parameters.filter_parse_results.filter_identifiers) {
-    identifiers.insert(filter_identifier);
-  }
-  vmsdk::ValkeySelectDbGuard select_db_guard(ctx, parameters.db_num);
-  // Resolve sortby field to actual identifier (e.g., "n1" -> "$.n1" for JSON)
-  std::string sortby_identifier;
-  if (parameters.sortby_parameter.has_value()) {
-    auto schema_identifier = parameters.index_schema->GetIdentifier(
-        parameters.sortby_parameter->field);
-    sortby_identifier = schema_identifier.ok()
-                            ? *schema_identifier
-                            : parameters.sortby_parameter->field;
-    identifiers.insert(sortby_identifier);
-  }
-  auto key_str = vmsdk::MakeUniqueValkeyString(key);
-  // NOEXPIRE prevents lazy expiry deletion which could cause
-  // server.also_propagate.numops == 0 crash. The key handle is reused
-  // by FetchAllAttributes to avoid a redundant second open.
-  auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
-      ctx, key_str.get(), VALKEYMODULE_OPEN_KEY_NOEXPIRE | VALKEYMODULE_READ);
-  if (!key_obj) {
-    return absl::NotFoundError("Key not found");
-  }
-  mstime_t expire = ValkeyModule_GetExpire(key_obj.get());
-  if (expire != VALKEYMODULE_NO_EXPIRE && expire <= 0) {
-    return absl::NotFoundError("Key expired");
-  }
-  VMSDK_ASSIGN_OR_RETURN(auto content, attribute_data_type.FetchAllAttributes(
-                                           ctx, vector_identifier,
-                                           key_obj.get(), key, identifiers));
-  if (parameters.filter_parse_results.filter_identifiers.empty()) {
-    // When returning early, we need to rename the sortby field from the
-    // resolved identifier (e.g., "$.n1") back to the alias (e.g., "n1")
-    if (parameters.sortby_parameter.has_value() &&
-        sortby_identifier != parameters.sortby_parameter->field) {
-      auto itr = content.find(sortby_identifier);
-      if (itr != content.end()) {
-        auto value = std::move(itr->second);
-        content.erase(itr);
-        content.emplace(parameters.sortby_parameter->field,
-                        RecordsMapValue(vmsdk::MakeUniqueValkeyString(
-                                            parameters.sortby_parameter->field),
-                                        std::move(value.value)));
-      }
-    }
-    return content;
-  }
-  auto verification = VerifyFilter(parameters, content, neighbor, query_ctx);
-  if (!verification.matches) {
-    return absl::NotFoundError("Verify filter failed");
-  }
-  if (out_recomputed_score != nullptr && verification.recomputed_score) {
-    *out_recomputed_score = verification.recomputed_score;
-  }
-  RecordsMap return_content;
-  static const vmsdk::UniqueValkeyString kJsonRootElementQueryPtr =
-      vmsdk::MakeUniqueValkeyString(kJsonRootElementQuery);
-  return_content.emplace(
-      kJsonRootElementQuery,
-      RecordsMapValue(
-          kJsonRootElementQueryPtr.get(),
-          std::move(content.find(kJsonRootElementQuery)->second.value)));
-
-  if (parameters.sortby_parameter.has_value()) {
-    auto itr = content.find(sortby_identifier);
-    if (itr != content.end()) {
-      // Use the alias (sortby_parameter->field) as the key in the response,
-      // not the resolved identifier
-      return_content.emplace(
-          parameters.sortby_parameter->field,
-          RecordsMapValue(
-              vmsdk::MakeUniqueValkeyString(parameters.sortby_parameter->field),
-              std::move(itr->second.value)));
-    }
-  }
-  return return_content;
-}
+// A document's SORTBY value and the name it is filed under.
+struct SortByContent {
+  std::string lookup_key;
+  vmsdk::UniqueValkeyString value;
+};
 
 absl::StatusOr<RecordsMap> GetContent(
     ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
@@ -341,29 +280,35 @@ absl::StatusOr<RecordsMap> GetContent(
     const indexes::Neighbor &neighbor,
     const std::optional<std::string> &vector_identifier,
     std::unique_ptr<query::QueryContext> &query_ctx,
-    std::optional<float> *out_recomputed_score = nullptr) {
+    std::optional<SortByContent> &out_sortby_content,
+    FilterVerification *out_verification = nullptr) {
   auto key = neighbor.external_id->Str();
-  if (attribute_data_type.ToProto() ==
-          data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON &&
-      parameters.return_attributes.empty()) {
-    return GetContentNoReturnJson(ctx, attribute_data_type, parameters,
-                                  neighbor, vector_identifier, query_ctx,
-                                  out_recomputed_score);
-  }
+  const bool is_json = attribute_data_type.ToProto() ==
+                       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON;
+  // A whole-record request is spelled differently per key type. On JSON it is
+  // the root document, which is an identifier like any other (`$`) and so can
+  // be asked for alongside named paths. On HASH it is every field, which the
+  // fetch expresses by asking for no identifier in particular -- so the named
+  // list is dropped there, since fetching everything already covers it.
+  const bool fetch_whole_hash = parameters.all_content && !is_json;
   absl::flat_hash_set<absl::string_view> identifiers;
-  for (const auto &return_attribute : parameters.return_attributes) {
-    identifiers.insert(vmsdk::ToStringView(return_attribute.identifier.get()));
-  }
-  if (!parameters.return_attributes.empty()) {
+  if (!fetch_whole_hash) {
+    if (parameters.all_content) {
+      identifiers.insert(kJsonRootElementQuery);
+    }
+    for (const auto &return_attribute : parameters.return_attributes) {
+      identifiers.insert(
+          vmsdk::ToStringView(return_attribute.identifier.get()));
+    }
     for (const auto &filter_identifier :
          parameters.filter_parse_results.filter_identifiers) {
       identifiers.insert(filter_identifier);
     }
   }
   vmsdk::ValkeySelectDbGuard select_db_guard(ctx, parameters.db_num);
-  // Resolve sortby field to actual identifier. Only add to identifiers set
-  // when return_attributes is specified, because when return_attributes is
-  // empty, all fields are fetched anyway.
+  // Resolve the sortby field to its identifier so it can be sorted on even
+  // when it is not one of the fields being returned. Skipped for a whole-hash
+  // fetch, which already covers every field.
   std::string sortby_identifier;
   if (parameters.sortby_parameter.has_value()) {
     auto schema_identifier = parameters.index_schema->GetIdentifier(
@@ -371,8 +316,7 @@ absl::StatusOr<RecordsMap> GetContent(
     sortby_identifier = schema_identifier.ok()
                             ? *schema_identifier
                             : parameters.sortby_parameter->field;
-    // Only add sortby to identifiers when return_attributes is not empty
-    if (!parameters.return_attributes.empty()) {
+    if (!fetch_whole_hash) {
       identifiers.insert(sortby_identifier);
     }
   }
@@ -393,47 +337,94 @@ absl::StatusOr<RecordsMap> GetContent(
                          attribute_data_type.FetchAllAttributes(
                              ctx, vector_identifier, key_obj.get(),
                              neighbor.external_id->Str(), identifiers));
-  if (parameters.filter_parse_results.filter_identifiers.empty()) {
-    return content;
+  if (!parameters.filter_parse_results.filter_identifiers.empty()) {
+    auto verification = VerifyFilter(parameters, content, neighbor, query_ctx);
+    if (!verification.matches) {
+      return absl::NotFoundError("Verify filter failed");
+    }
+    if (out_verification != nullptr) {
+      *out_verification = std::move(verification);
+    }
   }
-  auto verification = VerifyFilter(parameters, content, neighbor, query_ctx);
-  if (!verification.matches) {
-    return absl::NotFoundError("Verify filter failed");
-  }
-  if (out_recomputed_score != nullptr && verification.recomputed_score) {
-    *out_recomputed_score = verification.recomputed_score;
-  }
-  if (parameters.return_attributes.empty()) {
+  // Every other fetch is projected below, filter or not.
+  if (fetch_whole_hash) {
+    // The whole hash was fetched, and the whole hash is what was asked for.
     return content;
   }
   RecordsMap return_content;
+  if (parameters.all_content) {
+    // JSON: the whole record is the root document, and only that. Anything
+    // else fetched alongside it was fetched to be evaluated, not returned --
+    // a filter identifier, say -- and is dropped here the same way a named
+    // fetch drops what it did not name.
+    auto itr = content.find(kJsonRootElementQuery);
+    if (itr != content.end()) {
+      // The identifier has to outlive `content`, which owns the one the fetch
+      // produced and drops it on the way out of this function. A raw pointer
+      // into it would dangle, so name the column from a string that lives as
+      // long as the module does.
+      static const vmsdk::UniqueValkeyString kJsonRootElementQueryString =
+          vmsdk::MakeUniqueValkeyString(kJsonRootElementQuery);
+      // Retained, not moved: a field defined on `$` itself is looked up
+      // in `content` again below.
+      return_content.emplace(kJsonRootElementQuery,
+                             RecordsMapValue(kJsonRootElementQueryString.get(),
+                                             vmsdk::RetainUniqueValkeyString(
+                                                 itr->second.value.get())));
+    }
+  }
   for (auto &return_attribute : parameters.return_attributes) {
     auto itr =
         content.find(vmsdk::ToStringView(return_attribute.identifier.get()));
     if (itr == content.end()) {
       continue;
     }
+    auto id_str =
+        vmsdk::RetainUniqueValkeyString(return_attribute.identifier.get());
+    auto id_view = vmsdk::ToStringView(id_str.get());
     return_content.emplace(
-        vmsdk::ToStringView(return_attribute.identifier.get()),
-        RecordsMapValue(
-            return_attribute.identifier.get(),
-            vmsdk::RetainUniqueValkeyString(itr->second.value.get())));
+        id_view, RecordsMapValue(
+                     std::move(id_str),
+                     vmsdk::RetainUniqueValkeyString(itr->second.value.get())));
   }
 
-  // Add sortby field to return_content for sorting, even when return_attributes
-  // is not empty. Use the alias (sortby_parameter->field) as the key.
   if (parameters.sortby_parameter.has_value()) {
     auto itr = content.find(sortby_identifier);
     if (itr != content.end()) {
-      return_content.emplace(
-          parameters.sortby_parameter->field,
-          RecordsMapValue(
-              vmsdk::MakeUniqueValkeyString(parameters.sortby_parameter->field),
-              vmsdk::RetainUniqueValkeyString(itr->second.value.get())));
+      if (parameters.all_content) {
+        // Reached by JSON only. RediSearch shows the sort field under its
+        // alias in a whole record, so this copy is returned and counted.
+        return_content.emplace(
+            parameters.sortby_parameter->field,
+            RecordsMapValue(
+                vmsdk::MakeUniqueValkeyString(
+                    parameters.sortby_parameter->field),
+                vmsdk::RetainUniqueValkeyString(itr->second.value.get())));
+      } else {
+        // Must match SortByKey, except for an older coordinator, which reads
+        // HASH by alias.
+        std::string sortby_key;
+        if (is_json || !parameters.sortby_by_lookup_key) {
+          sortby_key = parameters.sortby_parameter->field;
+        } else {
+          sortby_key = std::move(sortby_identifier);
+        }
+        out_sortby_content.emplace(SortByContent{
+            .lookup_key = std::move(sortby_key),
+            .value = vmsdk::RetainUniqueValkeyString(itr->second.value.get())});
+      }
     }
   }
 
   return return_content;
+}
+
+// Adds the SORTBY value to a fetched row.
+void FileSortByContent(RecordsMap &content, SortByContent sortby_content) {
+  auto owned_key = vmsdk::MakeUniqueValkeyString(sortby_content.lookup_key);
+  auto key_view = vmsdk::ToStringView(owned_key.get());
+  content.emplace(key_view, RecordsMapValue(std::move(owned_key),
+                                            std::move(sortby_content.value)));
 }
 
 // The vector bytes this document holds now, or nullopt if they cannot be read.
@@ -537,17 +528,30 @@ void ProcessNeighborsForReply(
       // Skip this neighbor - we don't own its slot.
       continue;
     }
-    std::optional<float> recomputed_score;
-    auto content = GetContent(ctx, attribute_data_type, parameters, neighbor,
-                              vector_identifier, query_ctx, &recomputed_score);
+    FilterVerification verification;
+    std::optional<SortByContent> sortby_content;
+    auto content =
+        GetContent(ctx, attribute_data_type, parameters, neighbor,
+                   vector_identifier, query_ctx, sortby_content, &verification);
     if (!content.ok()) {
       continue;
     }
     // Apply the fresh, scale-consistent score (only set when Neighbor.score is
     // a relevance, never when it is a KNN distance).
-    if (recomputed_score.has_value()) {
-      neighbor.score = *recomputed_score;
+    if (verification.recomputed_score.has_value()) {
+      neighbor.score = *verification.recomputed_score;
       any_score_recomputed = true;
+    }
+    // VECTOR_RANGE is a non-vector query, but its yielded distance becomes
+    // stale across the same mutation window as a KNN distance. Revalidation
+    // independently checks the current range leaf so an OR-only survivor can
+    // either gain or lose the yielded distance.
+    if (verification.vector_range_distance_recomputed) {
+      neighbor.has_vr_distance =
+          verification.recomputed_vector_range_distance.has_value();
+      neighbor.distance =
+          verification.recomputed_vector_range_distance.value_or(
+              indexes::scoring::PositiveInf());
     }
     // A vector query's distance is stale for the same reason and is refreshed
     // the same way, against the vector the document holds now rather than the
@@ -614,6 +618,10 @@ void ProcessNeighborsForReply(
 
     // Only assign content if it's within size limit
     if (!size_exceeded) {
+      // Filed after the limits: the sort entry is not a RETURN field.
+      if (sortby_content.has_value()) {
+        FileSortByContent(content.value(), *std::move(sortby_content));
+      }
       neighbor.attribute_contents = std::move(content.value());
     }
   }

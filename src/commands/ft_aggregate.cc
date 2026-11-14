@@ -44,9 +44,8 @@ struct RealIndexInterface : public IndexInterface {
 
 namespace {
 
-// Whether fetching the named and stage-read fields under `LOAD *` changes the
-// reply of 1.2.1, which fetched only the whole record. Decided before any key
-// is read, so a value that happens to look the same either way still counts.
+// Does the 1.2.1 rule change this reply? The counter ticks only if it does.
+// We check before reading any key, so a NUMERIC stored as `2` still ticks.
 bool LoadAllFetchChangesReply(const AggregateParameters &params) {
   const bool is_json = params.index_schema->GetAttributeDataType().ToProto() ==
                        data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON;
@@ -58,10 +57,11 @@ bool LoadAllFetchChangesReply(const AggregateParameters &params) {
   auto loads_key = std::any_of(
       params.loads_.begin(), params.loads_.end(),
       [](const LoadField &load) { return load.identifier == "__key"; });
+  // 1.2.1 ignored `@__key` here, so a stage got nothing.
   if (loads_key && params.read_names_.contains("__key")) {
     return true;
   }
-  // The JSON record is the single `$` root, so a stage finds no field in it.
+  // In 1.2.1 a JSON stage found no field: the record is just `$`.
   if (is_json) {
     for (const auto &name : params.read_names_) {
       if (name == "__key" || is_score(name)) {
@@ -90,7 +90,7 @@ bool LoadAllFetchChangesReply(const AggregateParameters &params) {
       }
       continue;
     }
-    // Fetching a field the schema lacks, or a vector, is an error.
+    // From 1.3.0 this is an error; 1.2.1 ignored the name.
     auto indexer = params.index_schema->GetIndex(load.identifier);
     if (!indexer.ok() || indexes::IsVectorIndex(*indexer)) {
       return true;
@@ -126,8 +126,8 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
   if (params.loadall_) {
     CHECK(params.return_attributes.empty());
     params.all_content = true;
-    // 1.2.1 fetched nothing but the whole record under `LOAD *`: named loads
-    // were ignored, and stages read only from that record.
+    // #1381 made `LOAD *` fetch more fields, which changed 1.2.1 replies.
+    // Below 1.3.0, keep the 1.2.1 reply: fetch only the whole record.
     if (!options::EnabledInVersion(1, 3, 0)) {
       if (LoadAllFetchChangesReply(params)) {
         VALKEY_SEARCH_COMPATIBILITY_FIX(

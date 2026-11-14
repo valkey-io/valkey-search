@@ -407,6 +407,7 @@ vmsdk::KeyValueParser<AggregateParameters> CreateAggregateParser() {
 absl::StatusOr<std::unique_ptr<expr::Expression::AttributeReference>>
 AggregateParameters::MakeReference(const absl::string_view name, bool create) {
   DBG << "MakeReference : " << name << " Create:" << create << "\n";
+  // Note each name a stage reads or writes; see `read_names_`.
   if (create) {
     if (groupby_writes_.has_value()) {
       groupby_writes_->emplace_back(name);

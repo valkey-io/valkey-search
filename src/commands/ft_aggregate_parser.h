@@ -194,14 +194,13 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   //
   absl::flat_hash_set<std::string> record_identifiers_;
   //
-  // The names stages write (APPLY and REDUCE outputs), and the names read
-  // before any stage writes them: `@name` in a stage, and the source of a
-  // `LOAD ... AS` rename.
+  // Only the 1.2.1 `LOAD *` counter uses these. It needs to know which stored
+  // fields a stage reads and which names a stage overwrites.
   //
   absl::flat_hash_set<std::string> written_names_;
   absl::flat_hash_set<std::string> read_names_;
-  // Every reducer of a GROUPBY reads the input records, so the names it
-  // writes count as written only once the whole stage is parsed.
+  // Reducers read the input rows, so in `AS n ... @n` the `@n` is the stored
+  // field. A GROUPBY's output names wait here until the stage ends.
   std::optional<std::vector<std::string>> groupby_writes_;
   //
   // Maps indexes in a record into metadata for that index

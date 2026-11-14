@@ -46,12 +46,16 @@ struct FilterVerification {
   // fast (no-mutation) path and wherever Neighbor.score is a KNN distance,
   // which must never be overwritten with a relevance score.
   std::optional<float> recomputed_score;
+  // Set when a mutated survivor's current VECTOR_RANGE distance was checked.
+  // A missing value means it now matches only through another branch.
+  bool vector_range_distance_recomputed{false};
+  std::optional<float> recomputed_vector_range_distance;
 };
 
 // Re-checks `n` against the predicate in `parameters` using `records`, the
 // content just fetched for it, and recomputes its score when the document
 // changed since the search scored it. A document that has not been mutated
-// since then returns a match with no recomputed score, which is the common
+// since then returns a match with no recomputed values, which is the common
 // case and costs one integer compare.
 //
 // `query_ctx` is built here on the first mutated document and reused for the

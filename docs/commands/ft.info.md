@@ -19,7 +19,7 @@ FT.INFO <index-name>
 - `CONSISTENT` (optional): If specified, the command is terminated with an error if any received response isn't from a consistent version of the index. This is the default.
 - `INCONSISTENT` (optional): If specified, a command result is generated using only the responses from nodes with a consistent version of the index.
 
-`RESPONSE`
+## Reply
 
 ### Response when LOCAL is specified
 
@@ -104,7 +104,7 @@ The following field is always present:
 - `name` (string) `HNSW`.
 - `m` (integer) The count of maximum permitted outgoing edges for each node in the graph in each layer. The maximum number of outgoing edges is 2\*M for layer 0\. The Default is 16\. The maximum is 512\.
 - `ef_construction` (integer) The count of vectors in the index. The default is 200, and the max is 4096\. Higher values increase the time needed to create indexes, but improve the recall ratio.
-- `ef_runtime` (integer) The count of vectors to be examined during a query operation. The default is 10, and the max is 4096\.
+- `ef_runtime` (integer) The configured field-level `EF_RUNTIME` value.
 
 ### Response when the PRIMARY option is specified.
 

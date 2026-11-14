@@ -5,7 +5,8 @@ from valkeytestframework.conftest import resource_port_tracker
 import json
 import random
 from valkey.cluster import ValkeyCluster
-from valkey_search_test_case import ValkeySearchClusterTestCase
+from valkey_search_test_case import ValkeySearchClusterTestCase, ValkeySearchClusterTestCaseDebugMode
+import struct
 import time
 import pytest
 from utils import IndexingTestHelper
@@ -1214,6 +1215,302 @@ class TestReturnClauseGate(ValkeySearchTestCaseDebugMode):
             assert result == id_only, f"emulate-release {release}"
 
 
+class TestSortByAlias(ValkeySearchTestCaseDebugMode):
+    """
+        Issue #1440. The fix is ungated, so each release must give one order;
+        debug-mode lets the tests set emulate-release.
+    """
+
+    def test_sortby_alias_collision(self):
+        # Alias b is c's field; sba:2 lacks field b, so its c stays empty.
+        client: Valkey = self.server.get_new_client()
+        assert client.execute_command(
+            "FT.CREATE", "sba_idx", "ON", "HASH", "PREFIX", "1", "sba:",
+            "SCHEMA", "a", "AS", "b", "NUMERIC", "b", "AS", "c", "NUMERIC",
+            "v", "VECTOR", "FLAT", "6", "TYPE", "FLOAT32", "DIM", "2",
+            "DISTANCE_METRIC", "L2") == b"OK"
+        vec = struct.pack("<2f", 0.0, 0.0)
+        assert client.execute_command(
+            "HSET", "sba:1", "a", 7, "b", 500, "v", vec) == 3
+        assert client.execute_command("HSET", "sba:2", "a", 5, "v", vec) == 2
+        assert client.execute_command(
+            "HSET", "sba:3", "a", 6, "b", 100, "v", vec) == 3
+        IndexingTestHelper.wait_for_indexing_complete_on_node(client, "sba_idx")
+        knn = ["*=>[KNN 3 @v $q]", "PARAMS", "2", "q", vec]
+        with_c = [3, b"sba:2", b"#5", [],
+                  b"sba:3", b"#6", [b"c", b"100"],
+                  b"sba:1", b"#7", [b"c", b"500"]]
+        for release in ("1.2.1", "1.3.0"):
+            assert client.execute_command(
+                "CONFIG", "SET", "search.emulate-release", release) == b"OK"
+            for query in (["@b:[0 10]"], ["*"], knn):
+                result = client.execute_command(
+                    "FT.SEARCH", "sba_idx", *query, "SORTBY", "b", "ASC",
+                    "WITHSORTKEYS", "RETURN", "1", "c", "DIALECT", "2")
+                assert result == with_c, (release, query, result)
+            result = client.execute_command(
+                "FT.SEARCH", "sba_idx", "@b:[0 10]", "SORTBY", "b", "DESC",
+                "NOCONTENT", "DIALECT", "2")
+            assert result == [3, b"sba:1", b"sba:3", b"sba:2"], release
+
+    def test_sortkey_gates_count_once_per_reply_with_cursor(self):
+        # Each reply, first or FT.CURSOR READ, counts each gate once.
+        client: Valkey = self.server.get_new_client()
+        assert client.execute_command(
+            "FT.CREATE", "sbw_idx", "ON", "HASH", "PREFIX", "1", "sbw:",
+            "SCHEMA", "a", "AS", "b", "NUMERIC", "b", "AS", "c",
+            "NUMERIC") == b"OK"
+        for key, a, b in (("sbw:1", 7, 500), ("sbw:2", 5, 900),
+                          ("sbw:3", 6, 100)):
+            assert client.execute_command("HSET", key, "a", a, "b", b) == 2
+        IndexingTestHelper.wait_for_indexing_complete_on_node(client, "sbw_idx")
+        counters = ("search_compatibility-ft_search_sortkey_type_prefix",
+                    "search_compatibility-ft_search_sortkey_nil")
+
+        def uses():
+            info = client.info("SEARCH")
+            return [info.get(c, 0) for c in counters]
+
+        for release, per_reply in (("1.2.1", 1), ("1.3.0", 0)):
+            assert client.execute_command(
+                "CONFIG", "SET", "search.emulate-release", release) == b"OK"
+            before = uses()
+            total, rows, cursor = client.execute_command(
+                "FT.SEARCH", "sbw_idx", "@b:[0 10]", "SORTBY", "b", "ASC",
+                "WITHSORTKEYS", "RETURN", "1", "c", "WITHCURSOR", "COUNT", "2",
+                "DIALECT", "2")
+            assert total == 3 and len(rows) == 2 and cursor != 0
+            assert [n - b for n, b in zip(uses(), before)] == [per_reply] * 2
+            before = uses()
+            batch, cursor = client.execute_command(
+                "FT.CURSOR", "READ", "sbw_idx", cursor)
+            assert batch[0] == 1 and cursor == 0
+            assert [n - b for n, b in zip(uses(), before)] == [per_reply] * 2
+
+    def test_sortby_knn_prefill(self):
+        # KNN with RETURN sorts rows the index can fill and rows it cannot.
+        client: Valkey = self.server.get_new_client()
+        assert client.execute_command(
+            "FT.CREATE", "sbk_h", "ON", "HASH", "PREFIX", "1", "sbkh:",
+            "SCHEMA", "t", "TEXT", "n", "NUMERIC", "a", "AS", "s", "NUMERIC",
+            "v", "VECTOR", "FLAT", "6", "TYPE", "FLOAT32", "DIM", "2",
+            "DISTANCE_METRIC", "L2") == b"OK"
+        assert client.execute_command(
+            "FT.CREATE", "sbk_j", "ON", "JSON", "PREFIX", "1", "sbkj:",
+            "SCHEMA", "$.t", "AS", "t", "TEXT", "$.n", "AS", "n", "NUMERIC",
+            "$.a", "AS", "s", "NUMERIC", "$.v", "AS", "v", "VECTOR", "FLAT",
+            "6", "TYPE", "FLOAT32", "DIM", "2", "DISTANCE_METRIC",
+            "L2") == b"OK"
+        vec = struct.pack("<2f", 0.0, 0.0)
+        docs = (("1", "charlie", "0.1234567890123456", 7, 1.0),
+                ("2", "alpha", "0.2234567890123456", 5, 2.0),
+                ("3", "bravo", "0.3234567890123456", 6, 3.0),
+                ("4", "delta", "0.4234567890123456", None, 4.0))
+        for i, t, n, a, x in docs:
+            fields = {"t": t, "n": n, "v": struct.pack("<2f", x, 0.0)}
+            doc = {"t": t, "n": float(n), "v": [x, 0.0]}
+            if a is not None:
+                fields["a"] = a
+                doc["a"] = a
+            client.hset(f"sbkh:{i}", mapping=fields)
+            assert client.execute_command(
+                "JSON.SET", f"sbkj:{i}", "$", json.dumps(doc)) == b"OK"
+        IndexingTestHelper.wait_for_indexing_complete_on_node(client, "sbk_h")
+        IndexingTestHelper.wait_for_indexing_complete_on_node(client, "sbk_j")
+        knn = ["*=>[KNN 4 @v $q]", "PARAMS", "2", "q", vec]
+        indexed = {"1": b"0.123456789012", "2": b"0.223456789012",
+                   "3": b"0.323456789012", "4": b"0.423456789012"}
+        stored = {i: n.encode() for i, _, n, _, _ in docs}
+        # The index holds no TEXT, so a TEXT sort reads each row from the key
+        # and its RETURN numbers are the stored bytes.
+        for release, absent, text in (("1.2.1", b"#", b"#"),
+                                      ("1.3.0", None, b"$")):
+            assert client.execute_command(
+                "CONFIG", "SET", "search.emulate-release", release) == b"OK"
+            for idx, prefix in (("sbk_h", "sbkh:"), ("sbk_j", "sbkj:")):
+                for field, rows in (
+                        ("s", [("2", b"#5", indexed), ("3", b"#6", indexed),
+                               ("1", b"#7", indexed), ("4", absent, indexed)]),
+                        ("t", [("2", text + b"alpha", stored),
+                               ("3", text + b"bravo", stored),
+                               ("1", text + b"charlie", stored),
+                               ("4", text + b"delta", stored)])):
+                    result = client.execute_command(
+                        "FT.SEARCH", idx, *knn, "SORTBY", field, "ASC",
+                        "WITHSORTKEYS", "RETURN", "1", "n", "DIALECT", "2")
+                    expected = [4]
+                    for i, sort_key, n_of in rows:
+                        expected += [(prefix + i).encode(), sort_key,
+                                     [b"n", n_of[i]]]
+                    assert result == expected, (release, idx, field, result)
+
+    def test_sortby_knn_field_indexed_twice(self):
+        # Field a is x and z NUMERIC and y TAG; y sorts as text, not as x's
+        # number.
+        client: Valkey = self.server.get_new_client()
+        assert client.execute_command(
+            "FT.CREATE", "sbt_idx", "ON", "HASH", "PREFIX", "1", "sbt:",
+            "SCHEMA", "a", "AS", "x", "NUMERIC", "a", "AS", "y", "TAG",
+            "a", "AS", "z", "NUMERIC", "v", "VECTOR", "FLAT", "6", "TYPE",
+            "FLOAT32", "DIM", "2", "DISTANCE_METRIC", "L2") == b"OK"
+        for i, a in ((1, ".6"), (2, "0.5"), (3, "+0.55")):
+            assert client.execute_command(
+                "HSET", f"sbt:{i}", "a", a, "v",
+                struct.pack("<2f", float(i), 0.0)) == 2
+        IndexingTestHelper.wait_for_indexing_complete_on_node(client, "sbt_idx")
+        knn = ["*=>[KNN 3 @v $q]", "PARAMS", "2", "q",
+               struct.pack("<2f", 0.0, 0.0)]
+        for release, prefix in (("1.2.1", b"#"), ("1.3.0", b"$")):
+            assert client.execute_command(
+                "CONFIG", "SET", "search.emulate-release", release) == b"OK"
+            for query in (["*"], knn):
+                result = client.execute_command(
+                    "FT.SEARCH", "sbt_idx", *query, "SORTBY", "y", "ASC",
+                    "WITHSORTKEYS", "RETURN", "1", "x", "DIALECT", "2")
+                expected = [3]
+                for i, a in ((3, b"+0.55"), (1, b".6"), (2, b"0.5")):
+                    expected += [f"sbt:{i}".encode(), prefix + a, [b"x", a]]
+                assert result == expected, (release, query, result)
+            # A NUMERIC on the same field: the index's text is z's own.
+            result = client.execute_command(
+                "FT.SEARCH", "sbt_idx", *knn, "SORTBY", "z", "ASC", "RETURN",
+                "1", "x", "DIALECT", "2")
+            assert result == [3, b"sbt:2", [b"x", b"0.5"],
+                              b"sbt:3", [b"x", b"0.55"],
+                              b"sbt:1", [b"x", b"0.6"]], (release, result)
+
+    def test_sortby_alias_stray_field(self):
+        # An undeclared field named like the alias is not the attribute.
+        client: Valkey = self.server.get_new_client()
+        assert client.execute_command(
+            "FT.CREATE", "sbf_idx", "ON", "HASH", "PREFIX", "1", "sbf:",
+            "SCHEMA", "price_v2", "AS", "price", "NUMERIC",
+            "n", "NUMERIC") == b"OK"
+        assert client.execute_command(
+            "HSET", "sbf:new1", "price_v2", 700, "n", 1) == 2
+        assert client.execute_command(
+            "HSET", "sbf:new2", "price_v2", 500, "n", 1) == 2
+        assert client.execute_command(
+            "HSET", "sbf:old1", "price", 300, "n", 1) == 2
+        IndexingTestHelper.wait_for_indexing_complete_on_node(client, "sbf_idx")
+        for release, query in ((r, q) for r in ("1.2.1", "1.3.0")
+                               for q in (["*"], ["@n:[0 10]"])):
+            assert client.execute_command(
+                "CONFIG", "SET", "search.emulate-release", release) == b"OK"
+            for order, present in (("ASC", [b"sbf:new2", b"sbf:new1"]),
+                                   ("DESC", [b"sbf:new1", b"sbf:new2"])):
+                keys = present + [b"sbf:old1"]
+                sort_keys = [b"#" + str(
+                    {b"sbf:new1": 700, b"sbf:new2": 500}[k]).encode()
+                             for k in present] + [
+                                 b"#" if release == "1.2.1" else None]
+                base = ["FT.SEARCH", "sbf_idx", *query, "SORTBY", "price",
+                        order, "WITHSORTKEYS"]
+                result = client.execute_command(*base, "DIALECT", "2")
+                assert result[0] == 3, result
+                assert result[1::3] == keys, (release, query, order, result)
+                assert result[2::3] == sort_keys, (release, query, order, result)
+                assert [b"price", b"300"] == [
+                    x for x in result[3::3][2] if x in (b"price", b"300")]
+                result = client.execute_command(
+                    *base, "RETURN", "1", "price_v2", "DIALECT", "2")
+                assert result[1::3] == keys, (release, query, order, result)
+                assert result[2::3] == sort_keys, (release, query, order, result)
+
+    def test_sortby_alias_matrix(self):
+        # Values chosen so neither key order nor KNN order is the sorted order.
+        client: Valkey = self.server.get_new_client()
+        vec = struct.pack("<2f", 0.0, 0.0)
+        values = {1: 7, 2: 5, 3: 6}  # key suffix -> a; sorted asc: 2, 3, 1
+        assert client.execute_command(
+            "FT.CREATE", "sbm_h", "ON", "HASH", "PREFIX", "1", "sbmh:",
+            "SCHEMA", "a", "AS", "s", "NUMERIC", "t", "TEXT",
+            "v", "VECTOR", "FLAT", "6", "TYPE", "FLOAT32", "DIM", "2",
+            "DISTANCE_METRIC", "L2") == b"OK"
+        assert client.execute_command(
+            "FT.CREATE", "sbm_j", "ON", "JSON", "PREFIX", "1", "sbmj:",
+            "SCHEMA", "$.a", "AS", "s", "NUMERIC", "$.t", "AS", "t", "TEXT",
+            "$.v", "AS", "v", "VECTOR", "FLAT", "6", "TYPE", "FLOAT32",
+            "DIM", "2", "DISTANCE_METRIC", "L2") == b"OK"
+        for i, a in values.items():
+            assert client.execute_command(
+                "HSET", f"sbmh:{i}", "a", a, "t", "word", "v",
+                struct.pack("<2f", float(i), 0.0)) == 3
+            assert client.execute_command(
+                "JSON.SET", f"sbmj:{i}", "$",
+                json.dumps({"a": a, "t": "word", "v": [float(i), 0.0]})) == b"OK"
+        IndexingTestHelper.wait_for_indexing_complete_on_node(client, "sbm_h")
+        IndexingTestHelper.wait_for_indexing_complete_on_node(client, "sbm_j")
+
+        def ids(result):
+            return [x for x in result[1:] if isinstance(x, bytes)
+                    and x[:4] in (b"sbmh", b"sbmj")]
+
+        knn = ["*=>[KNN 3 @v $q]", "PARAMS", "2", "q", vec]
+        for release in ("1.2.1", "1.3.0"):
+            assert client.execute_command(
+                "CONFIG", "SET", "search.emulate-release", release) == b"OK"
+            for idx, prefix in (("sbm_h", b"sbmh:"), ("sbm_j", b"sbmj:")):
+                asc = [prefix + b"2", prefix + b"3", prefix + b"1"]
+                desc = list(reversed(asc))
+                for query in (["@s:[0 10]"], ["*"], knn):
+                    for order, expected in (("ASC", asc), ("DESC", desc)):
+                        base = ["FT.SEARCH", idx, *query, "SORTBY", "s", order]
+                        tail = ["DIALECT", "2"]
+                        where = (release, idx, query, order)
+                        for shape in ([], ["NOCONTENT"], ["RETURN", "1", "t"],
+                                      ["RETURN", "1", "s"]):
+                            result = client.execute_command(
+                                *base, *shape, *tail)
+                            assert ids(result) == expected, (where, shape,
+                                                             result)
+                        result = client.execute_command(
+                            *base, "WITHSORTKEYS", "RETURN", "1", "t", *tail)
+                        assert result[0] == 3, result
+                        assert result[1::3] == expected, (where, result)
+                        want = [b"#" + str(values[int(k[-1:])]).encode()
+                                for k in expected]
+                        assert result[2::3] == want, (where, result)
+
+
+class TestSortByResponseLimits(ValkeySearchTestCaseBase):
+    def test_internal_sortby_entries_do_not_count(self):
+        client: Valkey = self.server.get_new_client()
+        assert client.execute_command(
+            "FT.CREATE", "srl_idx", "ON", "HASH", "PREFIX", "1", "srl:",
+            "SCHEMA", "price_v2", "AS", "price", "NUMERIC", "title", "TAG",
+            "note", "TAG") == b"OK"
+        title = "x" * 95
+        for key, price in (("srl:1", 700), ("srl:2", 500), ("srl:3", 900)):
+            assert client.execute_command(
+                "HSET", key, "price_v2", price, "title", title, "note",
+                "n") == 3
+        IndexingTestHelper.wait_for_indexing_complete_on_node(client, "srl_idx")
+
+        # One row's RETURN footprint: 2 fields, 5 + 95 + 4 + 1 = 105 bytes.
+        fields_config = "search.max-search-result-fields-count"
+        size_config = "search.max-search-result-record-size"
+        saved = {c: client.config_get(c)[c] for c in (fields_config, size_config)}
+        row = [b"title", title.encode(), b"note", b"n"]
+        sorted_rows = [3, b"srl:2", b"#500", row, b"srl:1", b"#700", row,
+                       b"srl:3", b"#900", row]
+        try:
+            for fields, size, expected in ((2, 10 * 1024 * 1024, sorted_rows),
+                                           (10, 105, sorted_rows),
+                                           (1, 10 * 1024 * 1024, [0]),
+                                           (10, 104, [0])):
+                assert client.config_set(fields_config, fields)
+                assert client.config_set(size_config, size)
+                result = client.execute_command(
+                    "FT.SEARCH", "srl_idx", "@price:[0 1000]", "SORTBY",
+                    "price", "ASC", "WITHSORTKEYS", "RETURN", "2", "title",
+                    "note", "DIALECT", "2")
+                assert result == expected, (fields, size, result)
+        finally:
+            for config, value in saved.items():
+                client.config_set(config, value)
+
+
 class TestAggregateReducerAlias(ValkeySearchTestCaseDebugMode):
     """
         A REDUCE with no AS clause auto-generates its output name, and which form
@@ -1374,3 +1671,62 @@ class TestNonVectorCluster(ValkeySearchClusterTestCase):
         # Verify fetch-limited queries metric
         client.execute_command("CONFIG SET search.info-developer-visible yes")
         assert client.info("search").get("search_nonvector_results_fetched_limited_count", 0) == 8
+
+
+class TestSortByAliasCluster(ValkeySearchClusterTestCaseDebugMode):
+    """
+        Issue #1440 on rows merged from other shards.
+    """
+
+    def test_sortby_alias_cluster(self):
+        cluster_client: ValkeyCluster = self.new_cluster_client()
+        coordinator: Valkey = self.new_client_for_primary(0)
+        assert coordinator.execute_command(
+            "FT.CREATE", "sbc_idx", "ON", "HASH", "PREFIX", "1", "sbc:",
+            "SCHEMA", "a", "AS", "b", "NUMERIC", "b", "AS", "c", "NUMERIC",
+            "v", "VECTOR", "FLAT", "6", "TYPE", "FLOAT32", "DIM", "2",
+            "DISTANCE_METRIC", "L2") == b"OK"
+        # b = 1000 - 10 * a, so sorting by hash field b gives the reverse order.
+        a_values = {1: 7, 2: 5, 3: 6, 4: 9, 5: 1, 6: 8, 7: 3, 8: 2, 9: 4}
+        for i, a in a_values.items():
+            assert cluster_client.execute_command(
+                "HSET", f"sbc:{i}", "a", a, "b", 1000 - 10 * a, "v",
+                struct.pack("<2f", float(i), 0.0)) == 3
+        IndexingTestHelper.wait_for_indexing_complete_on_all_nodes(
+            self.get_all_primary_clients(), "sbc_idx")
+        # Some rows must have crossed the wire.
+        slots = {cluster_client.execute_command("CLUSTER", "KEYSLOT",
+                                                f"sbc:{i}") for i in a_values}
+        assert len(slots) > 1
+
+        by_a = [f"sbc:{i}".encode()
+                for i in sorted(a_values, key=lambda i: a_values[i])]
+        knn = ["*=>[KNN 9 @v $q]", "PARAMS", "2", "q",
+               struct.pack("<2f", 0.0, 0.0)]
+
+        def ids(result):
+            return [x for x in result[1:]
+                    if isinstance(x, bytes) and x.startswith(b"sbc:")]
+
+        for release in ("1.2.1", "1.3.0"):
+            for node in self.get_all_primary_clients():
+                assert node.execute_command(
+                    "CONFIG", "SET", "search.emulate-release",
+                    release) == b"OK"
+            for query in (["@b:[0 10]"], ["*"], knn):
+                for order, expected in (("ASC", by_a),
+                                        ("DESC", list(reversed(by_a)))):
+                    base = ["FT.SEARCH", "sbc_idx", *query, "SORTBY", "b",
+                            order]
+                    for shape in ([], ["NOCONTENT"], ["RETURN", "1", "c"]):
+                        result = coordinator.execute_command(
+                            *base, *shape, "DIALECT", "2")
+                        assert ids(result) == expected, (release, query,
+                                                         order, shape, result)
+            result = coordinator.execute_command(
+                "FT.SEARCH", "sbc_idx", "@b:[0 10]", "SORTBY", "b", "ASC",
+                "WITHSORTKEYS", "RETURN", "1", "c", "DIALECT", "2")
+            assert result[0] == 9, result
+            assert result[1::3] == by_a, (release, result)
+            want = [b"#" + str(a_values[int(k[-1:])]).encode() for k in by_a]
+            assert result[2::3] == want, (release, result)

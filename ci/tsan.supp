@@ -18,3 +18,9 @@ race:malloc_mutex_trylock_final
 # valkey-search code is not involved.
 race:replicaReceiveRDBFromPrimaryToDisk
 
+
+# TEMPORARY: valkey_search::cancel::Make (src/utils/cancel.cc) calls
+# ValkeyModule_Milliseconds() from gRPC event_engine threads; VM_Milliseconds
+# writes a valkey global that the main thread also writes (ustime). Remove
+# once cancel::Make no longer calls the module API off the main thread.
+race:VM_Milliseconds

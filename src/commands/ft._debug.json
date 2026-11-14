@@ -168,6 +168,11 @@
             ]
           },
           {
+            "name": "TSAN_RACE",
+            "type": "pure-token",
+            "token": "TSAN_RACE"
+          },
+          {
             "name": "HELP",
             "type": "pure-token",
             "token": "HELP"

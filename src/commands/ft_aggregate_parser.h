@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <limits>
 #include <optional>
+#include <vector>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
@@ -192,6 +193,15 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   // source the same identifier.
   //
   absl::flat_hash_set<std::string> record_identifiers_;
+  //
+  // Only the 1.2.1 `LOAD *` counter uses these. It needs to know which stored
+  // fields a stage reads and which names a stage overwrites.
+  //
+  absl::flat_hash_set<std::string> written_names_;
+  absl::flat_hash_set<std::string> read_names_;
+  // Reducers read the input rows, so in `AS n ... @n` the `@n` is the stored
+  // field. A GROUPBY's output names wait here until the stage ends.
+  std::optional<std::vector<std::string>> groupby_writes_;
   //
   // Maps indexes in a record into metadata for that index
   //

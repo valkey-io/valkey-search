@@ -1255,7 +1255,7 @@ class HierarchicalNSW
              sizeof(labeltype));
       new (GetDataPtrByInternalId(i)) StoredVectorT(generator(
           absl::string_view(chunk->data() + size_links_level0_, vector_size_),
-          isMarkedDeleted(i)));
+          isMarkedDeleted(i), id));
       cur_element_count_++;
       memcpy((*data_level0_memory_)[i] + label_offset_, (char *)&id,
              sizeof(labeltype));

@@ -101,7 +101,7 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
     ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
     const data_model::VectorIndex &vector_index_proto,
     absl::string_view attribute_identifier, SupplementalContentChunkIter &&iter,
-    int db_num) {
+    int db_num, TrackedKeys *key_labels) {
   try {
     auto index = std::shared_ptr<VectorHNSW<T>>(
         new VectorHNSW<T>(vector_index_proto.dimension_count(),
@@ -119,16 +119,20 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
     RDBChunkInputStream input(std::move(iter));
     index->algo_->normalized_ = index->normalize_;
 
-    auto generator = [allocator = index->GetVectorAllocator()](
-                         absl::string_view vector_data,
-                         bool is_marked_deleted) {
-      if (!is_marked_deleted) {
-        return VectorRecord(nullptr);
+    size_t keys_changed_since_save = 0;
+    auto generator = [&, allocator = index->GetVectorAllocator()](
+                         absl::string_view vector_data, bool is_marked_deleted,
+                         hnswlib::labeltype label) {
+      if (key_labels && !is_marked_deleted) {
+        auto it = key_labels->key_by_internal_id.find(label);
+        if (it != key_labels->key_by_internal_id.end()) {
+          if (auto shared = index->ShareIfUnchangedSinceSave(
+                  ctx, attribute_data_type, it->second, vector_data)) {
+            return std::move(*shared);
+          }
+          ++keys_changed_since_save;
+        }
       }
-      // For normalized indexes, tombstones are saved already normalized (see
-      // AlgoDeleteRecord), so restore them with a reciprocal magnitude of
-      // exactly 1.0; the HNSW distance path relies on this invariant. For
-      // other indexes the magnitude is not used.
       return VectorRecord::Construct(
           vector_data, 1.0f, static_cast<FixedSizeAllocator *>(allocator));
     };
@@ -136,6 +140,11 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
         input, index->space_.get(), vector_index_proto.initial_cap(),
         vector_index_proto.hnsw_algorithm().m(),
         options::GetHNSWValidationEnable().GetValue(), generator));
+    if (key_labels) {
+      index->AdoptTrackedKeys(std::move(*key_labels));
+      index->vectors_resolved_on_load_ = true;
+    }
+    index->keys_changed_since_save_ = keys_changed_since_save;
     // ef_runtime is not persisted in the index contents
     index->algo_->setEf(vector_index_proto.hnsw_algorithm().ef_runtime());
     return index;
@@ -469,8 +478,9 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
                  : kDefaultMagnitude;
   try {
     CancelCondition cancel_condition(cancellation_token);
-    VectorRecord query_record = VectorRecord::Construct(
-        query, reciprocal_magnitude, GetVectorAllocator());
+    // Query vectors are short-lived; keep them out of the index allocator.
+    VectorRecord query_record =
+        VectorRecord::Construct(query, reciprocal_magnitude, nullptr);
     QueryVector embedding(query_record, query.size(), normalize_,
                           GetVectorDataType());
     auto res = algo_->searchKnn(embedding, count, ef_runtime, filter.get(),
@@ -524,9 +534,10 @@ absl::StatusOr<RangeResult> VectorHNSW<T>::SearchRange(
   // that leave the ball briefly near its boundary are still followed; only keys
   // within the radius are emitted. Distances are in the radius's own space for
   // every metric (squared for L2).
-  QueryVector embedding(VectorRecord::Construct(nq.view, reciprocal_magnitude,
-                                                GetVectorAllocator()),
-                        nq.view.size(), normalize_, GetVectorDataType());
+  // Query vectors are short-lived; keep them out of the index allocator.
+  QueryVector embedding(
+      VectorRecord::Construct(nq.view, reciprocal_magnitude, nullptr),
+      nq.view.size(), normalize_, GetVectorDataType());
   std::vector<std::pair<float, hnswlib::labeltype>> raw_results;
   RangeStopCondition stop_condition(ComputeRangeShell(radius, range.epsilon),
                                     radius, normalize_,

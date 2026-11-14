@@ -6,13 +6,13 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 #include "absl/status/status.h"
 #include "hnswlib.h"
 #include "iostream.h"
 #include "third_party/hnswlib/index.pb.h"
+#include "vmsdk/src/huge/flat_hash_map.h"
 #include "vmsdk/src/status/status_macros.h"
 
 #ifdef VMSDK_ENABLE_MEMORY_ALLOCATION_OVERRIDES
@@ -35,7 +35,7 @@ class BruteforceSearch
 
   bool normalized_{false};
 
-  std::unordered_map<labeltype, size_t> dict_external_to_internal;
+  vmsdk::HugeFlatHashMap<labeltype, size_t> dict_external_to_internal;
 
   // Constructs a flat bruteforce vector index.
   // @param s Pointer to distance space interface (e.g., L2 or InnerProduct
@@ -151,7 +151,7 @@ class BruteforceSearch
       return;
     }
     size_t cur_c = found->second;
-    dict_external_to_internal.erase(found);
+    dict_external_to_internal.erase_and_migrate(found);
     if (cur_element_count_ - 1 == cur_c) {
       std::destroy_at(GetDataPtrByInternalId(cur_c));
       cur_element_count_--;
@@ -294,7 +294,7 @@ class BruteforceSearch
       memcpy((char *)&id, chunk->data() + vector_size_, sizeof(labeltype));
       VectorRecordT *stored_vector = GetDataPtrByInternalId(i);
       new (stored_vector) VectorRecordT(
-          generator(absl::string_view(chunk->data(), vector_size_)));
+          generator(absl::string_view(chunk->data(), vector_size_), id));
       memcpy(reinterpret_cast<char *>(GetDataPtrByInternalId(i)) +
                  sizeof(VectorRecordT),
              (char *)&id, sizeof(labeltype));

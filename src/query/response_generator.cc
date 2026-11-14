@@ -268,12 +268,19 @@ bool CheckSlotOwnership(ValkeyModuleCtx *ctx, absl::string_view key) {
   return cluster_map->IOwnSlot(static_cast<uint16_t>(slot));
 }
 
+// A document's SORTBY value and the name it is filed under.
+struct SortByContent {
+  std::string lookup_key;
+  vmsdk::UniqueValkeyString value;
+};
+
 absl::StatusOr<RecordsMap> GetContent(
     ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
     const query::SearchParameters &parameters,
     const indexes::Neighbor &neighbor,
     const std::optional<std::string> &vector_identifier,
     std::unique_ptr<query::QueryContext> &query_ctx,
+    std::optional<SortByContent> &out_sortby_content,
     FilterVerification *out_verification = nullptr) {
   auto key = neighbor.external_id->Str();
   const bool is_json = attribute_data_type.ToProto() ==
@@ -339,11 +346,7 @@ absl::StatusOr<RecordsMap> GetContent(
       *out_verification = std::move(verification);
     }
   }
-  // Every other fetch is projected below, filter or not. `content` cannot be
-  // handed back as it is: a JSON fetch keys it by views of the identifiers it
-  // was asked for, and `sortby_identifier` dies with this function. The
-  // projection also re-keys the sortby field under its alias, where sorting
-  // looks for it.
+  // Every other fetch is projected below, filter or not.
   if (fetch_whole_hash) {
     // The whole hash was fetched, and the whole hash is what was asked for.
     return content;
@@ -376,27 +379,52 @@ absl::StatusOr<RecordsMap> GetContent(
     if (itr == content.end()) {
       continue;
     }
+    auto id_str =
+        vmsdk::RetainUniqueValkeyString(return_attribute.identifier.get());
+    auto id_view = vmsdk::ToStringView(id_str.get());
     return_content.emplace(
-        vmsdk::ToStringView(return_attribute.identifier.get()),
-        RecordsMapValue(
-            return_attribute.identifier.get(),
-            vmsdk::RetainUniqueValkeyString(itr->second.value.get())));
+        id_view, RecordsMapValue(
+                     std::move(id_str),
+                     vmsdk::RetainUniqueValkeyString(itr->second.value.get())));
   }
 
-  // Add sortby field to return_content for sorting, even when return_attributes
-  // is not empty. Use the alias (sortby_parameter->field) as the key.
   if (parameters.sortby_parameter.has_value()) {
     auto itr = content.find(sortby_identifier);
     if (itr != content.end()) {
-      return_content.emplace(
-          parameters.sortby_parameter->field,
-          RecordsMapValue(
-              vmsdk::MakeUniqueValkeyString(parameters.sortby_parameter->field),
-              vmsdk::RetainUniqueValkeyString(itr->second.value.get())));
+      if (parameters.all_content) {
+        // Reached by JSON only. RediSearch shows the sort field under its
+        // alias in a whole record, so this copy is returned and counted.
+        return_content.emplace(
+            parameters.sortby_parameter->field,
+            RecordsMapValue(
+                vmsdk::MakeUniqueValkeyString(
+                    parameters.sortby_parameter->field),
+                vmsdk::RetainUniqueValkeyString(itr->second.value.get())));
+      } else {
+        // Must match SortByKey, except for an older coordinator, which reads
+        // HASH by alias.
+        std::string sortby_key;
+        if (is_json || !parameters.sortby_by_lookup_key) {
+          sortby_key = parameters.sortby_parameter->field;
+        } else {
+          sortby_key = std::move(sortby_identifier);
+        }
+        out_sortby_content.emplace(SortByContent{
+            .lookup_key = std::move(sortby_key),
+            .value = vmsdk::RetainUniqueValkeyString(itr->second.value.get())});
+      }
     }
   }
 
   return return_content;
+}
+
+// Adds the SORTBY value to a fetched row.
+void FileSortByContent(RecordsMap &content, SortByContent sortby_content) {
+  auto owned_key = vmsdk::MakeUniqueValkeyString(sortby_content.lookup_key);
+  auto key_view = vmsdk::ToStringView(owned_key.get());
+  content.emplace(key_view, RecordsMapValue(std::move(owned_key),
+                                            std::move(sortby_content.value)));
 }
 
 // The vector bytes this document holds now, or nullopt if they cannot be read.
@@ -501,8 +529,10 @@ void ProcessNeighborsForReply(
       continue;
     }
     FilterVerification verification;
-    auto content = GetContent(ctx, attribute_data_type, parameters, neighbor,
-                              vector_identifier, query_ctx, &verification);
+    std::optional<SortByContent> sortby_content;
+    auto content =
+        GetContent(ctx, attribute_data_type, parameters, neighbor,
+                   vector_identifier, query_ctx, sortby_content, &verification);
     if (!content.ok()) {
       continue;
     }
@@ -588,6 +618,10 @@ void ProcessNeighborsForReply(
 
     // Only assign content if it's within size limit
     if (!size_exceeded) {
+      // Filed after the limits: the sort entry is not a RETURN field.
+      if (sortby_content.has_value()) {
+        FileSortByContent(content.value(), *std::move(sortby_content));
+      }
       neighbor.attribute_contents = std::move(content.value());
     }
   }

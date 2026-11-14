@@ -56,12 +56,15 @@ class VectorFlat : public VectorType<T> {
       absl::string_view attribute_identifier,
       data_model::AttributeDataType attribute_data_type,
       int db_num) ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  // With `key_labels`, each node takes the keyspace's shared copy of its
+  // vector when it is unchanged since the save, instead of a saved copy, and
+  // the index takes over the key maps.
   static absl::StatusOr<std::shared_ptr<VectorFlat<T>>> LoadFromRDB(
       ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
       const data_model::VectorIndex &vector_index_proto,
       absl::string_view attribute_identifier,
-      SupplementalContentChunkIter &&iter,
-      int db_num) ABSL_NO_THREAD_SAFETY_ANALYSIS;
+      SupplementalContentChunkIter &&iter, int db_num,
+      TrackedKeys *key_labels = nullptr) ABSL_NO_THREAD_SAFETY_ANALYSIS;
   ~VectorFlat() override = default;
 
   const hnswlib::SpaceInterface<float> *GetSpace() const {

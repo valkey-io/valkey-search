@@ -34,6 +34,7 @@
 #include "src/coordinator/coordinator.pb.h"
 #include "src/coordinator/search_converter.h"
 #include "src/coordinator/util.h"
+#include "src/index_schema.h"
 #include "src/indexes/scoring/scorer.h"
 #include "src/indexes/vector_base.h"
 #include "src/query/multi_search.h"
@@ -183,6 +184,10 @@ struct SearchPartitionResultsTracker {
     absl::MutexLock lock(&mutex);
     accumulated_total_count.fetch_add(response.total_count(),
                                       std::memory_order_relaxed);
+    std::optional<std::string> refile_to;
+    if (!response.sortby_keyed_by_lookup_key()) {
+      refile_to = OldShardSortByRefileKey(*parameters);
+    }
     while (response.neighbors_size() > 0) {
       auto neighbor_entry = std::unique_ptr<coordinator::NeighborEntry>(
           response.mutable_neighbors()->ReleaseLast());
@@ -196,6 +201,10 @@ struct SearchPartitionResultsTracker {
             identifier_view, RecordsMapValue(std::move(identifier),
                                              vmsdk::MakeUniqueValkeyString(
                                                  attribute_content.content())));
+      }
+      if (refile_to.has_value()) {
+        RefileAliasSortByValue(attribute_contents, *refile_to,
+                               parameters->sortby_parameter->field);
       }
       indexes::Neighbor neighbor{
           StringInternStore::Intern(neighbor_entry->key()),

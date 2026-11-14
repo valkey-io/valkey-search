@@ -1072,8 +1072,7 @@ TEST_P(FTSearchTest, FTSearchTests) {
   }
   const FTSearchTestCase &test_case = std::get<2>(params);
   EXPECT_CALL(*kMockValkeyModule,
-              HashGet(An<ValkeyModuleKey *>(),
-                      VALKEYMODULE_HASH_CFIELDS | VALKEYMODULE_HASH_EXISTS,
+              HashGet(An<ValkeyModuleKey *>(), VALKEYMODULE_HASH_EXISTS,
                       An<const char *>(), An<int *>(), An<void *>()))
       .WillRepeatedly([&](ValkeyModuleKey *module_key, int flags,
                           const char *field, int *exists,

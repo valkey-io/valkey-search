@@ -195,8 +195,8 @@ class TestSaveRestore_v1_v1(ValkeySearchTestCaseDebugMode):
         args["search.rdb_read_v2"] = "no"
         return args
     @pytest.mark.parametrize("parameters", [
-        [index, [4, 0, 0], [4, 0, 0, 0]],
-        [vector_only_index, [2, 0, 0], [2, 0, 0, 0]],
+        [index, [5, 0, 0], [5, 0, 0, 0]],
+        [vector_only_index, [3, 0, 0], [3, 0, 0, 0]],
         [non_vector_index, [2, 0, 0], [2, 0, 0, 0]],
         ])
     def test_saverestore_v1_v1(self, parameters):
@@ -210,8 +210,8 @@ class TestSaveRestore_v1_v2(ValkeySearchTestCaseDebugMode):
         return args
 
     @pytest.mark.parametrize("parameters", [
-        [index, [4, 0, 0], [4, 0, 0, 0]],
-        [vector_only_index, [2, 0, 0], [2, 0, 0, 0]],
+        [index, [5, 0, 0], [5, 0, 0, 0]],
+        [vector_only_index, [3, 0, 0], [3, 0, 0, 0]],
         [non_vector_index, [2, 0, 0], [2, 0, 0, 0]],
         ])
     def test_saverestore_v1_v2(self, parameters):
@@ -225,8 +225,8 @@ class TestSaveRestore_v2_v1(ValkeySearchTestCaseDebugMode):
         return args
 
     @pytest.mark.parametrize("parameters", [
-        [index, [5, KEY_COUNT, 0], [5, 1, 0, 0]],
-        [vector_only_index, [3, KEY_COUNT, 0], [3, 1, 0, 0]],
+        [index, [6, KEY_COUNT, 0], [6, 1, 0, 0]],
+        [vector_only_index, [4, KEY_COUNT, 0], [4, 1, 0, 0]],
         [non_vector_index, [3, KEY_COUNT, 0], [3, 1, 0, 0]],
         ])
     def test_saverestore_v2_v1(self, parameters):
@@ -240,8 +240,8 @@ class TestSaveRestore_v2_v2(ValkeySearchTestCaseDebugMode):
         return args
 
     @pytest.mark.parametrize("parameters", [
-        [index, [5, KEY_COUNT, 0], [5, 0, KEY_COUNT, 0]],
-        [vector_only_index, [3, KEY_COUNT, 0], [3, 0, KEY_COUNT, 0]],
+        [index, [6, KEY_COUNT, 0], [6, 0, KEY_COUNT, 0]],
+        [vector_only_index, [4, KEY_COUNT, 0], [4, 0, KEY_COUNT, 0]],
         [non_vector_index, [3, KEY_COUNT, 0], [3, 0, KEY_COUNT, 0]],
         ])
     def test_saverestore_v2_v2(self, parameters):
@@ -368,6 +368,145 @@ class TestFlatLabelsAfterLoad(ValkeySearchTestCaseDebugMode):
         assert self.search(query) == {**loaded, b"k:1": 1.0}
 
 
+class TestLoadTrackedKeyMissingFromKeyspace(ValkeySearchTestCaseDebugMode):
+    """
+    An RDB's index section can track a key its keyspace section no longer
+    holds: the key expired before the load, or its delete was still in the
+    mutation queue at save time. The load must not crash, and the key must
+    drop out of the index.
+    """
+
+    def info(self) -> FTInfoParser:
+        return FTInfoParser(self.client.execute_command("FT.INFO", "idx"))
+
+    def index_idle(self) -> bool:
+        info = self.info()
+        return info.is_backfill_complete() and info.mutation_queue_size == 0
+
+    def create_and_fill(self, algo: str, metric: str):
+        self.client.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "k:",
+            "SCHEMA", "t", "TAG",
+            "v", "VECTOR", algo, "6", "TYPE", "FLOAT32", "DIM", "2",
+            "DISTANCE_METRIC", metric,
+        )
+        for i in range(4):
+            self.client.hset(
+                f"k:{i}",
+                mapping={"v": float_to_bytes([float(i), 1.0]), "t": "x"})
+        waiters.wait_for_true(self.index_idle)
+
+    def use_rdb_format(self, rdb_v2: str, key_labels: str):
+        # V2 removes the key by replaying the saved key list; V1 by the
+        # stale-entry scan and the backfill that follow the load. Without key
+        # labels, as in RDBs from older versions, HNSW checks the keyspace in
+        # LoadTrackedKeys instead of while loading each node.
+        self.client.execute_command(
+            "CONFIG", "SET", "search.rdb-write-v2", rdb_v2)
+        self.client.execute_command(
+            "CONFIG", "SET", "search.rdb-read-v2", rdb_v2)
+        self.client.execute_command(
+            "CONFIG", "SET", "search.rdb-write-v3", key_labels)
+
+    def reload_and_check(self, expected: set):
+        # NOSAVE loads the RDB written by the test instead of saving the
+        # current state.
+        self.client.execute_command("DEBUG", "RELOAD", "NOSAVE")
+        waiters.wait_for_true(self.index_idle)
+        res = self.client.execute_command(
+            "FT.SEARCH", "idx", "*=>[KNN 10 @v $B]", "NOCONTENT",
+            "PARAMS", "2", "B", float_to_bytes([1.0, 1.0]), "DIALECT", "2",
+        )
+        assert set(res[1:]) == expected
+        # Search results alone could hide a stale entry; check the index too.
+        assert self.info().get_attribute_by_name("v")["index"]["size"] == len(
+            expected)
+
+    @pytest.mark.parametrize("algo", ["FLAT", "HNSW"])
+    @pytest.mark.parametrize("metric", ["L2", "COSINE"])
+    @pytest.mark.parametrize("rdb_v2", ["yes", "no"])
+    @pytest.mark.parametrize("key_labels", ["yes", "no"])
+    def test_key_expired_before_load(self, algo, metric, rdb_v2, key_labels):
+        self.use_rdb_format(rdb_v2, key_labels)
+        self.create_and_fill(algo, metric)
+        # With active expiry off, k:1 can't be deleted before SAVE writes it.
+        self.client.execute_command("DEBUG", "SET-ACTIVE-EXPIRE", "0")
+        try:
+            self.client.pexpire("k:1", 100)
+            self.client.execute_command("SAVE")
+            time.sleep(0.2)  # let k:1 expire; the load then drops it
+            self.reload_and_check({b"k:0", b"k:2", b"k:3"})
+        finally:
+            self.client.execute_command("DEBUG", "SET-ACTIVE-EXPIRE", "1")
+
+    @pytest.mark.parametrize("algo", ["FLAT", "HNSW"])
+    @pytest.mark.parametrize("metric", ["L2", "COSINE"])
+    @pytest.mark.parametrize("rdb_v2", ["yes", "no"])
+    @pytest.mark.parametrize("key_labels", ["yes", "no"])
+    def test_delete_queued_at_save(self, algo, metric, rdb_v2, key_labels):
+        self.use_rdb_format(rdb_v2, key_labels)
+        self.create_and_fill(algo, metric)
+        self.client.execute_command(
+            "FT._DEBUG", "PAUSEPOINT", "SET", "block_mutation_queue")
+        # Like TestMutationQueue, write from a separate client while the queue
+        # is blocked.
+        deleter = threading.Thread(
+            target=self.server.get_new_client().delete, args=("k:1",))
+        deleter.start()
+        try:
+            waiters.wait_for_true(lambda: self.info().mutation_queue_size == 1)
+            self.client.execute_command("SAVE")
+        finally:
+            self.client.execute_command(
+                "FT._DEBUG", "PAUSEPOINT", "RESET", "block_mutation_queue")
+            deleter.join()
+        self.reload_and_check({b"k:0", b"k:2", b"k:3"})
+
+    @pytest.mark.parametrize("algo", ["FLAT", "HNSW"])
+    @pytest.mark.parametrize("change", ["hdel", "wrong_size", "update"])
+    @pytest.mark.parametrize("rdb_v2", ["yes", "no"])
+    @pytest.mark.parametrize("key_labels", ["yes", "no"])
+    def test_vector_changed_queued_at_save(
+            self, algo, change, rdb_v2, key_labels):
+        # The key still exists at load, but its vector is gone, has the wrong
+        # size or was updated, so V1 relies on the backfill rather than the
+        # stale-entry scan.
+        self.use_rdb_format(rdb_v2, key_labels)
+        self.create_and_fill(algo, "L2")
+        self.client.execute_command(
+            "FT._DEBUG", "PAUSEPOINT", "SET", "block_mutation_queue")
+        writer_client = self.server.get_new_client()
+        if change == "hdel":
+            writer = threading.Thread(
+                target=writer_client.hdel, args=("k:1", "v"))
+        elif change == "wrong_size":
+            writer = threading.Thread(
+                target=writer_client.hset, args=("k:1", "v", "bad"))
+        else:
+            writer = threading.Thread(
+                target=writer_client.hset,
+                args=("k:1", "v", float_to_bytes([-5.0, 1.0])))
+        writer.start()
+        try:
+            waiters.wait_for_true(lambda: self.info().mutation_queue_size == 1)
+            self.client.execute_command("SAVE")
+        finally:
+            self.client.execute_command(
+                "FT._DEBUG", "PAUSEPOINT", "RESET", "block_mutation_queue")
+            writer.join()
+        if change != "update":
+            self.reload_and_check({b"k:0", b"k:2", b"k:3"})
+            return
+        self.reload_and_check({b"k:0", b"k:1", b"k:2", b"k:3"})
+        # The load keeps the saved vector; the queued update must still land.
+        res = self.client.execute_command(
+            "FT.SEARCH", "idx", "*=>[KNN 10 @v $B AS d]", "RETURN", "1", "d",
+            "PARAMS", "2", "B", float_to_bytes([1.0, 1.0]), "DIALECT", "2",
+        )
+        distances = {res[i]: float(res[i + 1][1]) for i in range(1, len(res), 2)}
+        assert distances[b"k:1"] == 36.0
+
+
 class TestMutationQueue(ValkeySearchTestCaseDebugMode):
     def append_startup_args(self, args):
         args["search.rdb_write_v2"] = "yes"
@@ -460,6 +599,42 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
             i["search_rdb_load_multi_exec_entries"],
         ]
         assert reads == [len(records)]
+
+    def test_multi_exec_queue_applied_by_bgsave(self):
+        """A fork for a snapshot applies the multi/exec queue first (#1651),
+        unlike the foreground SAVE above, which persists it as queued entries.
+        The group stays under writer-threads (20) and no query runs, so nothing
+        else ends it; FT.INFO does not drain."""
+        index.create(self.client, True)
+        records = make_data()[:3]
+        expected_keys = [index.keyname(i).encode() for i in range(len(records))]
+
+        def num_records():
+            info = FTInfoParser(self.client.execute_command("ft.info", index.name))
+            return info.num_records
+
+        self.client.execute_command("MULTI")
+        for i in range(len(records)):
+            index.write_data(self.client, i, records[i])
+        self.client.execute_command("EXEC")
+        # Still queued: nothing has ended the group on this node.
+        assert num_records() == 0
+
+        self.client.execute_command("bgsave")
+        waiters.wait_for_true(
+            lambda: self.client.info("persistence")["rdb_bgsave_in_progress"] == 0
+        )
+        # The pre-fork drain indexed the group in the parent.
+        assert num_records() == len(records) * len(index.fields)
+
+        # restart() stops the server with SHUTDOWN NOSAVE, so this reloads the
+        # RDB the BGSAVE child wrote: the group is there as indexed records, not
+        # as queued multi/exec entries, and is served before any query runs.
+        self.server.restart(remove_rdb=False)
+        self.client.execute_command("CONFIG SET search.info-developer-visible yes")
+        assert self.client.info("search")["search_rdb_load_multi_exec_entries"] == 0
+        assert num_records() == len(records) * len(index.fields)
+        verify_data(self.client, index, expected_keys)
 
     def test_multi_exec_orphan_key_skipped_still_searchable(self):
         self.client.execute_command("CONFIG SET search.info-developer-visible yes")

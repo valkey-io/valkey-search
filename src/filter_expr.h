@@ -81,6 +81,8 @@ class FilterAttributeReference : public expr::Expression::AttributeReference {
   expr::Value GetValue(expr::Expression::EvalContext& ctx,
                        const expr::Expression::Record& record) const override;
 
+  expr::Expression::Type GetResultType() const override;
+
   void Dump(std::ostream& os) const override;
 
  private:
@@ -106,6 +108,10 @@ class UnindexedHashFieldReference
 
   expr::Value GetValue(expr::Expression::EvalContext& ctx,
                        const expr::Expression::Record& record) const override;
+
+  expr::Expression::Type GetResultType() const override {
+    return expr::Expression::Type::kString;
+  }
 
   void Dump(std::ostream& os) const override;
 

@@ -618,6 +618,37 @@ class TestFtHybridBase(ValkeySearchTestCaseBase):
                 "PARAMS", "2", "q", self.Q,
             )
 
+    def test_combine_function_argument_type_rejected(self):
+        """An arm score is a number, which strlen() rejects, so the command
+        is refused at parse time rather than scoring every document 0."""
+        client = self.server.get_new_client()
+        self.setup_index(client)
+        with pytest.raises(ResponseError,
+                           match=r"Argument 0 of strlen must be a string"):
+            client.execute_command(
+                "FT.HYBRID", self.INDEX,
+                "SEARCH", "@title:hello",
+                "VSIM", "@vec", "$q", "KNN", "2", "K", "5",
+                "COMBINE", "FUNCTION", "2", "EXPR", "strlen(@__vector_score)",
+                "PARAMS", "2", "q", self.Q,
+            )
+
+    def test_combine_function_evaluation_error_fails_the_query(self):
+        """An error the expression raises while scoring fails the query, as
+        an error in an APPLY or FILTER stage does: comparing a number with a
+        string that is not one is an error for `<`."""
+        client = self.server.get_new_client()
+        self.setup_index(client)
+        with pytest.raises(ResponseError, match=r"Error converting string"):
+            client.execute_command(
+                "FT.HYBRID", self.INDEX,
+                "SEARCH", "@title:hello",
+                "VSIM", "@vec", "$q", "KNN", "2", "K", "5",
+                "COMBINE", "FUNCTION", "2",
+                "EXPR", "@__vector_score < 'abc'",
+                "PARAMS", "2", "q", self.Q,
+            )
+
     def test_groupby_reduce_count(self):
         client = self.server.get_new_client()
         self.setup_index(client)

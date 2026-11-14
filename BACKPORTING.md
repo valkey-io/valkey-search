@@ -42,6 +42,20 @@ gh workflow run manual-backport.yml \
   --field target_branch=<BRANCH>
 ```
 
+To run the sweep on demand instead (it processes everything with Status **"To be backported"** on a board, same as the daily run), trigger `backport-sweep.yml`. This also requires write access to the `valkey-ci-agent` repo.
+
+```bash
+gh workflow run backport-sweep.yml \
+  --repo valkey-io/valkey-ci-agent \
+  --field repo=valkey-io/valkey-search \
+  --field project_number=<PROJECT_NUMBER> \
+  --field dry_run=false
+```
+
+- `dry_run` defaults to `true` (discovery only, nothing is pushed). Set it to `false` to open a backport PR.
+- `max_candidates` (default `2`) caps how many PRs are cherry-picked per branch in one run. The applied PRs are combined into a single "Backport sweep for `<BRANCH>`" PR.
+- Omit `project_number` to sweep every valkey-search release branch.
+
 ## For contributors
 
 Contributors do not have access to project boards or the manual workflow. If your PR fixes a bug that should be backported, mention it in your PR description — e.g., "This should be backported to 1.0 and 1.1." A maintainer will handle the rest.

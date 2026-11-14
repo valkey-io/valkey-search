@@ -172,6 +172,22 @@ TEST_F(TagIndexTest, ModifyRecordWithEmptyString) {
   EXPECT_EQ(index->GetTrackedKeyCount(), 0);
 }
 
+TEST_F(TagIndexTest, ToProtoKeepsExplicitSeparator) {
+  // Unset (index created before the field existed) stays unset.
+  EXPECT_FALSE(index->ToProto()->tag_index().has_explicit_separator());
+
+  for (bool explicit_separator : {true, false}) {
+    data_model::TagIndex tag_index_proto;
+    tag_index_proto.set_separator(",");
+    tag_index_proto.set_explicit_separator(explicit_separator);
+    auto tag_index = std::make_unique<IndexTeser<Tag, data_model::TagIndex>>(
+        tag_index_proto);
+    auto proto = tag_index->ToProto();
+    ASSERT_TRUE(proto->tag_index().has_explicit_separator());
+    EXPECT_EQ(proto->tag_index().explicit_separator(), explicit_separator);
+  }
+}
+
 TEST_F(TagIndexTest, KeyTrackingTest) {
   EXPECT_TRUE(index->AddRecord("key1", "tag1").value());
   EXPECT_TRUE(index->AddRecord("key2", "tag2").value());

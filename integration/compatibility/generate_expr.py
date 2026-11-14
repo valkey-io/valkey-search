@@ -54,23 +54,13 @@ VECTOR_OPERANDS = {"@v1"}
 # All of these diverge from Redisearch ONLY on the HASH index; the JSON index
 # carries real types (numbers, arrays) and agrees, so we exclude by key_type.
 #
-# 1. @v1 is a raw float32 blob on HASH with no well-defined string/numeric
-#    coercion. Redisearch coerces it arbitrarily (blob->0, empty-prefix match);
-#    valkey returns Nil/NaN. There is no correct answer to match.
-# 2. @n1/@price are numeric fields that valkey types as a double while
-#    Redisearch treats them as context-dependent strings -- and Redisearch is
-#    itself inconsistent (e.g. "0" is truthy in `(-1)&&@n1` but 0 is falsy in
-#    `@n1&&@n2`), so no single typing rule can match it. It only surfaces under
-#    typing-sensitive operators/functions (boolean, comparison, logical-not,
-#    lower/upper); arithmetic and the rest coerce cleanly and agree.
+# @v1 is a raw float32 blob on HASH with no well-defined string/numeric
+# coercion. Redisearch coerces it arbitrarily (blob->0, empty-prefix match);
+# valkey returns Nil/NaN. There is no correct answer to match.
+#
+# @n1/@price, HASH numeric fields, are not excluded: under the LOAD * these
+# commands use, both engines hand them to the pipeline as their raw strings.
 HASH_BLOB_FIELDS = {"@v1"}
-HASH_NUMERIC_FIELDS = {"@n1", "@price"}
-BOOLEAN_OPS = {"||", "&&", "!"}
-COMPARISON_OPS = {"<", "<=", "==", "!=", ">=", ">"}
-STRING_COERCION_FNS = {"lower", "upper"}
-# Operands that coerce cleanly to a number, so a numeric-field comparison
-# against them stays numeric (and agrees) in both engines.
-NUMERIC_OPERANDS = {"0", "-1", "3.14", "-0.5", "+inf", "-inf"} | HASH_NUMERIC_FIELDS
 
 
 def _skip_hash_case(key_type, name, operands):
@@ -82,20 +72,7 @@ def _skip_hash_case(key_type, name, operands):
     # @v1 is a raw float32 blob: Redisearch's coercion is arbitrary, so exclude
     # every op/function that touches it (some happen to agree, but only by
     # coincidence of the coercion, not by any stable rule).
-    if any(o in HASH_BLOB_FIELDS for o in operands):
-        return True
-    if any(o in HASH_NUMERIC_FIELDS for o in operands):
-        # Boolean ops and lower/upper on a hash numeric field: Redisearch's
-        # numeric-vs-string typing is self-inconsistent -> exclude.
-        if name in BOOLEAN_OPS or name in STRING_COERCION_FNS:
-            return True
-        # Comparisons diverge only when the numeric field is compared against a
-        # non-numeric (string/tag/text) operand; numeric-vs-numeric agrees, so
-        # keep those.
-        if name in COMPARISON_OPS and any(o not in NUMERIC_OPERANDS
-                                          for o in operands):
-            return True
-    return False
+    return any(o in HASH_BLOB_FIELDS for o in operands)
 
 # (filter, operand_values). The filter must match the same set of rows in
 # Redisearch and valkey_search — otherwise the per-row APPLY results are

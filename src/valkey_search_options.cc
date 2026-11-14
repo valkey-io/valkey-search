@@ -12,6 +12,7 @@
 #include "valkey_search.h"
 #include "version.h"
 #include "vmsdk/src/concurrency.h"
+#include "vmsdk/src/huge_page_allocation.h"
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/thread_pool.h"
 
@@ -185,6 +186,20 @@ constexpr absl::string_view kHNSWValidationEnable{"hnsw-validation-enable"};
 static auto hnsw_validation_enable =
     config::BooleanBuilder(kHNSWValidationEnable, true)  // default true
         .Dev()
+        .Build();
+
+/// Allocate HNSW / FLAT vector index memory (graph and vector storage) in
+/// units of transparent huge pages.
+/// Takes effect only when the server provides the external memory accounting
+/// APIs (Valkey 9.2+), and only for memory allocated after the change. Huge
+/// pages are best effort: with the host THP mode set to "always", Valkey
+/// disables THP for the process unless "disable-thp no" is set.
+constexpr absl::string_view kVectorChunkHugePages{"vector-chunk-huge-pages"};
+static auto vector_chunk_huge_pages =
+    config::BooleanBuilder(kVectorChunkHugePages, true)  // default true
+        .WithModifyCallback([](auto new_value) {
+          vmsdk::SetHugePageAllocationEnabled(new_value);
+        })
         .Build();
 
 // Register an enumerator for the log level
@@ -577,10 +592,10 @@ static auto rax_target_mutex_pool_size =
         .Build();
 
 /// Register the "--max-nonvector-search-results-fetched" flag. Controls the
-/// maximum number of results to fetch in background threads before content
-/// fetching on non-vector (numeric/tag/text) query paths. This controls
-/// potential OOM by limiting the result set size before expensive content
-/// fetching from the keyspace.
+/// maximum number of results retained in background threads before content
+/// fetching on non-vector (numeric/tag/text/VECTOR_RANGE) query paths. This
+/// controls potential OOM by limiting the result set size before expensive
+/// content fetching from the keyspace.
 /// Note: If queries use LIMIT with a large offset (e.g., LIMIT offset count
 /// where offset + count exceeds this value), consider increasing this config
 /// to ensure all paginated results are accessible.
@@ -904,8 +919,11 @@ config::Version &GetEmulateRelease() {
   return dynamic_cast<config::Version &>(*emulate_release_config);
 }
 
+thread_local vmsdk::ValkeyVersion ScopedMinimumRelease::minimum_{0, 0, 0};
+
 bool EnabledInVersion(vmsdk::ValkeyVersion version) {
-  return GetEmulateRelease().GetValue() >= version;
+  return version <= ScopedMinimumRelease::Minimum() ||
+         GetEmulateRelease().GetValue() >= version;
 }
 
 }  // namespace options

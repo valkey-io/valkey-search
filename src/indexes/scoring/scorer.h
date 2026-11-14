@@ -8,6 +8,7 @@
 #ifndef VALKEYSEARCH_SRC_INDEXES_SCORING_SCORER_H_
 #define VALKEYSEARCH_SRC_INDEXES_SCORING_SCORER_H_
 
+#include <bit>
 #include <cstdint>
 #include <string_view>
 
@@ -23,6 +24,29 @@ namespace valkey_search::indexes::scoring {
 // built with); detect ±inf and NaN by IEEE 754 bit pattern instead.
 bool IsInf(float f);
 bool IsNaN(float f);
+
+inline bool IsNaN(double d) {
+  constexpr uint64_t kExponentMask = uint64_t{0x7ff} << 52;
+  constexpr uint64_t kMantissaMask = (uint64_t{1} << 52) - 1;
+  const uint64_t bits = std::bit_cast<uint64_t>(d);
+  return (bits & kExponentMask) == kExponentMask && (bits & kMantissaMask) != 0;
+}
+
+// Sign and zero by bit as well: under -ffast-math `x == 0` can hold for NaN and
+// std::signbit can miss the sign of -nan and -0.
+inline bool IsZero(float f) { return (std::bit_cast<uint32_t>(f) << 1) == 0; }
+inline bool IsZero(double d) { return (std::bit_cast<uint64_t>(d) << 1) == 0; }
+
+// True when the sign bit is set and the value is not -0: a negative number,
+// -inf, or a NaN with the sign bit set.
+inline bool IsNegativeNonZero(float f) {
+  const uint32_t bits = std::bit_cast<uint32_t>(f);
+  return (bits >> 31) != 0 && !IsZero(f);
+}
+inline bool IsNegativeNonZero(double d) {
+  const uint64_t bits = std::bit_cast<uint64_t>(d);
+  return (bits >> 63) != 0 && !IsZero(d);
+}
 
 // Produces a +inf whose bit pattern survives -ffast-math. A source-level
 // std::numeric_limits<float>::infinity() may be folded to a finite value under

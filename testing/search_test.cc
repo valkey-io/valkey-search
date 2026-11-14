@@ -15,6 +15,7 @@
 #include <memory>
 #include <optional>
 #include <queue>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -2035,12 +2036,17 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
    public:
     explicit CancelAfterPolls(int grace) : grace_(grace) {}
     bool IsCancelled() override { return ++polls_ > grace_; }
-    void Cancel() override { grace_ = 0; }
+    void Cancel() override {
+      grace_ = 0;
+      stop_source_.request_stop();
+    }
+    std::stop_token GetStopToken() override { return stop_source_.get_token(); }
     int polls() const { return polls_; }
 
    private:
     int grace_;
     int polls_{0};
+    std::stop_source stop_source_;
   };
 
   auto search = [&](absl::string_view filter, cancel::Token token) {
@@ -2208,8 +2214,14 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
         ++polls;
         return false;
       }
-      void Cancel() override {}
+      void Cancel() override { stop_source_.request_stop(); }
+      std::stop_token GetStopToken() override {
+        return stop_source_.get_token();
+      }
       int polls{0};
+
+     private:
+      std::stop_source stop_source_;
     };
     auto search = [&](absl::string_view filter,
                       absl::flat_hash_set<std::string> inkeys,
@@ -2376,8 +2388,12 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
       ++polls;
       return false;
     }
-    void Cancel() override {}
+    void Cancel() override { stop_source_.request_stop(); }
+    std::stop_token GetStopToken() override { return stop_source_.get_token(); }
     int polls{0};
+
+   private:
+    std::stop_source stop_source_;
   };
   const std::vector<float> query(kVectorDimensions, 0.0f);
   for (absl::string_view filter :
@@ -2749,8 +2765,12 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
       ++polls;
       return false;
     }
-    void Cancel() override {}
+    void Cancel() override { stop_source_.request_stop(); }
+    std::stop_token GetStopToken() override { return stop_source_.get_token(); }
     int polls{0};
+
+   private:
+    std::stop_source stop_source_;
   };
   auto counting = std::make_shared<CountingToken>();
   const int64_t before = query::GetVectorRangeResultsFetchedLimitedCount();

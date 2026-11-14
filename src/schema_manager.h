@@ -102,6 +102,9 @@ class SchemaManager {
 
   void OnServerCronCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
                             uint64_t subevent, void *data);
+  // pthread_atfork prepare hook: applies every index's multi/exec queue so the
+  // snapshot does not copy an index that is missing a small group (#1651).
+  static void AtFork() ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
   void OnShutdownCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
                           uint64_t subevent, void *data)
       ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);

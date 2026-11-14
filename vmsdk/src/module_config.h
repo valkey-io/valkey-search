@@ -8,6 +8,7 @@
 
 #include <absl/container/flat_hash_map.h>
 
+#include <atomic>
 #include <optional>
 #include <type_traits>
 #include <vector>
@@ -394,11 +395,14 @@ struct ConfigTraits<vmsdk::ValkeyVersion> {
 };
 
 /// Configuration entry whose native type is `T`, stored under the hood as a
-/// Valkey string config. Conversion is driven by `ConfigTraits<T>`. Storage is
-/// unguarded: configs are read frequently but only written via CONFIG SET,
-/// and reads of `T` are tolerated to be non-atomic here.
+/// Valkey string config. Conversion is driven by `ConfigTraits<T>`. The value
+/// is written by CONFIG SET on the main thread and read from worker threads,
+/// so it is stored atomically, like Number and Boolean.
 template <typename T>
 class TypedConfig : public ConfigBase<T> {
+  static_assert(std::atomic<T>::is_always_lock_free,
+                "TypedConfig requires a lock-free atomic T");
+
  public:
   ~TypedConfig() override = default;
   absl::Status FromString(std::string_view value) override {
@@ -419,7 +423,7 @@ class TypedConfig : public ConfigBase<T> {
   ValkeyModuleString *GetCachedValkeyString() const {
     if (!cached_string_valkey_) {
       cached_string_valkey_ = vmsdk::MakeUniqueValkeyString(
-          ConfigTraits<T>::Format(current_value_));
+          ConfigTraits<T>::Format(GetValueImpl()));
     }
     return cached_string_valkey_.get();
   }
@@ -437,10 +441,12 @@ class TypedConfig : public ConfigBase<T> {
         min_value_(min_value),
         max_value_(max_value) {}
 
-  T GetValueImpl() const override { return current_value_; }
+  T GetValueImpl() const override {
+    return current_value_.load(std::memory_order_relaxed);
+  }
   T GetDefaultValueImpl() const override { return default_value_; }
   void SetValueImpl(T value) override {
-    current_value_ = value;
+    current_value_.store(value, std::memory_order_relaxed);
     cached_string_valkey_.reset();
   }
 
@@ -471,7 +477,7 @@ class TypedConfig : public ConfigBase<T> {
   }
 
   T default_value_;
-  T current_value_;
+  std::atomic<T> current_value_;
   mutable UniqueValkeyString cached_string_valkey_;
   std::optional<T> min_value_;
   std::optional<T> max_value_;

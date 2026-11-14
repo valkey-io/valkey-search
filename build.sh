@@ -383,6 +383,13 @@ function build_icu_if_needed() {
     cd "${ICU_BUILD_DIR}"
     
     printf "Configuring ICU for static linking with embedded data...\n"
+
+    # TSAN cannot see synchronization inside uninstrumented code (e.g. ICU's
+    # once-init of its singletons), so instrument ICU in TSAN builds.
+    local icu_san_flags=""
+    if [[ "${SAN_BUILD}" == "thread" ]]; then
+        icu_san_flags=" -fsanitize=thread"
+    fi
     
     local ICU_LOG="${ICU_BUILD_DIR}/icu-build.log"
 
@@ -398,8 +405,9 @@ function build_icu_if_needed() {
         --disable-samples \
         --enable-tools \
         --prefix="${ICU_BUILD_DIR}/install" \
-        CFLAGS="-O2 -fPIC" \
-        CXXFLAGS="-O2 -fPIC" > "${ICU_LOG}" 2>&1; then
+        CFLAGS="-O2 -fPIC${icu_san_flags}" \
+        CXXFLAGS="-O2 -fPIC${icu_san_flags}" \
+        LDFLAGS="${icu_san_flags}" > "${ICU_LOG}" 2>&1; then
         printf "${RED}ICU configure failed. See ${ICU_LOG}${RESET}\n"
         tail -30 "${ICU_LOG}"
         exit 1

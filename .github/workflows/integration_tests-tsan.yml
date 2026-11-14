@@ -60,7 +60,10 @@ jobs:
       continue-on-error: true
       run: |
         mkdir -p test-results .ccache
+        # Search coordinator ports (server port + 20294) overlap the ephemeral
+        # range; reserve them so outgoing sockets cannot take one first.
         docker run --privileged --rm \
+          --sysctl net.ipv4.ip_local_reserved_ports=30294-40393 \
           --mount type=bind,source="$(pwd)/test-results",target=/workspace/test-results \
           -v "$(pwd):/workspace" \
           -e CCACHE_DIR=/workspace/.ccache \

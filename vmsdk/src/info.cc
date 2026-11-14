@@ -349,7 +349,7 @@ static size_t DumpNames(ValkeyModuleCtx* ctx,
 absl::Status ShowInfo(ValkeyModuleCtx* ctx, vmsdk::ArgsIterator& itr,
                       const vmsdk::module::Options& options) {
   struct ShowParameters {
-    bool metadata_;
+    bool metadata_{false};
   } cmd;
   vmsdk::KeyValueParser<ShowParameters> parser;
   parser.AddParamParser("METADATA",

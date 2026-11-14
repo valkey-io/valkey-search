@@ -81,7 +81,7 @@ In cluster mode, Valkey distributes keys according to the hash algorithm of the 
 
 Search uses a simple architecture where index definitions are replicated on every node but the corresponding index only contains the data which is co-resident on that node. Index update operations remain wholly local to a node and will scale horizontally (save/restore operations also wholly node local). Vertical scaling is also effective because of the multi threaded architecture of search.
 
-Query operations are performed by one node of each shard on its local index and the results are transparently merged together to form a full command response. Query operations are subject to increasing overhead as the cluster shard count increases, so they may scale sub-linearly with increasing shard count.
+Query operations are performed by one node of each shard on its local index and the results are transparently merged together to form a full command response. For clients in `READONLY` mode that node is a replica, or the primary when the shard has no available replica; for other clients it is the primary. Query operations are subject to increasing overhead as the cluster shard count increases, so they may scale sub-linearly with increasing shard count.
 
 Search recognizes that certain data patterns can be optimized. In particular, it recognizes that if the data for an index is confined to a single slot, then only a single node needs to perform a search operation. Operations on single-slot indexes do not experience increased overhead as cluster size increases and thus will scale horizontally, vertically, and through replicas.
 

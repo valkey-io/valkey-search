@@ -121,6 +121,18 @@ std::vector<NodeInfo> ClusterMap::GetTargets(FanoutTargetMode mode,
       }
       return random_replicas;
     }
+    case FanoutTargetMode::kReplicaPreferred: {
+      std::vector<NodeInfo> targets;
+      targets.reserve(shards_.size());
+      for (const auto& [shard_id, shard_info] : shards_) {
+        if (!shard_info.replicas.empty()) {
+          targets.push_back(shard_info.GetRandomNode(true, prefer_local));
+        } else if (shard_info.primary.has_value()) {
+          targets.push_back(shard_info.primary.value());
+        }
+      }
+      return targets;
+    }
     case FanoutTargetMode::kRandom: {
       std::vector<NodeInfo> random_targets;
       random_targets.reserve(shards_.size());
@@ -177,6 +189,14 @@ std::vector<NodeInfo> ClusterMap::GetTargetsForSlot(FanoutTargetMode mode,
     case FanoutTargetMode::kOneReplicaPerShard:
       if (!shard->replicas.empty()) {
         return {shard->GetRandomNode(true, prefer_local)};
+      }
+      return {};
+    case FanoutTargetMode::kReplicaPreferred:
+      if (!shard->replicas.empty()) {
+        return {shard->GetRandomNode(true, prefer_local)};
+      }
+      if (shard->primary.has_value()) {
+        return {shard->primary.value()};
       }
       return {};
     case FanoutTargetMode::kRandom:

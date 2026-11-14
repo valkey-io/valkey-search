@@ -65,6 +65,13 @@ class TestFtDebugCommand(ValkeySearchTestCaseDebugMode):
         hnsw_index.create(client)
         waiters.wait_for_true(lambda: IndexingTestHelper.is_indexing_complete_on_node(client, hnsw_index.name))
         hnsw_index.load_data(client, 10)
+        # A mutation's worker task still holds a reference to its key for a
+        # moment after the client's HSET returns, so wait for the counts to
+        # settle.
+        waiters.wait_for_equal(lambda: GetStringPollStatus(client)[2], {
+            7: {'Count': 10, 'Bytes': 140, 'AvgSize': b'14', 'Allocated': 320, 'AvgAllocated': b'32', 'Utilization': 43},
+            11: {'Count': 1, 'Bytes': 1, 'AvgSize': b'1', 'Allocated': 16, 'AvgAllocated': b'16', 'Utilization': 6}
+        })
         print("Executing debug stats")
         hist = client.execute_command("FT._DEBUG StringPoolStats")
         print("Hist: ", hist)

@@ -11,6 +11,7 @@ The search module uses the Valkey configuration mechanism. Thus each of the name
 | :-------------------------------------------- | :-----: | :-----------: | :-------------------------------------------------------------------------------------------------------------------------------- |
 | search.query-string-bytes                     | Number  |               | Controls the length of the query string for FT.SEARCH command                                                                     |
 | search.hnsw-block-size                        | Number  |               | HNSW resize configuration parameter for vector index block allocation                                                             |
+| search.vector-chunk-huge-pages                | Boolean |      yes      | Allocate vector index memory in 2 MB transparent huge pages (needs Valkey 9.2+ and THP not disabled); applies to new allocations  |
 | search.reader-threads                         | Number  |               | Controls the reader thread pool size; dynamically resizes pool on modification                                                    |
 | search.writer-threads                         | Number  |               | Controls the writer thread pool size; dynamically resizes pool on modification                                                    |
 | search.utility-threads                        | Number  |               | Controls the utility thread pool size; dynamically resizes pool on modification                                                   |
@@ -55,3 +56,5 @@ The search module uses the Valkey configuration mechanism. Thus each of the name
 | search.coordinator-query-timeout-secs         | Number  |               | Controls the gRPC deadline timeout (in seconds) for distributed coordinator query operations.                                     |
 | search.max-indexes                            | Number  |               | Controls the maximum number of search indexes that can be created in the system                                                   |
 | search.cluster-map-expiration-ms              | Number  |               | Controls how long (in milliseconds) the coordinator caches the cluster topology map before refreshing it from the Valkey cluster. |
+
+`search.vector-chunk-huge-pages` takes effect when the server provides the external memory APIs (Valkey 9.2+) and transparent huge pages are not disabled for the process or host. Vector memory is then allocated and counted in 2 MB units, so a small index reports a few MB more `used_memory`. A 2 MB chunk is released only when all the vectors in it are deleted, so after most keys of a FLAT index are deleted, `used_memory` stays near its peak until new vectors reuse the space.

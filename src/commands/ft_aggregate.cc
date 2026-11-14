@@ -42,20 +42,99 @@ struct RealIndexInterface : public IndexInterface {
   RealIndexInterface(std::shared_ptr<IndexSchema> schema) : schema_(schema) {}
 };
 
+namespace {
+
+// Does the 1.2.1 rule change this reply? The counter ticks only if it does.
+// We check before reading any key, so a NUMERIC stored as `2` still ticks.
+bool LoadAllFetchChangesReply(const AggregateParameters &params) {
+  const bool is_json = params.index_schema->GetAttributeDataType().ToProto() ==
+                       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON;
+  const auto score_name = vmsdk::ToStringView(params.score_as.get());
+  auto is_score = [&](absl::string_view name) {
+    return name == score_name || (!params.vr_score_field_name_.empty() &&
+                                  name == params.vr_score_field_name_);
+  };
+  auto loads_key = std::any_of(
+      params.loads_.begin(), params.loads_.end(),
+      [](const LoadField &load) { return load.identifier == "__key"; });
+  // 1.2.1 ignored `@__key` here, so a stage got nothing.
+  if (loads_key && params.read_names_.contains("__key")) {
+    return true;
+  }
+  // In 1.2.1 a JSON stage found no field: the record is just `$`.
+  if (is_json) {
+    for (const auto &name : params.read_names_) {
+      if (name == "__key" || is_score(name)) {
+        continue;
+      }
+      auto indexer = params.index_schema->GetIndex(name);
+      if (indexer.ok() && !indexes::IsVectorIndex(*indexer)) {
+        return true;
+      }
+    }
+  }
+  const bool grouped = std::any_of(
+      params.stages_.begin(), params.stages_.end(),
+      [](const std::unique_ptr<Stage> &stage) {
+        return dynamic_cast<const GroupBy *>(stage.get()) != nullptr;
+      });
+  for (const auto &load : params.loads_) {
+    if (is_score(load.identifier)) {
+      continue;
+    }
+    // A GROUPBY leaves only groups, and an APPLY onto the name overwrites it.
+    const bool hidden = grouped || params.written_names_.contains(load.alias);
+    if (load.identifier == "__key") {
+      if (!hidden) {
+        return true;
+      }
+      continue;
+    }
+    // From 1.3.0 this is an error; 1.2.1 ignored the name.
+    auto indexer = params.index_schema->GetIndex(load.identifier);
+    if (!indexer.ok() || indexes::IsVectorIndex(*indexer)) {
+      return true;
+    }
+    if (hidden) {
+      continue;
+    }
+    // A HASH record already holds the field under its own name, as text; a
+    // fetched NUMERIC field is printed as a number instead, as it already is
+    // when a stage reads it.
+    if (is_json ||
+        ((*indexer)->GetIndexerType() == indexes::IndexerType::kNumeric &&
+         !params.read_names_.contains(load.alias))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+}  // namespace
+
 absl::Status ManipulateReturnsClause(AggregateParameters &params) {
   // Figure out what fields actually need to be returned by the aggregation
   // operation. And modify the common search returns list accordingly
   CHECK(!params.no_content);
   bool content = false;
-  // `LOAD *` asks for the whole record. It is not a short circuit: a field
-  // named by a pipeline stage still has to be fetched by name alongside it,
-  // because on a JSON index the whole record arrives as the single `$` root
+  // `LOAD *` asks for the whole record. From 1.3.0 it is not a short circuit: a
+  // field named by a pipeline stage still has to be fetched by name alongside
+  // it, because on a JSON index the whole record arrives as the single `$` root
   // and no `@name` resolves against that blob. Fall through into the same
   // load processing every other clause gets, with an empty `loads_`, so the
   // implicit loads below are collected exactly as usual.
   if (params.loadall_) {
     CHECK(params.return_attributes.empty());
     params.all_content = true;
+    // #1381 made `LOAD *` fetch more fields, which changed 1.2.1 replies.
+    // Below 1.3.0, keep the 1.2.1 reply: fetch only the whole record.
+    if (!options::EnabledInVersion(1, 3, 0)) {
+      if (LoadAllFetchChangesReply(params)) {
+        VALKEY_SEARCH_COMPATIBILITY_FIX(
+            1, 3, 0, "ft_aggregate_loadall_fetch", [] {}, [] {});
+      }
+      return absl::OkStatus();
+    }
   }
   std::vector<LoadField> loads_to_process = params.loads_;
 

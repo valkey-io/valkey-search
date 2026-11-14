@@ -1,0 +1,94 @@
+name: Integration tests TSAN
+
+on:
+  pull_request:
+    branches:
+      - main
+      - "[0-9].[0-9]"
+    paths-ignore:
+      - '**/*.md'
+      - '**/00-RELEASENOTES'
+  push:
+    branches:
+      - main
+      - "[0-9].[0-9]"
+      # TEMPORARY: lets the workflow run on the development fork; remove before merging.
+      - tsan
+    paths-ignore:
+      - '**/*.md'
+      - '**/00-RELEASENOTES'
+  workflow_dispatch:
+
+concurrency:
+  group: integration-tests-tsan-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  integration-tests-tsan:
+    runs-on: ubuntu-latest
+
+    steps:
+    # Checkout the code from the repository
+    - name: Checkout Code
+      uses: actions/checkout@v3
+
+    # Set up Docker to build and run the container
+    - name: Set up Docker
+      uses: docker/setup-buildx-action@v2
+
+    # Build the Docker image from the Dockerfile in your repo
+    - name: Build Docker Image
+      run: docker build -t presubmit-image -f .devcontainer/Dockerfile .
+
+    - name: Restore ccache
+      uses: actions/cache/restore@v4
+      with:
+        path: .ccache
+        key: ccache-integration-tsan-${{ github.sha }}
+        restore-keys: |
+          ccache-integration-tsan-
+
+    # GCC 13's TSAN aborts with "unexpected memory mapping" at the kernel default.
+    - name: Limit mmap randomization for TSAN
+      run: |
+        sudo sysctl vm.mmap_rnd_bits
+        sudo sysctl -w vm.mmap_rnd_bits=28
+
+    - name: Run Integration Tests
+      id: test-run
+      timeout-minutes: 140
+      continue-on-error: true
+      run: |
+        mkdir -p test-results .ccache
+        docker run --privileged --rm \
+          --mount type=bind,source="$(pwd)/test-results",target=/workspace/test-results \
+          -v "$(pwd):/workspace" \
+          -e CCACHE_DIR=/workspace/.ccache \
+          -e CCACHE_MAXSIZE=1G \
+          --user "ubuntu:ubuntu" \
+          presubmit-image \
+          sudo -E ci/build_ubuntu.sh --run-integration-tests --tsan --integration-output=/workspace/test-results
+
+    - name: Save ccache
+      if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+      uses: actions/cache/save@v4
+      with:
+        path: .ccache
+        key: ccache-integration-tsan-${{ github.sha }}
+
+    - name: Update Test Results Permissions
+      if: always()
+      run: sudo chmod -R 755 test-results
+
+    # Upload test results as artifacts
+    - name: Upload Test Results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: integration-test-results
+        path: test-results
+
+    # Fail the job if tests failed
+    - name: Check Test Results
+      if: steps.test-run.outcome == 'failure'
+      run: exit 1

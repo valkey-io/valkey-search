@@ -1939,6 +1939,12 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
             f"ft.aggregate {key_type}_idx1 * load 3 @__key @n1 @t1 groupby 1 @t1 reduce quantile 2 @n1 0.5 as p50 reduce quantile 2 @n1 0.95 as p95 reduce quantile 2 @n1 0.99 as p99"
         )
 
+        # Compare two quantile outputs: lo=5, hi=19 is true numerically but
+        # false as text ("5" > "19"), so this checks the outputs are numbers.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 1 @n1 apply 10+@n1 as m groupby 0 reduce quantile 2 @m 0 as lo reduce quantile 2 @m 1 as hi filter @lo<@hi"
+        )
+
     def test_aggregate_quantile_edge_cases(self, key_type, dialect, vector_data_type):
         """Test QUANTILE with edge cases: nil values, duplicates, negatives."""
         self.setup_data("hard numbers", key_type)

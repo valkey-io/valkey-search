@@ -3,11 +3,12 @@ Advisory HugeFlatHashMap migration (vmsdk/src/huge/flat_hash_map.h).
 
 While a table grows it keeps its old table (the background) and moves entries
 out of it a few at a time. Besides each mutation's own moves, server cron moves
-more for the main-thread tables it owns, so their backgrounds finish even when
-traffic stops. The controlled variable HugeMapAdvisoryMigration turns cron's
-moves off, which lets a test leave backgrounds in place and then turn them back
-on. The dev INFO field huge_hash_maps_migrating counts the tables that still
-have a background.
+more, so backgrounds finish even when traffic stops: main-thread tables migrate
+in cron itself, and an index's own tables in a mutations-pool task inside the
+index's write phase. The controlled variable HugeMapAdvisoryMigration turns
+cron's moves off, which lets a test leave backgrounds in place and then turn
+them back on. The dev INFO field huge_hash_maps_migrating counts the tables
+that still have a background.
 """
 
 import time
@@ -42,12 +43,13 @@ def _advisory_migration(client: Valkey, value: str) -> None:
 
 class TestHugeHashMapMigration(ValkeySearchTestCaseDebugMode):
 
-    def test_server_cron_drains_main_thread_maps(self):
+    def test_server_cron_drains_all_maps(self):
         """
         With cron's migration off, ingest leaves backgrounds behind and they
-        stay. Turned back on with no traffic at all, server cron drains the
-        main-thread maps it owns (the string intern store, and the vector
-        registry's tables).
+        stay. Turned back on with no traffic at all, server cron drains every
+        table: the main-thread ones (the string intern store, the vector
+        registry's tables, the schema's db_key_info_) and the index's own
+        (index_key_info_, the vector index's key maps, the FLAT label map).
         """
         client: Valkey = self.server.get_new_client()
         _advisory_migration(client, "no")
@@ -81,8 +83,8 @@ class TestHugeHashMapMigration(ValkeySearchTestCaseDebugMode):
             # From here on, no command touches search: whatever drains now is
             # server cron.
             _advisory_migration(client, "yes")
-            waiters.wait_for_true(lambda: _maps_migrating(client) < frozen,
-                                  timeout=30)
+            waiters.wait_for_equal(lambda: _maps_migrating(client), 0,
+                                   timeout=30)
         finally:
             _advisory_migration(client, "yes")
             _config_set(client, "huge-hash-map-migrate-batch", "8")

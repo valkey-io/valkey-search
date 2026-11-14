@@ -250,6 +250,9 @@ class IndexSchema : public KeyspaceEventSubscription,
 
   uint32_t PerformBackfill(ValkeyModuleCtx *ctx, uint32_t batch_size);
 
+  // Called from server cron.
+  void MigrateHugeMaps(size_t n);
+
   bool IsBackfillInProgress() const {
     auto &backfill_job = backfill_job_.Get();
     return backfill_job.has_value() &&
@@ -538,6 +541,11 @@ class IndexSchema : public KeyspaceEventSubscription,
   // the corresponding time slice mutex phases. Within the write phase,
   // exclusion is provided by mutated_records_mutex_.
   IndexKeyInfoMap index_key_info_ ABSL_GUARDED_BY(mutated_records_mutex_);
+
+  bool WriterMapsNeedMigration() const ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  void MigrateWriterMaps(size_t n);
+  // A MigrateWriterMaps() task is queued or running.
+  std::atomic<bool> writer_migration_scheduled_{false};
 
   struct BackfillJob {
     BackfillJob() = delete;

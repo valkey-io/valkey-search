@@ -620,6 +620,12 @@ uint32_t VectorBase::GetMutationWeight() const {
   return options::GetMutationWeightVector().GetValue();
 }
 
+void VectorBase::MigrateSome(size_t n) {
+  absl::MutexLock lock(&key_to_metadata_mutex_);
+  tracked_metadata_by_key_.MigrateSome(n);
+  key_by_internal_id_.MigrateSome(n);
+}
+
 absl::StatusOr<std::pair<float, hnswlib::labeltype>>
 VectorBase::ComputeDistanceFromRecord(const InternedStringPtr &key,
                                       absl::string_view query,

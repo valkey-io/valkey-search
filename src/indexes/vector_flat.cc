@@ -233,6 +233,13 @@ absl::Status VectorFlat<T>::RemoveRecordImpl(uint64_t internal_id) {
 }
 
 template <typename T>
+void VectorFlat<T>::MigrateSome(size_t n) {
+  this->VectorBase::MigrateSome(n);
+  absl::ReaderMutexLock lock(&resize_mutex_);
+  algo_->MigrateSome(n);
+}
+
+template <typename T>
 absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::Search(
     absl::string_view query, uint64_t count, cancel::Token &cancellation_token,
     std::unique_ptr<hnswlib::BaseFilterFunctor> filter,

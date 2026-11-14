@@ -102,6 +102,14 @@ class BruteforceSearch
     cur_element_count_ = 0;
   }
 
+  bool NeedsMigration() const {
+    return dict_external_to_internal.NeedsMigration();
+  }
+  void MigrateSome(size_t n) {
+    std::unique_lock<std::mutex> lock(index_lock);
+    dict_external_to_internal.MigrateSome(n);
+  }
+
   void addPoint(VectorRecordT &&datapoint, labeltype label,
                 bool replace_deleted = false) override {
     size_t idx;

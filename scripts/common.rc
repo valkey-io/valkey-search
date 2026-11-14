@@ -298,6 +298,11 @@ function setup_json_module() {
   LOG_INFO "VALKEY_JSON_PATH => ${VALKEY_JSON_PATH}"
 }
 
+# TSAN is matched on report headers only: its exit line "ThreadSanitizer:
+# reported N warnings" also counts reports redirected elsewhere (e.g. the
+# intentional one from FT._DEBUG TSAN_RACE), so it is not itself an error.
+SAN_ERROR_PATTERN='AddressSanitizer|LeakSanitizer|(WARNING|ERROR|FATAL|SUMMARY): ThreadSanitizer'
+
 # Loop over Valkey log files and search for sanitization errors
 function check_for_san_errors() {
   local valkey_logs=($1)
@@ -310,7 +315,7 @@ function check_for_san_errors() {
   if [[ ${num_logs} -gt 10 ]]; then
     printf "Checking %d log files for ASan/TSan errors..." "${num_logs}"
     for logfile in "${valkey_logs[@]}"; do
-      if grep -qwE 'AddressSanitizer|ThreadSanitizer|LeakSanitizer' "${logfile}" 2>/dev/null; then
+      if grep -qwE "${SAN_ERROR_PATTERN}" "${logfile}" 2>/dev/null; then
         exit_with_error=1
         files_to_dump="${files_to_dump} ${logfile}"
       fi
@@ -323,7 +328,7 @@ function check_for_san_errors() {
   else
     for logfile in "${valkey_logs[@]}"; do
       printf "Checking log file ${logfile} for ASan/TSan errors"
-      local errors_count=$(cat ${logfile} | grep -wE 'AddressSanitizer|ThreadSanitizer|LeakSanitizer' | wc -l)
+      local errors_count=$(cat ${logfile} | grep -wE "${SAN_ERROR_PATTERN}" | wc -l)
       if [[ ${errors_count} -eq 0 ]]; then
         printf "... ${GREEN}ok${RESET}\n"
       else

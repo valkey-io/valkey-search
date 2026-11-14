@@ -8,6 +8,14 @@
 #include <absl/base/no_destructor.h>
 #include <absl/strings/ascii.h>
 
+#if defined(__SANITIZE_THREAD__)
+#include <sanitizer/common_interface_defs.h>
+#include <unistd.h>
+
+#include <filesystem>
+#include <thread>
+#endif
+
 #include "module_config.h"
 #include "src/commands/commands.h"
 #include "src/coordinator/metadata_manager.h"
@@ -334,6 +342,37 @@ absl::Status VectorSharingStatsCmd(ValkeyModuleCtx *ctx,
   return absl::OkStatus();
 }
 
+#if defined(__SANITIZE_THREAD__)
+// Deliberately racy writes, used to prove the TSAN pipeline detects races.
+int tsan_race_target = 0;
+
+__attribute__((noinline)) void TsanRaceWrite() { tsan_race_target++; }
+#endif
+
+// Triggers a deterministic data race. TSAN reports are redirected to a file
+// in the server's working directory while the race runs (so the intentional
+// report is not confused with real ones on stderr), and the file name is
+// returned.
+absl::Status TsanRaceCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
+  VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
+#if defined(__SANITIZE_THREAD__)
+  constexpr const char *kReportPrefix = "tsan-debug-race";
+  __sanitizer_set_report_path(kReportPrefix);
+  // Sibling threads have no happens-before relation between their writes.
+  std::thread t1(TsanRaceWrite);
+  std::thread t2(TsanRaceWrite);
+  t1.join();
+  t2.join();
+  __sanitizer_set_report_path("stderr");
+  auto path =
+      std::filesystem::absolute(absl::StrCat(kReportPrefix, ".", getpid()));
+  ValkeyModule_ReplyWithCString(ctx, path.c_str());
+  return absl::OkStatus();
+#else
+  return absl::FailedPreconditionError("Not a TSAN build");
+#endif
+}
+
 absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
   VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
   static std::vector<std::pair<std::string, std::string>> help_text{
@@ -359,6 +398,8 @@ absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
       {"FT._DEBUG LIST_CONFIGS [VERBOSE] [APP|DEV|HIDDEN]",
        "List config names (default) or VERBOSE details, optionally filtered by "
        "visibility"},
+      {"FT._DEBUG TSAN_RACE",
+       "Trigger a data race (TSAN builds only); returns the report file"},
   };
   ValkeyModule_ReplyWithArray(ctx, 2 * help_text.size());
   for (auto &pair : help_text) {
@@ -407,6 +448,8 @@ absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     return ListMetricsCmd(ctx, itr);
   } else if (keyword == "LIST_CONFIGS") {
     return ListConfigsCmd(ctx, itr);
+  } else if (keyword == "TSAN_RACE") {
+    return TsanRaceCmd(ctx, itr);
   } else {
     return absl::InvalidArgumentError(absl::StrCat(
         "Unknown subcommand: ", *itr.GetStringView(), " try HELP subcommand"));

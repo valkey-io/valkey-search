@@ -298,21 +298,24 @@ fi
 
 ALL_FILES="vector_search_integration_test.py stability_test.py"
 
+# Record failure instead of exiting so the sanitizer check still runs.
+TEST_STATUS=0
+
 if [ -n "${PARALLEL_WORKERS}" ] && [ "${PARALLEL_WORKERS}" != "0" ] && [ "${PARALLEL_WORKERS}" != "1" ]; then
     XDIST_ARGS="-n ${PARALLEL_WORKERS} --dist=load"
     echo "Running integration tests in parallel with ${PARALLEL_WORKERS} workers"
     if [[ "${TEST}" == "all" ]]; then
-        python3 -m pytest ${XDIST_ARGS} -rfE -v ${ROOT_DIR}/vector_search_integration_test.py ${ROOT_DIR}/stability_test.py
+        python3 -m pytest ${XDIST_ARGS} -rfE -v ${ROOT_DIR}/vector_search_integration_test.py ${ROOT_DIR}/stability_test.py || TEST_STATUS=1
     else
-        python3 -m pytest ${XDIST_ARGS} -rfE -v ${ROOT_DIR}/${TEST}_test.py
+        python3 -m pytest ${XDIST_ARGS} -rfE -v ${ROOT_DIR}/${TEST}_test.py || TEST_STATUS=1
     fi
 else
     if [[ "${TEST}" == "all" ]]; then
         for file in $ALL_FILES; do
-            python3 ${ROOT_DIR}/${file}
+            python3 ${ROOT_DIR}/${file} || { TEST_STATUS=1; break; }
         done
     else
-        python3 ${ROOT_DIR}/${TEST}_test.py
+        python3 ${ROOT_DIR}/${TEST}_test.py || TEST_STATUS=1
     fi
 fi
 
@@ -331,3 +334,8 @@ fi
 END_TIME=$(date +%s)
 TEST_RUNTIME=$((END_TIME - START_TIME))
 printf "\n${GREEN}Integration tests execution time: %dm %ds (${TEST_RUNTIME}s)${RESET}\n\n" $((TEST_RUNTIME / 60)) $((TEST_RUNTIME % 60))
+
+if [[ ${TEST_STATUS} -ne 0 ]]; then
+    printf "${RED}Integration tests failed${RESET}\n"
+    exit 1
+fi

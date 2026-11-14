@@ -18,6 +18,15 @@ race:malloc_mutex_trylock_final
 # valkey-search code is not involved.
 race:replicaReceiveRDBFromPrimaryToDisk
 
+# Valkey core race: serverLogRaw reads server.primary_host (to pick the log
+# role letter) without synchronization, so logging from any non-main thread
+# (VM_Log from module workers, valkey's own bio threads) races with REPLICAOF
+# setting or clearing it in replicationSetPrimary/replicationUnsetPrimary. The
+# pointer is only null-tested, so at worst one log line shows the wrong role
+# letter.
+race:replicationSetPrimary
+race:replicationUnsetPrimary
+
 
 # DEBUG RESTART: valkey's restartServer closes every fd before execve while the
 # coordinator's gRPC event-engine threads are still polling them

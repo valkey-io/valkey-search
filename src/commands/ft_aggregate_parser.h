@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <limits>
 #include <optional>
+#include <vector>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
@@ -199,6 +200,9 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   //
   absl::flat_hash_set<std::string> written_names_;
   absl::flat_hash_set<std::string> read_names_;
+  // Every reducer of a GROUPBY reads the input records, so the names it
+  // writes count as written only once the whole stage is parsed.
+  std::optional<std::vector<std::string>> groupby_writes_;
   //
   // Maps indexes in a record into metadata for that index
   //

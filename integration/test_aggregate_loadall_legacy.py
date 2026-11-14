@@ -124,6 +124,16 @@ class TestAggregateLoadAllLegacy(ValkeySearchTestCaseBase):
         rows, ticks = _ticks(client, FIXED, "LOAD", "*", "FILTER", "@n>6")
         assert len(rows) == 1 and ticks == 0
 
+    def test_reducer_reading_an_earlier_reducers_name_ticks_on_json(self):
+        # A reducer reads the input records, so `@n` here is the field `n`,
+        # not the COUNT just named `n`.
+        client = self._client("JSON")
+        rows, ticks = _ticks(client, LEGACY, "LOAD", "*", "GROUPBY", "0",
+                             "REDUCE", "COUNT", "0", "AS", "n",
+                             "REDUCE", "SUM", "1", "@n", "AS", "s")
+        assert rows[0][b"s"] == b"0"
+        assert ticks == 1
+
     @pytest.mark.parametrize("key_type, tail", [
         ("HASH", ("LOAD", "*")),
         ("HASH", ("LOAD", "*", "LOAD", "1", "@t")),

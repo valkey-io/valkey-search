@@ -320,6 +320,7 @@ ConstructGroupByParser() {
       [](AggregateParameters &parameters,
          vmsdk::ArgsIterator &itr) -> absl::Status {
         auto groupby = std::make_unique<GroupBy>();
+        parameters.groupby_writes_.emplace();
         uint32_t cnt{0};
         // GROUPBY 0 puts every record into a single group, as in Redisearch.
         VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, cnt));
@@ -354,6 +355,10 @@ ConstructGroupByParser() {
               reducer_itr->second(*uc_name.AsStringView(), parameters, itr));
           groupby->reducers_.emplace_back(std::move(r));
         }
+        for (auto &name : *parameters.groupby_writes_) {
+          parameters.written_names_.insert(std::move(name));
+        }
+        parameters.groupby_writes_.reset();
         parameters.stages_.emplace_back(std::move(groupby));
         DBG << "After groupby: " << parameters << "\n";
         return absl::OkStatus();
@@ -403,7 +408,11 @@ absl::StatusOr<std::unique_ptr<expr::Expression::AttributeReference>>
 AggregateParameters::MakeReference(const absl::string_view name, bool create) {
   DBG << "MakeReference : " << name << " Create:" << create << "\n";
   if (create) {
-    written_names_.emplace(name);
+    if (groupby_writes_.has_value()) {
+      groupby_writes_->emplace_back(name);
+    } else {
+      written_names_.emplace(name);
+    }
   } else if (!written_names_.contains(name)) {
     read_names_.emplace(name);
   }

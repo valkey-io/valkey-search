@@ -7,6 +7,7 @@
 #include "src/commands/ft_aggregate_exec.h"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -15,12 +16,14 @@
 #include <memory>
 #include <random>
 
+#include "absl/strings/str_cat.h"
 #include "gtest/gtest.h"
 #include "src/attribute_data_type.h"
 #include "src/commands/ft_aggregate_parser.h"
 #include "src/indexes/scoring/scorer.h"
 #include "src/indexes/vector_base.h"
 #include "src/utils/cancel.h"
+#include "src/utils/hyperloglog_counter.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
 #include "testing/common.h"
@@ -132,10 +135,12 @@ struct AggregateExecTest : public vmsdk::ValkeyTest {
     auto params = std::make_unique<AggregateParameters>(0);
     params->parse_vars_.index_interface_ = &fakeIndex;
     EXPECT_EQ(params->AddRecordAttribute("n1", "n1", "n1",
-                                         indexes::IndexerType::kNumeric),
+                                         indexes::IndexerType::kNumeric,
+                                         expr::Expression::Type::kNumber),
               0);
     EXPECT_EQ(params->AddRecordAttribute("n2", "n2", "n2",
-                                         indexes::IndexerType::kNumeric),
+                                         indexes::IndexerType::kNumeric,
+                                         expr::Expression::Type::kNumber),
               1);
     // params->attr_record_indexes_["n1"] = 0;
     // params->attr_record_indexes_["n2"] = 1;
@@ -161,13 +166,16 @@ struct AggregateExecTest : public vmsdk::ValkeyTest {
     auto params = std::make_unique<AggregateParameters>(0);
     params->parse_vars_.index_interface_ = &fakeIndex;
     EXPECT_EQ(params->AddRecordAttribute("n1", "n1", "n1",
-                                         indexes::IndexerType::kNumeric),
+                                         indexes::IndexerType::kNumeric,
+                                         expr::Expression::Type::kNumber),
               0);
     EXPECT_EQ(params->AddRecordAttribute("n2", "n2", "n2",
-                                         indexes::IndexerType::kNumeric),
+                                         indexes::IndexerType::kNumeric,
+                                         expr::Expression::Type::kNumber),
               1);
     EXPECT_EQ(params->AddRecordAttribute("n3", "n3", "n3",
-                                         indexes::IndexerType::kNumeric),
+                                         indexes::IndexerType::kNumeric,
+                                         expr::Expression::Type::kNumber),
               2);
 
     auto parser = CreateAggregateParser();
@@ -191,8 +199,10 @@ struct AggregateExecTest : public vmsdk::ValkeyTest {
     AggregateParameters params(0);
     params.parse_vars_.index_interface_ = &fakeIndex;
     // Two numeric columns so the parsed stages can resolve both @n1 and @n2.
-    params.AddRecordAttribute("n1", "n1", "n1", indexes::IndexerType::kNumeric);
-    params.AddRecordAttribute("n2", "n2", "n2", indexes::IndexerType::kNumeric);
+    params.AddRecordAttribute("n1", "n1", "n1", indexes::IndexerType::kNumeric,
+                              expr::Expression::Type::kNumber);
+    params.AddRecordAttribute("n2", "n2", "n2", indexes::IndexerType::kNumeric,
+                              expr::Expression::Type::kNumber);
 
     auto parser = CreateAggregateParser();
     auto status = parser.Parse(params, itr);
@@ -260,6 +270,83 @@ TEST_F(AggregateExecTest, ApplyTest) {
   EXPECT_EQ(*records[1], *r1);
 }
 
+// An evaluation error fails the query, as in Redisearch, from 1.3.0 on. That
+// includes a reducer argument or sort key, which Redisearch allows only as a
+// field name and valkey-search allows as an expression.
+TEST_F(AggregateExecTest, EvaluationErrorFailsTheStage) {
+  const auto saved = options::GetEmulateRelease().GetValue();
+  for (absl::string_view stage :
+       {"APPLY strlen(@n1) AS x", "FILTER strlen(@n1)",
+        "GROUPBY 0 REDUCE SUM 1 strlen(@n1) AS s", "SORTBY 1 strlen(@n1)",
+        // No two records tie on @n1, so a comparator would never need the
+        // second key; it fails all the same.
+        "SORTBY 4 @n1 ASC strlen(@n1) ASC"}) {
+    // One record too: SORTBY has nothing to compare it with. Twenty is more
+    // than SORTBY's default MAX, which takes its bounded-heap path.
+    for (size_t count : {1, 2, 20}) {
+      VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue({1, 3, 0}));
+      auto records = MakeData(count);
+      auto status = MakeStages(stage)->stages_[0]->Execute(records);
+      EXPECT_EQ(status.code(), absl::StatusCode::kInvalidArgument)
+          << stage << " over " << count;
+      EXPECT_NE(status.message().find("strlen"), absl::string_view::npos)
+          << status;
+
+      VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue({1, 2, 0}));
+      records = MakeData(count);
+      VMSDK_EXPECT_OK(MakeStages(stage)->stages_[0]->Execute(records));
+    }
+  }
+  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue(saved));
+}
+
+// A null (lower() of a number) is a value that orders below every other one:
+// first ASC, last DESC. A missing value goes last either way. Measured on
+// Redis 8 with nulls mixed with strings and with numbers.
+TEST_F(AggregateExecTest, SortOrdersNullsFirstAndMissingLast) {
+  struct Case {
+    std::vector<expr::Value> input;
+    std::vector<std::string> asc, desc;  // sort keys, as printed below
+  };
+  auto name = [](const expr::Value &v) -> std::string {
+    if (v.IsNull()) {
+      return "null";
+    }
+    if (v.IsNil()) {
+      return "missing";
+    }
+    return std::string(*v.AsStringView());
+  };
+  std::vector<Case> cases = {
+      {{expr::Value("b"), expr::Value::Null(), expr::Value("a"),
+        expr::Value::Missing(), expr::Value("c"), expr::Value::Null()},
+       {"null", "null", "a", "b", "c", "missing"},
+       {"c", "b", "a", "null", "null", "missing"}},
+      {{expr::Value(3.0), expr::Value::Null(), expr::Value(1.0),
+        expr::Value::Missing(), expr::Value(2.0)},
+       {"null", "1", "2", "3", "missing"},
+       {"3", "2", "1", "null", "missing"}},
+  };
+  for (auto &c : cases) {
+    for (bool asc : {true, false}) {
+      RecordSet records(nullptr);
+      for (auto &v : c.input) {
+        auto rec = std::make_unique<Record>(2);
+        rec->fields_[0] = v;
+        rec->fields_[1] = expr::Value(0.0);
+        records.emplace_back(std::move(rec));
+      }
+      auto param = MakeStages(asc ? "SORTBY 2 @n1 ASC" : "SORTBY 2 @n1 DESC");
+      VMSDK_EXPECT_OK(param->stages_[0]->Execute(records));
+      std::vector<std::string> got;
+      for (auto &r : records) {
+        got.push_back(name(r->fields_[0]));
+      }
+      EXPECT_EQ(got, asc ? c.asc : c.desc);
+    }
+  }
+}
+
 TEST_F(AggregateExecTest, SortTest) {
   struct Testcase {
     std::string text_;
@@ -308,6 +395,65 @@ TEST_F(AggregateExecTest, SortTest) {
       if (!do_max || tc.ordered) {
         for (auto i = 0; i < order.size(); ++i) {
           EXPECT_EQ(*records[i], *RecordNOfM(order[i], input_count));
+        }
+      }
+    }
+  }
+}
+
+static double NaNValue() { return std::numeric_limits<double>::quiet_NaN(); }
+
+static bool IsNaNValue(const expr::Value &v) {
+  return v.IsDouble() && std::isnan(v.GetDouble());
+}
+
+// Record i holds NaN when i % 3 == 1, else the number (i * 37) % 101.
+static RecordSet MakeDataWithNaNs(size_t m, std::vector<double> &numbers) {
+  RecordSet result(nullptr);
+  numbers.clear();
+  for (size_t i = 0; i < m; ++i) {
+    auto rec = std::make_unique<Record>(2);
+    if (i % 3 == 1) {
+      rec->fields_[0] = expr::Value(NaNValue());
+    } else {
+      const double n = double((i * 37) % 101);
+      rec->fields_[0] = expr::Value(n);
+      numbers.push_back(n);
+    }
+    rec->fields_[1] = expr::Value(double(i));
+    result.emplace_back(std::move(rec));
+  }
+  return result;
+}
+
+// A NaN sort key sorts after every number in both directions.
+TEST_F(AggregateExecTest, SortPutsNaNLast) {
+  for (size_t m : {8, 100}) {
+    for (bool desc : {false, true}) {
+      for (bool use_max : {false, true}) {
+        std::vector<double> numbers;
+        auto records = MakeDataWithNaNs(m, numbers);
+        const size_t nan_count = m - numbers.size();
+        std::string text = absl::StrCat("SORTBY 2 @n1 ", desc ? "DESC" : "ASC");
+        // MAX >= record count takes the stable_sort path, else the heap path.
+        const size_t keep = use_max ? numbers.size() + nan_count / 2 : m;
+        absl::StrAppend(&text, " MAX ", keep);
+        SCOPED_TRACE(absl::StrCat(text, " over ", m, " records"));
+        auto param = MakeStages(text);
+        VMSDK_EXPECT_OK(param->stages_[0]->Execute(records));
+        ASSERT_EQ(records.size(), keep);
+        std::sort(numbers.begin(), numbers.end());
+        if (desc) {
+          std::reverse(numbers.begin(), numbers.end());
+        }
+        for (size_t i = 0; i < records.size(); ++i) {
+          const auto &v = records[i]->fields_[0];
+          if (i < numbers.size()) {
+            ASSERT_FALSE(IsNaNValue(v)) << "position " << i;
+            EXPECT_EQ(v.GetDouble(), numbers[i]) << "position " << i;
+          } else {
+            EXPECT_TRUE(IsNaNValue(v)) << "position " << i;
+          }
         }
       }
     }
@@ -521,12 +667,14 @@ TEST_F(AggregateExecTest, OutputNameReuseCollapsesOntoOneColumn) {
   params->parse_vars_.index_interface_ = &fakeIndex;
 
   EXPECT_EQ(params->AddRecordAttribute("n1", "n1", "n1",
-                                       indexes::IndexerType::kNumeric),
+                                       indexes::IndexerType::kNumeric,
+                                       expr::Expression::Type::kNumber),
             0);
   // Re-using the output name n1 for a different field resolves to the column
   // already emitting that name; no second n1 column is created.
   EXPECT_EQ(params->AddRecordAttribute("n2", "n1", "n1",
-                                       indexes::IndexerType::kNumeric),
+                                       indexes::IndexerType::kNumeric,
+                                       expr::Expression::Type::kNumber),
             0);
   EXPECT_EQ(params->record_info_by_index_.size(), 1);
   ASSERT_TRUE(params->record_indexes_by_alias_.contains("n1"));
@@ -537,7 +685,8 @@ TEST_F(AggregateExecTest, OutputNameReuseCollapsesOntoOneColumn) {
   // record_info_by_index_ -- what records are sized by -- stays the count of
   // columns actually emitted.
   EXPECT_EQ(params->AddRecordAttribute("n1", "n1", "alias_of_n1",
-                                       indexes::IndexerType::kNumeric),
+                                       indexes::IndexerType::kNumeric,
+                                       expr::Expression::Type::kNumber),
             1);
   EXPECT_EQ(params->record_info_by_index_.size(), 2);
   EXPECT_EQ(params->record_info_by_index_[1].identifier_, "n1");
@@ -545,7 +694,8 @@ TEST_F(AggregateExecTest, OutputNameReuseCollapsesOntoOneColumn) {
 
   // Re-adding a pair currently in effect is idempotent -- no new column.
   EXPECT_EQ(params->AddRecordAttribute("n1", "n1", "n1",
-                                       indexes::IndexerType::kNumeric),
+                                       indexes::IndexerType::kNumeric,
+                                       expr::Expression::Type::kNumber),
             0);
   EXPECT_EQ(params->record_info_by_index_.size(), 2);
 }
@@ -630,6 +780,234 @@ TEST_F(AggregateExecTest, ToListReducerTest) {
   }
 }
 
+// Helper: create a record with a specific n1 value and constant n2 group key.
+static std::unique_ptr<Record> RecordWithValue(expr::Value n1, double group) {
+  auto rec = std::make_unique<Record>(2);
+  rec->fields_[0] = std::move(n1);
+  rec->fields_[1] = expr::Value(group);
+  return rec;
+}
+
+// Helper: create records where n1 has duplicate values.
+static RecordSet MakeDuplicateData(size_t distinct, size_t repeats) {
+  RecordSet result(nullptr);
+  for (size_t r = 0; r < repeats; ++r) {
+    for (size_t i = 0; i < distinct; ++i) {
+      result.emplace_back(RecordNOfM(i, 1));
+    }
+  }
+  return result;
+}
+
+TEST_F(AggregateExecTest, CountDistinctishSmallDataset) {
+  auto param = MakeStages("groupby 1 @n2 reduce count_distinctish 1 @n1");
+  auto records = MakeData(4);
+  EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+  EXPECT_EQ(records.size(), 1);
+  auto record = records.pop_front();
+  EXPECT_TRUE(record->fields_.at(2).IsDouble());
+  // The estimate is deterministic; these 4 values set 4 distinct registers.
+  EXPECT_EQ(*(record->fields_.at(2).AsDouble()), 4);
+}
+
+TEST_F(AggregateExecTest, CountDistinctishLargeDataset) {
+  auto param = MakeStages("groupby 1 @n2 reduce count_distinctish 1 @n1");
+  auto records = MakeData(1000);
+  EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+  EXPECT_EQ(records.size(), 1);
+  auto record = records.pop_front();
+  EXPECT_TRUE(record->fields_.at(2).IsDouble());
+  // The estimate is deterministic for the 1000 doubles' bit patterns.
+  EXPECT_EQ(*(record->fields_.at(2).AsDouble()), 999);
+}
+
+TEST_F(AggregateExecTest, CountDistinctishDuplicates) {
+  auto param = MakeStages("groupby 1 @n2 reduce count_distinctish 1 @n1");
+  auto records = MakeDuplicateData(10, 5);
+  EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+  EXPECT_EQ(records.size(), 1);
+  auto record = records.pop_front();
+  EXPECT_TRUE(record->fields_.at(2).IsDouble());
+  // 10 distinct values regardless of duplicates
+  EXPECT_EQ(*(record->fields_.at(2).AsDouble()), 10);
+}
+
+TEST_F(AggregateExecTest, CountDistinctishNilValues) {
+  auto param = MakeStages("groupby 1 @n2 reduce count_distinctish 1 @n1");
+  RecordSet records(nullptr);
+  // 3 real values + 2 nils
+  records.emplace_back(RecordWithValue(expr::Value(1.0), 1));
+  records.emplace_back(RecordWithValue(expr::Value(), 1));
+  records.emplace_back(RecordWithValue(expr::Value(2.0), 1));
+  records.emplace_back(RecordWithValue(expr::Value(), 1));
+  records.emplace_back(RecordWithValue(expr::Value(3.0), 1));
+  EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+  EXPECT_EQ(records.size(), 1);
+  auto record = records.pop_front();
+  EXPECT_TRUE(record->fields_.at(2).IsDouble());
+  // 3 distinct non-nil values
+  EXPECT_EQ(*(record->fields_.at(2).AsDouble()), 3);
+}
+
+TEST_F(AggregateExecTest, CountDistinctishEmptyGroup) {
+  auto param = MakeStages("groupby 1 @n2 reduce count_distinctish 1 @n1");
+  auto records = MakeData(0);
+  EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+  // Empty input produces no groups
+  EXPECT_EQ(records.size(), 0);
+}
+
+TEST_F(AggregateExecTest, CountDistinctishAllNilGroup) {
+  auto param = MakeStages("groupby 1 @n2 reduce count_distinctish 1 @n1");
+  RecordSet records(nullptr);
+  records.emplace_back(RecordWithValue(expr::Value(), 1));
+  records.emplace_back(RecordWithValue(expr::Value(), 1));
+  EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+  EXPECT_EQ(records.size(), 1);
+  auto record = records.pop_front();
+  EXPECT_TRUE(record->fields_.at(2).IsDouble());
+  // All values are nil, so no register is set.
+  EXPECT_EQ(*(record->fields_.at(2).AsDouble()), 0);
+}
+
+TEST_F(AggregateExecTest, CountDistinctishSingleValue) {
+  auto param = MakeStages("groupby 1 @n2 reduce count_distinctish 1 @n1");
+  auto records = MakeData(1);
+  EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+  EXPECT_EQ(records.size(), 1);
+  auto record = records.pop_front();
+  EXPECT_TRUE(record->fields_.at(2).IsDouble());
+  double estimate = *(record->fields_.at(2).AsDouble());
+  EXPECT_EQ(estimate, 1);
+}
+
+// Every group holds one sketch, so its 12 KB dense registers must be
+// allocated only for groups with many distinct values.
+TEST_F(AggregateExecTest, CountDistinctishSmallGroupSize) {
+  EXPECT_LE(sizeof(HyperLogLog), 64);
+}
+
+// Values 0..n-1 set 1023, 1024 and 1025 registers at n = 1055, 1056 and
+// 1058, around the switch from the sparse to the dense representation; at
+// n = 2668 a register lowered by a colliding value would give 2665. The
+// expected values are the dense sketch's estimates.
+TEST_F(AggregateExecTest, CountDistinctishSparseToDense) {
+  auto param = MakeStages("groupby 1 @n2 reduce count_distinctish 1 @n1");
+  for (auto [n, expected] :
+       std::vector<std::pair<size_t, double>>{{1055, 1056},
+                                              {1056, 1057},
+                                              {1058, 1058},
+                                              {2668, 2666},
+                                              {100000, 100079}}) {
+    auto records = MakeData(n);
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    ASSERT_EQ(records.size(), 1);
+    EXPECT_EQ(*records.pop_front()->fields_.at(2).AsDouble(), expected) << n;
+    records = MakeDuplicateData(n, 3);
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    ASSERT_EQ(records.size(), 1);
+    EXPECT_EQ(*records.pop_front()->fields_.at(2).AsDouble(), expected) << n;
+  }
+}
+
+TEST_F(AggregateExecTest, CountDistinctishMultipleReducers) {
+  auto param = MakeStages(
+      "groupby 1 @n2 reduce count_distinctish 1 @n1"
+      " reduce count_distinctish 1 @n2");
+  auto records = MakeData(4);
+  EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+  EXPECT_EQ(records.size(), 1);
+  auto record = records.pop_front();
+  // First reducer: count_distinctish of n1 (4 distinct values: 0,1,2,3)
+  EXPECT_TRUE(record->fields_.at(2).IsDouble());
+  EXPECT_EQ(*(record->fields_.at(2).AsDouble()), 4);
+  // Second reducer: count_distinctish of n2 (1 distinct value: 4)
+  EXPECT_TRUE(record->fields_.at(3).IsDouble());
+  EXPECT_EQ(*(record->fields_.at(3).AsDouble()), 1);
+}
+
+TEST_F(AggregateExecTest, CountDistinctishVsCountDistinct) {
+  auto param_distinctish =
+      MakeStages("groupby 1 @n2 reduce count_distinctish 1 @n1");
+  auto param_distinct = MakeStages("groupby 1 @n2 reduce count_distinct 1 @n1");
+  auto records_ish = MakeData(20);
+  auto records_exact = MakeData(20);
+  EXPECT_TRUE((param_distinctish->stages_[0]->Execute(records_ish)).ok());
+  EXPECT_TRUE((param_distinct->stages_[0]->Execute(records_exact)).ok());
+  EXPECT_EQ(records_ish.size(), 1);
+  EXPECT_EQ(records_exact.size(), 1);
+  auto rec_ish = records_ish.pop_front();
+  auto rec_exact = records_exact.pop_front();
+  double approx = *(rec_ish->fields_.at(2).AsDouble());
+  double exact = *(rec_exact->fields_.at(2).AsDouble());
+  // COUNT_DISTINCT should be exactly 20
+  EXPECT_EQ(exact, 20);
+  EXPECT_EQ(approx, exact);
+}
+
+TEST_F(AggregateExecTest, CountDistinctishArrayValues) {
+  auto param = MakeStages("groupby 1 @n2 reduce count_distinctish 1 @n1");
+  using expr::Value;
+  RecordSet records(nullptr);
+  // Each array counts as one value: [1,2], [2,1], [1,2], "x" are 3 distinct.
+  records.emplace_back(RecordWithValue(Value({Value(1.0), Value(2.0)}), 1));
+  records.emplace_back(RecordWithValue(Value({Value(2.0), Value(1.0)}), 1));
+  records.emplace_back(RecordWithValue(Value({Value(1.0), Value(2.0)}), 1));
+  records.emplace_back(RecordWithValue(Value("x"), 1));
+  EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+  EXPECT_EQ(records.size(), 1);
+  auto record = records.pop_front();
+  EXPECT_TRUE(record->fields_.at(2).IsDouble());
+  EXPECT_EQ(*(record->fields_.at(2).AsDouble()), 3);
+}
+
+// -0.0 and +0.0 are the same double value and must count as one distinct
+// value; two different NaN bit patterns must also collapse to one distinct
+// value (NaN has no canonical textual form, so only the bit-pattern
+// canonicalization makes this deterministic).
+TEST_F(AggregateExecTest, CountDistinctishZeroAndNanCanonicalization) {
+  auto param = MakeStages("groupby 1 @n2 reduce count_distinctish 1 @n1");
+  using expr::Value;
+  RecordSet records(nullptr);
+  records.emplace_back(RecordWithValue(Value(0.0), 1));
+  records.emplace_back(RecordWithValue(Value(-0.0), 1));
+  EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+  EXPECT_EQ(records.size(), 1);
+  EXPECT_EQ(*(records.pop_front()->fields_.at(2).AsDouble()), 1);
+
+  uint64_t nan_bits_a = 0x7FF8000000000001ull;
+  uint64_t nan_bits_b = 0x7FFFFFFFFFFFFFFFull;
+  RecordSet nan_records(nullptr);
+  nan_records.emplace_back(
+      RecordWithValue(Value(std::bit_cast<double>(nan_bits_a)), 1));
+  nan_records.emplace_back(
+      RecordWithValue(Value(std::bit_cast<double>(nan_bits_b)), 1));
+  EXPECT_TRUE((param->stages_[0]->Execute(nan_records)).ok());
+  EXPECT_EQ(nan_records.size(), 1);
+  EXPECT_EQ(*(nan_records.pop_front()->fields_.at(2).AsDouble()), 1);
+}
+
+// Values that render identically as text must not collide: array [1,2] vs
+// string "[1,2]", and bool true vs string "1".
+TEST_F(AggregateExecTest, CountDistinctishMixedTypesDoNotCollide) {
+  auto param = MakeStages("groupby 1 @n2 reduce count_distinctish 1 @n1");
+  using expr::Value;
+  RecordSet array_vs_string(nullptr);
+  array_vs_string.emplace_back(
+      RecordWithValue(Value({Value(1.0), Value(2.0)}), 1));
+  array_vs_string.emplace_back(RecordWithValue(Value("[1,2]"), 1));
+  EXPECT_TRUE((param->stages_[0]->Execute(array_vs_string)).ok());
+  EXPECT_EQ(array_vs_string.size(), 1);
+  EXPECT_EQ(*(array_vs_string.pop_front()->fields_.at(2).AsDouble()), 2);
+
+  RecordSet bool_vs_string(nullptr);
+  bool_vs_string.emplace_back(RecordWithValue(Value(true), 1));
+  bool_vs_string.emplace_back(RecordWithValue(Value("1"), 1));
+  EXPECT_TRUE((param->stages_[0]->Execute(bool_vs_string)).ok());
+  EXPECT_EQ(bool_vs_string.size(), 1);
+  EXPECT_EQ(*(bool_vs_string.pop_front()->fields_.at(2).AsDouble()), 2);
+}
+
 /*
 TEST_F(AggregateExecTest, testHash) {
   GroupKey key1({expr::Value(1.0), expr::Value(2.0)});
@@ -664,12 +1042,15 @@ class CreateRecordsFromNeighborsTest : public ValkeySearchTest {
     params->index_schema = schema;
 
     params->AddRecordAttribute("__key", "__key", "__key",
-                               indexes::IndexerType::kNone);
+                               indexes::IndexerType::kNone,
+                               expr::Expression::Type::kString);
     params->AddRecordAttribute(score_name, score_name, score_name,
-                               indexes::IndexerType::kNone);
+                               indexes::IndexerType::kNone,
+                               expr::Expression::Type::kNumber);
     if (register_vr_column && !vr_name.empty()) {
       params->AddRecordAttribute(vr_name, vr_name, vr_name,
-                                 indexes::IndexerType::kNone);
+                                 indexes::IndexerType::kNone,
+                                 expr::Expression::Type::kNumber);
     }
     params->vr_score_field_name_ = vr_name;
     return params;
@@ -812,9 +1193,11 @@ TEST_F(AggregateExecTest, FirstValueReducerTest) {
       auto params = std::make_unique<AggregateParameters>(0);
       params->parse_vars_.index_interface_ = &fakeIndex;
       params->AddRecordAttribute("n1", "n1", "n1",
-                                 indexes::IndexerType::kNumeric);
+                                 indexes::IndexerType::kNumeric,
+                                 expr::Expression::Type::kNumber);
       params->AddRecordAttribute("n2", "n2", "n2",
-                                 indexes::IndexerType::kNumeric);
+                                 indexes::IndexerType::kNumeric,
+                                 expr::Expression::Type::kNumber);
       auto parser = CreateAggregateParser();
       auto result = parser.Parse(*params, itr);
       EXPECT_FALSE(result.ok()) << tc.text_ << ": expected parse failure";
@@ -1110,7 +1493,7 @@ TEST_F(AggregateExecTest, QuantileAllNilTest) {
 
   // Redisearch answers nan for a group with no numeric value.
   ASSERT_TRUE(record->fields_.at(2).IsDouble());
-  EXPECT_TRUE(expr::IsNan(*record->fields_.at(2).AsDouble()));
+  EXPECT_TRUE(std::isnan(*record->fields_.at(2).AsDouble()));
 }
 
 TEST_F(AggregateExecTest, QuantileDuplicateValuesTest) {
@@ -1193,9 +1576,11 @@ TEST_F(AggregateExecTest, QuantileRangeValidationProperty) {
     auto params = std::make_unique<AggregateParameters>(0);
     params->parse_vars_.index_interface_ = &fakeIndex;
     params->AddRecordAttribute("n1", "n1", "n1",
-                               indexes::IndexerType::kNumeric);
+                               indexes::IndexerType::kNumeric,
+                               expr::Expression::Type::kNumber);
     params->AddRecordAttribute("n2", "n2", "n2",
-                               indexes::IndexerType::kNumeric);
+                               indexes::IndexerType::kNumeric,
+                               expr::Expression::Type::kNumber);
 
     auto parser = CreateAggregateParser();
     auto result = parser.Parse(*params, itr);
@@ -1385,10 +1770,12 @@ TEST_F(AggregateExecTest, ArgumentCountValidationProperty) {
     auto params = std::make_unique<AggregateParameters>(0);
     params->parse_vars_.index_interface_ = &fakeIndex;
     EXPECT_EQ(params->AddRecordAttribute("n1", "n1", "n1",
-                                         indexes::IndexerType::kNumeric),
+                                         indexes::IndexerType::kNumeric,
+                                         expr::Expression::Type::kNumber),
               0);
     EXPECT_EQ(params->AddRecordAttribute("n2", "n2", "n2",
-                                         indexes::IndexerType::kNumeric),
+                                         indexes::IndexerType::kNumeric,
+                                         expr::Expression::Type::kNumber),
               1);
 
     auto parser = CreateAggregateParser();
@@ -1634,9 +2021,9 @@ TEST_F(AggregateExecTest, NumericPrecisionConsistencyProperty) {
 
     // Verify the result is a valid double (not NaN or infinity for normal
     // inputs)
-    EXPECT_FALSE(expr::IsNan(result))
+    EXPECT_FALSE(std::isnan(result))
         << "Iteration " << iteration << ": Result should not be NaN";
-    EXPECT_FALSE(expr::IsInf(result))
+    EXPECT_FALSE(std::isinf(result))
         << "Iteration " << iteration
         << ": Result should not be infinity for normal inputs";
   }
@@ -2282,10 +2669,12 @@ TEST_F(NeighborRecordTest, LoadAllDoesNotOverwriteTheScoreColumn) {
   params.loadall_ = true;
   params.no_content = false;
   ASSERT_EQ(params.AddRecordAttribute("__key", "__key", "__key",
-                                      indexes::IndexerType::kNone),
+                                      indexes::IndexerType::kNone,
+                                      expr::Expression::Type::kString),
             AggregateParameters::kKeyColumn);
   ASSERT_EQ(params.AddRecordAttribute("__score", "__score", "__score",
-                                      indexes::IndexerType::kNone),
+                                      indexes::IndexerType::kNone,
+                                      expr::Expression::Type::kNumber),
             AggregateParameters::kScoreColumn);
 
   std::vector<indexes::Neighbor> neighbors;

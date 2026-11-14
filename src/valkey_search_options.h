@@ -6,6 +6,8 @@
  */
 #pragma once
 
+#include <algorithm>
+
 #include "vmsdk/src/info.h"  // IWYU pragma: keep
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/utils.h"
@@ -186,16 +188,43 @@ config::Number &GetVectorUnshareBatchSize();
 /// See COMPATIBILITY.md for the semantics.
 config::Version &GetEmulateRelease();
 
-/// Return true if search.emulate-release >= version. Use this at sites that
+/// Return true if search.emulate-release >= version, or version is no later
+/// than the ScopedMinimumRelease alive on this thread. Use this at sites that
 /// gate the compatible vs legacy behavior of a fix described in
 /// COMPATIBILITY.md.
 bool EnabledInVersion(vmsdk::ValkeyVersion version);
+
+/// While one is alive on this thread, the code running emulates at least
+/// `minimum`, whatever search.emulate-release says: every fix up to that
+/// release is enabled, and later fixes still follow the setting. A command new
+/// in 1.3.0 (FT.CREATE FILTER, FT.HYBRID) has no older release to emulate, so
+/// it opens one with 1.3.0 around compiling and evaluating its expressions and
+/// around writing its reply. Nested guards keep the highest minimum.
+class ScopedMinimumRelease {
+ public:
+  explicit ScopedMinimumRelease(vmsdk::ValkeyVersion minimum)
+      : saved_(minimum_) {
+    minimum_ = std::max(minimum_, minimum);
+  }
+  ~ScopedMinimumRelease() { minimum_ = saved_; }
+  ScopedMinimumRelease(const ScopedMinimumRelease &) = delete;
+  ScopedMinimumRelease &operator=(const ScopedMinimumRelease &) = delete;
+  static vmsdk::ValkeyVersion Minimum() { return minimum_; }
+
+ private:
+  vmsdk::ValkeyVersion saved_;
+  static thread_local vmsdk::ValkeyVersion minimum_;
+};
 
 /// Convenience overload — the constexpr ValkeyVersion ctor lets the compiler
 /// fold the comparand at every call site.
 inline bool EnabledInVersion(int major, int minor, int patch) {
   return EnabledInVersion(vmsdk::ValkeyVersion(major, minor, patch));
 }
+
+// Set while code that already ran for this command runs again (a re-parse),
+// so its compatibility counters count the command once, not once per run.
+inline thread_local bool compat_counters_suppressed = false;
 
 }  // namespace options
 }  // namespace valkey_search
@@ -207,7 +236,8 @@ inline bool EnabledInVersion(int major, int minor, int patch) {
 //   * emulate-release >= major.minor.patch  -> run `fixed_fn()`
 //   * otherwise                             -> run `old_fn()` and bump the
 //                                              per-site INFO counter named
-//                                              `label`.
+//                                              `label`, unless
+//                                              compat_counters_suppressed.
 //
 // Both callables must be nullary and return the same type (void is allowed).
 // `label` must be a string literal; the INFO field is registered under the
@@ -233,6 +263,8 @@ inline bool EnabledInVersion(int major, int minor, int patch) {
     if (::valkey_search::options::EnabledInVersion(kVsCompatFixVersion)) {    \
       return (fixed_fn)();                                                    \
     }                                                                         \
-    kVsCompatFixCounter.Increment();                                          \
+    if (!::valkey_search::options::compat_counters_suppressed) {              \
+      kVsCompatFixCounter.Increment();                                        \
+    }                                                                         \
     return (old_fn)();                                                        \
   })()

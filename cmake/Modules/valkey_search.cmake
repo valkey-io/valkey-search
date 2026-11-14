@@ -118,7 +118,6 @@ function(valkey_search_target_update_compile_flags TARGET)
     target_compile_options(${TARGET}
                            PRIVATE -ffile-prefix-map=${CMAKE_SOURCE_DIR}=)
   endif()
-  target_compile_options(${TARGET} PRIVATE -ffast-math)
   target_compile_options(${TARGET} PRIVATE -funroll-loops)
   target_compile_options(${TARGET} PRIVATE -ftree-vectorize)
   if(UNIX AND NOT APPLE)

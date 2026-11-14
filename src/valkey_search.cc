@@ -1044,6 +1044,9 @@ void ValkeySearch::Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const {
 // happening. For more details see:
 // https://pubs.opengroup.org/onlinepubs/009695399/functions/pthread_atfork.html
 void ValkeySearch::AtForkPrepare() {
+  // Apply queued multi/exec mutations while the writer pool can still run them,
+  // so the child does not copy an index that is missing them (#1651).
+  SchemaManager::AtFork();
   // Sanity: fork can occur (by example: calling to "popen") before the thread
   // pool is initialized
   if (writer_thread_pool_ == nullptr || reader_thread_pool_ == nullptr ||

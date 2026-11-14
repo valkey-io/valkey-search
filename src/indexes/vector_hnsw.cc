@@ -478,8 +478,9 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
                  : kDefaultMagnitude;
   try {
     CancelCondition cancel_condition(cancellation_token);
-    VectorRecord query_record = VectorRecord::Construct(
-        query, reciprocal_magnitude, GetVectorAllocator());
+    // Query vectors are short-lived; keep them out of the index allocator.
+    VectorRecord query_record =
+        VectorRecord::Construct(query, reciprocal_magnitude, nullptr);
     QueryVector embedding(query_record, query.size(), normalize_,
                           GetVectorDataType());
     auto res = algo_->searchKnn(embedding, count, ef_runtime, filter.get(),
@@ -533,9 +534,10 @@ absl::StatusOr<RangeResult> VectorHNSW<T>::SearchRange(
   // that leave the ball briefly near its boundary are still followed; only keys
   // within the radius are emitted. Distances are in the radius's own space for
   // every metric (squared for L2).
-  QueryVector embedding(VectorRecord::Construct(nq.view, reciprocal_magnitude,
-                                                GetVectorAllocator()),
-                        nq.view.size(), normalize_, GetVectorDataType());
+  // Query vectors are short-lived; keep them out of the index allocator.
+  QueryVector embedding(
+      VectorRecord::Construct(nq.view, reciprocal_magnitude, nullptr),
+      nq.view.size(), normalize_, GetVectorDataType());
   std::vector<std::pair<float, hnswlib::labeltype>> raw_results;
   RangeStopCondition stop_condition(ComputeRangeShell(radius, range.epsilon),
                                     radius, normalize_,

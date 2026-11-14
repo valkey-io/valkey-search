@@ -504,7 +504,8 @@ TEST_F(AggregateTest, ColumnResultTypes) {
       "APPLY @a AS before APPLY lower(@t1) AS a APPLY @a AS after "
       "GROUPBY 2 @b @before REDUCE COUNT 0 AS cnt REDUCE SUM 1 @before AS s "
       "REDUCE TOLIST 1 @b AS tl REDUCE RANDOM_SAMPLE 2 @b 3 AS rs "
-      "REDUCE FIRST_VALUE 1 @b AS fv APPLY @cnt+1 AS c1");
+      "REDUCE FIRST_VALUE 1 @b AS fv REDUCE QUANTILE 2 @before 0.5 AS q "
+      "APPLY @cnt+1 AS c1");
   vmsdk::ArgsIterator itr(argv.data(), argv.size());
   AggregateParameters params(0);
   params.timeout_ms = 0;
@@ -526,6 +527,7 @@ TEST_F(AggregateTest, ColumnResultTypes) {
   EXPECT_EQ(type_of("before"), Type::kNumber);
   EXPECT_EQ(type_of("after"), Type::kString);
   EXPECT_EQ(type_of("cnt"), Type::kNumber);
+  EXPECT_EQ(type_of("q"), Type::kNumber);
   EXPECT_EQ(type_of("s"), Type::kNumber);
   EXPECT_EQ(type_of("tl"), Type::kArray);
   EXPECT_EQ(type_of("rs"), Type::kArray);

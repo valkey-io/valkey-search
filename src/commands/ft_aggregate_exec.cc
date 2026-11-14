@@ -1364,6 +1364,8 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> QuantileReducerParser(
         std::unique_ptr<Attribute>(dynamic_cast<Attribute *>(output.release()));
   }
 
+  parameters.record_info_by_index_[r->output_->record_index_].result_type_ =
+      expr::Expression::Type::kNumber;
   return std::unique_ptr<GroupBy::Reducer>(std::move(r));
 }
 

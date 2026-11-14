@@ -941,6 +941,29 @@ void SchemaManager::OnServerCronCallback(ValkeyModuleCtx *ctx,
       ctx, options::GetBackfillBatchSize().GetValue());
 }
 
+void SchemaManager::AtFork() {
+  // The queue is main-thread state, so a fork from another thread (popen)
+  // skips it; the manager may not exist yet for an early fork.
+  if (!vmsdk::IsMainThread() || *schema_manager_instance == nullptr) {
+    return;
+  }
+  auto &manager = Instance();
+  // Copy the schemas out so ProcessMultiQueue, which waits on the writer pool,
+  // does not run under db_to_index_schemas_mutex_.
+  std::vector<std::shared_ptr<IndexSchema>> schemas;
+  {
+    absl::MutexLock lock(&manager.db_to_index_schemas_mutex_);
+    for (const auto &[db_num, schema_map] : manager.db_to_index_schemas_) {
+      for (const auto &[name, schema] : schema_map) {
+        schemas.push_back(schema);
+      }
+    }
+  }
+  for (const auto &schema : schemas) {
+    schema->ProcessMultiQueue();
+  }
+}
+
 void SchemaManager::OnShutdownCallback(ValkeyModuleCtx *ctx,
                                        [[maybe_unused]] ValkeyModuleEvent eid,
                                        [[maybe_unused]] uint64_t subevent,

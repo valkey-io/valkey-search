@@ -10,6 +10,7 @@
 #include <iterator>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "absl/base/thread_annotations.h"
@@ -173,6 +174,47 @@ TEST_F(MultiExecTest, Basic) {
     EXPECT_THAT(expected_keys, testing::UnorderedElementsAreArray(added_keys));
     index_schema = nullptr;
   }
+}
+
+TEST_F(MultiExecTest, SmallGroupAppliedBeforeFork) {
+  // One key is below the pool size, so no drain is armed and, with no query
+  // on this node, the key would stay queued. A snapshot must not copy the
+  // index in that state, so the pre-fork hook applies the queue.
+  ASSERT_GT(mutations_thread_pool->Size(), 1);
+  EXPECT_CALL(*kMockValkeyModule, GetContextFlags(testing::_))
+      .WillRepeatedly(testing::Return(VALKEYMODULE_CTX_FLAGS_MULTI));
+  EXPECT_CALL(*kMockValkeyModule, EventLoopAddOneShot(testing::_, testing::_))
+      .Times(0);
+  // The key must be applied on a writer thread, i.e. before the pool is
+  // suspended, not inline on this thread afterwards.
+  std::thread::id add_record_thread;
+  EXPECT_CALL(*mock_index, AddRecord(testing::_, testing::_))
+      .WillRepeatedly([this, &add_record_thread](const InternedStringPtr &key,
+                                                 AttributeData &&data) {
+        absl::MutexLock lock(&mutex);
+        add_record_thread = std::this_thread::get_id();
+        added_keys.push_back(std::string(*key));
+        return indexes::RecordResult::kAdded;
+      });
+
+  const std::string key = key_prefix + "0";
+  auto key_valkey_str = vmsdk::MakeUniqueValkeyString(key);
+  index_schema->OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_HASH,
+                                       "event", key_valkey_str.get());
+  WaitWorkerTasksAreCompleted(*mutations_thread_pool);
+  {
+    absl::MutexLock lock(&mutex);
+    EXPECT_TRUE(added_keys.empty());
+  }
+
+  ValkeySearch::Instance().AtForkPrepare();
+  {
+    absl::MutexLock lock(&mutex);
+    EXPECT_THAT(added_keys, testing::ElementsAre(key));
+    EXPECT_NE(add_record_thread, std::this_thread::get_id());
+  }
+  EXPECT_TRUE(mutations_thread_pool->IsSuspended());
+  index_schema = nullptr;
 }
 
 TEST_F(MultiExecTest, TrackMutationOverride) {

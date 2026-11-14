@@ -3,6 +3,7 @@
  * All rights reserved.
  * SPDX-License-Identifier: BSD 3-Clause
  */
+#include <algorithm>
 #include <bit>
 #include <limits>
 
@@ -13,6 +14,7 @@
 
 namespace valkey_search::indexes {
 namespace {
+// Builds portable sparse values without relying on host endianness.
 std::string Encode(std::initializer_list<Sparse::Entry> entries) {
   std::string blob;
   for (const auto &entry : entries) {
@@ -35,12 +37,25 @@ class SparseIndexTest : public vmsdk::ValkeyTest {
     bool IsCancelled() override { return cancelled; }
     void Cancel() override { cancelled = true; }
   };
+  // A deterministic deadline measured in cancellation polls, not wall time.
+  struct Budget : cancel::Base {
+    int remaining;
+    int polls = 0;
+    explicit Budget(int budget) : remaining(budget) {}
+    bool IsCancelled() override {
+      ++polls;
+      return --remaining <= 0;
+    }
+    void Cancel() override { remaining = 0; }
+  };
   cancel::Token token = std::make_shared<Token>();
+  // Inserts an encoded HASH value through the normal ingestion interface.
   absl::StatusOr<RecordResult> Add(absl::string_view key,
                                    absl::string_view blob) {
     return index.AddRecord(StringInternStore::Intern(key),
                            AttributeData(vmsdk::MakeUniqueValkeyString(blob)));
   }
+  // Uses the same cancellable decode and search stages as a sparse request.
   absl::StatusOr<std::vector<Neighbor>> Search(absl::string_view query,
                                                size_t k = 10) {
     auto entries = Sparse::Decode(query, token.get());
@@ -51,6 +66,7 @@ class SparseIndexTest : public vmsdk::ValkeyTest {
   }
 };
 
+// Checks framing, dimension order, finite bits and zero-weight normalization.
 TEST_F(SparseIndexTest, RejectsMalformedValuesIncludingUnderFastMath) {
   EXPECT_FALSE(Sparse::Decode("x").ok());
   EXPECT_FALSE(Sparse::Decode(Encode({{3, 1}, {3, 2}})).ok());
@@ -65,6 +81,7 @@ TEST_F(SparseIndexTest, RejectsMalformedValuesIncludingUnderFastMath) {
   EXPECT_TRUE(Sparse::Decode(Encode({{1, 0}}))->empty());
 }
 
+// Checks signed ranking and ties, then verifies replacement and invalidation.
 TEST_F(SparseIndexTest, SignedDotProductsTiesFilterAndUpdates) {
   ASSERT_EQ(*Add("a", Encode({{1, -2}, {5, 1}})), RecordResult::kAdded);
   ASSERT_EQ(*Add("b", Encode({{1, 2}, {5, -1}})), RecordResult::kAdded);
@@ -104,6 +121,7 @@ TEST_F(SparseIndexTest, SignedDotProductsTiesFilterAndUpdates) {
   EXPECT_EQ(Search(query).status().code(), absl::StatusCode::kDeadlineExceeded);
 }
 
+// Exercises bitmap word boundaries and retains overlapping zero-sum hits.
 TEST_F(SparseIndexTest, DenseBitmapPreservesBoundaryIdsZeroSumsAndTies) {
   for (uint32_t id = 0; id <= 128; ++id) {
     ASSERT_TRUE(Add(std::to_string(id), Encode({{1, 1}, {2, -1}})).ok());
@@ -122,6 +140,7 @@ TEST_F(SparseIndexTest, DenseBitmapPreservesBoundaryIdsZeroSumsAndTies) {
   }
 }
 
+// Excluded overflowing documents do not fail a query; accepted ones do.
 TEST_F(SparseIndexTest, ScoreCutoffPreservesFilteredOverflow) {
   const auto huge = std::numeric_limits<float>::max();
   ASSERT_TRUE(Add("finite", Encode({{1, 1}})).ok());
@@ -136,6 +155,86 @@ TEST_F(SparseIndexTest, ScoreCutoffPreservesFilteredOverflow) {
   EXPECT_FALSE(Search(q, 1).ok());
 }
 
+// A full heap skips worse finite scores before filtering, but still checks
+// equal scores so the lexicographically smaller key can replace the winner.
+TEST_F(SparseIndexTest, ScoreCutoffSkipsFilterButPreservesTies) {
+  for (const auto path : {"candidates", "dense", "hash"}) {
+    SCOPED_TRACE(path);
+    Sparse subject;
+    auto insert = [&](absl::string_view key, uint32_t dimension, float weight) {
+      ASSERT_TRUE(subject
+                      .AddRecord(StringInternStore::Intern(key),
+                                 AttributeData(vmsdk::MakeUniqueValkeyString(
+                                     Encode({{dimension, weight}}))))
+                      .ok());
+    };
+    insert("z", 1, 2);
+    insert("worse", 1, 1);
+    insert("a", 1, 2);
+    const bool hash = absl::string_view(path) == "hash";
+    if (hash) {
+      // More than 16 slots per matched ID forces the flat_hash_map accumulator.
+      for (int i = 0; i < 64; ++i) {
+        insert(std::to_string(i), 9, 1);
+      }
+    }
+    std::vector<InternedStringPtr> candidates{
+        StringInternStore::Intern("z"), StringInternStore::Intern("worse"),
+        StringInternStore::Intern("a")};
+    std::vector<std::string> filtered;
+    float best_seen = 0;
+    auto hits = subject.Search(
+        {{1, 1}}, 1, token,
+        [&](const auto &key) {
+          const float score = key->Str() == "worse" ? 1 : 2;
+          EXPECT_GE(score, best_seen);
+          best_seen = score;
+          filtered.emplace_back(key->Str());
+          return true;
+        },
+        absl::string_view(path) == "candidates" ? &candidates : nullptr);
+    ASSERT_TRUE(hits.ok());
+    ASSERT_EQ(hits->size(), 1);
+    EXPECT_EQ(hits->front().external_id->Str(), "a");
+    EXPECT_EQ(hits->front().distance, -2);
+    if (hash) {
+      // Hash iteration order is unspecified. A worse candidate may reach the
+      // filter only if it precedes both tied winners; both ties must reach it.
+      ASSERT_FALSE(filtered.empty());
+      EXPECT_EQ(filtered.size(), filtered.front() == "worse" ? 3 : 2);
+      EXPECT_EQ(std::count(filtered.begin(), filtered.end(), "a"), 1);
+      EXPECT_EQ(std::count(filtered.begin(), filtered.end(), "z"), 1);
+    } else {
+      EXPECT_EQ(filtered, (std::vector<std::string>{"z", "a"}));
+    }
+  }
+}
+
+// Cancellation during accumulation must never expose partially summed hits.
+TEST_F(SparseIndexTest, CancelsAtSecondPostingBatch) {
+  for (int i = 0; i < 513; ++i) {
+    ASSERT_TRUE(Add(std::to_string(i), Encode({{1, 1}})).ok());
+  }
+  for (const bool partial : {false, true}) {
+    SCOPED_TRACE(partial);
+    auto budget = std::make_shared<Budget>(3);
+    token = budget;
+    int filter_calls = 0;
+    auto hits = index.Search(
+        {{1, 1}}, 1, token,
+        [&](const auto &) {
+          ++filter_calls;
+          return true;
+        },
+        nullptr, partial);
+    EXPECT_EQ(hits.status().code(), absl::StatusCode::kDeadlineExceeded);
+    // One plan poll, then polls before the first and second posting batches.
+    EXPECT_EQ(budget->polls, 3);
+    EXPECT_EQ(filter_calls, 0);
+  }
+}
+
+// Forces sparse scratch after churn and preserves signed zero-sum matches.
 TEST_F(SparseIndexTest, RareDimensionsRetainZeroSumAfterChurn) {
   for (int i = 0; i < 64; ++i) {
     ASSERT_TRUE(Add(std::to_string(i), Encode({{100, 1}})).ok());
@@ -154,6 +253,7 @@ TEST_F(SparseIndexTest, RareDimensionsRetainZeroSumAfterChurn) {
   EXPECT_EQ(hits->front().distance, 0);
 }
 
+// Partial mode retains a finished candidate; strict mode reports the deadline.
 TEST_F(SparseIndexTest, CancellationKeepsOnlyFullyScoredCandidates) {
   const auto key = StringInternStore::Intern("a");
   ASSERT_TRUE(Add("a", Encode({{1, 4}})).ok());
@@ -175,13 +275,8 @@ TEST_F(SparseIndexTest, CancellationKeepsOnlyFullyScoredCandidates) {
   EXPECT_EQ(hits->front().distance, -8);
 }
 
+// Checks bounded cancellation during decode, planning and forward scoring.
 TEST_F(SparseIndexTest, PollsLongDecodesAndEstimatesWithAbsentDimensions) {
-  struct Budget : cancel::Base {
-    int remaining;
-    explicit Budget(int polls) : remaining(polls) {}
-    bool IsCancelled() override { return --remaining <= 0; }
-    void Cancel() override { remaining = 0; }
-  };
   std::string query;
   for (uint32_t i = 0; i < 1024; ++i) {
     query += Encode({{i, 1}});
@@ -210,6 +305,7 @@ TEST_F(SparseIndexTest, PollsLongDecodesAndEstimatesWithAbsentDimensions) {
   EXPECT_FALSE(reached_filter);
 }
 
+// Checks that the traversal estimate follows live posting counts after writes.
 TEST_F(SparseIndexTest, PlanEstimateTracksReplacementAndRemoval) {
   ASSERT_TRUE(Add("a", Encode({{1, 2}, {2, 1}})).ok());
   ASSERT_TRUE(Add("b", Encode({{1, 3}, {2, 1}})).ok());
@@ -236,6 +332,7 @@ TEST_F(SparseIndexTest, PlanEstimateTracksReplacementAndRemoval) {
   EXPECT_FALSE(*index.PreferPrefilter(query, 1));
 }
 
+// Re-scoring rejects lost overlap and unrepresentable FLOAT32 distances.
 TEST_F(SparseIndexTest, RescoringAndOverflow) {
   auto record = Encode({{1, -2}, {3, 4}});
   EXPECT_EQ(*Sparse::RecomputeDistance(record, {{1, 2}, {3, 3}}), -8);
@@ -245,6 +342,7 @@ TEST_F(SparseIndexTest, RescoringAndOverflow) {
   EXPECT_FALSE(Search(huge).ok());
 }
 
+// Checks swap-removal back-references and ID reuse across repeated mutations.
 TEST_F(SparseIndexTest, RemovalRepairReusedIdsAndZeroScoreOverlap) {
   // Multiple shared postings exercise both swap removal and ID reuse.
   ASSERT_TRUE(Add("z", Encode({{1, 3}, {2, -3}, {4, 1}})).ok());

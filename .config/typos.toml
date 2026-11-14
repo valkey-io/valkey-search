@@ -51,3 +51,6 @@ extend-ignore-re = [
     'caf\\xC3\\xA9',
     "eit_.*"
 ]
+
+[type.cpp.extend-identifiers]
+countr_zero = "countr_zero" # C++20 bit operation

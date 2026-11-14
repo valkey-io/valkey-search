@@ -17,12 +17,14 @@
 
 namespace valkey_search::indexes {
 namespace {
+// Reads a wire-format word without alignment or host-endianness assumptions.
 uint32_t ReadLE32(const char *p) {
   const auto *b = reinterpret_cast<const unsigned char *>(p);
   return uint32_t(b[0]) | (uint32_t(b[1]) << 8) | (uint32_t(b[2]) << 16) |
          (uint32_t(b[3]) << 24);
 }
 
+// Converts a dot product to the ranking distance, rejecting FLOAT32 overflow.
 absl::StatusOr<float> Distance(double dot) {
   if (dot > std::numeric_limits<float>::max() ||
       dot < -std::numeric_limits<float>::max()) {
@@ -57,6 +59,8 @@ absl::StatusOr<std::optional<double>> Dot(
 }
 }  // namespace
 
+// Charges one arm against the command budget before copying or decoding it.
+// Rejects truncated pairs in constant time; Decode validates their contents.
 absl::Status Sparse::CheckQuerySize(absl::string_view blob, size_t &remaining) {
   if (blob.size() > remaining) {
     return absl::InvalidArgumentError(
@@ -69,6 +73,8 @@ absl::Status Sparse::CheckQuerySize(absl::string_view blob, size_t &remaining) {
   return absl::OkStatus();
 }
 
+// Decodes strictly increasing dimensions, omits zero weights, and polls the
+// deadline every 256 pairs. Bit checks reject NaN/Inf even under fast-math.
 absl::StatusOr<std::vector<Sparse::Entry>> Sparse::Decode(
     absl::string_view blob, cancel::Base *cancel) {
   if (blob.size() % 8 != 0) {
@@ -102,6 +108,7 @@ absl::StatusOr<std::vector<Sparse::Entry>> Sparse::Decode(
   return entries;
 }
 
+// Re-scores a current HASH value after mutation; no overlap removes the hit.
 absl::StatusOr<float> Sparse::RecomputeDistance(
     absl::string_view record, const std::vector<Entry> &query) {
   VMSDK_ASSIGN_OR_RETURN(auto a, Decode(record));
@@ -112,6 +119,8 @@ absl::StatusOr<float> Sparse::RecomputeDistance(
   return Distance(*score);
 }
 
+// Allocates or reuses a compact document ID and indexes its nonzero weights.
+// Empty or malformed values remain untracked for later ingestion updates.
 absl::StatusOr<RecordResult> Sparse::AddRecord(const InternedStringPtr &key,
                                                AttributeData &&data) {
   auto entries = Decode(data.GetStringView());
@@ -141,6 +150,7 @@ absl::StatusOr<RecordResult> Sparse::AddRecord(const InternedStringPtr &key,
   return RecordResult::kAdded;
 }
 
+// Appends each weight and saves its posting offset for subsequent removal.
 void Sparse::AddPostings(DocId id) {
   posting_count_ += records_[id].entries.size();
   for (auto &entry : records_[id].entries) {
@@ -150,6 +160,7 @@ void Sparse::AddPostings(DocId id) {
   }
 }
 
+// Swap-removes postings and repairs moved records' offsets before ID reuse.
 void Sparse::ErasePostings(DocId id) {
   posting_count_ -= records_[id].entries.size();
   for (const auto &entry : records_[id].entries) {
@@ -173,6 +184,7 @@ void Sparse::ErasePostings(DocId id) {
   }
 }
 
+// Replaces every old posting; invalid or empty replacements become untracked.
 absl::StatusOr<RecordResult> Sparse::ModifyRecord(const InternedStringPtr &key,
                                                   AttributeData &&data) {
   auto entries = Decode(data.GetStringView());
@@ -193,6 +205,7 @@ absl::StatusOr<RecordResult> Sparse::ModifyRecord(const InternedStringPtr &key,
   return RecordResult::kAdded;
 }
 
+// Drops postings and recycles the ID; field removal keeps the key untracked.
 absl::StatusOr<bool> Sparse::RemoveRecord(const InternedStringPtr &key,
                                           DeletionType deletion_type) {
   absl::MutexLock lock(&mutex_);
@@ -210,6 +223,8 @@ absl::StatusOr<bool> Sparse::RemoveRecord(const InternedStringPtr &key,
   return true;
 }
 
+// Compares forward-vector work with posting-list work under the schema reader
+// phase. Cancellation also covers dimensions absent from the index.
 absl::StatusOr<bool> Sparse::PreferPrefilter(
     const std::vector<Entry> &entries, size_t candidate_count,
     cancel::Base *cancel) const ABSL_NO_THREAD_SAFETY_ANALYSIS {
@@ -229,6 +244,10 @@ absl::StatusOr<bool> Sparse::PreferPrefilter(
   return double(candidate_count) * (mean_nnz + entries.size()) <= posting_work;
 }
 
+// Returns exact top-K by FLOAT32 negative dot product, then ascending key.
+// Enumerates supplied candidates or accumulates postings with bounded scratch;
+// partial timeouts may retain only fully scored and ranked hits. The caller
+// holds the schema reader phase, so index mutations cannot run concurrently.
 absl::StatusOr<std::vector<Neighbor>> Sparse::Search(
     const std::vector<Entry> &entries, size_t count,
     cancel::Token &cancellation,
@@ -411,6 +430,7 @@ void Sparse::UnTrack(const InternedStringPtr &key) {
   absl::MutexLock lock(&mutex_);
   untracked_.erase(key);
 }
+// Visits indexed keys under the mutation mutex; stops on the first error.
 absl::Status Sparse::ForEachTrackedKey(
     absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn) const {
   absl::MutexLock lock(&mutex_);
@@ -419,6 +439,7 @@ absl::Status Sparse::ForEachTrackedKey(
   }
   return absl::OkStatus();
 }
+// Visits missing or invalid keys under the mutation mutex; stops on error.
 absl::Status Sparse::ForEachUnTrackedKey(
     absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn) const {
   absl::MutexLock lock(&mutex_);

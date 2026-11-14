@@ -641,6 +641,8 @@ CalcBestMatchingInkeys(const SearchParameters &parameters,
   return results;
 }
 
+// Adds requested attributes available in the indexes; leaves sparse blobs and
+// other uncached content for the main-thread HASH/JSON fetch.
 absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
     absl::StatusOr<std::vector<indexes::Neighbor>> results,
     const SearchParameters &parameters) {
@@ -1445,6 +1447,9 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
   return borrowed;
 }
 
+// Dispatches dense KNN or exact sparse retrieval under the schema reader phase.
+// Sparse planning chooses filtered candidates or postings without changing
+// the ranking, filter semantics, or request cancellation policy.
 absl::StatusOr<std::vector<indexes::Neighbor>> DoSearchVector(
     const SearchParameters &parameters, indexes::IndexBase *index,
     vmsdk::ReaderMutexLock &lock) {
@@ -1727,6 +1732,8 @@ SerializationRange SearchResult::GetSerializationRange(
   return {start_index, end_index};
 }
 
+// Executes one shard search, validating sparse input before empty-result
+// shortcuts and reusing the decoded query for planning and scoring.
 absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
   std::shared_ptr<indexes::IndexBase> vector_index;
   if (parameters.IsVectorQuery()) {
@@ -2261,6 +2268,8 @@ absl::Status query::SearchParameters::PreParseQueryString() {
   return absl::OkStatus();
 }
 
+// Resolves query parameters and validates index-specific options. Sparse
+// payloads are size-checked before copying; cancellable decoding runs later.
 absl::Status PostParseVectorParameters(query::SearchParameters &parameters) {
   VMSDK_ASSIGN_OR_RETURN(
       auto k_string,

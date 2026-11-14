@@ -187,6 +187,7 @@ class TestManagedSparse(ValkeySearchTestCaseBase):
                 assert float(row[b"sparse_score"]) == sparse_scores[row[b"__key"]]
 
     def test_sparse_arm_options(self):
+        """Reject duplicate score aliases and explicit sparse traversal policies."""
         c = self.server.get_new_client()
         self.setup_index(c)
         arm = ["VSIM", "@s", "$q", "KNN", 2, "K", 1]
@@ -201,6 +202,7 @@ class TestManagedSparse(ValkeySearchTestCaseBase):
 
     @pytest.mark.parametrize("n", [3, 5, 6])
     def test_multiple_sparse_arms(self, n):
+        """RRF retains every supported arm and rejects a sixth arm."""
         c = self.server.get_new_client()
         self.setup_index(c)
         for i in range(n):
@@ -250,6 +252,7 @@ class TestManagedSparseCluster(ValkeySearchClusterTestCase):
         assert all(node.dbsize() > 0 for node in nodes)
         query = sparse([(1, 1), (7, 2)])
         def correct():
+            """Compare each coordinator with the current filtered dot-product oracle."""
             expected = sorted(((key, -(w + 2)) for key, w in weights.items()),
                               key=lambda hit: (hit[1], hit[0]))[:10]
             return all(search(node, query, 10, "@region:{1}") == expected for node in nodes)

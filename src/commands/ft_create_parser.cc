@@ -611,6 +611,8 @@ absl::Status ValidateAttributeAlias(absl::string_view alias) {
   return absl::OkStatus();
 }
 
+// Parses one schema field and its options, rejecting combinations unsupported
+// by its type (including JSON or SORTABLE sparse fields).
 absl::StatusOr<data_model::Attribute *> ParseAttributeArgs(
     vmsdk::ArgsIterator &itr, absl::string_view attribute_identifier,
     data_model::IndexSchema &index_schema_proto,

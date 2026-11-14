@@ -49,6 +49,7 @@ inline bool IsVectorIndex(IndexerType type) {
          type == IndexerType::kFlat;
 }
 
+// Checks the normalized schema field type; dense algorithms use kVector.
 inline void AssertValidIndexerType(IndexerType type) {
   CHECK(type == IndexerType::kTag || type == IndexerType::kText ||
         type == IndexerType::kNone || type == IndexerType::kNumeric ||

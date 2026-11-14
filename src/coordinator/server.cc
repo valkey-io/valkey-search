@@ -153,6 +153,8 @@ class RemoteResponderSearch : public query::SearchParameters {
   }
 
  private:
+  // Reports shard results, preserving validation failures even when partial
+  // results are allowed; malformed sparse input cannot become empty success.
   void QueryCompleteImpl() {
     if (!search_result.status.ok() && (!enable_partial_results || multi_arm ||
                                        sparse_query_validation_failed)) {

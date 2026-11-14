@@ -30,6 +30,7 @@ class Sparse : public IndexBase {
 
   // Shared by every sparse arm of one command, including repeated PARAMS.
   static constexpr size_t kMaxQueryBytes = 64 * 1024;
+  // Checks pair framing and charges the payload against the remaining budget.
   static absl::Status CheckQuerySize(absl::string_view blob, size_t &remaining);
 
   // Rejects non-finite values, duplicate/out-of-order IDs and truncated pairs.

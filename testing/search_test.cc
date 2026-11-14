@@ -546,6 +546,7 @@ std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
   return index_schema;
 }
 
+// An empty key restriction cannot bypass a sparse request's expired deadline.
 TEST_F(ValkeySearchTest, CancelledSparseDecodePrecedesEmptyInkeys) {
   auto schema = CreateIndexSchema(kIndexSchemaName).value();
   VMSDK_EXPECT_OK(

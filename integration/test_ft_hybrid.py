@@ -905,6 +905,7 @@ class TestFtHybridBase(ValkeySearchTestCaseBase):
     # ---------------------------------------------------------------------
 
     def test_single_vsim_arm_rejected(self):
+        """Fusion requires another retrieval arm beside a lone VSIM clause."""
         client = self.server.get_new_client()
         self.setup_index(client)
         with pytest.raises(ResponseError, match=r"FT.HYBRID requires at least 2 arms"):
@@ -915,6 +916,7 @@ class TestFtHybridBase(ValkeySearchTestCaseBase):
             )
 
     def test_single_search_arm_rejected(self):
+        """Fusion rejects a lone SEARCH clause before executing it."""
         client = self.server.get_new_client()
         self.setup_index(client)
         with pytest.raises(ResponseError, match=r"FT.HYBRID requires at least 2 arms"):

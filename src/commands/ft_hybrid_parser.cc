@@ -786,6 +786,9 @@ absl::Status ParseCombineClause(MultiSearchParameters &env,
 
 }  // namespace
 
+// Parses retrieval arms and fusion/projection options into a shared request.
+// RRF accepts two to five arms; sparse inputs share one command byte budget
+// and are decoded later by each executing shard.
 absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
                                   vmsdk::ArgsIterator &itr) {
   bool vsim_uses_range = false;

@@ -200,6 +200,8 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> CreateVectorIndexForType(
 
 }  // namespace
 
+// Constructs the schema field's index, restoring persisted dense data when
+// present. Sparse postings are rebuilt from HASH values by schema backfill.
 absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
     ValkeyModuleCtx *ctx, IndexSchema *index_schema,
     const data_model::Attribute &attribute,
@@ -2113,6 +2115,8 @@ bool IndexSchema::PerformKeyContentionCheck(
   return false;
 }
 
+// Waits for changed neighbors to leave the mutation queue, applying them inline
+// when workers are suspended. Returns false if the deadline expires first.
 bool IndexSchema::WaitForContendedKeys(
     const std::vector<indexes::Neighbor> &neighbors, absl::Time deadline) {
   const auto &dbkeyinfo_map = db_key_info_.Get();
@@ -2146,10 +2150,13 @@ bool IndexSchema::WaitForContendedKeys(
   }
   absl::MutexLock lock(&mutated_records_mutex_);
   // A record is erased only after its mutation is applied.
-  auto applied = [&]() ABSL_NO_THREAD_SAFETY_ANALYSIS {
-    return std::ranges::none_of(contended, [&](const Key &key) {
-      return tracked_mutated_records_.contains(key);
-    });
+  auto applied = [&]() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutated_records_mutex_) {
+    for (const auto &key : contended) {
+      if (tracked_mutated_records_.contains(key)) {
+        return false;
+      }
+    }
+    return true;
   };
   if (applied()) {
     return true;

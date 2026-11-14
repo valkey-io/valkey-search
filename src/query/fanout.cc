@@ -54,6 +54,7 @@ namespace valkey_search::query::fanout {
 CONTROLLED_BOOLEAN(ForceInvalidSlotFingerprint, false);
 
 struct NeighborComparator {
+  // Selects the shard-local tie order so coordinator top-K agrees with it.
   explicit NeighborComparator(const SearchParameters &params) {
     if (params.index_schema && params.IsVectorQuery()) {
       auto index = params.index_schema->GetIndex(params.attribute_alias);
@@ -63,6 +64,7 @@ struct NeighborComparator {
   }
 
   bool sparse = false;
+  // Keeps the worst retained hit at the root of the merge heap.
   bool operator()(const indexes::Neighbor &a,
                   const indexes::Neighbor &b) const {
     // Max heap on distance, to pop off the furthest vector during KNN
@@ -202,6 +204,7 @@ struct SearchPartitionResultsTracker {
     accumulated_total_count.fetch_add(count, std::memory_order_relaxed);
   }
 
+  // Merges one hit, using sparse key ties when the global heap is full.
   void AddResult(indexes::Neighbor &neighbor)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex) {
     // For non-vector queries, we can add the result directly.

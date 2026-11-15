@@ -50,11 +50,22 @@ class Allocator {
 
 class FixedSizeAllocator;
 
+// Frees chunk data the way it was allocated.
+struct ChunkDataDeleter {
+  bool huge_pages;
+  size_t bytes;
+  void operator()(char *data) const;
+};
+
 struct AllocatorChunk {
   AllocatorChunk(Allocator *allocator, size_t size);
   ~AllocatorChunk();
+  // Chunk data comes from huge pages when available (see
+  // vmsdk::UseHugePageAllocation), decided per chunk at creation.
+  const bool huge_pages;
   size_t entries_in_chunk;
-  std::unique_ptr<char[]> data;
+  size_t data_bytes;
+  std::unique_ptr<char[], ChunkDataDeleter> data;
   std::stack<char *> free_list;
   Allocator *allocator;
   // Intrusive linked list.

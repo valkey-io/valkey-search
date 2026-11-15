@@ -699,8 +699,10 @@ inline int TestValkeyModule_HashGetExistsDefaultImpl(ValkeyModuleKey *key,
                                                      const char *field,
                                                      int *exists_out,
                                                      void *terminating_null) {
-  CHECK(false);
-  return VALKEYMODULE_ERR;
+  if (exists_out) {
+    *exists_out = 1;
+  }
+  return VALKEYMODULE_OK;
 }
 
 inline int TestValkeyModule_HashGetDefaultImpl(ValkeyModuleKey *key, int flags,
@@ -756,7 +758,13 @@ inline int TestValkeyModule_HashGet(ValkeyModuleKey *key, int flags, ...) {
   va_list args;
   va_start(args, flags);
 
-  const char *field = va_arg(args, const char *);
+  const char *field = nullptr;
+  if (flags & VALKEYMODULE_HASH_CFIELDS) {
+    field = va_arg(args, const char *);
+  } else {
+    ValkeyModuleString *field_str = va_arg(args, ValkeyModuleString *);
+    field = field_str ? field_str->data.c_str() : nullptr;
+  }
   int result;
   if (flags & VALKEYMODULE_HASH_EXISTS) {
     int *exists_out = va_arg(args, int *);
@@ -1266,6 +1274,22 @@ inline size_t TestValkeyModule_MallocUsableSize(void *ptr) {
   return kMockValkeyModule->MallocUsableSize(ptr);
 }
 
+// Like the allocator entry points above, these bypass kMockValkeyModule: a
+// huge table can outlive the test that grew it (StringInternStore is a
+// process-lifetime singleton), and would report its release through a deleted
+// mock. Tests read the running total, as a difference from a baseline.
+inline std::atomic<int64_t> test_external_memory_bytes{0};
+
+inline int TestValkeyModule_IncrExternalMemory(size_t bytes) {
+  test_external_memory_bytes.fetch_add(bytes, std::memory_order_relaxed);
+  return VALKEYMODULE_OK;
+}
+
+inline int TestValkeyModule_DecrExternalMemory(size_t bytes) {
+  test_external_memory_bytes.fetch_sub(bytes, std::memory_order_relaxed);
+  return VALKEYMODULE_OK;
+}
+
 inline size_t TestValkeyModule_GetClusterSize() {
   return kMockValkeyModule->GetClusterSize();
 }
@@ -1713,6 +1737,8 @@ inline void TestValkeyModule_Init() {
   ValkeyModule_Realloc = &TestValkeyModule_Realloc;
   ValkeyModule_Calloc = &TestValkeyModule_Calloc;
   ValkeyModule_MallocUsableSize = &TestValkeyModule_MallocUsableSize;
+  ValkeyModule_IncrExternalMemory = &TestValkeyModule_IncrExternalMemory;
+  ValkeyModule_DecrExternalMemory = &TestValkeyModule_DecrExternalMemory;
   ValkeyModule_GetClusterSize = &TestValkeyModule_GetClusterSize;
   ValkeyModule_ClusterKeySlot = &TestValkeyModule_ClusterKeySlot;
   ValkeyModule_GetSharedAPI = &TestValkeyModule_GetSharedAPI;

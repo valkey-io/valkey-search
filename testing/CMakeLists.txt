@@ -117,7 +117,8 @@ set(INDEXES_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/text_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/unicode_normalizer_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/space_distance_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/vector_normalize_test.cc)
+    ${CMAKE_CURRENT_LIST_DIR}/vector_normalize_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/chunked_array_test.cc)
 
 add_executable(indexes_test ${INDEXES_TEST_SOURCES})
 target_include_directories(indexes_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})

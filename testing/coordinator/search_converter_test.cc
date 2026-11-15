@@ -264,6 +264,27 @@ TEST_F(SearchConverterTest, ForceContentProcessingRoundTrips) {
   }
 }
 
+// An older coordinator leaves the field unset.
+TEST_F(SearchConverterTest, SortByLookupKeyFlagRoundTrips) {
+  UnitTestSearchParameters parameters;
+  parameters.index_schema_name = "index_schema_name";
+  parameters.score_as = vmsdk::MakeUniqueValkeyString("__score");
+  auto request = ParametersToGRPCSearchRequest(parameters);
+  ASSERT_NE(request, nullptr);
+  EXPECT_TRUE(request->accepts_sortby_lookup_key());
+
+  UnitTestSearchParameters decoded;
+  VMSDK_EXPECT_OK(
+      GRPCSearchRequestToParameters(*request, /*context=*/nullptr, &decoded));
+  EXPECT_TRUE(decoded.sortby_by_lookup_key);
+
+  request->clear_accepts_sortby_lookup_key();
+  UnitTestSearchParameters from_old_coordinator;
+  VMSDK_EXPECT_OK(GRPCSearchRequestToParameters(*request, /*context=*/nullptr,
+                                                &from_old_coordinator));
+  EXPECT_FALSE(from_old_coordinator.sortby_by_lookup_key);
+}
+
 TEST_F(SearchConverterTest, EfRuntimePresenceRoundTrips) {
   UnitTestSearchParameters omitted;
   omitted.index_schema_name = "index_schema_name";

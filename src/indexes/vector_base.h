@@ -40,6 +40,7 @@
 #include "src/utils/cancel.h"
 #include "src/utils/string_interning.h"
 #include "third_party/hnswlib/hnswlib.h"
+#include "vmsdk/src/huge/flat_hash_map.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -441,8 +442,10 @@ struct TrackedKeyMetadata {
 // A vector index's key maps, saved ahead of the index content so the index can
 // check each node's key against the keyspace while the node is being loaded.
 struct TrackedKeys {
-  InternedStringHashMap<TrackedKeyMetadata> metadata_by_key;
-  absl::flat_hash_map<uint64_t, InternedStringPtr> key_by_internal_id;
+  vmsdk::HugeFlatHashMap<InternedStringPtr, TrackedKeyMetadata,
+                         InternedStringPtrHash, InternedStringPtrEq>
+      metadata_by_key;
+  vmsdk::HugeFlatHashMap<uint64_t, InternedStringPtr> key_by_internal_id;
 };
 
 class VectorBase : public IndexBase {
@@ -781,11 +784,12 @@ class VectorBase : public IndexBase {
   // races can occur during the search phase.
   absl::StatusOr<uint64_t> GetInternalIdDuringSearch(
       const InternedStringPtr &key) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
-  absl::flat_hash_map<uint64_t, InternedStringPtr> key_by_internal_id_
+  vmsdk::HugeFlatHashMap<uint64_t, InternedStringPtr> key_by_internal_id_
       ABSL_GUARDED_BY(key_to_metadata_mutex_);
 
-  InternedStringHashMap<TrackedKeyMetadata> tracked_metadata_by_key_
-      ABSL_GUARDED_BY(key_to_metadata_mutex_);
+  vmsdk::HugeFlatHashMap<InternedStringPtr, TrackedKeyMetadata,
+                         InternedStringPtrHash, InternedStringPtrEq>
+      tracked_metadata_by_key_ ABSL_GUARDED_BY(key_to_metadata_mutex_);
   uint64_t inc_id_ ABSL_GUARDED_BY(key_to_metadata_mutex_){0};
   mutable absl::Mutex key_to_metadata_mutex_;
   absl::StatusOr<std::pair<float, hnswlib::labeltype>>
@@ -801,7 +805,7 @@ class PrefilterEvaluator : public query::Evaluator {
   PrefilterEvaluator(query::QueryContext &query_ctx,
                      QueryOperations query_operations,
                      const IndexSchema &index_schema,
-                     bool source_resolves_text = true);
+                     bool source_resolves_text);
   bool Evaluate(const query::Predicate &predicate,
                 const InternedStringPtr &key);
   // Like Evaluate(), but returns the full EvaluationResult so that callers
@@ -813,7 +817,7 @@ class PrefilterEvaluator : public query::Evaluator {
     CHECK(key_);
     return *key_;
   }
-  bool IsPrefilterEvaluator() const override { return source_resolves_text_; }
+  bool SourceResolvesText() const override { return source_resolves_text_; }
 
  private:
   query::EvaluationResult EvaluateTags(

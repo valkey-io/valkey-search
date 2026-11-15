@@ -8,7 +8,6 @@
 #include "src/utils/string_interning.h"
 
 #include <cstring>
-#include <utility>
 
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
@@ -194,9 +193,9 @@ bool StringInternStore::Release(InternedString* str) {
   auto it = str_to_interned_.find(*ptr_ptr);
   CHECK(it != str_to_interned_.end()) << "Bad Map State";
   CHECK(str->RefCount() == 0);
-  str_to_interned_.erase(
-      it);  // Note this will also call the DecrementRefCount, but
-            // since refcount is already zero, it will be a no-op.
+  // Note this will also call the DecrementRefCount, but since refcount is
+  // already zero, it will be a no-op.
+  str_to_interned_.erase_and_migrate(it);
   return true;
 }
 
@@ -227,7 +226,9 @@ InternedStringPtr StringInternStore::InternImpl(absl::string_view str,
   InternedStringPtr* ptr_ptr = MakeShadowInternPtrPtr(&fake, storage);
 
   absl::MutexLock lock(&mutex_);
-  auto it = str_to_interned_.find(*ptr_ptr);
+  // Hash the string once, for both the lookup and the insert.
+  auto key = str_to_interned_.Prehash(*ptr_ptr);
+  auto it = str_to_interned_.find(key);
   if (it != str_to_interned_.end()) {
     return *it;  // will bump the refcount automatically.
   }
@@ -235,8 +236,18 @@ InternedStringPtr StringInternStore::InternImpl(absl::string_view str,
   // Create a new interned string. Without bumping the refcount....
   //
   InternedString* new_ptr = InternedString::Constructor(str, allocator);
-  str_to_interned_.insert(std::move(InternedStringPtr(new_ptr)));
+  str_to_interned_.insert(key, InternedStringPtr(new_ptr));
   return {new_ptr};
+}
+
+void StringInternStore::MigrateSome(size_t n) {
+  if (!NeedsMigration()) {
+    return;
+  }
+  auto& store = Instance();
+  IsolatedMemoryScope scope{memory_pool_};
+  absl::MutexLock lock(&store.mutex_);
+  store.str_to_interned_.MigrateSome(n);
 }
 
 int64_t StringInternStore::GetMemoryUsage() { return memory_pool_.GetUsage(); }

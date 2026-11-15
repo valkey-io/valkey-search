@@ -41,6 +41,7 @@
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
 #include "src/vector_registry.h"
+#include "vmsdk/src/huge/flat_hash_map.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -524,6 +525,31 @@ inline void SetDebugMode(bool enabled) {
     TestValkeyModule_FreeString(nullptr, arg);
   }
 }
+
+// While alive, every HugeFlatHashMap/Set migration batch is 1, so hash-table
+// backgrounds linger for tests of the server cron drain. Restores the defaults
+// and turns debug mode off when destroyed.
+class MinimalHugeMapMigration {
+ public:
+  MinimalHugeMapMigration() {
+    SetDebugMode(true);
+    for (auto *config : Configs()) {
+      VMSDK_EXPECT_OK(config->SetValue(1));
+    }
+  }
+  ~MinimalHugeMapMigration() {
+    for (auto *config : Configs()) {
+      VMSDK_EXPECT_OK(config->SetValue(config->GetDefaultValue()));
+    }
+    SetDebugMode(false);
+  }
+
+ private:
+  static std::vector<vmsdk::config::Number *> Configs() {
+    return {&vmsdk::GetHugeFlatHashMapMigrateBatch(),
+            &vmsdk::GetHugeFlatHashMapCronMigrateBatch()};
+  }
+};
 
 absl::StatusOr<std::shared_ptr<MockIndexSchema>> CreateIndexSchema(
     std::string index_schema_key, ValkeyModuleCtx *fake_ctx = nullptr,

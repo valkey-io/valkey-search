@@ -49,8 +49,14 @@ def run_pausepoint_reset(type, node0, node1):
             # reset consistency check pausepoint second
             reset_pausepoint_result = node0.execute_command("FT._DEBUG PAUSEPOINT RESET fanout_remote_pausepoint")
         elif type == 1:
+            retry_count_before = node0.info("SEARCH")["search_info_fanout_retry_count"]
             # reset consistency check pausepoint first
             reset_pausepoint_result = node0.execute_command("FT._DEBUG PAUSEPOINT RESET fanout_remote_pausepoint")
+            # keep node1 stale until the consistency check has demonstrably retried
+            waiters.wait_for_true(
+                lambda: node0.info("SEARCH")["search_info_fanout_retry_count"] - retry_count_before
+                    > RETRY_MIN_THRESHOLD
+            )
             # reset handle cluster message pausepoint second
             reset_pause_handle_message_result = node1.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET PauseHandleClusterMessage no")
         else:

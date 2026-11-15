@@ -35,3 +35,24 @@ License: ICU License
 License URL: https://spdx.org/licenses/ICU.html
 License File: third_party/icu/LICENSE
 Details: Provides Unicode normalization and case folding for international text processing.
+
+Package: Unicode CLDR (Punctuation Exemplars)
+License: Unicode License V3
+License URL: https://www.unicode.org/license.txt
+Source URL: https://www.unicode.org/cldr/charts/46/by_type/core_data.alphabetic_information.punctuation.html
+Details: Per-language default punctuation character sets for full-text search tokenization.
+  Languages: French, German, Spanish, Italian, Portuguese, Russian, Swedish,
+  Turkish, Dutch, Indonesian, Arabic.
+
+The following third-party data is embedded in source files outside of third_party/:
+
+Package: Apache Lucene (Stop Word Lists)
+License: Apache License 2.0
+License URL: https://www.apache.org/licenses/LICENSE-2.0
+Source URL: https://github.com/apache/lucene
+Details: Per-language default stop word lists for full-text search. Snowball language
+  stop words sourced from lucene/analysis/common/src/resources/org/apache/lucene/analysis/snowball/.
+  Arabic stop words from lucene/analysis/common/src/resources/org/apache/lucene/analysis/ar/.
+  Turkish stop words from lucene/analysis/common/src/resources/org/apache/lucene/analysis/tr/.
+  Languages: English, French, German, Spanish, Italian, Portuguese, Russian, Swedish,
+  Turkish, Dutch, Indonesian, Arabic.

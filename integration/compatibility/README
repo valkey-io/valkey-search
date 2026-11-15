@@ -11,6 +11,7 @@ generators come and go. Today that list is:
     generate_expr.py    -> expr-answers.pickle.gz
     generate_sortkey.py -> sortkey-answers.pickle.gz
     generate_filter.py  -> filter-answers.pickle.gz
+    generate_scoring.py -> scoring-answers.pickle.gz
     generate_hybrid.py  -> hybrid-answers.pickle.gz
 
 Or, to regenerate just one, cd to this directory and run pytest on it -- but
@@ -20,9 +21,15 @@ complete file with a short one.
 
 Both forms require Docker. The generators spin up redis:latest to
 capture reference answers, in a container named Generate-search-NNNN on a port
-docker assigns, so concurrent runs on one machine do not collide. A generator
-that fails part way leaves its answer file untouched rather than replacing it
-with a short one.
+docker assigns, so concurrent runs on one machine do not collide. The server
+runs with --search-workers 0 so every write is search-visible before the next
+command is answered; there are no sleeps between loading data and querying
+it. See "Search visibility after writes" in the Redis docs:
+
+    https://redis.io/docs/latest/develop/ai/redisvl/concepts/search-and-indexing/#search-visibility-after-writes
+
+A generator that fails part way leaves its answer file untouched rather than
+replacing it with a short one.
 
 Each pickle stores a SHA256 of every .py file in this directory. The
 compatibility integration test (integration/compatibility_test.py) verifies

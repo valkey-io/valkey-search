@@ -14,11 +14,15 @@ GENERATORS = [
     {"generator": "generate.py",         "answers": "aggregate-answers.pickle.gz",    "cluster": True},
     {"generator": "generate_search.py",  "answers": "search-answers.pickle.gz",       "cluster": True},
     {"generator": "generate_text.py",    "answers": "text-search-answers.pickle.gz",  "cluster": False},
+    {"generator": "generate_text.py",    "answers": "text-search-multilang-answers.pickle.gz", "cluster": False},
     {"generator": "generate_array.py",   "answers": "array-input-answers.pickle.gz",  "cluster": False},
     {"generator": "generate_expr.py",    "answers": "expr-answers.pickle.gz",         "cluster": False},
     {"generator": "generate_sortkey.py", "answers": "sortkey-answers.pickle.gz",      "cluster": False},
     {"generator": "generate_filter.py",  "answers": "filter-answers.pickle.gz",       "cluster": False},
     {"generator": "generate_return.py",  "answers": "return-answers.pickle.gz",       "cluster": False},
+    {"generator": "generate_scoring.py", "answers": "scoring-answers.pickle.gz",      "cluster": False},
+    # Captured from a Redis cluster, so replayed against a cluster only.
+    {"generator": "generate_scoring_cluster.py", "answers": "scoring-cluster-answers.pickle.gz", "cluster": True, "standalone": False},
     # "cluster": False for the reason generate_text.py is -- text scores are
     # computed from shard-local corpus statistics, so these standalone-captured
     # answers cannot match a cluster replay. See unsupported_tests.md 5.9. The
@@ -26,6 +30,9 @@ GENERATORS = [
     # distributed text scoring lands.
     {"generator": "generate_hybrid.py",  "answers": "hybrid-answers.pickle.gz",       "cluster": False},
 ]
+
+# De-duplicated generator files for regenerate.sh (each file is run once)
+GENERATOR_FILES_UNIQUE = sorted(set(g["generator"] for g in GENERATORS))
 
 
 def compute_sources_hash():

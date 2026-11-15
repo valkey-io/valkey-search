@@ -26,6 +26,7 @@
 #include "absl/synchronization/mutex.h"
 #include "gtest/gtest_prod.h"
 #include "src/utils/allocator.h"
+#include "vmsdk/src/huge/flat_hash_map.h"
 #include "vmsdk/src/memory_tracker.h"
 
 namespace valkey_search {
@@ -989,6 +990,33 @@ static_assert(alignof(InternedStringPtr) == alignof(uintptr_t),
               "BagOfInternedStringPtrs assumes InternedStringPtr aligns to a "
               "machine word");
 
+// Read-only view of a BagOfInternedStringPtrs whose storage lives elsewhere
+// (a rax slot). Borrowed, not owned, so valid only while the owner is not
+// mutated.
+class BorrowedBagOfInternedStringPtrs {
+ public:
+  explicit BorrowedBagOfInternedStringPtrs(uintptr_t storage)
+      : storage_(storage) {}
+
+  // Adopt to read, then Release so the live storage stays owned by the rax
+  // slot.
+  bool contains(const BorrowedInternedStringPtr &key) const {
+    auto bag = BagOfInternedStringPtrs::Adopt(storage_);
+    const bool found = bag.contains(key);
+    (void)bag.Release();
+    return found;
+  }
+  size_t size() const {
+    auto bag = BagOfInternedStringPtrs::Adopt(storage_);
+    const size_t count = bag.size();
+    (void)bag.Release();
+    return count;
+  }
+
+ private:
+  uintptr_t storage_;
+};
+
 class StringInternStore {
  public:
   friend class InternedString;
@@ -1007,6 +1035,14 @@ class StringInternStore {
     absl::MutexLock lock(&mutex_);
     return str_to_interned_.size();
   }
+
+  // Advisory HugeFlatHashSet migration (see vmsdk/src/huge/flat_hash_map.h).
+  // NeedsMigration() is lock-free; MigrateSome() takes the store's mutex only
+  // when there is something to migrate.
+  static bool NeedsMigration() ABSL_NO_THREAD_SAFETY_ANALYSIS {
+    return Instance().str_to_interned_.NeedsMigration();
+  }
+  static void MigrateSome(size_t n);
 
   struct Stats {
     struct BucketStats {
@@ -1040,8 +1076,8 @@ class StringInternStore {
       return lhs->Str() == rhs->Str();
     }
   };
-  absl::flat_hash_set<InternedStringPtr, InternedStringPtrFullHash,
-                      InternedStringPtrFullEqual>
+  vmsdk::HugeFlatHashSet<InternedStringPtr, InternedStringPtrFullHash,
+                         InternedStringPtrFullEqual>
       str_to_interned_ ABSL_GUARDED_BY(mutex_);
   mutable absl::Mutex mutex_;
 

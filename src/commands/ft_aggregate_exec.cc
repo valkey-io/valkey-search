@@ -7,25 +7,32 @@
 #include "src/commands/ft_aggregate_exec.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <queue>
 #include <random>
+#include <type_traits>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/ascii.h"
+#include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_format.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/strip.h"
 #include "absl/time/clock.h"
+#include "absl/types/span.h"
 #include "src/attribute_data_type.h"
 #include "src/commands/ft_aggregate_parser.h"
 #include "src/cursor.h"
+#include "src/expr/value.h"
 #include "src/indexes/index_base.h"
 #include "src/query/response_generator.h"
+#include "src/utils/hyperloglog_counter.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/info.h"
@@ -184,6 +191,10 @@ absl::Status Apply::Execute(RecordSet &records) const {
     }
     auto r = records.pop_front();
     auto value = expr_->Evaluate(ctx, *r);
+    // Redisearch fails the whole query on an evaluation error.
+    if (value.IsError()) {
+      return absl::InvalidArgumentError(value.GetNil().GetReason());
+    }
     if (value.IsMissing() && ApplyDropsMissingField()) {
       continue;
     }
@@ -206,6 +217,9 @@ absl::Status Filter::Execute(RecordSet &records) const {
     }
     auto r = records.pop_front();
     auto result = expr_->Evaluate(ctx, *r);
+    if (result.IsError()) {
+      return absl::InvalidArgumentError(result.GetNil().GetReason());
+    }
     if (result.IsTrue()) {
       filtered.push_back(std::move(r));
     }
@@ -215,13 +229,42 @@ absl::Status Filter::Execute(RecordSet &records) const {
   return absl::OkStatus();
 }
 
+static bool IsNaNValue(const expr::Value &v) {
+  return v.IsDouble() && std::isnan(v.GetDouble());
+}
+
+// A record with its sort keys, evaluated once before sorting. Every key of
+// every record is evaluated, so whether a key's evaluation error fails the
+// query does not depend on which records happen to tie on an earlier key.
+template <typename T>
+struct KeyedRecord {
+  T record;
+  ArgVector keys;
+};
+
+// Evaluates every sort key of `record`. An evaluation error fails the query,
+// as in APPLY and FILTER.
+static absl::StatusOr<ArgVector> EvaluateSortKeys(
+    const absl::InlinedVector<SortBy::SortKey, 4> &sortkeys,
+    const Record &record) {
+  ArgVector keys;
+  for (auto &sk : sortkeys) {
+    keys.emplace_back(sk.expr_->Evaluate(ctx, record));
+    if (keys.back().IsError()) {
+      return absl::InvalidArgumentError(keys.back().GetNil().GetReason());
+    }
+  }
+  return keys;
+}
+
 template <typename T>
 struct SortFunctor {
   const absl::InlinedVector<SortBy::SortKey, 4> *sortkeys_;
-  bool operator()(const T &l, const T &r) const {
-    for (auto &sk : *sortkeys_) {
-      auto lvalue = sk.expr_->Evaluate(ctx, *l);
-      auto rvalue = sk.expr_->Evaluate(ctx, *r);
+  bool operator()(const KeyedRecord<T> &l, const KeyedRecord<T> &r) const {
+    for (size_t i = 0; i < sortkeys_->size(); ++i) {
+      const auto &sk = (*sortkeys_)[i];
+      const auto &lvalue = l.keys[i];
+      const auto &rvalue = r.keys[i];
       // A record that has no value for this key sorts after one that does,
       // ascending and descending alike, which is what Redisearch does.
       //
@@ -231,8 +274,12 @@ struct SortFunctor {
       // interleaved with the sorted ones. Answering the direction here rather
       // than through the switch below is deliberate -- "missing goes last" is
       // not a smaller-or-larger claim, so DESC must not flip it.
-      const bool l_missing = lvalue.IsNil();
-      const bool r_missing = rvalue.IsNil();
+      //
+      // A null -- lower() of a number -- is a value, not a missing one: it
+      // orders below every other value, first ASC and last DESC, as in
+      // Redisearch.
+      const bool l_missing = lvalue.IsNil() && !lvalue.IsNull();
+      const bool r_missing = rvalue.IsNil() && !rvalue.IsNull();
       if (l_missing != r_missing) {
         return r_missing;
       }
@@ -240,7 +287,18 @@ struct SortFunctor {
         // Both missing: undecided on this key, try the next one.
         continue;
       }
-      auto cmp = expr::Compare(lvalue, rvalue);
+      // NaN sorts last in both directions. A tie with every value would not
+      // be a strict weak ordering.
+      const bool l_nan = IsNaNValue(lvalue);
+      const bool r_nan = IsNaNValue(rvalue);
+      if (l_nan != r_nan) {
+        return r_nan;
+      }
+      if (l_nan) {
+        continue;
+      }
+      auto cmp = expr::CompareNulls(lvalue, rvalue)
+                     .value_or(expr::Compare(lvalue, rvalue));
       switch (cmp) {
         case expr::Ordering::kEQUAL:
         case expr::Ordering::kUNORDERED:
@@ -262,17 +320,28 @@ absl::Status SortBy::Execute(RecordSet &records) const {
   if (records.size() > max_) {
     // Sadly std::priority_queue can't operate on unique_ptr's. so we need an
     // extra copy
+    using Keyed = KeyedRecord<Record *>;
     SortFunctor<Record *> sorter{&sortkeys_};
-    std::priority_queue<Record *, std::vector<Record *>, SortFunctor<Record *>>
-        heap(sorter);
+    std::priority_queue<Keyed, std::vector<Keyed>, SortFunctor<Record *>> heap(
+        sorter);
     absl::Status status = absl::OkStatus();
     size_t polled = 0;
+    // Evaluates the front record's keys and pushes it onto the heap. On an
+    // error the record stays in `records`, where the caller discards it.
+    auto push_front = [&]() {
+      auto keys = EvaluateSortKeys(sortkeys_, *records.front());
+      if (!keys.ok()) {
+        status = keys.status();
+        return;
+      }
+      heap.push(Keyed{records.pop_front().release(), *std::move(keys)});
+    };
     for (auto i = 0; i < max_ && status.ok(); ++i) {
       if (++polled % kCancellationPollInterval == 0) {
         status = CheckCancelled(records);
       }
       if (status.ok()) {
-        heap.push(records.pop_front().release());
+        push_front();
       }
     }
     while (status.ok() && !records.empty()) {
@@ -282,16 +351,19 @@ absl::Status SortBy::Execute(RecordSet &records) const {
           break;
         }
       }
-      heap.push(records.pop_front().release());
-      auto top = RecordPtr(heap.top());  // no leak....
+      push_front();
+      if (!status.ok()) {
+        break;
+      }
+      auto top = RecordPtr(heap.top().record);  // no leak....
       heap.pop();
     }
-    // Drained even when cancelled: the heap holds raw pointers this function
-    // owns, so leaving early without handing them back would leak them. On the
-    // cancelled path the record set is left in whatever order the partial fill
-    // produced, which is fine -- the caller discards it with the error.
+    // Drained even when cancelled or failed: the heap holds raw pointers this
+    // function owns, so leaving early without handing them back would leak
+    // them. On that path the record set is left in whatever order the partial
+    // fill produced, which is fine -- the caller discards it with the error.
     while (!heap.empty()) {
-      records.emplace_front(RecordPtr(heap.top()));
+      records.emplace_front(RecordPtr(heap.top().record));
       heap.pop();
     }
     return status;
@@ -302,9 +374,23 @@ absl::Status SortBy::Execute(RecordSet &records) const {
   // during the sort is not seen until it finishes. It is bounded by SORTBY's
   // MAX (this branch only runs when the input is already no larger than it).
   VMSDK_RETURN_IF_ERROR(CheckCancelled(records));
-  SortFunctor<RecordPtr> sorter{&sortkeys_};
-  std::stable_sort(records.begin(), records.end(), sorter);
-  return CheckCancelled(records);
+  std::vector<KeyedRecord<RecordPtr>> keyed;
+  keyed.reserve(records.size());
+  for (const auto &record : records) {
+    VMSDK_ASSIGN_OR_RETURN(auto keys, EvaluateSortKeys(sortkeys_, *record));
+    keyed.push_back({nullptr, std::move(keys)});
+  }
+  // Moved only once every key is evaluated, so an error leaves `records` whole.
+  for (size_t i = 0; i < keyed.size(); ++i) {
+    keyed[i].record = std::move(records[i]);
+  }
+  std::stable_sort(keyed.begin(), keyed.end(),
+                   SortFunctor<RecordPtr>{&sortkeys_});
+  for (size_t i = 0; i < keyed.size(); ++i) {
+    records[i] = std::move(keyed[i].record);
+  }
+  VMSDK_RETURN_IF_ERROR(CheckCancelled(records));
+  return absl::OkStatus();
 }
 
 // Redisearch treats an array group key as a multi-value field: the record joins
@@ -388,6 +474,10 @@ absl::Status GroupBy::Execute(RecordSet &records) const {
       ArgVector args;
       for (auto &nargs : reducer->args_) {
         args.emplace_back(nargs->Evaluate(ctx, *record));
+        // An evaluation error fails the query, as in APPLY and FILTER.
+        if (args.back().IsError()) {
+          return absl::InvalidArgumentError(args.back().GetNil().GetReason());
+        }
       }
       args_by_reducer.emplace_back(std::move(args));
     }
@@ -745,6 +835,29 @@ class ToList : public GroupBy::ReducerInstance {
   }
 };
 
+// Default REDUCE alias when no AS is given; shared so the compatibility
+// counter registers once. See COMPATIBILITY.md.
+static std::string DefaultReducerAlias(
+    absl::string_view reducer_name,
+    absl::Span<const absl::string_view> arg_texts) {
+  return VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 3, 0, "aggregate_reducer_default_alias",
+      [&] {
+        auto name = absl::StrCat(
+            "__generated_alias", reducer_name,
+            absl::StrJoin(arg_texts, ",",
+                          [](std::string *out, absl::string_view arg) {
+                            absl::StrAppend(out, absl::StripPrefix(arg, "@"));
+                          }));
+        absl::AsciiStrToLower(&name);
+        return name;
+      },
+      [&] {
+        return absl::StrCat(reducer_name, "(", absl::StrJoin(arg_texts, ","),
+                            ")");
+      });
+}
+
 struct RandomSampleReducer : GroupBy::Reducer {
   size_t sample_size_ = 0;
   std::unique_ptr<GroupBy::ReducerInstance> MakeInstance() override {
@@ -807,35 +920,220 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> RandomSampleReducerParser(
     r->output_ =
         std::unique_ptr<Attribute>(dynamic_cast<Attribute *>(output.release()));
   } else {
-    // Name of a REDUCE with no AS clause. New release 1.3.0 builds it as
-    // "__generated_alias" + reducer + comma-joined args with the leading '@'
-    // stripped, lowercasing the whole thing; the legacy form is
-    // "REDUCER(args)". See COMPATIBILITY.md.
-    const std::vector<absl::string_view> alias_args{field_text, size_text};
-    std::string default_name = VALKEY_SEARCH_COMPATIBILITY_FIX(
-        1, 3, 0, "aggregate_reducer_default_alias",
-        [&] {
-          auto name = absl::StrCat(
-              "__generated_alias", r->name_,
-              absl::StrJoin(alias_args, ",",
-                            [](std::string *out, absl::string_view arg) {
-                              absl::StrAppend(out, absl::StripPrefix(arg, "@"));
-                            }));
-          absl::AsciiStrToLower(&name);
-          return name;
-        },
-        [&] {
-          return absl::StrCat(r->name_, "(", absl::StrJoin(alias_args, ","),
-                              ")");
-        });
+    const std::array<absl::string_view, 2> alias_args{field_text, size_text};
+    std::string default_name = DefaultReducerAlias(r->name_, alias_args);
     VMSDK_ASSIGN_OR_RETURN(auto output,
                            parameters.MakeReference(default_name, true));
     r->output_ =
         std::unique_ptr<Attribute>(dynamic_cast<Attribute *>(output.release()));
   }
 
+  parameters.record_info_by_index_[r->output_->record_index_].result_type_ =
+      expr::Expression::Type::kArray;
   return std::unique_ptr<GroupBy::Reducer>(std::move(r));
 }
+
+class Quantile : public GroupBy::ReducerInstance {
+  struct Sample {
+    double value;
+    size_t g;      // Number of ranks this sample represents
+    double delta;  // Uncertainty between ranks
+
+    Sample(double v, size_t g_val, double d) : value(v), g(g_val), delta(d) {}
+  };
+
+  static constexpr size_t kDefaultBufferSize = 500;
+
+  mutable std::vector<double> buffer_;
+  mutable std::vector<Sample> samples_;
+  size_t n_{0};  // Total number of values inserted
+  double quantile_{0.0};
+
+  // Borrowed from the owning QuantileReducer, lifetime guaranteed because
+  // ReducerInstances are created and destroyed within GroupBy::Execute while
+  // the Reducer outlives that scope.
+  QuantileStats *stats_{nullptr};
+
+ public:
+  Quantile(double quantile, QuantileStats *stats)
+      : quantile_(quantile), stats_(stats) {}
+
+ private:
+  // Calculate maximum allowed error for a given rank
+  double GetMaxVal(double rank) const { return kQuantileEpsilon * 2.0 * rank; }
+
+  // Flush buffer: sort and merge into samples
+  // Walk the existing sample list forward while merging
+  // sorted buffer values in order.
+  void Flush() const {
+    if (buffer_.empty()) return;
+
+    std::sort(buffer_.begin(), buffer_.end());
+
+    if (samples_.empty()) {
+      // First flush: create samples from buffer
+      for (double val : buffer_) {
+        samples_.emplace_back(val, 1, 0);
+      }
+      stats_->flush_initial_count++;
+    } else {
+      // Merge sorted buffer into existing samples
+      std::vector<Sample> merged;
+      size_t buf_idx = 0;
+      size_t samp_idx = 0;
+      double r = 0;
+
+      // Main merge: both sequences have elements
+      while (buf_idx < buffer_.size() && samp_idx < samples_.size()) {
+        if (buffer_[buf_idx] < samples_[samp_idx].value) {
+          double max_val = GetMaxVal(r);
+          // -1 below rank 50, as in RediSearch's QS_Flush; Compress and Query
+          // depend on it, so it must stay signed to match Redis.
+          double delta = std::floor(max_val) - 1;
+          merged.emplace_back(buffer_[buf_idx++], 1, delta);
+        } else {
+          // Keep existing sample, advance rank
+          r += samples_[samp_idx].g;
+          merged.push_back(samples_[samp_idx++]);
+        }
+      }
+      // Residual buffer values
+      while (buf_idx < buffer_.size()) {
+        merged.emplace_back(buffer_[buf_idx++], 1, 0);
+      }
+      // Residual samples
+      while (samp_idx < samples_.size()) {
+        r += samples_[samp_idx].g;
+        merged.push_back(samples_[samp_idx++]);
+      }
+
+      samples_ = std::move(merged);
+      stats_->flush_merge_count++;
+    }
+
+    buffer_.clear();
+  }
+
+  // Compress samples to maintain space bounds.
+  // Walks backward from the second-to-last sample so that merges
+  // propagate toward the tail where error bounds are largest.
+  // parent_idx tracks the nearest live (non-merged) sample to the right of
+  // the current position, preventing merged (g==0) zombie samples from being
+  // used as merge targets and silently absorbing subsequent merges.
+  void Compress() const {
+    if (samples_.size() < 2) return;
+
+    // Compute rank of the last sample (n - 1 - last.g)
+    double r =
+        static_cast<double>(n_) - 1.0 - static_cast<double>(samples_.back().g);
+
+    // Walk backward from second-to-last to first, always merging into the
+    // nearest live parent to the right.
+    size_t parent_idx = samples_.size() - 1;
+    for (int i = static_cast<int>(samples_.size()) - 2; i >= 0; --i) {
+      Sample &curr = samples_[i];
+      Sample &parent = samples_[parent_idx];
+      double g_curr = curr.g;
+
+      if (curr.g + parent.g + parent.delta <=
+          static_cast<size_t>(GetMaxVal(r))) {
+        // Merge curr into parent; parent_idx stays — keep accumulating into
+        // the same live sample.
+        parent.g += curr.g;
+        curr.g = 0;
+      } else {
+        // curr survives; it becomes the new live parent for i-1.
+        parent_idx = static_cast<size_t>(i);
+      }
+      r -= g_curr;
+    }
+
+    // Remove merged samples (g == 0)
+    size_t before = samples_.size();
+    samples_.erase(std::remove_if(samples_.begin(), samples_.end(),
+                                  [](const Sample &s) { return s.g == 0; }),
+                   samples_.end());
+    stats_->samples_merged += before - samples_.size();
+    stats_->compress_count++;
+  }
+
+  // Query for quantile value
+  double Query(double q) const {
+    Flush();
+
+    if (samples_.empty()) {
+      return std::numeric_limits<double>::quiet_NaN();
+    }
+
+    // Calculate target rank
+    double t = std::ceil(q * n_);
+    double max_val = GetMaxVal(t);
+    t += std::floor(max_val / 2.0);
+
+    // Walk forward: find the first sample whose cumulative rank
+    // plus uncertainty reaches the target.
+    double rank = 0;
+    size_t result_idx = 0;
+
+    for (size_t i = 1; i < samples_.size(); ++i) {
+      if (rank + samples_[i].g + samples_[i].delta >= t) {
+        break;
+      }
+      rank += samples_[i].g;
+      result_idx = i;
+    }
+
+    return samples_[result_idx].value;
+  }
+
+  // Try to insert a single value. Returns true if it was numeric.
+  bool InsertValue(const expr::Value &val) {
+    if (val.IsNil()) return false;
+
+    auto d = val.AsDouble();
+    if (!d) return false;
+    if (std::isnan(*d)) return false;
+
+    buffer_.push_back(*d);
+    n_++;
+    stats_->insert_count++;
+    if (buffer_.size() >= kDefaultBufferSize) {
+      Flush();
+      Compress();
+    }
+    return true;
+  }
+
+  void ProcessRecord(const ArgVector &values) override {
+    // Redisearch spreads an array across the sample, one level deep: a nested
+    // array is not a number and contributes nothing.
+    if (values[0].IsArray()) {
+      for (const auto &element : *values[0].GetArray()) {
+        InsertValue(element);
+      }
+      return;
+    }
+    InsertValue(values[0]);
+  }
+
+  expr::Value GetResult() const override {
+    // Query answers nan when nothing was inserted, as Redisearch does. Not
+    // gated like SUM and AVG: no earlier release had QUANTILE.
+    return expr::Value(Query(quantile_));
+  }
+};
+
+class CountDistinctish : public GroupBy::ReducerInstance {
+  HyperLogLog hll_;
+  void ProcessRecord(const ArgVector &values) override {
+    if (!values[0].IsNil()) {
+      hll_.Add(values[0]);
+    }
+  }
+  expr::Value GetResult() const override {
+    return expr::Value(static_cast<double>(hll_.Estimate()));
+  }
+};
 
 template <typename T>
 struct BasicReducer : GroupBy::Reducer {
@@ -858,7 +1156,7 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> BasicReducerParser(
     return absl::OutOfRangeError(absl::StrCat("incorrect number of arguments (",
                                               cnt, ") to reducer ", name));
   }
-  std::vector<std::string> arg_texts;
+  std::vector<absl::string_view> arg_texts;
   for (int i = 0; i < cnt; ++i) {
     VMSDK_ASSIGN_OR_RETURN(auto arg, itr.PopNext(),
                            _ << "Missing Reducer argument " << i);
@@ -877,32 +1175,16 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> BasicReducerParser(
     r->output_ =
         std::unique_ptr<Attribute>(dynamic_cast<Attribute *>(output.release()));
   } else {
-    // Name of a REDUCE with no AS clause. New release 1.3.0 builds it as
-    // "__generated_alias" + reducer + comma-joined args with the leading '@'
-    // stripped, lowercasing the whole thing; the legacy form is
-    // "REDUCER(args)". See COMPATIBILITY.md.
-    std::string default_name = VALKEY_SEARCH_COMPATIBILITY_FIX(
-        1, 3, 0, "aggregate_reducer_default_alias",
-        [&] {
-          auto name = absl::StrCat(
-              "__generated_alias", r->name_,
-              absl::StrJoin(arg_texts, ",",
-                            [](std::string *out, absl::string_view arg) {
-                              absl::StrAppend(out, absl::StripPrefix(arg, "@"));
-                            }));
-          absl::AsciiStrToLower(&name);
-          return name;
-        },
-        [&] {
-          return absl::StrCat(r->name_, "(", absl::StrJoin(arg_texts, ","),
-                              ")");
-        });
+    std::string default_name = DefaultReducerAlias(r->name_, arg_texts);
     VMSDK_ASSIGN_OR_RETURN(auto output,
                            parameters.MakeReference(default_name, true));
     r->output_ =
         std::unique_ptr<Attribute>(dynamic_cast<Attribute *>(output.release()));
   }
 
+  parameters.record_info_by_index_[r->output_->record_index_].result_type_ =
+      std::is_same_v<T, ToList> ? expr::Expression::Type::kArray
+                                : expr::Expression::Type::kNumber;
   return std::unique_ptr<GroupBy::Reducer>(std::move(r));
 }
 
@@ -1003,6 +1285,87 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> FirstValueReducerParser(
         std::unique_ptr<Attribute>(dynamic_cast<Attribute *>(output.release()));
   }
 
+  parameters.record_info_by_index_[r->output_->record_index_].result_type_ =
+      r->args_[0]->GetResultType();
+  return std::unique_ptr<GroupBy::Reducer>(std::move(r));
+}
+
+struct QuantileReducer : GroupBy::Reducer {
+  double quantile_{0.0};
+  // Raw source text of the quantile argument, printed verbatim by DumpArgs.
+  std::string quantile_text_;
+  QuantileStats stats_;  // Outlives all ReducerInstances created below.
+
+  std::unique_ptr<GroupBy::ReducerInstance> MakeInstance() override {
+    return std::make_unique<Quantile>(quantile_, &stats_);
+  }
+
+  void DumpArgs(std::ostream &os) const override {
+    Reducer::DumpArgs(os);
+    os << ',' << quantile_text_;
+  }
+};
+
+// Custom parser for QUANTILE.
+// Syntax: QUANTILE <nargs> <field> <quantile_value>
+// The quantile value must be a numeric literal in [0.0, 1.0].
+absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> QuantileReducerParser(
+    std::string_view name, AggregateParameters &parameters,
+    vmsdk::ArgsIterator &itr) {
+  auto r = std::make_unique<QuantileReducer>();
+  r->name_ = name;
+
+  uint32_t cnt{0};
+  VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, cnt));
+  if (cnt != 2) {
+    return absl::OutOfRangeError(absl::StrFormat(
+        "incorrect number of arguments (%d) to reducer %s", cnt, name));
+  }
+
+  // arg 0: the field to compute quantile over.
+  VMSDK_ASSIGN_OR_RETURN(auto field_tok, itr.PopNext(),
+                         _ << "Missing Reducer argument 0");
+  VMSDK_ASSIGN_OR_RETURN(
+      auto field_expr,
+      expr::Expression::Compile(parameters, vmsdk::ToStringView(field_tok)),
+      _ << " in QUANTILE reducer");
+  r->args_.push_back(std::move(field_expr));
+
+  // arg 1: quantile value — must be a numeric literal in [0.0, 1.0].
+  VMSDK_ASSIGN_OR_RETURN(auto quantile_tok, itr.PopNext(),
+                         _ << "Missing quantile value argument");
+  double quantile_val;
+  if (!absl::SimpleAtod(vmsdk::ToStringView(quantile_tok), &quantile_val)) {
+    return absl::InvalidArgumentError(
+        "QUANTILE: quantile value must be a numeric literal");
+  }
+  if (std::isnan(quantile_val) || std::isinf(quantile_val) ||
+      quantile_val < 0.0 || quantile_val > 1.0) {
+    return absl::InvalidArgumentError(
+        "QUANTILE: quantile value must be between 0.0 and 1.0");
+  }
+  r->quantile_ = quantile_val;
+  r->quantile_text_ = std::string(vmsdk::ToStringView(quantile_tok));
+
+  if (itr.PopIfNextIgnoreCase(valkey_search::aggregate::kAsParam)) {
+    VMSDK_ASSIGN_OR_RETURN(auto alias, itr.PopNext(),
+                           _ << "Missing Reducer alias");
+    VMSDK_ASSIGN_OR_RETURN(auto output, parameters.MakeReference(
+                                            vmsdk::ToStringView(alias), true));
+    r->output_ =
+        std::unique_ptr<Attribute>(dynamic_cast<Attribute *>(output.release()));
+  } else {
+    const std::array<absl::string_view, 2> arg_texts{
+        vmsdk::ToStringView(field_tok), vmsdk::ToStringView(quantile_tok)};
+    std::string default_name = DefaultReducerAlias(r->name_, arg_texts);
+    VMSDK_ASSIGN_OR_RETURN(auto output,
+                           parameters.MakeReference(default_name, true));
+    r->output_ =
+        std::unique_ptr<Attribute>(dynamic_cast<Attribute *>(output.release()));
+  }
+
+  parameters.record_info_by_index_[r->output_->record_index_].result_type_ =
+      expr::Expression::Type::kNumber;
   return std::unique_ptr<GroupBy::Reducer>(std::move(r));
 }
 
@@ -1010,9 +1373,11 @@ absl::flat_hash_map<std::string, GroupBy::ReducerInfo> GroupBy::reducerTable{
     {"AVG", &BasicReducerParser<Avg, 1, 1>},
     {"COUNT", &BasicReducerParser<Count, 0, 0>},
     {"COUNT_DISTINCT", &BasicReducerParser<CountDistinct, 1, 1>},
+    {"COUNT_DISTINCTISH", &BasicReducerParser<CountDistinctish, 1, 1>},
     {"FIRST_VALUE", &FirstValueReducerParser},
     {"MIN", &BasicReducerParser<Min, 1, 1>},
     {"MAX", &BasicReducerParser<Max, 1, 1>},
+    {"QUANTILE", &QuantileReducerParser},
     {"RANDOM_SAMPLE", &RandomSampleReducerParser},
     {"STDDEV", &BasicReducerParser<Stddev, 1, 1>},
     {"SUM", &BasicReducerParser<Sum, 1, 1>},
@@ -1181,8 +1546,26 @@ absl::Status CreateRecordsFromNeighbors(
       rec->fields_.at(key_index) = expr::Value(n.external_id->Str());
     }
 
-    if (parameters.IsVectorQuery() || parameters.addscores_) {
+    // A vector query's score column is its KNN distance alias. For a hybrid
+    // `text=>[KNN]` query Neighbor.score holds the text relevance instead.
+    if (parameters.IsVectorQuery()) {
+      rec->fields_.at(scores_index) = expr::Value(n.distance);
+    } else if (parameters.addscores_) {
       rec->fields_.at(scores_index) = expr::Value(n.score);
+    }
+
+    // Write the single VR distance into its registered record attribute slot.
+    // In the single-VR model the matched distance is carried in
+    // Neighbor::distance; a non-VR OR-branch match outside the radius carries
+    // no VR distance (has_vr_distance == false) and is omitted. Gate on the
+    // flag, not the float: the build uses -ffast-math (-ffinite-math-only), so
+    // a float sentinel comparison is unreliable.
+    if (!parameters.vr_score_field_name_.empty() && n.has_vr_distance) {
+      auto it = parameters.record_indexes_by_alias_.find(
+          parameters.vr_score_field_name_);
+      if (it != parameters.record_indexes_by_alias_.end()) {
+        rec->fields_.at(it->second) = expr::Value(n.distance);
+      }
     }
 
     if (n.attribute_contents.has_value() && !parameters.no_content) {
@@ -1308,6 +1691,12 @@ class CursorAggregateResult : public Cursor {
 // Replies [count, row...] with the first `count` records, removing them.
 void AggregateParameters::ReplyRecords(ValkeyModuleCtx *ctx, RecordSet &records,
                                        size_t count) {
+  // An FT.HYBRID reply, including a later FT.CURSOR READ of one, is written
+  // emulating at least 1.3.0: FT.HYBRID is new in 1.3.0.
+  std::optional<options::ScopedMinimumRelease> minimum;
+  if (hybrid_) {
+    minimum.emplace(vmsdk::ValkeyVersion(1, 3, 0));
+  }
   auto &parameters = *this;
   ValkeyModule_ReplyWithArray(ctx, 1 + count);
   ValkeyModule_ReplyWithLongLong(ctx, static_cast<long long>(count));
@@ -1382,6 +1771,14 @@ absl::Status RunAggregatePipeline(ValkeyModuleCtx *ctx,
       CursorTable::Instance().Insert(std::move(cursor), db_num, absl::Now());
   ValkeyModule_ReplyWithLongLong(ctx, static_cast<long long>(id));
   return absl::OkStatus();
+}
+
+std::unique_ptr<GroupBy::Reducer> MakeQuantileReducer(
+    double quantile, QuantileStats *&stats_out) {
+  auto r = std::make_unique<QuantileReducer>();
+  r->quantile_ = quantile;
+  stats_out = &r->stats_;
+  return r;
 }
 
 }  // namespace aggregate

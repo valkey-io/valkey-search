@@ -7,16 +7,19 @@
 
 #include "src/indexes/vector_hnsw.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <limits>
 #include <memory>
 #include <mutex>  // NOLINT(build/c++11)
 #include <optional>
+#include <queue>
 #include <string>
-#include <type_traits>
 #include <utility>
+#include <vector>
 
 #include "absl/log/check.h"
 #include "absl/status/status.h"
@@ -30,11 +33,14 @@
 #include "src/indexes/bfloat16.h"
 #include "src/indexes/fp16.h"
 #include "src/indexes/index_base.h"
+#include "src/indexes/scoring/scorer.h"
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_type.h"
 #include "src/metrics.h"
 #include "src/query/search.h"
 #include "src/rdb_serialization.h"
+#include "src/utils/cancel.h"
+#include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
 #include "src/valkey_search_options.h"
 #include "valkey_search_options.h"
@@ -95,7 +101,7 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
     ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
     const data_model::VectorIndex &vector_index_proto,
     absl::string_view attribute_identifier, SupplementalContentChunkIter &&iter,
-    int db_num) {
+    int db_num, TrackedKeys *key_labels) {
   try {
     auto index = std::shared_ptr<VectorHNSW<T>>(
         new VectorHNSW<T>(vector_index_proto.dimension_count(),
@@ -113,23 +119,32 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
     RDBChunkInputStream input(std::move(iter));
     index->algo_->normalized_ = index->normalize_;
 
-    auto generator = [allocator = index->GetVectorAllocator()](
-                         absl::string_view vector_data,
-                         bool is_marked_deleted) {
-      if (!is_marked_deleted) {
-        return std::shared_ptr<VectorRecord>(nullptr);
+    size_t keys_changed_since_save = 0;
+    auto generator = [&, allocator = index->GetVectorAllocator()](
+                         absl::string_view vector_data, bool is_marked_deleted,
+                         hnswlib::labeltype label) {
+      if (key_labels && !is_marked_deleted) {
+        auto it = key_labels->key_by_internal_id.find(label);
+        if (it != key_labels->key_by_internal_id.end()) {
+          if (auto shared = index->ShareIfUnchangedSinceSave(
+                  ctx, attribute_data_type, it->second, vector_data)) {
+            return std::move(*shared);
+          }
+          ++keys_changed_since_save;
+        }
       }
-      float reciprocal_magnitude = CalcReciprocalMagnitude(
-          reinterpret_cast<const T *>(vector_data.data()),
-          vector_data.size() / sizeof(T));
       return VectorRecord::Construct(
-          vector_data, reciprocal_magnitude,
-          static_cast<FixedSizeAllocator *>(allocator));
+          vector_data, 1.0f, static_cast<FixedSizeAllocator *>(allocator));
     };
     VMSDK_RETURN_IF_ERROR(index->algo_->LoadIndex(
         input, index->space_.get(), vector_index_proto.initial_cap(),
         vector_index_proto.hnsw_algorithm().m(),
         options::GetHNSWValidationEnable().GetValue(), generator));
+    if (key_labels) {
+      index->AdoptTrackedKeys(std::move(*key_labels));
+      index->vectors_resolved_on_load_ = true;
+    }
+    index->keys_changed_since_save_ = keys_changed_since_save;
     // ef_runtime is not persisted in the index contents
     index->algo_->setEf(vector_index_proto.hnsw_algorithm().ef_runtime());
     return index;
@@ -148,25 +163,14 @@ VectorHNSW<T>::VectorHNSW(int dimensions,
     : VectorType<T>(IndexerType::kHNSW, dimensions, attribute_data_type,
                     attribute_identifier, db_num) {}
 
-QueryVector::QueryVector(
-    const std::shared_ptr<const VectorRecord> &vector_record,
-    size_t vector_record_size, bool normalize,
-    data_model::VectorDataType data_type)
-    : vector_record_(vector_record) {
-  if (normalize) {
-    normalized_vector_ = NormalizeVector(
-        absl::string_view(vector_record_->GetRawVector(), vector_record_size),
-        data_type, vector_record_->GetReciprocalMagnitude());
-  }
-}
 template <typename T>
-absl::Status VectorHNSW<T>::AddRecordImpl(
-    uint64_t internal_id, std::shared_ptr<const VectorRecord> &&vector_record) {
+absl::Status VectorHNSW<T>::AddRecordImpl(uint64_t internal_id,
+                                          VectorRecord &&vector_record) {
   do {
     try {
       absl::ReaderMutexLock lock(&resize_mutex_);
 
-      algo_->addPoint(QueryVector(std::move(vector_record), GetVectorDataSize(),
+      algo_->addPoint(QueryVector(vector_record, GetVectorDataSize(),
                                   normalize_, GetVectorDataType()),
                       internal_id, algo_->allow_replace_deleted_);
       return absl::OkStatus();
@@ -213,14 +217,13 @@ absl::Status VectorHNSW<T>::SaveIndexImpl(
     RDBChunkOutputStream chunked_out) const {
   absl::ReaderMutexLock lock(&resize_mutex_);
   auto serializer = [normalize = normalize_, vector_size = GetVectorDataSize()](
-                        const std::shared_ptr<const VectorRecord> &record,
-                        bool is_marked_deleted) {
+                        const VectorRecord &record, bool is_marked_deleted) {
     if (normalize && !is_marked_deleted) {
       return NormalizeVector<T>(
-          absl::string_view(record->GetRawVector(), vector_size));
+          absl::string_view(record.GetRawVector(), vector_size));
     }
-    return std::vector<char>(record->GetRawVector(),
-                             record->GetRawVector() + vector_size);
+    return std::vector<char>(record.GetRawVector(),
+                             record.GetRawVector() + vector_size);
   };
   return algo_->SaveIndex(chunked_out, serializer);
 }
@@ -273,7 +276,7 @@ absl::Status VectorHNSW<T>::AlgoDeleteRecord(uint64_t label) {
     return absl::OkStatus();
   }
   const auto &stored_record = algo_->GetDataByInternalId(*hnsw_internal_id);
-  absl::string_view unnorm_vector(stored_record->GetRawVector(),
+  absl::string_view unnorm_vector(stored_record.GetRawVector(),
                                   GetVectorDataSize());
 
   auto norm_record = NormalizeVector<T>(unnorm_vector);
@@ -287,13 +290,13 @@ absl::Status VectorHNSW<T>::AlgoDeleteRecord(uint64_t label) {
 }
 
 template <typename T>
-absl::Status VectorHNSW<T>::ModifyRecordImpl(
-    uint64_t internal_id, std::shared_ptr<const VectorRecord> &&vector_record) {
+absl::Status VectorHNSW<T>::ModifyRecordImpl(uint64_t internal_id,
+                                             VectorRecord &&vector_record) {
   try {
     absl::ReaderMutexLock lock(&resize_mutex_);
     // addPoint() routes an existing label to an in-place update.
-    algo_->addPoint(QueryVector(std::move(vector_record), GetVectorDataSize(),
-                                normalize_, GetVectorDataType()),
+    algo_->addPoint(QueryVector(vector_record, GetVectorDataSize(), normalize_,
+                                GetVectorDataType()),
                     internal_id, /*replace_deleted=*/false);
   } catch (const std::exception &e) {
     DCHECK(false) << "Unexpected error while modifying a record: " << e.what();
@@ -320,16 +323,143 @@ absl::Status VectorHNSW<T>::RemoveRecordImpl(uint64_t internal_id) {
   return absl::OkStatus();
 }
 
-// Paper over the impedance mismatch between the
-// cancel::Token and hnswlib::BaseCancellationFunctor.
-class CancelCondition : public hnswlib::BaseCancellationFunctor {
+namespace {
+
+// Compute the range traversal shell outside float arithmetic: FLT_MAX with
+// even the default epsilon overflows in float. GetSearchEpsilon() keeps epsilon
+// finite, and the double product of two finite floats cannot overflow double.
+float ComputeRangeShell(float radius, float epsilon) {
+  CHECK(!scoring::IsNaN(radius));
+  CHECK(!scoring::IsInf(radius));
+  CHECK(!scoring::IsNaN(epsilon));
+  CHECK(!scoring::IsInf(epsilon));
+  const double shell =
+      static_cast<double>(radius) * (1.0 + static_cast<double>(epsilon));
+  constexpr float kMaxShell = std::numeric_limits<float>::max();
+  return shell >= static_cast<double>(kMaxShell) ? kMaxShell
+                                                 : static_cast<float>(shell);
+}
+
+// Stop condition of the HNSW range traversal. A node is expanded while it is
+// within `shell` of the query or could still improve the `ef` nearest results
+// beyond the shell. Results within the shell do not occupy the ef beam, so the
+// walk homes in on the query as an ef-bounded KNN search does, floods the ball,
+// and keeps an ef-wide beam around it to follow paths that leave the shell.
+// At most `max_results` results within the radius are kept. An eligible
+// in-radius result beyond that limit is observed but not stored, and
+// immediately stops the current adjacency scan. Seeing `max_results` results
+// within the shell without that witness requests a bounded exact fallback from
+// SearchRange.
+class RangeStopCondition : public hnswlib::BaseSearchStopCondition<float> {
  public:
-  explicit CancelCondition(cancel::Token &token) : token_(token) {}
-  bool isCancelled() override { return token_->IsCancelled(); }
+  // `ef_cap` bounds the beam independently of `max_results`, so a planner
+  // probe with a small result cap still walks with the query's EF_RUNTIME.
+  RangeStopCondition(float shell, float radius, bool normalize, size_t ef,
+                     size_t max_results, size_t ef_cap)
+      : shell_(shell),
+        radius_(radius),
+        normalize_(normalize),
+        ef_(std::clamp<size_t>(ef, 1, std::max<size_t>(ef_cap, 1))),
+        max_results_(max_results),
+        max_fetched_(max_results + ef_) {
+    CHECK(!scoring::IsNaN(shell_));
+    CHECK(!scoring::IsInf(shell_));
+  }
+
+  bool observe_distance(float dist) override {
+    if (!scoring::IsNaN(dist) && !(normalize_ && scoring::IsInf(dist))) {
+      return false;
+    }
+    requires_exact_fallback_ = true;
+    return true;
+  }
+
+  bool observe_result(float dist) override {
+    if (dist <= shell_) {
+      ++shell_results_seen_;
+    }
+    if (dist <= radius_ && ++matching_results_seen_ > max_results_) {
+      truncated_ = true;
+      return true;
+    }
+    return false;
+  }
+
+  void add_point_to_result(hnswlib::labeltype, const void *,
+                           float dist) override {
+    ++num_results_;
+    if (dist <= shell_) {
+      return;
+    }
+    if (nearest_.size() < ef_) {
+      nearest_.push(dist);
+    } else if (dist < nearest_.top()) {
+      nearest_.pop();
+      nearest_.push(dist);
+    }
+  }
+  void remove_point_from_result(hnswlib::labeltype, const void *,
+                                float) override {
+    --num_results_;
+  }
+  bool should_stop_search(float candidate_dist, float lower_bound) override {
+    if (requires_exact_fallback_) {
+      return true;
+    }
+    // Once the fetch is full it stays so (later results only displace farther
+    // ones), and SearchRange then resolves the N+1 witness or fallback.
+    if (num_results_ >= max_fetched_ &&
+        (candidate_dist > lower_bound || lower_bound <= shell_)) {
+      return true;
+    }
+    return candidate_dist > shell_ && EfFull() &&
+           candidate_dist > nearest_.top();
+  }
+  bool should_consider_candidate(float dist, float lower_bound) override {
+    if (dist <= radius_) {
+      return true;
+    }
+    if (num_results_ >= max_fetched_ && dist >= lower_bound) {
+      return false;
+    }
+    return dist <= shell_ || !EfFull() || dist < nearest_.top();
+  }
+  bool should_remove_extra() override { return num_results_ > max_fetched_; }
+  void filter_results(
+      std::vector<std::pair<float, hnswlib::labeltype>> &results) override {
+    while (!results.empty() && results.back().first > shell_) {
+      results.pop_back();
+    }
+  }
+  bool RequiresExactFallback() const { return requires_exact_fallback_; }
+  bool Truncated() const { return truncated_; }
+  bool ShellFilled() const { return shell_results_seen_ >= max_results_; }
 
  private:
-  cancel::Token &token_;
+  // Compares the count, not a distance against a sentinel: a stored vector
+  // with an infinite component is at +inf, beyond FLT_MAX, and -ffast-math
+  // may fold comparisons with an infinite constant.
+  bool EfFull() const { return nearest_.size() >= ef_; }
+
+  const float shell_;
+  const float radius_;
+  const bool normalize_;
+  const size_t ef_;
+  const size_t max_results_;
+  // The fetch has room for ef results beyond the cap. While at most
+  // max_results_ of its results are within the shell, a full fetch holds at
+  // least ef outside it, so its farthest result is never nearer than the ef-th
+  // nearest outside the shell and the bound never narrows the beam.
+  const size_t max_fetched_;
+  size_t num_results_{0};
+  size_t shell_results_seen_{0};
+  size_t matching_results_seen_{0};
+  bool requires_exact_fallback_{false};
+  bool truncated_{false};
+  std::priority_queue<float> nearest_;  // The ef nearest distances, max on top.
 };
+
+}  // namespace
 
 template <typename T>
 absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
@@ -348,9 +478,11 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
                  : kDefaultMagnitude;
   try {
     CancelCondition cancel_condition(cancellation_token);
-    QueryVector embedding(VectorRecord::Construct(query, reciprocal_magnitude,
-                                                  GetVectorAllocator()),
-                          query.size(), normalize_, GetVectorDataType());
+    // Query vectors are short-lived; keep them out of the index allocator.
+    VectorRecord query_record =
+        VectorRecord::Construct(query, reciprocal_magnitude, nullptr);
+    QueryVector embedding(query_record, query.size(), normalize_,
+                          GetVectorDataType());
     auto res = algo_->searchKnn(embedding, count, ef_runtime, filter.get(),
                                 &cancel_condition);
     if (!enable_partial_results && cancellation_token->IsCancelled()) {
@@ -362,6 +494,115 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
         1, std::memory_order_relaxed);
     return absl::InternalError(e.what());
   }
+}
+
+template <typename T>
+absl::StatusOr<RangeResult> VectorHNSW<T>::SearchRange(
+    absl::string_view query, const RangeQuery &range,
+    cancel::Token &cancellation_token) {
+  VMSDK_ASSIGN_OR_RETURN(const float radius,
+                         this->ValidateRangeSearchInputs(query, range));
+  const size_t configured_cap = static_cast<size_t>(
+      options::GetMaxNonVectorSearchResultsFetched().GetValue());
+  const size_t max_candidates = RangeResultLimit(range, configured_cap);
+  const bool probe = range.probe_limit.has_value();
+  auto exact_scan = [&](RangeFallback fallback) {
+    RangeResult result = this->SearchRangeExhaustive(
+        query, radius, cancellation_token, max_candidates, range.filter);
+    result.fallback = fallback;
+    return result;
+  };
+
+  // A cap of 0 uses the bounded exact scan to look for one witness.
+  if (max_candidates == 0) {
+    return exact_scan(RangeFallback::kCapZero);
+  }
+  // COSINE distances clamp into [0, 2], so radius 2 holds every key: scan,
+  // rather than walk the whole graph and depend on the shell reaching
+  // unclamped distances just above 2.
+  if (this->normalize_ && radius >= 2.0f) {
+    return exact_scan(RangeFallback::kCosineFullRadius);
+  }
+
+  auto nq = this->NormalizeQueryIfNeeded(query);
+  float reciprocal_magnitude =
+      this->normalize_
+          ? CalcReciprocalMagnitude(nq.view, this->GetVectorDataType())
+          : kDefaultMagnitude;
+
+  // The traversal also expands nodes within radius * (1 + epsilon), so paths
+  // that leave the ball briefly near its boundary are still followed; only keys
+  // within the radius are emitted. Distances are in the radius's own space for
+  // every metric (squared for L2).
+  // Query vectors are short-lived; keep them out of the index allocator.
+  QueryVector embedding(
+      VectorRecord::Construct(nq.view, reciprocal_magnitude, nullptr),
+      nq.view.size(), normalize_, GetVectorDataType());
+  std::vector<std::pair<float, hnswlib::labeltype>> raw_results;
+  RangeStopCondition stop_condition(ComputeRangeShell(radius, range.epsilon),
+                                    radius, normalize_,
+                                    range.ef_runtime.value_or(GetEfRuntime()),
+                                    max_candidates, configured_cap);
+  try {
+    CancelCondition cancel_condition(cancellation_token);
+    raw_results = algo_->searchStopConditionClosest(
+        embedding, stop_condition, range.filter, &cancel_condition);
+  } catch (const std::exception &e) {
+    Metrics::GetStats().hnsw_search_exceptions_cnt.fetch_add(
+        1, std::memory_order_relaxed);
+    return absl::InternalError(e.what());
+  }
+  // A cancelled walk returns the keys in range it reached, as Search() and the
+  // scan do; the reply is a timeout error unless partial results are enabled.
+  const bool cancelled = cancellation_token->IsCancelled();
+
+  // A rejected NaN, or a non-finite COSINE traversal distance, can hide keys
+  // reachable only through that graph node. Scan exactly unless cancellation
+  // requests a partial result. A probe only has to lose to its sibling, so it
+  // reports truncation instead of paying for the scan.
+  if (!cancelled && stop_condition.RequiresExactFallback()) {
+    if (probe) {
+      return RangeResult{.truncated = true};
+    }
+    return exact_scan(RangeFallback::kNonFiniteDistance);
+  }
+  RangeResult result;
+  std::vector<Neighbor> &neighbors = result.neighbors;
+  neighbors.reserve(std::min(raw_results.size(), max_candidates));
+  // observe_distance keeps NaN out of the fetch, and observe_result keeps it
+  // to at most N results within the radius. A +inf distance is within no
+  // radius and ranks last, so filter_results has already trimmed it; an IP
+  // -inf is an ordinary distance, within every radius.
+  for (const auto &[dist, label] : raw_results) {
+    const float clamped_dist = this->ClampCosineDistance(dist);
+    if (clamped_dist > radius) {
+      continue;
+    }
+    auto key = this->GetKeyDuringSearch(label);
+    if (!key.ok()) {
+      continue;
+    }
+    neighbors.emplace_back(*key, clamped_dist);
+  }
+  if (stop_condition.Truncated()) {
+    result.truncated = true;
+    return result;
+  }
+  // Once max_candidates results within the shell were seen, the fetch bound
+  // may have stopped the walk short of more matches. Scan exactly, collecting
+  // at most N+1 matches. With exactly N results within the shell, the bound
+  // did not change the walk, but the scan is kept because it makes such a ball
+  // exact; it costs the walk plus one distance per tracked key.
+  if (!cancelled && stop_condition.ShellFilled()) {
+    if (probe) {
+      // Undecided: the walk cannot tell whether more than the probe limit
+      // match, so the probe loses to the sibling it was compared with.
+      result.truncated = true;
+      return result;
+    }
+    return exact_scan(RangeFallback::kShellFilled);
+  }
+  return result;
 }
 
 template <typename T>
@@ -379,9 +620,9 @@ void VectorHNSW<T>::ToProtoImpl(
 
 template <typename T>
 float VectorHNSW<T>::ComputeDistance(absl::string_view query,
-                                     const VectorRecord *vector_record,
+                                     const VectorRecord &vector_record,
                                      float query_magnitude) const {
-  return algo_->fstdistfunc_(query.data(), vector_record->GetRawVector(),
+  return algo_->fstdistfunc_(query.data(), vector_record.GetRawVector(),
                              algo_->dist_func_param_, query_magnitude);
 }
 

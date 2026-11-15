@@ -154,6 +154,18 @@ def gen_word(vocab: List[str], rng: random.Random) -> List[WordTerm]:
     return [WordTerm(rng.choice(vocab)) for _ in range(count)]
 
 
+def turkish_upper(word: str) -> str:
+    """Uppercase with Turkish rules: i -> İ and ı -> I, which str.upper() does
+    not apply (it maps both i and ı to I)."""
+    return word.replace("i", "\u0130").replace("\u0131", "I").upper()
+
+
+def gen_turkish_uppercase_word(vocab: List[str], rng: random.Random) -> List[WordTerm]:
+    """Generate one word containing i or ı, written in Turkish uppercase."""
+    candidates = [w for w in vocab if "i" in w or "\u0131" in w]
+    return [WordTerm(turkish_upper(rng.choice(candidates)))]
+
+
 def gen_prefix(vocab: List[str], rng: random.Random) -> List[PrefixTerm]:
     """Generate 1-2 prefix terms."""
     count = rng.randint(1, 2)
@@ -215,6 +227,12 @@ def gen_depth3(vocab: List[str], rng: random.Random) -> str:
 def gen_unescaped_word(vocab: List[str], rng: random.Random) -> List[str]:
     count = rng.randint(1, 3)
     return [UnescapedTerm(rng.choice(vocab)) for _ in range(count)]
+
+
+def gen_whitespace_joined_half(vocab: List[str], rng: random.Random) -> List[WordTerm]:
+    """Pick a value whose words are joined by Unicode whitespace and query one
+    of them. str.split() splits on Unicode whitespace."""
+    return [WordTerm(rng.choice(rng.choice(vocab).split()))]
 
 
 def gen_escaped_word(vocab: List[str], rng: random.Random) -> List[str]:

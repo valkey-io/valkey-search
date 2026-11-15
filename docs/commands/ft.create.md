@@ -46,9 +46,9 @@ FT.CREATE <index-name>
 
   Field references use the `@<name>` syntax. For a `HASH` index the expression may reference a field that is **not** declared in the `SCHEMA`; its value is read directly off the key at ingestion time (an absent field makes the comparison false). Because an undeclared field name is read verbatim from the key, a **misspelled** field name does not produce an error — watch `filter_rejected_keys` in `FT.INFO` to detect this. For a `JSON` index every field referenced by the expression must be declared in the `SCHEMA`; referencing an undeclared field is rejected when the index is created.
 
-- `LANGUAGE <language>` (optional): For text fields, the language used to control lexical parsing and stemming. Currently only the value `ENGLISH` is supported.
+- `LANGUAGE <language>` (optional): For text fields, the language used to control lexical parsing and stemming. It selects the stemmer and the default punctuation and stop words. Supported values: `ENGLISH` (default), `ARABIC`, `DUTCH`, `FRENCH`, `GERMAN`, `INDONESIAN`, `ITALIAN`, `PORTUGUESE`, `RUSSIAN`, `SPANISH`, `SWEDISH`, `TURKISH`. Languages other than English require 1.3.0 or later.
 
-- `MINSTEMSIZE <min_stem_size>` (optional): For text fields with stemming enabled. This controls the minimum length of a word required for it to be subjected to stemming. The default value is 4.
+- `MINSTEMSIZE <min_stem_size>` (optional): For text fields with stemming enabled. This controls the minimum length of a word, in characters (Unicode code points), required for it to be subjected to stemming. The default value is 4. On English indexes with `search.emulate-release` below 1.3.0, the length is counted in bytes (see COMPATIBILITY.md).
 
 - `WITHOFFSETS | NOOFFSETS` (optional): Enables/Disables the retention of per-word offsets within a text field. Offsets are required to perform exact phrase matching and slop-based proximity matching. Thus if offsets are disabled, those query operations will be rejected with an error. The default is `WITHOFFSETS`.
 
@@ -56,7 +56,7 @@ FT.CREATE <index-name>
 
 - `NOSTOPWORDS | STOPWORDS <count> <word1> <word2>...` (optional): Stop words are words which are not put into the indexes. The default value of `STOPWORDS`is language dependent. For`LANGUAGE ENGLISH` the default is: [a, an, and, are, as, at, be, but, by, for, if, in, into, is, it, no, not, of, on, or, such, that, their, then, there, these, they, this, to, was, will, with].
 
-- `PUNCTUATION <punctuation>` (optional): A string of characters that define the separation points between words, in addition to whitespace characters (spaces, tabs, newlines, carriage returns, and control characters) which always break words. The default value is `,.<>{}[]"':;!@#$%^&\*()-+=~/\|?`.
+- `PUNCTUATION <punctuation>` (optional): A string of characters that define the separation points between words, in addition to whitespace characters (spaces, tabs, newlines, carriage returns, and control characters) which always break words. Each character, including a multi-byte one such as `—`, is matched as a whole Unicode code point; before 1.3 each byte of a multi-byte character was matched separately, which also split unrelated characters sharing those bytes. The default value depends on `LANGUAGE`; for English it is `,.<>{}[]"':;!@#$%^&\*()-+=~/\|?`.
 
 - `SKIPINITIALSCAN` (optional): If specified, this option skips the normal backfill operation for an index. If this option is specified, pre-existing keys which match the `PREFIX` clause will not be loaded into the index during a backfill operation. This clause has no effect on processing of key mutations _after_ an index is created, i.e., keys which are mutated after an index is created and satisfy the data type and `PREFIX` clause will be inserted into that index.
 
@@ -98,26 +98,25 @@ See [Numeric Field Format](../topics/search-data-formats.md#numeric-fields) for 
   - `INITIAL_CAP <size>` (optional): Initial index size.
   - `M <number>` (optional): Number of maximum allowed outgoing edges for each node in the graph in each layer. on layer zero the maximal number of outgoing edges will be 2\*M. Default is 16, the maximum is 512\.
   - `EF_CONSTRUCTION <number>` (optional): controls the number of vectors examined during index construction. Higher values for this parameter will improve recall ratio at the expense of longer index creation times. The default value is 200\. Maximum value is 4096\.
-  - `EF_RUNTIME <number>` (optional): controls the number of vectors to be examined during a query operation. The default is 10, and the max is 4096\. You can set this parameter value for each query you run. Higher values increase query times, but improve query recall.
+  - `EF_RUNTIME <number>` (optional): Controls HNSW search effort. Higher values can improve recall at the expense of longer query times. The default is 10. The maximum is set by `search.max-vector-ef-runtime`. A query can override the field value.
   - `DISTANCE_METRIC [L2 | IP | COSINE]` (required): Specifies the distance algorithm.
 
 See [Vector Field Format](../topics/search-data-formats.md#vector-fields) for more details and examples.
 
-The KNN search algorithm operates to locate vectors that are the nearest to the query vector, i.e., looking for the smallest distance value.
-The computation of the distance metrics is adjusted from their classical definitions in order to posses this property.
-This table shows the actual computation that Search uses when computing the distance between two vectors: $X$ and $Y$.
-
-| Classical Name | Valkey Search Distance Metric Name |   Classical Distance Formula Definition   | Valkey Search Distance Formula                  |
-| :------------: | :--------------------------------: | :---------------------------------------: | :---------------------------------------------- |
-| Inner Product  |                 IP                 |                 dot(X,Y)                  | 1 - dot(X,Y)                                    |
-|   Euclidean    |                 L2                 |          sqrt(sum(x[i]-y[i])^2)           | sqrt(sum(x[i]-y[i])^2)                          |
-|     Cosine     |               COSINE               | dot(x,y) / (magnitude(X) \* magnitude(Y)) | 1 - (dot(X,Y) / (magnitude(X) \* magnitude(Y))) |
+The KNN search algorithm finds the vectors nearest to the query vector, which are the vectors with the smallest distance.
+For the distance formula of each metric, see [Vector Distance](../topics/search-scoring.md#vector-distance).
 
 ### Field options
 
 `SORTABLE` (optional): This parameter is not required. Any field may be used with `SORTBY` whether or not it is declared `SORTABLE`. It is recorded on the attribute and reported by [`FT.INFO`](ft.info.md), but does not otherwise affect indexing or query behavior.
 
-- `UNF` (optional): Only valid immediately after `SORTABLE`. In RediSearch this keeps a sortable field's sort value in its original, un-normalized form rather than lowercased. `SORTBY` already compares the stored field value directly, so this has no effect beyond being reported by [`FT.INFO`](ft.info.md).
+- `UNF` (optional): Only valid immediately after `SORTABLE`. In RediSearch this keeps the sort value of a `SORTABLE` field in its original form instead of converting it to lowercase. `SORTBY` never converts the sort value to lowercase, so this has no effect beyond being reported by [`FT.INFO`](ft.info.md).
+
+## Reply
+
+`OK`.
+
+If an error occurs during the index creation, an error is returned.
 
 ## Examples
 

@@ -467,8 +467,7 @@ class VectorRegistryStateMachineTest
   // `key`, and that the registry and engine-side sharing state match what this
   // data type is supposed to produce. Leverages DedupOrConstruct return value
   // to check that the returned vector record matches what is expected.
-  const indexes::VectorRecord *ExpectTracked(absl::string_view key,
-                                             float scale) {
+  indexes::VectorRecord ExpectTracked(absl::string_view key, float scale) {
     EXPECT_TRUE(IndexTracks(key)) << "index does not track " << key;
     auto indexed =
         vector_index_->GetVectorDuringSearch(StringInternStore::Intern(key));
@@ -505,10 +504,10 @@ class VectorRegistryStateMachineTest
     auto check_tracked = VectorRegistry::Instance().DedupOrConstruct(
         interned_key, vector_valkey_str.get(), attr_type, 0,
         vector_index_.get());
-    const auto *record = check_tracked.vector_record.get();
+    auto record = check_tracked.vector_record;
     EXPECT_NE(record, nullptr);
     if (record) {
-      EXPECT_EQ(absl::string_view(record->GetRawVector(), kVectorBytes),
+      EXPECT_EQ(absl::string_view(record.GetRawVector(), kVectorBytes),
                 absl::string_view(VectorAtScale(scale)));
     }
     return record;

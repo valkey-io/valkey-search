@@ -167,6 +167,7 @@ class RemoteResponderSearch : public query::SearchParameters {
     }
     SerializeNeighbors(response, search_result.neighbors);
     response->set_total_count(search_result.total_count);
+    response->set_sortby_keyed_by_lookup_key(sortby_by_lookup_key);
     (*on_done)(grpc::Status::OK);
     RecordSearchMetrics(false, std::move(latency_sample));
   }
@@ -352,7 +353,11 @@ grpc::ServerUnaryReactor *Service::MultiSearchIndexPartition(
     auto *sub_resp = response->mutable_sub_responses(i);
     SearchOneArm(
         context, request->sub_requests(i), sub_resp->mutable_response(),
-        [sub_resp, completion](grpc::Status s) {
+        [sub_resp, completion, i](grpc::Status s) {
+          if (s.ok()) {
+            s = ToGrpcStatus(
+                query::ForcedMultiArmFailure(static_cast<size_t>(i)));
+          }
           sub_resp->set_grpc_code(static_cast<uint32_t>(s.error_code()));
           if (!s.ok()) {
             sub_resp->set_error_message(s.error_message());

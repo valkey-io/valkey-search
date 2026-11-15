@@ -161,3 +161,52 @@ class TestFtHybridClusterControls(ClusterTestUtils,
             one.execute_command("ft._debug", "CONTROLLED_VARIABLE", "set",
                                 "ForceInvalidIndexFingerprint", "no")
             self.config_set("search.enable-partial-results", "yes")
+
+    def _hybrid_via(self, primary: int):
+        """Runs FT.HYBRID with the given primary as coordinator."""
+        return self.client_for_primary(primary).execute_command(
+            "FT.HYBRID", self.INDEX,
+            "SEARCH", "@title:hello",
+            "VSIM", "@vec", "$q", "KNN", "2", "K", "40",
+            "COMBINE", "RRF", "4", "WINDOW", "100", "YIELD_SCORE_AS", "h",
+            "LIMIT", "0", "100",
+            "PARAMS", "2", "q", self.Q)
+
+    @staticmethod
+    def _keys(reply) -> set:
+        return {dict(zip(rec[::2], rec[1::2]))[b"__key"] for rec in reply[1:]}
+
+    def _force_arm_failure(self, primary: int, arm: int):
+        self.client_for_primary(primary).execute_command(
+            "ft._debug", "CONTROLLED_VARIABLE", "set",
+            "ForceMultiArmFailure", str(arm))
+
+    def _assert_one_arm_failure_drops_shard(self, coordinator: int,
+                                            failing: int):
+        """A failing arm drops its shard: an error, or no keys from it."""
+        self._setup()
+        nominal = self._keys(self._hybrid_via(coordinator))
+        assert len(nominal) == self.DOCS
+        owned = set(self.client_for_primary(failing).keys("d:*"))
+        assert owned, "the failing shard must own some of the keys"
+        try:
+            for arm in (0, 1):
+                self._force_arm_failure(failing, arm)
+                self.config_set("search.enable-partial-results", "no")
+                with pytest.raises(ResponseError):
+                    self._hybrid_via(coordinator)
+
+                self.config_set("search.enable-partial-results", "yes")
+                assert self._keys(self._hybrid_via(coordinator)) == (
+                    nominal - owned), f"arm {arm} failed on shard {failing}"
+        finally:
+            self._force_arm_failure(failing, -1)
+            self.config_set("search.enable-partial-results", "yes")
+
+    def test_one_arm_failing_on_a_remote_shard(self):
+        """The failing shard is a remote one."""
+        self._assert_one_arm_failure_drops_shard(coordinator=1, failing=0)
+
+    def test_one_arm_failing_on_the_coordinator_shard(self):
+        """The failing shard is the coordinator's own (#1420)."""
+        self._assert_one_arm_failure_drops_shard(coordinator=0, failing=0)

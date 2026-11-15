@@ -114,6 +114,11 @@ std::optional<absl::string_view> ParseHashTag(absl::string_view);
 bool IsRealUserClient(ValkeyModuleCtx *ctx);
 bool MultiOrLua(ValkeyModuleCtx *ctx);
 
+// Returns true if the node is currently a replica (the context's SLAVE flag is
+// set). Roles can change at runtime, so callers running asynchronously should
+// recheck this on the main thread immediately before acting.
+bool IsReplica(ValkeyModuleCtx *ctx);
+
 size_t DisplayAsSIBytes(size_t value, char *buffer, size_t buffer_size);
 
 std::string PrintableBytes(absl::string_view sv);

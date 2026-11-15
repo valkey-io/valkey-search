@@ -393,8 +393,7 @@ void MetadataManager::HandleBroadcastedMetadata(
   }
 
   // Only accept metadata broadcasts if we are a primary
-  int flags = ValkeyModule_GetContextFlags(ctx);
-  if (flags & VALKEYMODULE_CTX_FLAGS_SLAVE) {
+  if (vmsdk::IsReplica(ctx)) {
     return;  // This is a replica, ignore the broadcast
   }
 
@@ -465,6 +464,15 @@ void MetadataManager::HandleBroadcastedMetadata(
                           schema = std::unique_ptr<GlobalMetadata>(
                               response.release_metadata()),
                           address = std::move(address)] {
+          // The node may have been demoted after accepting the broadcast but
+          // before the asynchronous metadata fetch completed. Recheck the
+          // role on the main thread immediately before applying the update.
+          if (vmsdk::IsReplica(ctx)) {
+            VMSDK_LOG_EVERY_N_SEC(NOTICE, ctx, 1)
+                << "Discarding metadata reconciliation because node is a "
+                   "replica";
+            return;
+          }
           VMSDK_LOG_EVERY_N_SEC(DEBUG, ctx, 1)
               << "Got GlobalMetadata from " << address << ": "
               << schema->DebugString();
@@ -486,16 +494,17 @@ absl::Status MetadataManager::ReconcileMetadata(const GlobalMetadata &proposed,
                                                 absl::string_view source,
                                                 bool trigger_callbacks,
                                                 bool prefer_incoming) {
-  if (proposed.version_header().top_level_version() > kModuleVersion.ToInt()) {
+  if (proposed.version_header().top_level_min_version() >
+      kModuleVersion.ToInt()) {
     VMSDK_LOG(WARNING, nullptr)
         << "Proposed GlobalMetadata from " << source
         << " requires minimum version "
-        << proposed.version_header().top_level_version()
+        << proposed.version_header().top_level_min_version()
         << ", current version is " << kModuleVersion.ToString();
     return absl::InternalError(absl::StrCat(
         "Proposed GlobalMetadata from ", source, " requires minimum version ",
-        proposed.version_header().top_level_version(), ", current version is ",
-        kModuleVersion.ToString()));
+        proposed.version_header().top_level_min_version(),
+        ", current version is ", kModuleVersion.ToString()));
   }
   // We synthesize the new version in a new variable, so that if we need to
   // fail, the state is unchanged. The new version starts as a copy of the
@@ -916,7 +925,7 @@ absl::Status MetadataManager::CreateEntryOnReplica(
     const coordinator::GlobalMetadataVersionHeader *global_version_header) {
   auto obj_name = ObjName::Decode(id);
 
-  if (ValkeyModule_GetContextFlags(ctx) & VALKEYMODULE_CTX_FLAGS_SLAVE) {
+  if (vmsdk::IsReplica(ctx)) {
     // On a live replica, apply the entry to the SchemaManager immediately.
     auto callback_result =
         TriggerCallbacks(type_name, obj_name, *metadata_entry);

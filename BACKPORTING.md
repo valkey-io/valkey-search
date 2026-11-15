@@ -22,6 +22,7 @@ Each release branch has a corresponding GitHub Project board in the `valkey-io` 
 | `1.0` | 36 | https://github.com/orgs/valkey-io/projects/36 |
 | `1.1` | 34 | https://github.com/orgs/valkey-io/projects/34 |
 | `1.2` | 58 | https://github.com/orgs/valkey-io/projects/58 |
+| `1.3` | 69 | https://github.com/orgs/valkey-io/projects/69 |
 
 Each board must have a **"Status"** field with a **"To be backported"** option. This is the value the agent queries via GraphQL to discover candidates.
 
@@ -40,6 +41,20 @@ gh workflow run manual-backport.yml \
   --field pr_url=https://github.com/valkey-io/valkey-search/pull/<PR_NUMBER> \
   --field target_branch=<BRANCH>
 ```
+
+To run the sweep on demand instead (it processes everything with Status **"To be backported"** on a board, same as the daily run), trigger `backport-sweep.yml`. This also requires write access to the `valkey-ci-agent` repo.
+
+```bash
+gh workflow run backport-sweep.yml \
+  --repo valkey-io/valkey-ci-agent \
+  --field repo=valkey-io/valkey-search \
+  --field project_number=<PROJECT_NUMBER> \
+  --field dry_run=false
+```
+
+- `dry_run` defaults to `true` (discovery only, nothing is pushed). Set it to `false` to open a backport PR.
+- `max_candidates` (default `2`) caps how many PRs are cherry-picked per branch in one run. The applied PRs are combined into a single "Backport sweep for `<BRANCH>`" PR.
+- Omit `project_number` to sweep every valkey-search release branch.
 
 ## For contributors
 

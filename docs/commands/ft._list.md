@@ -4,11 +4,11 @@ Lists the currently defined indexes for the current data base.
 FT._LIST
 ```
 
-Response
+## Reply
 
 An array of strings. Each string is the name of an index in the current database. The index names are in no particular order.
 
-Example
+## Examples
 
 ```
 ft._list

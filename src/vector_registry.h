@@ -20,6 +20,7 @@
 #include "src/index_schema.pb.h"
 #include "src/indexes/vector_base.h"
 #include "src/utils/string_interning.h"
+#include "vmsdk/src/huge/flat_hash_map.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -69,9 +70,9 @@ class VectorRegistry {
   void RemoveIndexKeys(int db_num,
                        const InternedStringPtr &attribute_identifier,
                        absl::Span<const InternedStringPtr> keys);
-  void RemoveIndexKeys(int db_num,
-                       const InternedStringPtr &attribute_identifier,
-                       absl::flat_hash_map<uint64_t, InternedStringPtr> keys);
+  void RemoveIndexKeys(
+      int db_num, const InternedStringPtr &attribute_identifier,
+      vmsdk::HugeFlatHashMap<uint64_t, InternedStringPtr> keys);
 
   // Processes up to batch_size pending unshare keys across all databases.
   // Returns the number of keys processed.
@@ -80,6 +81,7 @@ class VectorRegistry {
   // Returns the total number of keys pending unshare.
   size_t GetPendingUnsharesCount() const;
 
+  // Also migrates every db's tables, so they drain without any traffic.
   void OnServerCronCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
                             uint64_t subevent, void *data);
 
@@ -123,13 +125,14 @@ class VectorRegistry {
   };
 
   using PerDbRegistryMap =
-      absl::flat_hash_map<RegistryKey, indexes::VectorRecordWithSize>;
+      vmsdk::HugeFlatHashMap<RegistryKey, indexes::VectorRecordWithSize>;
 
   // Maps db_num -> inner map to track active vector records per database.
   absl::flat_hash_map<int, PerDbRegistryMap> tracked_vectors_;
 
   // Maps db_num -> pending unshare keys queued for rate-limited processing.
-  absl::flat_hash_map<int, absl::flat_hash_set<RegistryKey>> pending_unshares_;
+  absl::flat_hash_map<int, vmsdk::HugeFlatHashSet<RegistryKey>>
+      pending_unshares_;
 
   void CancelPendingUnshare(int db_num, const RegistryKey &key);
 
@@ -151,7 +154,7 @@ class VectorRegistry {
   bool ShareWithValkey(
       int db_num, const InternedStringPtr &key,
       absl::string_view attribute_identifier,
-      const indexes::VectorRecord *vector_record, size_t vector_size,
+      const indexes::VectorRecord &vector_record, size_t vector_size,
       const data_model::AttributeDataType &attribute_data_type);
   std::optional<indexes::VectorRecordWithSize> ExtractTrackedRecord(
       int db_num, const InternedStringPtr &key,
@@ -161,7 +164,7 @@ class VectorRegistry {
   // with an independent owned copy.
   bool UnshareWithValkey(ValkeyModuleKey *key_obj,
                          absl::string_view attribute_identifier,
-                         const indexes::VectorRecord *vector_record,
+                         const indexes::VectorRecord &vector_record,
                          size_t vector_size);
   bool IsEraseTrackedRecordSafe(
       int db_num, const InternedStringPtr &key, absl::string_view vector_str,

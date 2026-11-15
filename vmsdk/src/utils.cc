@@ -174,6 +174,11 @@ bool MultiOrLua(ValkeyModuleCtx *ctx) {
           (VALKEYMODULE_CTX_FLAGS_MULTI | VALKEYMODULE_CTX_FLAGS_LUA)) != 0;
 }
 
+bool IsReplica(ValkeyModuleCtx *ctx) {
+  return (ValkeyModule_GetContextFlags(ctx) & VALKEYMODULE_CTX_FLAGS_SLAVE) !=
+         0;
+}
+
 std::optional<absl::string_view> ParseHashTag(absl::string_view s) {
   auto start = s.find('{');
   // Does a left bracket exist and is NOT the last character

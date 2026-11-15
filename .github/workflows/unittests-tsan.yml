@@ -46,6 +46,11 @@ jobs:
         restore-keys: |
           ccache-unittests-tsan-
 
+    # The image's own mmap_rnd_bits=28 no longer applies on ubuntu-26.04, and GCC 13's TSAN aborts at the kernel default.
+    - name: Limit mmap randomization for TSAN
+      run: |
+        sudo sysctl vm.mmap_rnd_bits
+        sudo sysctl -w vm.mmap_rnd_bits=28
 
     - name: Run Tests TSAN
       id: test-run

@@ -24,6 +24,12 @@ uint32_t FloatBits(float f) {
   std::memcpy(&bits, &f, sizeof(bits));
   return bits;
 }
+
+float BitsToFloat(uint32_t bits) {
+  float f;
+  std::memcpy(&f, &bits, sizeof(f));
+  return f;
+}
 }  // namespace
 
 // Hand-rolled inf/NaN checks via the raw IEEE-754 bits: the build uses
@@ -39,6 +45,8 @@ bool IsNaN(float f) {
   const uint32_t bits = FloatBits(f);
   return (bits & kExponentMask) == kExponentMask && (bits & kMantissaMask) != 0;
 }
+
+float PositiveInf() { return BitsToFloat(kExponentMask); }
 
 const Scorer* GetScorer(ScorerType type) {
   static const Bm25StdScorer kBm25Std;

@@ -24,16 +24,19 @@
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
+#include "src/attribute_data_type.h"
 #include "src/commands/filter_parser.h"
 #include "src/index_schema.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/scoring/scorer.h"
 #include "src/indexes/vector_base.h"
 #include "src/query/predicate.h"
+#include "src/query/query_context.h"
 #include "src/utils/cancel.h"
 #include "src/valkey_search_options.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/sharded_atomic.h"
 #include "vmsdk/src/thread_pool.h"
 
 namespace valkey_search::query {
@@ -45,10 +48,35 @@ enum class SearchMode {
 };
 
 enum class SortOrder { kAscending, kDescending };
+
+enum class HybridPolicy {
+  kAuto,
+  kBatches,
+  kAdHocBruteForce,
+};
+
 struct SortByParameter {
   std::string field;
   SortOrder order{SortOrder::kAscending};
 };
+
+// HASH files the SORTBY value under the hash field, since the alias may be
+// another attribute's field; JSON under the alias, as a whole record shows it.
+// Gotcha: a JSON path without `$` equal to the alias then shows it in RETURN.
+struct SortByKey {
+  SortByKey(const IndexSchema &schema, absl::string_view sortby_alias);
+
+  std::string lookup_key;
+
+  RecordsMap::const_iterator Find(const RecordsMap &contents) const {
+    return contents.find(lookup_key);
+  }
+};
+
+// Copies a row's SORTBY value from the alias to lookup_key, for rows from a
+// shard that predates sortby_keyed_by_lookup_key.
+void RefileAliasSortByValue(RecordsMap &contents, absl::string_view lookup_key,
+                            absl::string_view alias);
 
 constexpr int64_t kTimeoutMS{50000};
 constexpr size_t kMaxTimeoutMs{60000};
@@ -227,11 +255,41 @@ struct SearchParameters {
   bool enable_consistency{options::GetPreferConsistentResults().GetValue()};
   int k{0};
   std::optional<unsigned> ef;
+  HybridPolicy hybrid_policy{HybridPolicy::kAuto};
   LimitParameter limit;
   std::optional<absl::flat_hash_set<std::string>> inkeys;
   uint64_t timeout_ms{0};
   bool no_content{false};
+  // True when the caller asked for the whole record, alongside whatever
+  // `return_attributes` names:
+  //
+  //   all_content  return_attributes   fetched
+  //   -----------  -----------------   -------------------------------------
+  //   false        empty               nothing   (NOCONTENT, RETURN 0, LOAD 0)
+  //   false        list                just that list
+  //   true         empty               the whole record   (LOAD *)
+  //   true         list                the whole record *and* that list
+  //
+  // The last row is why this is a flag rather than "the list is empty". The
+  // two key types spell a whole-record fetch differently: a HASH fetch asks
+  // for no identifier in particular and the scan keeps every field, while a
+  // JSON fetch must name the root `$` explicitly. So on JSON the root can sit
+  // in the identifier list next to the named paths a pipeline stage needs,
+  // and both are fetched together; on HASH the named list is redundant.
+  //
+  // FT.AGGREGATE sets this from `LOAD *`. FT.SEARCH derives it in
+  // PostParseQueryString, where a bare search means the whole record.
+  bool all_content{false};
+  // Set on deserialized fanout requests when the originating command's
+  // derived parameters require content processing despite no_content.
+  bool force_content_processing{false};
+  // False when the coordinator predates accepts_sortby_lookup_key.
+  bool sortby_by_lookup_key{true};
   FilterParseResults filter_parse_results;
+  // True when the filter tree contains a (single) VectorRangePredicate. In the
+  // single-VR model the matched distance is carried in Neighbor::distance;
+  // there is no per-predicate score-slot side channel.
+  bool has_vector_range{false};
   std::vector<ReturnAttribute> return_attributes;
   bool inorder{false};
   std::optional<uint32_t> slop;
@@ -242,15 +300,20 @@ struct SearchParameters {
   coordinator::IndexFingerprintVersion index_fingerprint_version;
   uint64_t slot_fingerprint;
   SearchResult search_result;
+  // CPU time metric charged by ResolveContent; null for local searches.
+  vmsdk::ShardedAtomic<uint64_t> *content_resolution_cpu_time_usec{nullptr};
   struct ParseTimeVariables {
     // Members of this struct are only valid during the parsing of
     // VectorSearchParameters on the mainthread. They get cleared
     // at the end of the parse to ensure no dangling pointers.
     absl::string_view query_string;
+    // The filter (non-vector) portion of query_string.
+    absl::string_view filter_expression;
     absl::string_view score_as_string;
     absl::string_view query_vector_string;
     absl::string_view k_string;
     absl::string_view ef_string;
+    absl::string_view hybrid_policy_string;
     //
     // A Map of param names to values. The target of the map is a pair
     // that is the string of the value AND a reference count so that we can
@@ -261,10 +324,12 @@ struct SearchParameters {
         params;
     void ClearAtEndOfParse() {
       query_string = absl::string_view();
+      filter_expression = absl::string_view();
       score_as_string = absl::string_view();
       query_vector_string = absl::string_view();
       k_string = absl::string_view();
       ef_string = absl::string_view();
+      hybrid_policy_string = absl::string_view();
       params.clear();
     }
   } parse_vars;
@@ -275,10 +340,13 @@ struct SearchParameters {
   bool vector_score_only{false};
   bool IsNonVectorQuery() const { return attribute_alias.empty(); }
   bool IsVectorQuery() const { return !IsNonVectorQuery(); }
+  // True when Neighbor.score is a relevance score, false when it is a KNN
+  // distance.
+  bool ScoreIsRelevance() const;
   // Indicates whether the search requires complete results (neighbors/keys) to
   // be able to return correct results. An example of this is when sorting on a
-  // particular is needed on the results. This should be overridden in derived
-  // classes if needed. The default implementation returns false.
+  // particular field is needed on the results. This should be overridden in
+  // derived classes if needed. The default implementation returns false.
   virtual bool RequiresCompleteResults() const {
     return sortby_parameter.has_value() || inkeys.has_value();
   }
@@ -288,10 +356,14 @@ struct SearchParameters {
   // set first. When true, the query can complete on the background thread and
   // skip content loading.
   virtual bool NoProcessingRequired() const {
-    return no_content && !sortby_parameter.has_value();
+    return !force_content_processing && no_content &&
+           !sortby_parameter.has_value();
   }
 
   virtual absl::Status PreParseQueryString();
+  // Parses filter_expression into filter_parse_results; may run again once a
+  // command has read VERBATIM / INORDER / SLOP.
+  absl::Status ParseFilter();
   virtual absl::Status PostParseQueryString();
   // Virtual so specialized parameter types (e.g. FT.HYBRID's fused-result
   // resolver) can force a particular content-processing mode.
@@ -369,6 +441,9 @@ absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
                          vmsdk::ThreadPool *thread_pool,
                          SearchMode search_mode);
 
+// Test-only: returns an error if arm `arm_index` is forced to fail, else OK.
+absl::Status ForcedMultiArmFailure(size_t arm_index);
+
 absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
     absl::StatusOr<std::vector<indexes::Neighbor>> results,
     const SearchParameters &parameters);
@@ -378,76 +453,91 @@ class Predicate;
 size_t EvaluateFilterAsPrimary(
     const SearchParameters &parameters, const Predicate *predicate,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
-    bool negate, float or_weight_multiplier = 1.0f);
+    bool negate, float or_weight_multiplier = 1.0f, bool *truncated = nullptr,
+    size_t range_probe_limit = SIZE_MAX);
 
 // Defined in the header to support testing
 absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
-    indexes::VectorBase *vector_index, const SearchParameters &parameters);
+    indexes::VectorBase *vector_index, const SearchParameters &parameters,
+    QueryContext &query_ctx);
+
+// Vector Range query (no KNN): returns the keys matching the filter, with the
+// VR distance in Neighbor::distance, in key order. A query that is only the VR
+// predicate and has no INKEYS delegates to VectorBase::SearchRange. INKEYS is
+// evaluated directly as the complete candidate set; other compound queries
+// evaluate the full predicate tree per fetched key.
+absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
+    const SearchParameters &parameters, QueryContext &query_ctx)
+    ABSL_SHARED_LOCKS_REQUIRED(parameters.index_schema->GetTimeSlicedMutex());
 
 std::priority_queue<std::pair<float, hnswlib::labeltype>>
 CalcBestMatchingPrefilteredKeys(
     const SearchParameters &parameters,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
-    indexes::VectorBase *vector_index, size_t qualified_entries);
+    indexes::VectorBase *vector_index, size_t qualified_entries,
+    QueryContext &query_ctx);
 
-bool QueryHasTextPredicate(const SearchParameters &parameters);
+// Returns the single VECTOR_RANGE predicate in `parameters`, or nullptr.
+const VectorRangePredicate *GetVectorRangePredicate(
+    const SearchParameters &parameters);
+
+// Returns the distance score field name for the single VR predicate in the
+// query: the $yield_distance_as (or AS) name if set, otherwise "" (empty).
+// Redisearch parity: a VECTOR_RANGE distance is surfaced ONLY under an explicit
+// alias — there is no default "__<alias>_score" field — so an empty name here
+// suppresses the field wherever emission is gated on a non-empty name. Also
+// returns "" when the query has no VR predicate.
+std::string GetVrScoreFieldName(const SearchParameters &parameters);
+
+// The name to re-file an older shard's SORTBY values under, or nullopt. A whole
+// hash, or a RETURN of the sort field, already has the field, and an
+// alias-named entry there is a real field.
+std::optional<std::string> OldShardSortByRefileKey(
+    const SearchParameters &parameters);
+
+// Count the number of VectorRangePredicate nodes in the predicate tree. Used
+// at parse time to reject unsupported multi-VR queries (single-VR only).
+// Returns 0 when predicate is null.
+size_t CountVectorRangePredicates(const Predicate *predicate);
 
 // Check if no results should be returned based on limit parameters
 bool ShouldReturnNoResults(const SearchParameters &parameters);
+
+// INFO counters, for behavioral tests: the non-vector fetch-cap counter, the
+// VECTOR_RANGE truncation counter, and the HNSW range exact-scan counter for
+// `fallback` (0 for kNone).
+int64_t GetNonVectorResultsFetchedLimitedCount();
+int64_t GetVectorRangeResultsFetchedLimitedCount();
+int64_t GetVectorRangeFallbackCount(indexes::RangeFallback fallback);
 
 // Scans for the vector filter delimiter `=>` that is followed by `[` (after
 // optional whitespace). Returns the position of `=>` or npos if not found.
 // Exposed for testing.
 size_t FindVectorDelimiter(absl::string_view expr);
 
-// Scores admitted candidate documents by walking the predicate tree.
-// For each TermPredicate leaf, looks up each candidate's term frequency
-// and feeds the scorer. Writes scores into candidates in-place. Sorting and
-// trimming to the requested limit happen later in SearchResult::TrimResults.
-void ScoreTextQuery(const IndexSchema &index_schema,
-                    const Predicate *root_predicate,
-                    const indexes::scoring::Scorer *scorer,
-                    std::vector<indexes::BorrowedNeighbor> &candidates);
+// Scores admitted candidates in place by walking the predicate tree per
+// document. Sorting and trimming to the requested limit happen later in
+// SearchResult::TrimResults. `query_ctx` is the query's, so leaves resolved
+// while filtering are reused here.
+void ScoreTextQuery(const Predicate *root_predicate,
+                    std::vector<indexes::BorrowedNeighbor> &candidates,
+                    QueryContext &query_ctx);
 
-// Recomputes composed relevance scores for single already-matched documents by
-// walking the predicate tree through the exact same Scorer seam ScoreTextQuery
-// uses: ResolveLeaves (dt/IDF) -> ScoreNode (per-leaf ScoreLeaf / weight +
-// AND/OR composition) -> Scorer::ComposeDocumentScore. Every input
-// (total_docs, avg_doc_len, per-term IDF, term frequency, doc_len, document
-// score) is sourced IDENTICALLY to ScoreTextQuery, so values returned here are
-// on the same scale as shard-side scores and rank correctly against
-// non-recomputed neighbors.
-//
-// All document-independent inputs (posting lists, per-term IDF, corpus stats)
-// are resolved ONCE at construction, so scoring N mutated documents in a reply
-// costs one resolve instead of N. Construct lazily on the first document that
-// needs a recompute and reuse for the rest of the reply.
-//
-// The constructor and Score() each acquire the index reader lock internally,
-// so callers must NOT already hold it: TimeSlicedMRMWMutex is non-reentrant
-// and a nested acquire can deadlock in SwitchWithWait() when the inverse mode
-// is waiting and the time quota is exceeded. Used by the main-thread
-// content-fetch revalidation path (response_generator.cc VerifyFilter) where a
-// document mutated between scoring and fetch needs a fresh, scale-consistent
-// score. Score() returns
-// nullopt for an empty corpus or when ScoreNode reports a non-match (mirroring
-// ScoreTextQuery's per-candidate result); callers treat nullopt as "score 0",
-// never a drop.
-class SingleDocumentScorer {
- public:
-  SingleDocumentScorer(const IndexSchema &index_schema,
-                       const Predicate *root_predicate,
-                       const indexes::scoring::Scorer *scorer);
-  ~SingleDocumentScorer();
-  SingleDocumentScorer(const SingleDocumentScorer &) = delete;
-  SingleDocumentScorer &operator=(const SingleDocumentScorer &) = delete;
+// A revalidated document's tags for the predicate's field, read from the
+// fetched record rather than the index, which may not reflect the mutation yet.
+// nullopt when the record has no such field.
+std::optional<absl::flat_hash_set<absl::string_view>> ReadRecordTags(
+    const RecordsMap &records, const TagPredicate &predicate);
 
-  std::optional<float> Score(const InternedStringPtr &key) const;
-
- private:
-  struct State;
-  std::unique_ptr<State> state_;
-};
+// Main-thread rescoring of one revalidated document, through the same ScoreNode
+// walk ScoreTextQuery runs so the result is on the shard-side scale.
+// `query_ctx` must be in kShortLocks: this runs outside any time-sliced read
+// phase and never acquires that mutex. nullopt when ScoreNode re-derives a
+// non-match; callers score 0 rather than drop the document.
+std::optional<float> RecomputeDocumentScore(const Predicate *root_predicate,
+                                            const InternedStringPtr &key,
+                                            QueryContext &query_ctx,
+                                            const RecordsMap &records);
 
 }  // namespace valkey_search::query
 #endif  // VALKEYSEARCH_SRC_QUERY_SEARCH_H_

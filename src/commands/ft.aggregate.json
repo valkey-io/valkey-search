@@ -9,6 +9,10 @@
       [
         "1.2.0",
         "Added Text Indexing and Search support"
+      ],
+      [
+        "1.3.0-RC1",
+        "Added WITHCURSOR, ADDSCORES and SCORER options, TOLIST, FIRST_VALUE and RANDOM_SAMPLE reducers, VECTOR_RANGE queries and HYBRID_POLICY, and LOAD ... AS (with `search.emulate-release 1.3.0`)"
       ]
     ],
     "arguments": [
@@ -21,6 +25,12 @@
         "key_spec_index": 1,
         "name": "query",
         "type": "string"
+      },
+      {
+        "name": "ADDSCORES",
+        "type": "pure-token",
+        "optional": true,
+        "token": "ADDSCORES"
       },
       {
         "name": "DIALECT",
@@ -54,9 +64,31 @@
                 "type": "integer"
               },
               {
-                "name": "field",
-                "type": "string",
-                "multiple": true
+                "name": "load_field",
+                "type": "block",
+                "multiple": true,
+                "arguments": [
+                  {
+                    "name": "field",
+                    "type": "string"
+                  },
+                  {
+                    "name": "as_alias",
+                    "type": "block",
+                    "optional": true,
+                    "arguments": [
+                      {
+                        "name": "as_token",
+                        "type": "pure-token",
+                        "token": "AS"
+                      },
+                      {
+                        "name": "alias",
+                        "type": "string"
+                      }
+                    ]
+                  }
+                ]
               }
             ]
           }
@@ -88,6 +120,12 @@
             ]
           }
         ]
+      },
+      {
+        "name": "SCORER",
+        "token": "SCORER",
+        "type": "string",
+        "optional": true
       },
       {
         "name": "SLOP",
@@ -153,7 +191,8 @@
           {
             "name": "field",
             "type": "string",
-            "multiple": true
+            "multiple": true,
+            "optional": true
           },
           {
             "name": "REDUCE",
@@ -176,6 +215,11 @@
                     "name": "COUNT_DISTINCT",
                     "type": "pure-token",
                     "token": "COUNT_DISTINCT"
+                  },
+                  {
+                    "name": "COUNT_DISTINCTISH",
+                    "type": "pure-token",
+                    "token": "COUNT_DISTINCTISH"
                   },
                   {
                     "name": "SUM",
@@ -216,6 +260,11 @@
                     "name": "RANDOM_SAMPLE",
                     "type": "pure-token",
                     "token": "RANDOM_SAMPLE"
+                  },
+                  {
+                    "name": "QUANTILE",
+                    "type": "pure-token",
+                    "token": "QUANTILE"
                   }
                 ]
               },

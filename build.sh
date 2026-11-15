@@ -580,6 +580,10 @@ if [ -f "${BUILD_DIR}/compile_commands.json" ]; then
 fi
 
 if [[ "${RUN_BUILD}" == "yes" ]]; then
+    # Integration tests only load the module, so don't build the unit tests for them.
+    if [[ "${INTEGRATION_TEST}" == "yes" && -z "${RUN_TEST}" && -z "${CMAKE_TARGET}" ]]; then
+        CMAKE_TARGET="libsearch"
+    fi
     build
 fi
 

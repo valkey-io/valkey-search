@@ -15,6 +15,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "absl/base/thread_annotations.h"
@@ -33,6 +34,7 @@
 #include "src/expr/expr.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
+#include "src/indexes/text/language_registry.h"
 #include "src/indexes/text/text_index.h"
 #include "src/indexes/vector_base.h"
 #include "src/keyspace_event_manager.h"
@@ -40,6 +42,7 @@
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/command_parser.h"
+#include "vmsdk/src/huge/flat_hash_map.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/thread_pool.h"
@@ -98,8 +101,8 @@ class IndexSchema : public KeyspaceEventSubscription,
 
   // Transparent functors so GetDocumentScore() can probe with a borrowed key.
   using IndexKeyInfoMap =
-      absl::flat_hash_map<Key, IndexKeyInfo, InternedStringPtrHash,
-                          InternedStringPtrEq>;
+      vmsdk::HugeFlatHashMap<Key, IndexKeyInfo, InternedStringPtrHash,
+                             InternedStringPtrEq>;
 
   struct InfoIndexPartitionData {
     uint64_t num_docs;
@@ -207,34 +210,23 @@ class IndexSchema : public KeyspaceEventSubscription,
     }
     return itr->second.document_score;
   }
-
-  uint32_t GetDocumentLength(BorrowedInternedStringPtr key) const
-      ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
-    if (!text_index_schema_) {
-      return 0;
-    }
-    return text_index_schema_->GetKeyDocLen(key, false);
-  }
-
-  uint32_t GetDocumentNorm(const Key &key) const
-      ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
-    if (!text_index_schema_) {
-      return 0;
-    }
-    return text_index_schema_->GetKeyNorm(key);
-  }
-
-  uint64_t GetTotalDocumentLength() const
-      ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
-    if (!text_index_schema_) {
-      return 0;
-    }
-    return text_index_schema_->GetMetadata().total_doc_len.load();
+  // Main-thread read, which must not wait on the time-sliced mutex: every
+  // writer of index_key_info_ takes mutated_records_mutex_, so a short hold of
+  // it suffices.
+  float GetDocumentScoreLocked(BorrowedInternedStringPtr key) const
+      ABSL_LOCKS_EXCLUDED(mutated_records_mutex_) {
+    absl::MutexLock lock(&mutated_records_mutex_);
+    auto itr = index_key_info_.find(key);
+    return itr == index_key_info_.end() ? score_ : itr->second.document_score;
   }
 
   void CreateTextIndexSchema() {
+    auto language = indexes::text::LanguageRegistry::Instance().Get(language_);
+    CHECK(language != nullptr)
+        << "Unregistered language: " << data_model::Language_Name(language_);
     text_index_schema_ = std::make_shared<indexes::text::TextIndexSchema>(
-        language_, punctuation_, with_offsets_, stop_words_, min_stem_size_);
+        std::move(language), punctuation_, stop_words_, with_offsets_,
+        min_stem_size_);
     // BM25's N is the count of ALL indexed docs, not just text-bearing keys.
     // IndexSchema owns text_index_schema_, so `this` outlives the callback; the
     // scoring hot path already holds time_sliced_mutex_ in read phase when this
@@ -333,6 +325,15 @@ class IndexSchema : public KeyspaceEventSubscription,
       std::unique_ptr<query::SearchParameters> &&params)
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
 
+  // Blocks until the in-flight mutations of `neighbors` are indexed, or
+  // `deadline` passes (false). For queries that reply synchronously and so
+  // cannot be parked in the mutation queue by PerformKeyContentionCheck.
+  // While the writer pool is suspended for a fork, applies them on the
+  // calling thread instead, taking time_sliced_mutex_ as writer.
+  bool WaitForContendedKeys(const std::vector<indexes::Neighbor> &neighbors,
+                            absl::Time deadline)
+      ABSL_LOCKS_EXCLUDED(mutated_records_mutex_, time_sliced_mutex_);
+
   static absl::Status TextInfoCmd(ValkeyModuleCtx *ctx,
                                   vmsdk::ArgsIterator &itr);
   struct DbKeyInfo {
@@ -389,6 +390,15 @@ class IndexSchema : public KeyspaceEventSubscription,
   // REQUIRES: time_sliced_mutex_ held in read phase
   size_t GetIndexKeyInfoSize() const
       ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
+    return index_key_info_.size();
+  }
+
+  // Main-thread read, which must not wait on the time-sliced mutex: every
+  // writer of index_key_info_ takes mutated_records_mutex_, so a short hold of
+  // it suffices.
+  size_t GetIndexKeyInfoSizeLocked() const
+      ABSL_LOCKS_EXCLUDED(mutated_records_mutex_) {
+    absl::MutexLock lock(&mutated_records_mutex_);
     return index_key_info_.size();
   }
 
@@ -521,7 +531,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   mutable absl::Mutex mutated_records_mutex_;
 
   MutationSequenceNumber schema_mutation_sequence_number_{0};
-  vmsdk::MainThreadAccessGuard<absl::flat_hash_map<Key, DbKeyInfo>>
+  vmsdk::MainThreadAccessGuard<vmsdk::HugeFlatHashMap<Key, DbKeyInfo>>
       db_key_info_;  // Mainthread.
 
   // For proper sequencing and thread-safety, we separate reads/writes into
@@ -661,10 +671,15 @@ class IndexSchema : public KeyspaceEventSubscription,
   FRIEND_TEST(IndexSchemaFriendTest, FlatConsistencyTest);
   FRIEND_TEST(IndexSchemaFriendTest, MutatedAttributes);
   FRIEND_TEST(IndexSchemaFriendTest, WeightedBuffer);
+  FRIEND_TEST(IndexSchemaFriendTest, WaitForContendedKeysWhileSuspended);
+  FRIEND_TEST(IndexSchemaFriendTest, WaitForContendedKeysUntilApplied);
+  FRIEND_TEST(IndexSchemaFriendTest, WaitForContendedKeysDeadlineWhileBlocked);
   FRIEND_TEST(IndexSchemaFriendTest, MutatedAttributesSanity);
   FRIEND_TEST(IndexSchemaFriendTest, InvalidDataDropsKey);
   FRIEND_TEST(IndexSchemaFriendTest,
               InTrackedMutationRecordsAfterConsumeNoCrash);
+  // Orphan multi/exec key is skipped on save (test-only access).
+  FRIEND_TEST(IndexSchemaFriendTest, OrphanMultiKeySkippedOnSave);
   FRIEND_TEST(ValkeySearchTest, Info);
   FRIEND_TEST(OnSwapDBCallbackTest, OnSwapDBCallback);
 };

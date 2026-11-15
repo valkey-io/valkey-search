@@ -1,3 +1,5 @@
+# Never use time.sleep() to wait for indexing: writes are searchable
+# immediately (see README).
 import pytest, struct
 from .generate import BaseCompatibilityTest
 from .data_sets import VECTOR_DIM

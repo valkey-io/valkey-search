@@ -5,15 +5,22 @@ filter at content-fetch time. These cover the other half of that: its distance
 is recomputed against the vector it holds now, and the reply is put back in
 order once it has been. The last case covers FT.HYBRID, whose VSIM arm does the
 same work in RevalidateArmsBeforeFusion before the arms are fused.
+
+The VECTOR_RANGE cases at the end cover the filter half for a range query: a
+rewritten document stays in the reply only if the vector it holds now is in
+range.
 """
 
 import struct
 
 from valkey.client import Valkey
-from valkey_search_test_case import ValkeySearchTestCaseDebugMode
+from valkey_search_test_case import (
+    ValkeySearchClusterTestCaseDebugMode,
+    ValkeySearchTestCaseDebugMode,
+)
 from valkeytestframework.util import waiters
 from valkeytestframework.conftest import resource_port_tracker
-from utils import IndexingTestHelper, run_in_thread
+from utils import IndexingTestHelper, find_local_key, run_in_thread
 
 
 def _vec(*xs: float) -> bytes:
@@ -62,8 +69,8 @@ class TestVectorMutationRescore(ValkeySearchTestCaseDebugMode):
             rows.append((result[i], fields[b"dist"]))
         return rows
 
-    def _park_mutation(self, client: Valkey, *hset_args):
-        """Queue an HSET and hold it at the mutation pausepoint.
+    def _park_mutation(self, client: Valkey, *write):
+        """Queue a write and hold it at the mutation pausepoint.
 
         The write lands in the database immediately; only the index update
         waits. So while this is parked the index still describes the old
@@ -73,7 +80,7 @@ class TestVectorMutationRescore(ValkeySearchTestCaseDebugMode):
         client.execute_command(
             "FT._DEBUG", "PAUSEPOINT", "SET", "mutation_processing")
         thread, _, err = run_in_thread(
-            lambda: self.server.get_new_client().execute_command(*hset_args))
+            lambda: self.server.get_new_client().execute_command(*write))
         waiters.wait_for_true(
             lambda: client.execute_command(
                 "FT._DEBUG", "PAUSEPOINT", "TEST", "mutation_processing") >= 1,
@@ -227,3 +234,296 @@ class TestVectorMutationRescore(ValkeySearchTestCaseDebugMode):
         rows = self.knn(client)
         assert [k for k, _ in rows] == [b"d:1", b"d:2", b"d:3", b"d:4"]
         assert [float(d) for _, d in rows] == [1.0, 4.0, 9.0, 16.0]
+
+    # -------- VECTOR_RANGE: membership is re-checked on the current vector --
+    #
+    # A VECTOR_RANGE reply re-checks a mutated document's predicate while its
+    # content is fetched, like any other filter. The range test there has to
+    # read the vector the document holds now: the index still holds the old
+    # one, and is not safe to read outside the search's reader lock anyway.
+
+    def vr_rows(self, client: Valkey, query: str, *extra):
+        """Return (key, fields) rows in reply order for a range query."""
+        result = client.execute_command(
+            "FT.SEARCH", self.INDEX, query, *extra,
+            "DIALECT", "2", "PARAMS", "2", "q", self.Q)
+        rows = []
+        for i in range(1, len(result), 2):
+            fields = {result[i + 1][j]: result[i + 1][j + 1]
+                      for j in range(0, len(result[i + 1]), 2)}
+            rows.append((result[i], fields))
+        return rows
+
+    def vr(self, client: Valkey):
+        """Keys of a content-returning VECTOR_RANGE reply. Radius 5 around
+        the origin takes the documents at 1 and 4."""
+        result = client.execute_command(
+            "FT.SEARCH", self.INDEX, "@vec:[VECTOR_RANGE 5 $q]",
+            "RETURN", "1", "price",
+            "DIALECT", "2", "PARAMS", "2", "q", self.Q)
+        return sorted(result[i] for i in range(1, len(result), 2))
+
+    def test_vector_range_drops_a_document_that_left_the_range(self):
+        """d:1 is in range, then its vector moves far away. A reply taken
+        while the index still holds the old vector must leave it out."""
+        client: Valkey = self.server.get_new_client()
+        self.setup_index(client)
+        assert self.vr(client) == [b"d:1", b"d:2"]
+
+        thread, err = self._park_mutation(
+            client, "HSET", "d:1", "vec", _vec(99.0, 0, 0, 0))
+        during = self.vr(client)
+        self._release(client, thread, err)
+
+        assert during == self.vr(client) == [b"d:2"]
+
+    def test_vector_range_drops_a_document_whose_vector_is_gone(self):
+        """A document whose vector field was deleted has no vector that could
+        be in range."""
+        client: Valkey = self.server.get_new_client()
+        self.setup_index(client)
+
+        thread, err = self._park_mutation(client, "HDEL", "d:1", "vec")
+        during = self.vr(client)
+        self._release(client, thread, err)
+
+        assert during == self.vr(client) == [b"d:2"]
+
+    def test_vector_range_keeps_a_document_that_moved_within_the_range(self):
+        """The control: a document that moved but is still in range stays."""
+        client: Valkey = self.server.get_new_client()
+        self.setup_index(client)
+
+        thread, err = self._park_mutation(
+            client, "HSET", "d:2", "vec", _vec(0.5, 0, 0, 0))
+        during = self.vr(client)
+        self._release(client, thread, err)
+
+        assert during == self.vr(client) == [b"d:1", b"d:2"]
+
+    def test_vector_range_yields_the_recomputed_distance(self):
+        """A vector moving within the radius refreshes its distance and order."""
+        client: Valkey = self.server.get_new_client()
+        self.setup_index(client)
+
+        def query():
+            rows = self.vr_rows(
+                client,
+                "@vec:[VECTOR_RANGE 5 $q]=>{$yield_distance_as: dist}",
+                "RETURN", "1", "dist", "SORTBY", "dist", "ASC")
+            return [(key, round(float(fields[b"dist"]), 4))
+                    for key, fields in rows]
+
+        assert query() == [(b"d:1", 1.0), (b"d:2", 4.0)]
+        thread, err = self._park_mutation(
+            client, "HSET", "d:2", "vec", _vec(0.5, 0, 0, 0))
+        during = query()
+        self._release(client, thread, err)
+        after = query()
+
+        assert during == after == [(b"d:2", 0.25), (b"d:1", 1.0)]
+
+    def test_aggregate_vector_range_yields_recomputed_distance(self):
+        """Synthetic-only aggregate rows use the current distance and order."""
+        client: Valkey = self.server.get_new_client()
+        self.setup_index(client)
+
+        def query():
+            result = client.execute_command(
+                "FT.AGGREGATE", self.INDEX,
+                "@vec:[VECTOR_RANGE 5 $q]=>{$yield_distance_as: dist}",
+                "PARAMS", "2", "q", self.Q,
+                "LOAD", "2", "@__key", "@dist",
+                "SORTBY", "2", "@dist", "ASC", "DIALECT", "2")
+            rows = []
+            for row in result[1:]:
+                fields = {row[i]: row[i + 1]
+                          for i in range(0, len(row), 2)}
+                rows.append((fields[b"__key"],
+                             round(float(fields[b"dist"]), 4)))
+            return rows
+
+        assert query() == [(b"d:1", 1.0), (b"d:2", 4.0)]
+        thread, err = self._park_mutation(
+            client, "HSET", "d:2", "vec", _vec(0.5, 0, 0, 0))
+        during = query()
+        self._release(client, thread, err)
+        after = query()
+
+        assert during == after == [(b"d:2", 0.25), (b"d:1", 1.0)]
+
+    def test_vector_range_or_survivor_loses_stale_distance(self):
+        """An OR-only survivor outside the current radius has no distance."""
+        client: Valkey = self.server.get_new_client()
+        self.setup_index(client)
+
+        def query():
+            rows = self.vr_rows(
+                client,
+                "@vec:[VECTOR_RANGE 5 $q]=>{$yield_distance_as: dist} | "
+                "@price:[2 2]",
+                "RETURN", "1", "dist", "SORTBY", "dist", "ASC")
+            return [
+                (key, round(float(fields[b"dist"]), 4)
+                 if b"dist" in fields else None)
+                for key, fields in rows
+            ]
+
+        assert query() == [(b"d:1", 1.0), (b"d:2", 4.0)]
+        thread, err = self._park_mutation(
+            client, "HSET", "d:2", "vec", _vec(99.0, 0, 0, 0))
+        during = query()
+        self._release(client, thread, err)
+        after = query()
+
+        assert during == after == [(b"d:1", 1.0), (b"d:2", None)]
+
+    def test_vector_range_or_survivor_gains_current_distance(self):
+        """An OR-only survivor entering the radius gains its fresh distance."""
+        client: Valkey = self.server.get_new_client()
+        self.setup_index(client)
+
+        def query():
+            rows = self.vr_rows(
+                client,
+                "@vec:[VECTOR_RANGE 5 $q]=>{$yield_distance_as: dist} | "
+                "@price:[3 3]",
+                "RETURN", "1", "dist", "SORTBY", "dist", "ASC")
+            return [
+                (key, round(float(fields[b"dist"]), 4)
+                 if b"dist" in fields else None)
+                for key, fields in rows
+            ]
+
+        assert query() == [
+            (b"d:1", 1.0), (b"d:2", 4.0), (b"d:3", None)]
+        thread, err = self._park_mutation(
+            client, "HSET", "d:3", "vec", _vec(0.5, 0, 0, 0))
+        during = query()
+        self._release(client, thread, err)
+        after = query()
+
+        assert during == after == [
+            (b"d:3", 0.25), (b"d:1", 1.0), (b"d:2", 4.0)]
+
+    def test_vector_range_json_yields_the_recomputed_distance(self):
+        """JSON vector conversion also refreshes yielded distance and order."""
+        client: Valkey = self.server.get_new_client()
+        client.execute_command(
+            "FT.CREATE", self.INDEX, "ON", "JSON", "PREFIX", "1", "j:",
+            "SCHEMA", "$.price", "AS", "price", "NUMERIC",
+            "$.vec", "AS", "vec", "VECTOR", "FLAT", "6",
+            "TYPE", "FLOAT32", "DIM", "4", "DISTANCE_METRIC", "L2")
+        for i in range(1, 5):
+            client.execute_command(
+                "JSON.SET", f"j:{i}", "$",
+                f'{{"price":{i},"vec":[{float(i)},0,0,0]}}')
+        IndexingTestHelper.wait_for_indexing_complete_on_node(
+            client, self.INDEX)
+
+        def query():
+            rows = self.vr_rows(
+                client,
+                "@vec:[VECTOR_RANGE 5 $q]=>{$yield_distance_as: dist}",
+                "RETURN", "1", "dist", "SORTBY", "dist", "ASC")
+            return [(key, round(float(fields[b"dist"]), 4))
+                    for key, fields in rows]
+
+        assert query() == [(b"j:1", 1.0), (b"j:2", 4.0)]
+        thread, err = self._park_mutation(
+            client, "JSON.SET", "j:2", "$.vec", "[0.5,0,0,0]")
+        during = query()
+        self._release(client, thread, err)
+        after = query()
+
+        assert during == after == [(b"j:2", 0.25), (b"j:1", 1.0)]
+
+    def test_vector_range_json_drops_a_document_that_left_the_range(self):
+        """The same for JSON, whose vector is fetched as text and has to be
+        converted the way ingestion converts it."""
+        client: Valkey = self.server.get_new_client()
+        client.execute_command(
+            "FT.CREATE", self.INDEX, "ON", "JSON", "PREFIX", "1", "j:",
+            "SCHEMA", "$.price", "AS", "price", "NUMERIC",
+            "$.vec", "AS", "vec", "VECTOR", "FLAT", "6",
+            "TYPE", "FLOAT32", "DIM", "4", "DISTANCE_METRIC", "L2")
+        for i in range(1, 5):
+            client.execute_command(
+                "JSON.SET", f"j:{i}", "$",
+                f'{{"price": {i}, "vec": [{i}, 0, 0, 0]}}')
+        IndexingTestHelper.wait_for_indexing_complete_on_node(
+            client, self.INDEX)
+        assert self.vr(client) == [b"j:1", b"j:2"]
+
+        thread, err = self._park_mutation(
+            client, "JSON.SET", "j:1", "$.vec", "[99, 0, 0, 0]")
+        during = self.vr(client)
+        self._release(client, thread, err)
+
+        assert during == self.vr(client) == [b"j:2"]
+
+
+class TestVectorRangeMutationRescoreCluster(
+        ValkeySearchClusterTestCaseDebugMode):
+    """Remote shards preserve aggregate distance revalidation through fanout."""
+
+    def append_startup_args(self, args: dict[str, str]) -> dict[str, str]:
+        args = super().append_startup_args(args)
+        args["search.writer-threads"] = "2"
+        args["search.reader-threads"] = "4"
+        return args
+
+    def test_remote_aggregate_yields_recomputed_distance(self):
+        cluster = self.new_cluster_client()
+        assert cluster.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "r:",
+            "SCHEMA", "vec", "VECTOR", "HNSW", "6",
+            "TYPE", "FLOAT32", "DIM", "4", "DISTANCE_METRIC", "L2") == b"OK"
+        primaries = [self.client_for_primary(i)
+                     for i in range(len(self.replication_groups))]
+        tag = find_local_key(primaries[1], "vr-rescore-owner-")
+        near = f"r:{{{tag}}}:near"
+        moved = f"r:{{{tag}}}:moved"
+        primaries[1].hset(near, mapping={"vec": _vec(1.0, 0, 0, 0)})
+        primaries[1].hset(moved, mapping={"vec": _vec(2.0, 0, 0, 0)})
+        for primary in primaries:
+            IndexingTestHelper.wait_for_indexing_complete_on_node(
+                primary, "idx")
+
+        def query():
+            result = primaries[0].execute_command(
+                "FT.AGGREGATE", "idx",
+                "@vec:[VECTOR_RANGE 5 $q]=>{$yield_distance_as: dist}",
+                "PARAMS", "2", "q", _vec(0.0, 0, 0, 0),
+                "LOAD", "2", "@__key", "@dist",
+                "SORTBY", "2", "@dist", "ASC", "DIALECT", "2")
+            rows = []
+            for row in result[1:]:
+                fields = {row[i]: row[i + 1]
+                          for i in range(0, len(row), 2)}
+                rows.append((fields[b"__key"].decode(),
+                             round(float(fields[b"dist"]), 4)))
+            return rows
+
+        assert query() == [(near, 1.0), (moved, 4.0)]
+        primaries[1].execute_command(
+            "FT._DEBUG", "PAUSEPOINT", "SET", "mutation_processing")
+        thread, _, err = run_in_thread(
+            lambda: self.client_for_primary(1).execute_command(
+                "HSET", moved, "vec", _vec(0.5, 0, 0, 0)))
+        waiters.wait_for_true(
+            lambda: primaries[1].execute_command(
+                "FT._DEBUG", "PAUSEPOINT", "TEST",
+                "mutation_processing") >= 1,
+            timeout=5)
+        during = query()
+        primaries[1].execute_command(
+            "FT._DEBUG", "PAUSEPOINT", "RESET", "mutation_processing")
+        thread.join()
+        assert err[0] is None
+        for primary in primaries:
+            IndexingTestHelper.wait_for_indexing_complete_on_node(
+                primary, "idx")
+        after = query()
+
+        assert during == after == [(moved, 0.25), (near, 1.0)]

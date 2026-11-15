@@ -135,50 +135,30 @@ LANGS=$(ls src_c/stem_UTF_8_*.h 2>/dev/null | sed 's/.*stem_UTF_8_\(.*\)\.h/\1/'
     
 } > libstemmer/modules.h
 
-# Update CMakeLists.txt with new language sources
+# Update only the STEMMER_SOURCES block in CMakeLists.txt (between markers)
 echo "Updating CMakeLists.txt..."
-{
-    echo "# Snowball stemming library"
-    echo "# Build the libstemmer C library"
-    echo "# Version: $VERSION"
-    echo
-    echo "set(SNOWBALL_SOURCE_DIR \${CMAKE_CURRENT_SOURCE_DIR})"
-    echo
-    echo "# Source files for libstemmer"
-    echo "set(LIBSTEMMER_SOURCES"
-    echo "  \${SNOWBALL_SOURCE_DIR}/libstemmer/libstemmer.c"
-    echo "  \${SNOWBALL_SOURCE_DIR}/runtime/api.c"
-    echo "  \${SNOWBALL_SOURCE_DIR}/runtime/utilities.c"
-    echo ")"
-    echo
-    echo "# Generated stemmer sources (UTF-8 versions for supported languages)"
-    echo "set(STEMMER_SOURCES"
-    for f in src_c/stem_UTF_8_*.c; do
-        if [ -f "$f" ]; then
-            lang=$(basename "$f" .c | sed 's/stem_UTF_8_//')
-            echo "  \${SNOWBALL_SOURCE_DIR}/src_c/stem_UTF_8_${lang}.c"
-        fi
-    done
-    echo ")"
-    echo
-    echo "# Create the snowball library"
-    echo "add_library(snowball STATIC \${LIBSTEMMER_SOURCES} \${STEMMER_SOURCES})"
-    echo
-    echo "# Set include directories"
-    echo "target_include_directories(snowball PUBLIC" 
-    echo "  \${SNOWBALL_SOURCE_DIR}/include"
-    echo "  \${SNOWBALL_SOURCE_DIR}"
-    echo ")"
-    echo
-    echo "# Set compile flags to match the original build"
-    echo "target_compile_options(snowball PRIVATE -w) # Suppress warnings from third-party code"
-    echo
-    echo "# Export the target"
-    echo "set_target_properties(snowball PROPERTIES"
-    echo "  POSITION_INDEPENDENT_CODE ON"
-    echo "  CXX_STANDARD 20"
-    echo ")"
-} > CMakeLists.txt
+MARKER_BEGIN="# BEGIN GENERATED STEMMER SOURCES — do not edit manually"
+MARKER_END="# END GENERATED STEMMER SOURCES — do not edit manually"
+
+if ! grep -q "$MARKER_BEGIN" CMakeLists.txt || ! grep -q "$MARKER_END" CMakeLists.txt; then
+    echo "Error: CMakeLists.txt is missing generated source markers."
+    echo "Expected to find both '$MARKER_BEGIN' and '$MARKER_END' markers."
+    exit 1
+fi
+
+# Build the replacement block
+SOURCES_BLOCK="${MARKER_BEGIN}"
+SOURCES_BLOCK+="\nset(STEMMER_SOURCES"
+for f in src_c/stem_UTF_8_*.c; do
+    if [ -f "$f" ]; then
+        SOURCES_BLOCK+="\n  \${SNOWBALL_SOURCE_DIR}/$f"
+    fi
+done
+SOURCES_BLOCK+="\n)"
+SOURCES_BLOCK+="\n${MARKER_END}"
+
+# Replace content between markers (inclusive)
+sed -i "/${MARKER_BEGIN}/,/${MARKER_END}/c\\${SOURCES_BLOCK}" CMakeLists.txt
 
 rm -rf "$TEMP_DIR"
 echo "Successfully added languages: $*"

@@ -41,7 +41,9 @@
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
 #include "src/vector_registry.h"
+#include "vmsdk/src/huge/flat_hash_map.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
@@ -230,12 +232,10 @@ class MockIndex : public indexes::VectorBase {
   MOCK_METHOD(size_t, GetCapacity, (), (const, override));
   MOCK_METHOD(absl::Status, RemoveRecordImpl, (uint64_t internal_id),
               (override));
-  absl::Status ModifyRecordImpl(
-      uint64_t, std::shared_ptr<const indexes::VectorRecord> &&) override {
+  absl::Status ModifyRecordImpl(uint64_t, indexes::VectorRecord &&) override {
     return absl::OkStatus();
   }
-  absl::Status AddRecordImpl(
-      uint64_t, std::shared_ptr<const indexes::VectorRecord> &&) override {
+  absl::Status AddRecordImpl(uint64_t, indexes::VectorRecord &&) override {
     return absl::OkStatus();
   }
   MOCK_METHOD(int, RespondWithInfoImpl, (ValkeyModuleCtx * ctx),
@@ -246,17 +246,15 @@ class MockIndex : public indexes::VectorBase {
   absl::Status SaveIndexImpl(RDBChunkOutputStream) const override {
     return absl::OkStatus();
   }
-  std::shared_ptr<const indexes::VectorRecord> &GetVectorLockFree(
-      uint64_t) const override {
-    static std::shared_ptr<const indexes::VectorRecord> p;
+  indexes::VectorRecord &GetVectorLockFree(uint64_t) const override {
+    static indexes::VectorRecord p;
     return p;
   }
-  std::shared_ptr<const indexes::VectorRecord> &GetVector(
-      uint64_t) const override {
-    static std::shared_ptr<const indexes::VectorRecord> p;
+  indexes::VectorRecord &GetVector(uint64_t) const override {
+    static indexes::VectorRecord p;
     return p;
   }
-  float ComputeDistance(absl::string_view, const indexes::VectorRecord *,
+  float ComputeDistance(absl::string_view, const indexes::VectorRecord &,
                         float) const override {
     return 0.0f;
   }
@@ -278,6 +276,11 @@ class MockIndex : public indexes::VectorBase {
       std::unique_ptr<hnswlib::BaseFilterFunctor> = nullptr,
       std::optional<size_t> = std::nullopt, bool = false) override {
     return std::vector<indexes::Neighbor>{};
+  }
+  absl::StatusOr<indexes::RangeResult> SearchRange(absl::string_view,
+                                                   const indexes::RangeQuery &,
+                                                   cancel::Token &) override {
+    return indexes::RangeResult{};
   }
 };
 
@@ -511,6 +514,43 @@ inline void InitThreadPools(std::optional<size_t> readers,
       ->InitThreadPools(readers, writers, utility);
 }
 
+// Toggles search.debug-mode, which gates modification of Dev() configs.
+inline void SetDebugMode(bool enabled) {
+  auto args = vmsdk::ToValkeyStringVector(enabled ? "--debug-mode yes"
+                                                  : "--debug-mode no");
+  VMSDK_EXPECT_OK(
+      vmsdk::config::ModuleConfigManager::Instance().ParseAndLoadArgv(
+          nullptr, args.data(), args.size()));
+  for (auto *arg : args) {
+    TestValkeyModule_FreeString(nullptr, arg);
+  }
+}
+
+// While alive, every HugeFlatHashMap/Set migration batch is 1, so hash-table
+// backgrounds linger for tests of the server cron drain. Restores the defaults
+// and turns debug mode off when destroyed.
+class MinimalHugeMapMigration {
+ public:
+  MinimalHugeMapMigration() {
+    SetDebugMode(true);
+    for (auto *config : Configs()) {
+      VMSDK_EXPECT_OK(config->SetValue(1));
+    }
+  }
+  ~MinimalHugeMapMigration() {
+    for (auto *config : Configs()) {
+      VMSDK_EXPECT_OK(config->SetValue(config->GetDefaultValue()));
+    }
+    SetDebugMode(false);
+  }
+
+ private:
+  static std::vector<vmsdk::config::Number *> Configs() {
+    return {&vmsdk::GetHugeFlatHashMapMigrateBatch(),
+            &vmsdk::GetHugeFlatHashMapCronMigrateBatch()};
+  }
+};
+
 absl::StatusOr<std::shared_ptr<MockIndexSchema>> CreateIndexSchema(
     std::string index_schema_key, ValkeyModuleCtx *fake_ctx = nullptr,
     vmsdk::ThreadPool *writer_thread_pool = nullptr,
@@ -704,12 +744,13 @@ class UnitTestSearchParameters : public query::SearchParameters {
 
 namespace testing_infra {
 
-inline std::shared_ptr<indexes::VectorRecord> MakeVectorRecord(
+inline indexes::VectorRecord MakeVectorRecord(
     absl::string_view raw_vector_bytes) {
   float reciprocal_mag = indexes::CalcReciprocalMagnitude(
       reinterpret_cast<const float *>(raw_vector_bytes.data()),
       raw_vector_bytes.size() / sizeof(float));
-  return indexes::VectorRecord::Construct(raw_vector_bytes, reciprocal_mag);
+  return indexes::VectorRecord::Construct(raw_vector_bytes, reciprocal_mag,
+                                          nullptr);
 }
 
 inline AttributeData MakeStringAttributeData(absl::string_view str) {

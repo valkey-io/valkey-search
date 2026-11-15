@@ -52,8 +52,16 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 include_directories(${CMAKE_SOURCE_DIR})
 include_directories(${CMAKE_BINARY_DIR}/.deps/install/include)
+include_directories(${CMAKE_SOURCE_DIR}/third_party/icu/source/common)
+include_directories(${CMAKE_SOURCE_DIR}/third_party/icu/source/i18n)
 
 include(valkey_search)
+
+# Before any add_subdirectory() that defines tests: add_test() is ignored
+# until enable_testing() has run, and vmsdk/testing defines tests too.
+if(BUILD_UNIT_TESTS)
+  enable_testing()
+endif()
 
 add_subdirectory(vmsdk)
 add_subdirectory(third_party)
@@ -61,7 +69,6 @@ add_subdirectory(src)
 
 if(BUILD_UNIT_TESTS)
   message(STATUS "Building tests")
-  enable_testing()
   add_subdirectory(testing)
   add_subdirectory(integration)
 endif()

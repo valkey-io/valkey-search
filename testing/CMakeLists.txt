@@ -109,13 +109,16 @@ finalize_test_flags(filter_test)
 # 1. Indexes Test Suite - consolidates index-related tests
 set(INDEXES_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/index_schema_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/lexer_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/numeric_index_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/posting_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/snowball_language_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/snowball_stem_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/tag_index_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/text_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/unicode_normalizer_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/space_distance_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/vector_normalize_test.cc)
+    ${CMAKE_CURRENT_LIST_DIR}/vector_normalize_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/chunked_array_test.cc)
 
 add_executable(indexes_test ${INDEXES_TEST_SOURCES})
 target_include_directories(indexes_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
@@ -165,6 +168,7 @@ set(QUERY_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/query/multi_search_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/query/rank_fusion_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/query/response_generator_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/vector_range_predicate_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/search_converter_test.cc)
 
 add_executable(query_test ${QUERY_TEST_SOURCES})
@@ -218,8 +222,10 @@ set(UTILS_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/utils/intrusive_ref_count_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/utils/lru_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/utils/patricia_tree_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/utils/scanner_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/utils/numeric_btree_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/utils/string_interning_test.cc)
+
 
 add_executable(valkey_utils_test ${UTILS_TEST_SOURCES})
 target_include_directories(valkey_utils_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
@@ -228,13 +234,14 @@ target_include_directories(valkey_utils_test
 target_link_libraries(valkey_utils_test PRIVATE testing_common_base)
 target_link_libraries(valkey_utils_test PRIVATE intrusive_list)
 target_link_libraries(valkey_utils_test PRIVATE lru)
+target_link_libraries(valkey_utils_test PRIVATE scanner)
 target_link_libraries(valkey_utils_test PRIVATE numeric_btree)
 finalize_test_flags(valkey_utils_test)
+
 
 # 7. Text Index Test Suite
 add_executable(text_index_test
     ${CMAKE_CURRENT_LIST_DIR}/flat_position_map_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/radix_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/rax_wrapper_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/text_index_schema_test.cc)
 target_include_directories(text_index_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})

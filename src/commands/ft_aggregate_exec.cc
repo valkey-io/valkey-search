@@ -27,6 +27,7 @@
 #include "src/cursor.h"
 #include "src/indexes/index_base.h"
 #include "src/query/response_generator.h"
+#include "src/utils/hyperloglog_counter.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/info.h"
@@ -223,6 +224,10 @@ absl::Status Filter::Execute(RecordSet &records) const {
   return absl::OkStatus();
 }
 
+static bool IsNaNValue(const expr::Value &v) {
+  return v.IsDouble() && std::isnan(v.GetDouble());
+}
+
 // A record with its sort keys, evaluated once before sorting. Every key of
 // every record is evaluated, so whether a key's evaluation error fails the
 // query does not depend on which records happen to tie on an earlier key.
@@ -275,6 +280,16 @@ struct SortFunctor {
       }
       if (l_missing) {
         // Both missing: undecided on this key, try the next one.
+        continue;
+      }
+      // NaN sorts last in both directions. A tie with every value would not
+      // be a strict weak ordering.
+      const bool l_nan = IsNaNValue(lvalue);
+      const bool r_nan = IsNaNValue(rvalue);
+      if (l_nan != r_nan) {
+        return r_nan;
+      }
+      if (l_nan) {
         continue;
       }
       auto cmp = expr::CompareNulls(lvalue, rvalue)
@@ -909,6 +924,18 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> RandomSampleReducerParser(
   return std::unique_ptr<GroupBy::Reducer>(std::move(r));
 }
 
+class CountDistinctish : public GroupBy::ReducerInstance {
+  HyperLogLog hll_;
+  void ProcessRecord(const ArgVector &values) override {
+    if (!values[0].IsNil()) {
+      hll_.Add(values[0]);
+    }
+  }
+  expr::Value GetResult() const override {
+    return expr::Value(static_cast<double>(hll_.Estimate()));
+  }
+};
+
 template <typename T>
 struct BasicReducer : GroupBy::Reducer {
   // BasicReducer(std::string name) : GroupBy::Reducer(std::move(name)) {}
@@ -1087,6 +1114,7 @@ absl::flat_hash_map<std::string, GroupBy::ReducerInfo> GroupBy::reducerTable{
     {"AVG", &BasicReducerParser<Avg, 1, 1>},
     {"COUNT", &BasicReducerParser<Count, 0, 0>},
     {"COUNT_DISTINCT", &BasicReducerParser<CountDistinct, 1, 1>},
+    {"COUNT_DISTINCTISH", &BasicReducerParser<CountDistinctish, 1, 1>},
     {"FIRST_VALUE", &FirstValueReducerParser},
     {"MIN", &BasicReducerParser<Min, 1, 1>},
     {"MAX", &BasicReducerParser<Max, 1, 1>},

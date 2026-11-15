@@ -100,7 +100,7 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::LoadFromRDB(
     ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
     const data_model::VectorIndex &vector_index_proto,
     absl::string_view attribute_identifier, SupplementalContentChunkIter &&iter,
-    int db_num) {
+    int db_num, TrackedKeys *key_labels) {
   try {
     auto index = std::shared_ptr<VectorFlat<T>>(
         new VectorFlat<T>(vector_index_proto.dimension_count(),
@@ -114,8 +114,20 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::LoadFromRDB(
         std::make_unique<FlatIndex>(index->space_.get(), index->normalize_);
     RDBChunkInputStream input(std::move(iter));
 
-    auto generator = [allocator = index->GetVectorAllocator()](
-                         absl::string_view vector_data) {
+    size_t keys_changed_since_save = 0;
+    auto generator = [&, allocator = index->GetVectorAllocator()](
+                         absl::string_view vector_data,
+                         hnswlib::labeltype label) {
+      if (key_labels) {
+        auto it = key_labels->key_by_internal_id.find(label);
+        if (it != key_labels->key_by_internal_id.end()) {
+          if (auto shared = index->ShareIfUnchangedSinceSave(
+                  ctx, attribute_data_type, it->second, vector_data)) {
+            return std::move(*shared);
+          }
+          ++keys_changed_since_save;
+        }
+      }
       float reciprocal_magnitude = CalcReciprocalMagnitude(
           reinterpret_cast<const T *>(vector_data.data()),
           vector_data.size() / sizeof(T));
@@ -125,6 +137,11 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::LoadFromRDB(
     };
     VMSDK_RETURN_IF_ERROR(
         index->algo_->LoadIndex(input, index->space_.get(), generator));
+    if (key_labels) {
+      index->AdoptTrackedKeys(std::move(*key_labels));
+      index->vectors_resolved_on_load_ = true;
+    }
+    index->keys_changed_since_save_ = keys_changed_since_save;
     return index;
   } catch (const std::exception &e) {
     ++Metrics::GetStats().flat_create_exceptions_cnt;

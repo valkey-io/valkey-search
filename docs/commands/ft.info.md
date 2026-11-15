@@ -19,7 +19,7 @@ FT.INFO <index-name>
 - `CONSISTENT` (optional): If specified, the command is terminated with an error if any received response isn't from a consistent version of the index. This is the default.
 - `INCONSISTENT` (optional): If specified, a command result is generated using only the responses from nodes with a consistent version of the index.
 
-`RESPONSE`
+## Reply
 
 ### Response when LOCAL is specified
 

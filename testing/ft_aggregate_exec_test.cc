@@ -6,17 +6,22 @@
 
 #include "src/commands/ft_aggregate_exec.h"
 
+#include <algorithm>
+#include <bit>
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
 #include <memory>
 
+#include "absl/strings/str_cat.h"
 #include "gtest/gtest.h"
 #include "src/attribute_data_type.h"
 #include "src/commands/ft_aggregate_parser.h"
 #include "src/indexes/scoring/scorer.h"
 #include "src/indexes/vector_base.h"
 #include "src/utils/cancel.h"
+#include "src/utils/hyperloglog_counter.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
 #include "testing/common.h"
@@ -373,6 +378,65 @@ TEST_F(AggregateExecTest, SortTest) {
   }
 }
 
+static double NaNValue() { return std::numeric_limits<double>::quiet_NaN(); }
+
+static bool IsNaNValue(const expr::Value &v) {
+  return v.IsDouble() && std::isnan(v.GetDouble());
+}
+
+// Record i holds NaN when i % 3 == 1, else the number (i * 37) % 101.
+static RecordSet MakeDataWithNaNs(size_t m, std::vector<double> &numbers) {
+  RecordSet result(nullptr);
+  numbers.clear();
+  for (size_t i = 0; i < m; ++i) {
+    auto rec = std::make_unique<Record>(2);
+    if (i % 3 == 1) {
+      rec->fields_[0] = expr::Value(NaNValue());
+    } else {
+      const double n = double((i * 37) % 101);
+      rec->fields_[0] = expr::Value(n);
+      numbers.push_back(n);
+    }
+    rec->fields_[1] = expr::Value(double(i));
+    result.emplace_back(std::move(rec));
+  }
+  return result;
+}
+
+// A NaN sort key sorts after every number in both directions.
+TEST_F(AggregateExecTest, SortPutsNaNLast) {
+  for (size_t m : {8, 100}) {
+    for (bool desc : {false, true}) {
+      for (bool use_max : {false, true}) {
+        std::vector<double> numbers;
+        auto records = MakeDataWithNaNs(m, numbers);
+        const size_t nan_count = m - numbers.size();
+        std::string text = absl::StrCat("SORTBY 2 @n1 ", desc ? "DESC" : "ASC");
+        // MAX >= record count takes the stable_sort path, else the heap path.
+        const size_t keep = use_max ? numbers.size() + nan_count / 2 : m;
+        absl::StrAppend(&text, " MAX ", keep);
+        SCOPED_TRACE(absl::StrCat(text, " over ", m, " records"));
+        auto param = MakeStages(text);
+        VMSDK_EXPECT_OK(param->stages_[0]->Execute(records));
+        ASSERT_EQ(records.size(), keep);
+        std::sort(numbers.begin(), numbers.end());
+        if (desc) {
+          std::reverse(numbers.begin(), numbers.end());
+        }
+        for (size_t i = 0; i < records.size(); ++i) {
+          const auto &v = records[i]->fields_[0];
+          if (i < numbers.size()) {
+            ASSERT_FALSE(IsNaNValue(v)) << "position " << i;
+            EXPECT_EQ(v.GetDouble(), numbers[i]) << "position " << i;
+          } else {
+            EXPECT_TRUE(IsNaNValue(v)) << "position " << i;
+          }
+        }
+      }
+    }
+  }
+}
+
 TEST_F(AggregateExecTest, GroupTest) {
   struct Testcase {
     std::string text_;
@@ -691,6 +755,234 @@ TEST_F(AggregateExecTest, ToListReducerTest) {
     EXPECT_TRUE(record->fields_.at(3).IsDouble());
     EXPECT_NEAR(*(record->fields_.at(3).AsDouble()), 4.0, .001);
   }
+}
+
+// Helper: create a record with a specific n1 value and constant n2 group key.
+static std::unique_ptr<Record> RecordWithValue(expr::Value n1, double group) {
+  auto rec = std::make_unique<Record>(2);
+  rec->fields_[0] = std::move(n1);
+  rec->fields_[1] = expr::Value(group);
+  return rec;
+}
+
+// Helper: create records where n1 has duplicate values.
+static RecordSet MakeDuplicateData(size_t distinct, size_t repeats) {
+  RecordSet result(nullptr);
+  for (size_t r = 0; r < repeats; ++r) {
+    for (size_t i = 0; i < distinct; ++i) {
+      result.emplace_back(RecordNOfM(i, 1));
+    }
+  }
+  return result;
+}
+
+TEST_F(AggregateExecTest, CountDistinctishSmallDataset) {
+  auto param = MakeStages("groupby 1 @n2 reduce count_distinctish 1 @n1");
+  auto records = MakeData(4);
+  EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+  EXPECT_EQ(records.size(), 1);
+  auto record = records.pop_front();
+  EXPECT_TRUE(record->fields_.at(2).IsDouble());
+  // The estimate is deterministic; these 4 values set 4 distinct registers.
+  EXPECT_EQ(*(record->fields_.at(2).AsDouble()), 4);
+}
+
+TEST_F(AggregateExecTest, CountDistinctishLargeDataset) {
+  auto param = MakeStages("groupby 1 @n2 reduce count_distinctish 1 @n1");
+  auto records = MakeData(1000);
+  EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+  EXPECT_EQ(records.size(), 1);
+  auto record = records.pop_front();
+  EXPECT_TRUE(record->fields_.at(2).IsDouble());
+  // The estimate is deterministic for the 1000 doubles' bit patterns.
+  EXPECT_EQ(*(record->fields_.at(2).AsDouble()), 999);
+}
+
+TEST_F(AggregateExecTest, CountDistinctishDuplicates) {
+  auto param = MakeStages("groupby 1 @n2 reduce count_distinctish 1 @n1");
+  auto records = MakeDuplicateData(10, 5);
+  EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+  EXPECT_EQ(records.size(), 1);
+  auto record = records.pop_front();
+  EXPECT_TRUE(record->fields_.at(2).IsDouble());
+  // 10 distinct values regardless of duplicates
+  EXPECT_EQ(*(record->fields_.at(2).AsDouble()), 10);
+}
+
+TEST_F(AggregateExecTest, CountDistinctishNilValues) {
+  auto param = MakeStages("groupby 1 @n2 reduce count_distinctish 1 @n1");
+  RecordSet records(nullptr);
+  // 3 real values + 2 nils
+  records.emplace_back(RecordWithValue(expr::Value(1.0), 1));
+  records.emplace_back(RecordWithValue(expr::Value(), 1));
+  records.emplace_back(RecordWithValue(expr::Value(2.0), 1));
+  records.emplace_back(RecordWithValue(expr::Value(), 1));
+  records.emplace_back(RecordWithValue(expr::Value(3.0), 1));
+  EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+  EXPECT_EQ(records.size(), 1);
+  auto record = records.pop_front();
+  EXPECT_TRUE(record->fields_.at(2).IsDouble());
+  // 3 distinct non-nil values
+  EXPECT_EQ(*(record->fields_.at(2).AsDouble()), 3);
+}
+
+TEST_F(AggregateExecTest, CountDistinctishEmptyGroup) {
+  auto param = MakeStages("groupby 1 @n2 reduce count_distinctish 1 @n1");
+  auto records = MakeData(0);
+  EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+  // Empty input produces no groups
+  EXPECT_EQ(records.size(), 0);
+}
+
+TEST_F(AggregateExecTest, CountDistinctishAllNilGroup) {
+  auto param = MakeStages("groupby 1 @n2 reduce count_distinctish 1 @n1");
+  RecordSet records(nullptr);
+  records.emplace_back(RecordWithValue(expr::Value(), 1));
+  records.emplace_back(RecordWithValue(expr::Value(), 1));
+  EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+  EXPECT_EQ(records.size(), 1);
+  auto record = records.pop_front();
+  EXPECT_TRUE(record->fields_.at(2).IsDouble());
+  // All values are nil, so no register is set.
+  EXPECT_EQ(*(record->fields_.at(2).AsDouble()), 0);
+}
+
+TEST_F(AggregateExecTest, CountDistinctishSingleValue) {
+  auto param = MakeStages("groupby 1 @n2 reduce count_distinctish 1 @n1");
+  auto records = MakeData(1);
+  EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+  EXPECT_EQ(records.size(), 1);
+  auto record = records.pop_front();
+  EXPECT_TRUE(record->fields_.at(2).IsDouble());
+  double estimate = *(record->fields_.at(2).AsDouble());
+  EXPECT_EQ(estimate, 1);
+}
+
+// Every group holds one sketch, so its 12 KB dense registers must be
+// allocated only for groups with many distinct values.
+TEST_F(AggregateExecTest, CountDistinctishSmallGroupSize) {
+  EXPECT_LE(sizeof(HyperLogLog), 64);
+}
+
+// Values 0..n-1 set 1023, 1024 and 1025 registers at n = 1055, 1056 and
+// 1058, around the switch from the sparse to the dense representation; at
+// n = 2668 a register lowered by a colliding value would give 2665. The
+// expected values are the dense sketch's estimates.
+TEST_F(AggregateExecTest, CountDistinctishSparseToDense) {
+  auto param = MakeStages("groupby 1 @n2 reduce count_distinctish 1 @n1");
+  for (auto [n, expected] :
+       std::vector<std::pair<size_t, double>>{{1055, 1056},
+                                              {1056, 1057},
+                                              {1058, 1058},
+                                              {2668, 2666},
+                                              {100000, 100079}}) {
+    auto records = MakeData(n);
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    ASSERT_EQ(records.size(), 1);
+    EXPECT_EQ(*records.pop_front()->fields_.at(2).AsDouble(), expected) << n;
+    records = MakeDuplicateData(n, 3);
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    ASSERT_EQ(records.size(), 1);
+    EXPECT_EQ(*records.pop_front()->fields_.at(2).AsDouble(), expected) << n;
+  }
+}
+
+TEST_F(AggregateExecTest, CountDistinctishMultipleReducers) {
+  auto param = MakeStages(
+      "groupby 1 @n2 reduce count_distinctish 1 @n1"
+      " reduce count_distinctish 1 @n2");
+  auto records = MakeData(4);
+  EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+  EXPECT_EQ(records.size(), 1);
+  auto record = records.pop_front();
+  // First reducer: count_distinctish of n1 (4 distinct values: 0,1,2,3)
+  EXPECT_TRUE(record->fields_.at(2).IsDouble());
+  EXPECT_EQ(*(record->fields_.at(2).AsDouble()), 4);
+  // Second reducer: count_distinctish of n2 (1 distinct value: 4)
+  EXPECT_TRUE(record->fields_.at(3).IsDouble());
+  EXPECT_EQ(*(record->fields_.at(3).AsDouble()), 1);
+}
+
+TEST_F(AggregateExecTest, CountDistinctishVsCountDistinct) {
+  auto param_distinctish =
+      MakeStages("groupby 1 @n2 reduce count_distinctish 1 @n1");
+  auto param_distinct = MakeStages("groupby 1 @n2 reduce count_distinct 1 @n1");
+  auto records_ish = MakeData(20);
+  auto records_exact = MakeData(20);
+  EXPECT_TRUE((param_distinctish->stages_[0]->Execute(records_ish)).ok());
+  EXPECT_TRUE((param_distinct->stages_[0]->Execute(records_exact)).ok());
+  EXPECT_EQ(records_ish.size(), 1);
+  EXPECT_EQ(records_exact.size(), 1);
+  auto rec_ish = records_ish.pop_front();
+  auto rec_exact = records_exact.pop_front();
+  double approx = *(rec_ish->fields_.at(2).AsDouble());
+  double exact = *(rec_exact->fields_.at(2).AsDouble());
+  // COUNT_DISTINCT should be exactly 20
+  EXPECT_EQ(exact, 20);
+  EXPECT_EQ(approx, exact);
+}
+
+TEST_F(AggregateExecTest, CountDistinctishArrayValues) {
+  auto param = MakeStages("groupby 1 @n2 reduce count_distinctish 1 @n1");
+  using expr::Value;
+  RecordSet records(nullptr);
+  // Each array counts as one value: [1,2], [2,1], [1,2], "x" are 3 distinct.
+  records.emplace_back(RecordWithValue(Value({Value(1.0), Value(2.0)}), 1));
+  records.emplace_back(RecordWithValue(Value({Value(2.0), Value(1.0)}), 1));
+  records.emplace_back(RecordWithValue(Value({Value(1.0), Value(2.0)}), 1));
+  records.emplace_back(RecordWithValue(Value("x"), 1));
+  EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+  EXPECT_EQ(records.size(), 1);
+  auto record = records.pop_front();
+  EXPECT_TRUE(record->fields_.at(2).IsDouble());
+  EXPECT_EQ(*(record->fields_.at(2).AsDouble()), 3);
+}
+
+// -0.0 and +0.0 are the same double value and must count as one distinct
+// value; two different NaN bit patterns must also collapse to one distinct
+// value (NaN has no canonical textual form, so only the bit-pattern
+// canonicalization makes this deterministic).
+TEST_F(AggregateExecTest, CountDistinctishZeroAndNanCanonicalization) {
+  auto param = MakeStages("groupby 1 @n2 reduce count_distinctish 1 @n1");
+  using expr::Value;
+  RecordSet records(nullptr);
+  records.emplace_back(RecordWithValue(Value(0.0), 1));
+  records.emplace_back(RecordWithValue(Value(-0.0), 1));
+  EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+  EXPECT_EQ(records.size(), 1);
+  EXPECT_EQ(*(records.pop_front()->fields_.at(2).AsDouble()), 1);
+
+  uint64_t nan_bits_a = 0x7FF8000000000001ull;
+  uint64_t nan_bits_b = 0x7FFFFFFFFFFFFFFFull;
+  RecordSet nan_records(nullptr);
+  nan_records.emplace_back(
+      RecordWithValue(Value(std::bit_cast<double>(nan_bits_a)), 1));
+  nan_records.emplace_back(
+      RecordWithValue(Value(std::bit_cast<double>(nan_bits_b)), 1));
+  EXPECT_TRUE((param->stages_[0]->Execute(nan_records)).ok());
+  EXPECT_EQ(nan_records.size(), 1);
+  EXPECT_EQ(*(nan_records.pop_front()->fields_.at(2).AsDouble()), 1);
+}
+
+// Values that render identically as text must not collide: array [1,2] vs
+// string "[1,2]", and bool true vs string "1".
+TEST_F(AggregateExecTest, CountDistinctishMixedTypesDoNotCollide) {
+  auto param = MakeStages("groupby 1 @n2 reduce count_distinctish 1 @n1");
+  using expr::Value;
+  RecordSet array_vs_string(nullptr);
+  array_vs_string.emplace_back(
+      RecordWithValue(Value({Value(1.0), Value(2.0)}), 1));
+  array_vs_string.emplace_back(RecordWithValue(Value("[1,2]"), 1));
+  EXPECT_TRUE((param->stages_[0]->Execute(array_vs_string)).ok());
+  EXPECT_EQ(array_vs_string.size(), 1);
+  EXPECT_EQ(*(array_vs_string.pop_front()->fields_.at(2).AsDouble()), 2);
+
+  RecordSet bool_vs_string(nullptr);
+  bool_vs_string.emplace_back(RecordWithValue(Value(true), 1));
+  bool_vs_string.emplace_back(RecordWithValue(Value("1"), 1));
+  EXPECT_TRUE((param->stages_[0]->Execute(bool_vs_string)).ok());
+  EXPECT_EQ(bool_vs_string.size(), 1);
+  EXPECT_EQ(*(bool_vs_string.pop_front()->fields_.at(2).AsDouble()), 2);
 }
 
 /*

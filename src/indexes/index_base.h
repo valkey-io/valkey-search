@@ -105,6 +105,9 @@ class IndexBase {
   virtual absl::Status ForEachUnTrackedKey(
       absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn) const = 0;
 
+  // Whether AddRecord/ModifyRecord take AttributeDataType::GetRawAttribute.
+  virtual bool WantsRawAttribute() const { return false; }
+
   virtual vmsdk::UniqueValkeyString NormalizeStringAttribute(
       vmsdk::UniqueValkeyString input) const {
     return input;

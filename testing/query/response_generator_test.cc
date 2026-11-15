@@ -928,7 +928,8 @@ class VectorRangeRevalidationTest
                                       vmsdk::MakeUniqueValkeyString(*current)));
     }
     std::unique_ptr<query::QueryContext> query_ctx;
-    return query::VerifyFilter(parameters, records, neighbor, query_ctx)
+    auto no_raw = [](absl::string_view) { return vmsdk::UniqueValkeyString(); };
+    return query::VerifyFilter(parameters, records, no_raw, neighbor, query_ctx)
         .matches;
   }
 

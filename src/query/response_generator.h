@@ -63,7 +63,7 @@ struct FilterVerification {
 // mutex.
 FilterVerification VerifyFilter(
     const query::SearchParameters &parameters, const RecordsMap &records,
-    const indexes::Neighbor &n,
+    RawAttributeReader read_raw, const indexes::Neighbor &n,
     std::unique_ptr<query::QueryContext> &query_ctx);
 
 // Adds all local content for neighbors to the list of neighbors.

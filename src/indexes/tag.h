@@ -41,7 +41,9 @@ extern vmsdk::info_field::Integer tag_value_lookups;
 // Tag index backed by an in-tree vs_rax radix tree.
 //
 // Storage model:
-//   - tracked_tags_by_keys_: doc-key → interned raw tag string.
+//   - tracked_tags_by_keys_: doc-key → interned stored tags: the raw tag
+//     string for HASH, or the decoded tags packed (see AppendPackedTag) for
+//     JSON.
 //   - untracked_keys_: doc-keys present in the dataset but without any tag.
 //   - tree_ (rax): per-normalized-tag posting list. The rax key bytes are
 //     the lowercased tag (or raw bytes when case-sensitive); the rax value
@@ -53,7 +55,10 @@ class Tag : public IndexBase {
  public:
   using KeySet = BagOfInternedStringPtrs;
 
-  explicit Tag(const data_model::TagIndex &tag_index_proto);
+  // `json_legacy_path`: a JSON field declared with a legacy path (see
+  // IsJsonLegacyPath), which from 1.3.0 is never indexed.
+  explicit Tag(const data_model::TagIndex &tag_index_proto, bool json = false,
+               bool json_legacy_path = false);
   ~Tag() override;
 
   absl::StatusOr<RecordResult> AddRecord(const InternedStringPtr &key,
@@ -91,11 +96,20 @@ class Tag : public IndexBase {
 
   uint32_t GetMutationWeight() const override;
 
+  // JSON records arrive as the JSON module's match array.
+  bool WantsRawAttribute() const override { return json_; }
+
+  // The stored string as given. HASH only: JSON stores decoded tags.
   InternedStringPtr GetRawValue(const InternedStringPtr &key) const
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
+  // The tags AddRecord would index for `data`, viewing into `storage`, or
+  // nullopt if `data` is invalid.
+  std::optional<absl::flat_hash_set<absl::string_view>> ParseRecord(
+      absl::string_view data, InternedStringPtr &storage) const;
+
   // Returns the parsed tag set for `key`, or nullopt if `key` is not tracked.
-  // The returned set's string_views point into the interned raw tag string
+  // The returned set's string_views point into the interned tag string
   // held by the tracked entry; valid for the duration of the call under the
   // index's read-side invariant.
   std::optional<absl::flat_hash_set<absl::string_view>> GetValue(
@@ -190,10 +204,24 @@ class Tag : public IndexBase {
   // Normalize a tag for storage / lookup: lowercase if !case_sensitive_,
   // pass-through otherwise.
   std::string Normalize(absl::string_view tag) const;
+  // The separator values are split on, or nullopt for none: from 1.3.0, a
+  // JSON index created without SEPARATOR does not split.
+  std::optional<char> EffectiveSeparator() const;
+  // The separator from 1.3.0, for a JSON index.
+  std::optional<char> JsonSeparator() const;
+  // What tracked_tags_by_keys_ stores for record `data`, or nullopt if `data`
+  // is invalid.
+  std::optional<InternedStringPtr> InternRecord(absl::string_view data) const;
+  // Calls `fn` on each tag in `stored`, in order, until it returns true. May
+  // repeat a tag for HASH.
+  template <typename Fn>
+  void ForEachStoredTag(absl::string_view stored, Fn &&fn) const;
+  absl::flat_hash_set<absl::string_view> StoredTags(
+      absl::string_view stored) const;
 
   mutable absl::Mutex index_mutex_;
   struct TagInfo {
-    InternedStringPtr raw_tag_string;
+    InternedStringPtr stored_tags;
   };
   InternedStringHashMap<TagInfo> tracked_tags_by_keys_
       ABSL_GUARDED_BY(index_mutex_);
@@ -203,6 +231,8 @@ class Tag : public IndexBase {
   // created before the field existed.
   const std::optional<bool> explicit_separator_;
   const bool case_sensitive_;
+  const bool json_;
+  const bool json_legacy_path_;
   rax *tree_ ABSL_GUARDED_BY(index_mutex_);
 };
 

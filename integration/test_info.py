@@ -115,6 +115,9 @@ class TestAppMetrics(ValkeySearchTestCaseDebugMode):
             # Counts non-UTF-8 TAG values indexed while search.emulate-release
             # is below 1.3.0.
             "compatibility-tag_rejects_non_utf8",
+            # Counts JSON TAG values indexed differently than from 1.3.0 while
+            # search.emulate-release is below it.
+            "compatibility-json_tag_values",
             "coordinator_bytes_in",
             "coordinator_bytes_out",
             "coordinator_client_get_global_metadata_failure_count",

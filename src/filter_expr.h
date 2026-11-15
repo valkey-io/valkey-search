@@ -75,8 +75,12 @@ class FilterEvalContext : public expr::Expression::EvalContext {
 class FilterAttributeReference : public expr::Expression::AttributeReference {
  public:
   FilterAttributeReference(std::string alias, indexes::IndexerType type,
-                           data_model::AttributeDataType data_type)
-      : alias_(std::move(alias)), type_(type), data_type_(data_type) {}
+                           data_model::AttributeDataType data_type,
+                           bool legacy_path = false)
+      : alias_(std::move(alias)),
+        type_(type),
+        data_type_(data_type),
+        legacy_path_(legacy_path) {}
 
   expr::Value GetValue(expr::Expression::EvalContext& ctx,
                        const expr::Expression::Record& record) const override;
@@ -89,6 +93,8 @@ class FilterAttributeReference : public expr::Expression::AttributeReference {
   std::string alias_;
   indexes::IndexerType type_;
   data_model::AttributeDataType data_type_;
+  // The field's identifier is a JSON legacy path (see IsJsonLegacyPath).
+  bool legacy_path_;
 };
 
 // A compiled reference to a HASH field that is NOT declared in the index

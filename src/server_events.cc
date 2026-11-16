@@ -41,6 +41,10 @@ void OnFlushDBCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
 void OnLoadingCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
                        uint64_t subevent, void *data) {
   SchemaManager::Instance().OnLoadingCallback(ctx, eid, subevent, data);
+  if (subevent == VALKEYMODULE_SUBEVENT_LOADING_ENDED ||
+      subevent == VALKEYMODULE_SUBEVENT_LOADING_FAILED) {
+    VectorRegistry::Instance().OnLoadingEnded();
+  }
   if (coordinator::MetadataManager::IsInitialized()) {
     coordinator::MetadataManager::Instance().OnLoadingCallback(ctx, eid,
                                                                subevent, data);

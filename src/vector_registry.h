@@ -57,6 +57,12 @@ class VectorRegistry {
       const data_model::AttributeDataType &attribute_data_type, int db_num,
       const indexes::VectorBase *vector_base);
 
+  // Returns one shared record per distinct tombstone vector during an RDB load.
+  indexes::VectorRecord DedupTombstoneOnLoad(
+      int db_num, const InternedStringPtr &attribute_identifier,
+      absl::string_view vector, FixedSizeAllocator *allocator);
+  void OnLoadingEnded();
+
   // Checks whether any registered vector index in db_num matches the given
   // key and attribute_identifier. Also checks that the index vector data size
   // matches. If require_tracked is true, additionally checks that the index
@@ -133,6 +139,12 @@ class VectorRegistry {
   // Maps db_num -> pending unshare keys queued for rate-limited processing.
   absl::flat_hash_map<int, vmsdk::HugeFlatHashSet<RegistryKey>>
       pending_unshares_;
+
+  // (db_num, attribute) -> vector bytes -> record; cleared when loading ends.
+  absl::flat_hash_map<
+      std::pair<int, InternedStringPtr>,
+      absl::flat_hash_map<absl::string_view, indexes::VectorRecord>>
+      loaded_tombstones_;
 
   void CancelPendingUnshare(int db_num, const RegistryKey &key);
 

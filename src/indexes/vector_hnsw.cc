@@ -43,6 +43,7 @@
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
 #include "src/valkey_search_options.h"
+#include "src/vector_registry.h"
 #include "valkey_search_options.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -132,6 +133,12 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
           }
           ++keys_changed_since_save;
         }
+      }
+      // Normalized tombstones are private per index (see AlgoDeleteRecord).
+      if (is_marked_deleted && !index->normalize_) {
+        return VectorRegistry::Instance().DedupTombstoneOnLoad(
+            db_num, index->GetInternedAttributeIdentifier(), vector_data,
+            static_cast<FixedSizeAllocator *>(allocator));
       }
       return VectorRecord::Construct(
           vector_data, 1.0f, static_cast<FixedSizeAllocator *>(allocator));

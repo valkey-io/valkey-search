@@ -191,7 +191,8 @@
           {
             "name": "field",
             "type": "string",
-            "multiple": true
+            "multiple": true,
+            "optional": true
           },
           {
             "name": "REDUCE",
@@ -214,6 +215,11 @@
                     "name": "COUNT_DISTINCT",
                     "type": "pure-token",
                     "token": "COUNT_DISTINCT"
+                  },
+                  {
+                    "name": "COUNT_DISTINCTISH",
+                    "type": "pure-token",
+                    "token": "COUNT_DISTINCTISH"
                   },
                   {
                     "name": "SUM",
@@ -254,6 +260,11 @@
                     "name": "RANDOM_SAMPLE",
                     "type": "pure-token",
                     "token": "RANDOM_SAMPLE"
+                  },
+                  {
+                    "name": "QUANTILE",
+                    "type": "pure-token",
+                    "token": "QUANTILE"
                   }
                 ]
               },

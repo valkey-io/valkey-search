@@ -55,7 +55,6 @@
 #include "version.h"
 #include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/debug.h"
-#include "vmsdk/src/info.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/module_config.h"
@@ -548,12 +547,6 @@ absl::Status IndexSchema::AddIndex(absl::string_view attribute_alias,
   return absl::OkStatus();
 }
 
-// INFO counter for the invalid-data compatibility defect (see COMPATIBILITY.md
-// and the "Compatibility Defects" section).
-static vmsdk::info_field::Integer invalid_data_drops_key_compat_counter(
-    "compatibility", "compatibility-invalid_data_drops_key",
-    vmsdk::info_field::IntegerBuilder().App());
-
 void TrackResults(
     ValkeyModuleCtx *ctx, const absl::StatusOr<bool> &status,
     const char *operation_str,
@@ -821,14 +814,9 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
   // the legacy behavior (treat the offending field as missing) is preserved by
   // default. See COMPATIBILITY.md.
   if (ABSL_PREDICT_FALSE(invalid_data)) {
-    // Equivalent to VALKEY_SEARCH_COMPATIBILITY_FIX, but that macro lazily
-    // constructs its INFO counter on first invocation, which here is a worker
-    // thread; we use a statically-constructed counter instead (see above).
-    if (options::EnabledInVersion(1, 3, 0)) {
-      RemoveKeyFromAllIndexes(ctx, key);
-    } else {
-      invalid_data_drops_key_compat_counter.Increment();
-    }
+    VALKEY_SEARCH_COMPATIBILITY_FIX(
+        1, 3, 0, "invalid_data_drops_key",
+        [&] { RemoveKeyFromAllIndexes(ctx, key); }, [] {});
   }
 }
 

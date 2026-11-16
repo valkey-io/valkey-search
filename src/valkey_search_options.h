@@ -7,7 +7,11 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
+#include <map>
+#include <string>
 
+#include "absl/strings/string_view.h"
 #include "vmsdk/src/info.h"  // IWYU pragma: keep
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/utils.h"
@@ -226,6 +230,17 @@ inline bool EnabledInVersion(int major, int minor, int patch) {
 // so its compatibility counters count the command once, not once per run.
 inline thread_local bool compat_counters_suppressed = false;
 
+// Usage count of each compatibility-fix legacy branch, keyed by the label given
+// to VALKEY_SEARCH_COMPATIBILITY_FIX. Reported as the single INFO field
+// compatibility_usage. Inserts are serialized by an internal mutex; the counts
+// themselves are updated without it.
+extern std::map<std::string, std::atomic<long long>> CompatibilityUsageMap;
+
+// Return the entry for `label` in CompatibilityUsageMap, inserting it with a
+// count of 0 if absent. Takes the map's mutex.
+std::map<std::string, std::atomic<long long>>::iterator
+RegisterCompatibilityUsage(absl::string_view label);
+
 }  // namespace options
 }  // namespace valkey_search
 
@@ -235,36 +250,36 @@ inline thread_local bool compat_counters_suppressed = false;
 //
 //   * emulate-release >= major.minor.patch  -> run `fixed_fn()`
 //   * otherwise                             -> run `old_fn()` and bump the
-//                                              per-site INFO counter named
-//                                              `label`, unless
+//                                              count for `label` in
+//                                              CompatibilityUsageMap, unless
 //                                              compat_counters_suppressed.
 //
 // Both callables must be nullary and return the same type (void is allowed).
-// `label` must be a string literal; the INFO field is registered under the
-// "compatibility" section with the name `"compatibility-" + label`, so every
-// metric emitted by this macro shares a common prefix. The counter is
-// constructed lazily on the first macro invocation (regardless of path) and
-// only incremented when the legacy branch runs.
+// `label` must be a string literal. The first time a call site counts a use of
+// the legacy branch, it inserts `label` into CompatibilityUsageMap (under the
+// map's mutex) and keeps the iterator in a function-local static; later uses
+// only do an atomic increment. The fixed branch never touches the map. All
+// counts are reported in the single INFO field
+// compatibility:compatibility_usage as a comma-separated list of label=count.
 //
 // Usage:
 //   auto result = VALKEY_SEARCH_COMPATIBILITY_FIX(
 //       1, 2, 2, "ft_search_attr_order_pre_1_2_2",
 //       [&] { return new_path(args); },
 //       [&] { return old_path(args); });
-//   // Surfaces as: compatibility:compatibility-ft_search_attr_order_pre_1_2_2
+//   // Surfaces in compatibility_usage as: ft_search_attr_order_pre_1_2_2=<n>
 #define VALKEY_SEARCH_COMPATIBILITY_FIX(major, minor, patch, label, fixed_fn, \
                                         old_fn)                               \
   ([&]() {                                                                    \
     static constexpr ::vmsdk::ValkeyVersion kVsCompatFixVersion{              \
         (major), (minor), (patch)};                                           \
-    static ::vmsdk::info_field::Integer kVsCompatFixCounter{                  \
-        "compatibility", "compatibility-" label,                              \
-        ::vmsdk::info_field::IntegerBuilder().App()};                         \
     if (::valkey_search::options::EnabledInVersion(kVsCompatFixVersion)) {    \
       return (fixed_fn)();                                                    \
     }                                                                         \
     if (!::valkey_search::options::compat_counters_suppressed) {              \
-      kVsCompatFixCounter.Increment();                                        \
+      static const auto kVsCompatFixUsage =                                   \
+          ::valkey_search::options::RegisterCompatibilityUsage(label);        \
+      kVsCompatFixUsage->second.fetch_add(1, std::memory_order_relaxed);      \
     }                                                                         \
     return (old_fn)();                                                        \
   })()

@@ -27,6 +27,7 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/notification.h"
+#include "absl/time/time.h"
 #include "gmock/gmock.h"
 #include "grpcpp/support/status.h"
 #include "gtest/gtest.h"
@@ -1241,6 +1242,61 @@ INSTANTIATE_TEST_SUITE_P(
                                       : "WithoutThreadPool") +
              "_" + (std::get<0>(info.param) ? "WithFanout" : "WithoutFanout");
     });
+
+// Queued shard replies are not search load, so they must not count toward
+// max-query-queue-depth.
+TEST_F(ValkeySearchTest, QueueDepthExcludesQueuedShardReplies) {
+  InitThreadPools(/*readers=*/1, std::nullopt, /*utility=*/1);
+  auto mock_server = std::make_unique<coordinator::MockServer>();
+  // First query: the 2 queued tasks are searches. Second: they are replies.
+  EXPECT_CALL(*mock_server, QueuedShardReplyCount())
+      .WillOnce(testing::Return(0))
+      .WillOnce(testing::Return(2));
+  ValkeySearch::Instance().SetCoordinatorServer(std::move(mock_server));
+  auto index_schema = CreateVectorHNSWSchema("my_index", &fake_ctx_).value();
+  VMSDK_EXPECT_OK(options::GetMaxQueryQueueDepth().SetValue(2));
+  auto *pool = ValkeySearch::Instance().GetReaderThreadPool();
+  VMSDK_EXPECT_OK(pool->SuspendWorkers());
+  pool->Schedule([] {}, vmsdk::ThreadPool::Priority::kLow);
+  pool->Schedule([] {}, vmsdk::ThreadPool::Priority::kLow);
+
+  std::vector<float> vec(100, 1.0f);
+  std::vector<ValkeyModuleString *> argv;
+  for (const std::string &arg : std::vector<std::string>{
+           "FT.SEARCH", "my_index", "*=>[KNN 1 @vector $vec]", "NOCONTENT",
+           "PARAMS", "2", "vec",
+           std::string((char *)vec.data(), vec.size() * sizeof(float)),
+           "DIALECT", "2"}) {
+    argv.push_back(
+        ValkeyModule_CreateString(&fake_ctx_, arg.data(), arg.size()));
+  }
+
+  vmsdk::CreateCommand<FTSearchCmd>(&fake_ctx_, argv.data(), argv.size());
+  EXPECT_THAT(fake_ctx_.reply_capture.GetReply(),
+              testing::HasSubstr(query::kQueueDepthMsg));
+
+  absl::Notification done;
+  void *private_data = nullptr;
+  EXPECT_CALL(*kMockValkeyModule, BlockClient)
+      .WillOnce(testing::Return((ValkeyModuleBlockedClient *)1));
+  EXPECT_CALL(*kMockValkeyModule, UnblockClient)
+      .WillOnce([&](ValkeyModuleBlockedClient *, void *data) {
+        private_data = data;
+        done.Notify();
+        return VALKEYMODULE_OK;
+      });
+  vmsdk::CreateCommand<FTSearchCmd>(&fake_ctx_, argv.data(), argv.size());
+  EXPECT_EQ(pool->QueueSize(), 3u);  // Admitted: the search was queued.
+
+  VMSDK_EXPECT_OK(pool->ResumeWorkers());
+  ASSERT_TRUE(done.WaitForNotificationWithTimeout(absl::Seconds(10)));
+  async::Free(&fake_ctx_, private_data);
+  for (auto *arg : argv) {
+    TestValkeyModule_FreeString(&fake_ctx_, arg);
+  }
+  VMSDK_EXPECT_OK(options::GetMaxQueryQueueDepth().SetValue(
+      options::GetMaxQueryQueueDepth().GetDefaultValue()));
+}
 
 // Struct to hold parameters for max limit tests
 struct MaxLimitTestCase {

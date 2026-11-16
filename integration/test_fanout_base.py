@@ -292,10 +292,13 @@ class TestFanout(ValkeySearchClusterTestCase):
                 "n": i,
                 "vec": float_to_bytes([float(i), float(i * 2), float(i * 3),
                                        float(i * 4)])})
+        # LOCALONLY sends no shard RPCs, so it leaves no late count behind.
+        primaries = [self.new_client_for_primary(i)
+                     for i in range(self.CLUSTER_SIZE)]
         waiters.wait_for_true(
-            lambda: client.execute_command(
-                "FT.SEARCH", index, "@title:hello",
-                "NOCONTENT", "LIMIT", "0", "0")[0] == docs,
+            lambda: sum(p.execute_command(
+                "FT.SEARCH", index, "@title:hello", "NOCONTENT",
+                "LIMIT", "0", "0", "LOCALONLY")[0] for p in primaries) == docs,
             timeout=15)
         # The coordinator only sends asynchronously from a pool of 2+ threads.
         assert int(client.execute_command(
@@ -330,14 +333,19 @@ class TestFanout(ValkeySearchClusterTestCase):
                 "hybrid": (hybrid[0], sorted(hybrid_keys)),
             }
 
+        # Remote RPC arms per run_all: one per remote shard for each FT.SEARCH,
+        # two (one per arm) for FT.HYBRID.
+        arms_per_run = (self.CLUSTER_SIZE - 1) * (1 + 1 + 2)
+
+        before = sum_of_remote_searches(self.nodes)
         baseline = run_all()
         assert baseline["search_content"][0] == docs
         assert baseline["search_nocontent"][0] == docs
         assert baseline["hybrid"][0] > 0
-
-        # Remote RPC arms per run_all: one per remote shard for each FT.SEARCH,
-        # two (one per arm) for FT.HYBRID.
-        arms_per_run = (self.CLUSTER_SIZE - 1) * (1 + 1 + 2)
+        # Let the baseline's late counts land before the first snapshot.
+        waiters.wait_for_equal(
+            lambda: sum_of_remote_searches(self.nodes),
+            before + arms_per_run, timeout=5)
 
         for threshold, background_reply in [
                 ("30", "no"), ("1", "no"), ("30", "yes"), ("1", "yes")]:

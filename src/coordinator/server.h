@@ -84,6 +84,10 @@ class Service final : public Coordinator::CallbackService {
       const InfoIndexPartitionRequest* request,
       InfoIndexPartitionResponse* response) override;
 
+  size_t QueuedShardReplyCount() const {
+    return reply_dispatcher_.QueuedCount();
+  }
+
  private:
   static grpc::Status PerformSlotConsistencyCheck(
       uint64_t expected_slot_fingerprint);
@@ -121,6 +125,8 @@ class Service final : public Coordinator::CallbackService {
 class Server {
  public:
   virtual uint16_t GetPort() const = 0;
+  // Shard replies queued on the reader pool; they are not search load.
+  virtual size_t QueuedShardReplyCount() const = 0;
   virtual ~Server() = default;
 };
 
@@ -132,6 +138,9 @@ class ServerImpl final : public Server {
   ServerImpl(const ServerImpl&) = delete;
   ServerImpl& operator=(const ServerImpl&) = delete;
   uint16_t GetPort() const override { return port_; }
+  size_t QueuedShardReplyCount() const override {
+    return coordinator_service_->QueuedShardReplyCount();
+  }
 
  private:
   ServerImpl(std::unique_ptr<Service> coordinator_service,

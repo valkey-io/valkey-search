@@ -47,6 +47,7 @@ class MockClient : public Client {
 class MockServer : public Server {
  public:
   MOCK_METHOD(uint16_t, GetPort, (), (const, override));
+  MOCK_METHOD(size_t, QueuedShardReplyCount, (), (const, override));
 };
 
 }  // namespace valkey_search::coordinator

@@ -197,11 +197,16 @@ absl::Status ExecuteCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     // pool queue is too deep. Covers both fanout and single-node paths.
     // No scaling factor needed — each node protects its own queue via the
     // server-side check in coordinator/server.cc.
+    // Queued shard replies are not search load, so leave them out.
     auto configured_limit = options::GetMaxQueryQueueDepth().GetValue();
     if (configured_limit > 0) {
-      auto *thread_pool = ValkeySearch::Instance().GetReaderThreadPool();
+      size_t queued =
+          ValkeySearch::Instance().GetReaderThreadPool()->QueueSize();
+      auto *server = ValkeySearch::Instance().GetCoordinatorServer();
+      size_t replies = server ? server->QueuedShardReplyCount() : 0;
+      size_t searches = queued > replies ? queued - replies : 0;
       if (ForceQueueDepthExceeded.GetValue() ||
-          thread_pool->QueueSize() >= static_cast<size_t>(configured_limit)) {
+          searches >= static_cast<size_t>(configured_limit)) {
         return absl::ResourceExhaustedError(query::kQueueDepthMsg);
       }
     }

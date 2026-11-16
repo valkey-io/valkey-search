@@ -197,10 +197,10 @@ It may be judged that a compatibility defect cannot reasonably be fixed while pr
 
 When feasible the old (non-compatible) behavior will be preserved for _at least_ one additional major release. If a bug was fixed in 1.x.x, then the 2.y.y will support emulating the 1.x.x release. However support in the 3. release or later releases is not ensured. Similar to the above clause, if retaining the parallel behavior becomes unreasonable to support, then it can be removed on the next major version (see the release notes for that release).
 
-To ease application migration, incompatible behavior controlled by `search.emulate-release` is tracked by the single INFO field `compatibility_usage` (reported as `search_compatibility_usage` in the `compatibility` section). Its value is a comma-separated list of `label:count` pairs, one per usage label in the table below, where `count` is the number of uses of that incompatible behavior by an application. A label appears in the list once its code path has been reached for the first time, with or without the old behavior; a label that is absent has a count of 0. For example:
+To ease application migration, incompatible behavior controlled by `search.emulate-release` is tracked by the single INFO field `compatibility_usage` (reported as `search_compatibility_usage` in the `compatibility` section). Its value is a comma-separated list of `label=count` pairs, one per usage label in the table below, where `count` is the number of uses of that incompatible behavior by an application. A label appears in the list only once the old behavior has been used; a label that is absent has a count of 0. For example:
 
 ```
-search_compatibility_usage:ft_aggregate_divide_by_zero:3,tag_rejects_non_utf8:0
+search_compatibility_usage:ft_aggregate_divide_by_zero=3,tag_rejects_non_utf8=1
 ```
 
 ### Known Compatibility Defect Corrections

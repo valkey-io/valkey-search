@@ -928,14 +928,14 @@ bool EnabledInVersion(vmsdk::ValkeyVersion version) {
          GetEmulateRelease().GetValue() >= version;
 }
 
-std::map<std::string, std::atomic<int>> CompatibilityUsageMap;
+std::map<std::string, std::atomic<long long>> CompatibilityUsageMap;
 
 // Serializes inserts into CompatibilityUsageMap against each other and against
 // the INFO walk below. Increments of an existing entry do not take it.
 static absl::Mutex compatibility_usage_mutex;
 
-std::map<std::string, std::atomic<int>>::iterator RegisterCompatibilityUsage(
-    absl::string_view label) {
+std::map<std::string, std::atomic<long long>>::iterator
+RegisterCompatibilityUsage(absl::string_view label) {
   absl::MutexLock lock(&compatibility_usage_mutex);
   return CompatibilityUsageMap.try_emplace(std::string(label), 0).first;
 }
@@ -950,7 +950,7 @@ static vmsdk::info_field::String compatibility_usage(
             if (!result.empty()) {
               result += ',';
             }
-            absl::StrAppend(&result, label, ":",
+            absl::StrAppend(&result, label, "=",
                             count.load(std::memory_order_relaxed));
           }
           return result;

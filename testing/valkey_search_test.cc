@@ -606,9 +606,9 @@ class CompatibilityFixTest : public vmsdk::ValkeyTest {
     return info_ctx.info_capture.GetInfo();
   }
 
-  // Regex for `label:count` as one entry of the compatibility_usage list.
+  // Regex for `label=count` as one entry of the compatibility_usage list.
   static std::string UsageEntry(absl::string_view label, int count) {
-    return absl::StrCat("compatibility_usage: '([^']*,)?", label, ":", count,
+    return absl::StrCat("compatibility_usage: '([^']*,)?", label, "=", count,
                         "[,']");
   }
 
@@ -678,10 +678,9 @@ TEST_F(CompatibilityFixTest, FixedPathDoesNotIncrementCounter) {
         [&] { return 0; });
   }
 
-  // The entry is inserted on first macro invocation regardless of which path
-  // runs, but the fixed path must not increment it.
-  EXPECT_THAT(DumpCompatibilitySection(), ::testing::ContainsRegex(UsageEntry(
-                                              "test_label_no_increment", 0)));
+  // The fixed path neither counts nor registers the label.
+  EXPECT_THAT(DumpCompatibilitySection(),
+              ::testing::Not(::testing::HasSubstr("test_label_no_increment")));
 }
 
 class MockPthreadAtfork {

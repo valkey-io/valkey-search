@@ -239,13 +239,6 @@ class IndexingTestHelper:
 def compatibility_usage(client: Valkey) -> Dict[str, int]:
     """The INFO field search_compatibility_usage as {label: count}.
 
-    The server reports it as a comma-separated list of label:count; valkey-py
-    returns that as a string for one entry and as a list for several."""
-    value = client.info("SEARCH").get("search_compatibility_usage", "")
-    entries = value if isinstance(value, list) else str(value).split(",")
-    usage = {}
-    for entry in entries:
-        if entry:
-            label, count = entry.rsplit(":", 1)
-            usage[label] = int(count)
-    return usage
+    The server reports it as a comma-separated list of label=count, which
+    valkey-py parses into a dict; an empty list comes back as ""."""
+    return client.info("SEARCH").get("search_compatibility_usage") or {}

@@ -104,7 +104,7 @@ class TestAppMetrics(ValkeySearchTestCaseDebugMode):
         # Expected baseline: 71 APP metrics as of current implementation
         # This list should be updated intentionally when metrics are added/removed
         expected_metrics = {
-            # label:count list of legacy compatibility branches taken while
+            # label=count list of legacy compatibility branches taken while
             # search.emulate-release is below their fix version. See
             # COMPATIBILITY.md.
             "compatibility_usage",

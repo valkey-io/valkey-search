@@ -234,12 +234,12 @@ inline thread_local bool compat_counters_suppressed = false;
 // to VALKEY_SEARCH_COMPATIBILITY_FIX. Reported as the single INFO field
 // compatibility_usage. Inserts are serialized by an internal mutex; the counts
 // themselves are updated without it.
-extern std::map<std::string, std::atomic<int>> CompatibilityUsageMap;
+extern std::map<std::string, std::atomic<long long>> CompatibilityUsageMap;
 
 // Return the entry for `label` in CompatibilityUsageMap, inserting it with a
 // count of 0 if absent. Takes the map's mutex.
-std::map<std::string, std::atomic<int>>::iterator RegisterCompatibilityUsage(
-    absl::string_view label);
+std::map<std::string, std::atomic<long long>>::iterator
+RegisterCompatibilityUsage(absl::string_view label);
 
 }  // namespace options
 }  // namespace valkey_search
@@ -255,30 +255,30 @@ std::map<std::string, std::atomic<int>>::iterator RegisterCompatibilityUsage(
 //                                              compat_counters_suppressed.
 //
 // Both callables must be nullary and return the same type (void is allowed).
-// `label` must be a string literal. Each call site inserts `label` into
-// CompatibilityUsageMap on its first invocation (regardless of path, under the
-// map's mutex) and keeps the iterator in a function-local static; later
-// invocations only do an atomic increment, and only on the legacy branch. All
+// `label` must be a string literal. The first time a call site counts a use of
+// the legacy branch, it inserts `label` into CompatibilityUsageMap (under the
+// map's mutex) and keeps the iterator in a function-local static; later uses
+// only do an atomic increment. The fixed branch never touches the map. All
 // counts are reported in the single INFO field
-// compatibility:compatibility_usage as a comma-separated list of label:count.
+// compatibility:compatibility_usage as a comma-separated list of label=count.
 //
 // Usage:
 //   auto result = VALKEY_SEARCH_COMPATIBILITY_FIX(
 //       1, 2, 2, "ft_search_attr_order_pre_1_2_2",
 //       [&] { return new_path(args); },
 //       [&] { return old_path(args); });
-//   // Surfaces in compatibility_usage as: ft_search_attr_order_pre_1_2_2:<n>
+//   // Surfaces in compatibility_usage as: ft_search_attr_order_pre_1_2_2=<n>
 #define VALKEY_SEARCH_COMPATIBILITY_FIX(major, minor, patch, label, fixed_fn, \
                                         old_fn)                               \
   ([&]() {                                                                    \
     static constexpr ::vmsdk::ValkeyVersion kVsCompatFixVersion{              \
         (major), (minor), (patch)};                                           \
-    static const auto kVsCompatFixUsage =                                     \
-        ::valkey_search::options::RegisterCompatibilityUsage(label);          \
     if (::valkey_search::options::EnabledInVersion(kVsCompatFixVersion)) {    \
       return (fixed_fn)();                                                    \
     }                                                                         \
     if (!::valkey_search::options::compat_counters_suppressed) {              \
+      static const auto kVsCompatFixUsage =                                   \
+          ::valkey_search::options::RegisterCompatibilityUsage(label);        \
       kVsCompatFixUsage->second.fetch_add(1, std::memory_order_relaxed);      \
     }                                                                         \
     return (old_fn)();                                                        \

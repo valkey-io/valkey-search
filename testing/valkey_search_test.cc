@@ -8,9 +8,11 @@
 #include "src/valkey_search.h"
 
 #include <cstddef>
+#include <latch>
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -681,6 +683,35 @@ TEST_F(CompatibilityFixTest, FixedPathDoesNotIncrementCounter) {
   // The fixed path neither counts nor registers the label.
   EXPECT_THAT(DumpCompatibilitySection(),
               ::testing::Not(::testing::HasSubstr("test_label_no_increment")));
+}
+
+// Off-main-thread use: threads released together race to register the same
+// label, then keep incrementing it. Exactly one registration must win and no
+// increment may be lost. Most useful under TSAN (unittests-tsan.yml).
+TEST_F(CompatibilityFixTest, ConcurrentThreadsIncrementLabel) {
+  // Set before the threads start: the config value is not atomic.
+  SetEmulateRelease({1, 0, 0});
+  constexpr int kThreads = 8;
+  constexpr int kIterations = 10000;
+  std::latch start(kThreads);
+  std::vector<std::thread> threads;
+  threads.reserve(kThreads);
+  for (int t = 0; t < kThreads; ++t) {
+    threads.emplace_back([&start] {
+      start.arrive_and_wait();
+      for (int i = 0; i < kIterations; ++i) {
+        VALKEY_SEARCH_COMPATIBILITY_FIX(
+            1, 1, 0, "test_label_concurrent", [] {}, [] {});
+      }
+    });
+  }
+  for (auto& thread : threads) {
+    thread.join();
+  }
+
+  EXPECT_THAT(DumpCompatibilitySection(),
+              ::testing::ContainsRegex(
+                  UsageEntry("test_label_concurrent", kThreads * kIterations)));
 }
 
 class MockPthreadAtfork {

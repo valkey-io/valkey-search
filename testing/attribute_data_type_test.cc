@@ -80,7 +80,8 @@ class HashAttributeDataTypeTest
 TEST_F(HashAttributeDataTypeTest, HashBasic) {
   EXPECT_EQ(hash_attribute_data_type.GetValkeyEventTypes(),
             VALKEYMODULE_NOTIFY_HASH | VALKEYMODULE_NOTIFY_GENERIC |
-                VALKEYMODULE_NOTIFY_EXPIRED | VALKEYMODULE_NOTIFY_EVICTED);
+                VALKEYMODULE_NOTIFY_EXPIRED | VALKEYMODULE_NOTIFY_EVICTED |
+                VALKEYMODULE_NOTIFY_STRING);
 
   EXPECT_EQ(hash_attribute_data_type.ToProto(),
             data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH);
@@ -332,7 +333,8 @@ static JsonAttributeDataTypeTest *current_test;
 TEST_F(JsonAttributeDataTypeTest, JsonBasic) {
   EXPECT_EQ(json_attribute_data_type.GetValkeyEventTypes(),
             VALKEYMODULE_NOTIFY_MODULE | VALKEYMODULE_NOTIFY_GENERIC |
-                VALKEYMODULE_NOTIFY_EXPIRED | VALKEYMODULE_NOTIFY_EVICTED);
+                VALKEYMODULE_NOTIFY_EXPIRED | VALKEYMODULE_NOTIFY_EVICTED |
+                VALKEYMODULE_NOTIFY_STRING);
 
   EXPECT_EQ(json_attribute_data_type.ToProto(),
             data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON);

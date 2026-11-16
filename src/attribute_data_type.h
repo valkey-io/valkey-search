@@ -65,8 +65,9 @@ class AttributeDataType {
       ValkeyModuleCtx *ctx, ValkeyModuleKey *open_key, absl::string_view key,
       absl::string_view identifier) const = 0;
   virtual int GetValkeyEventTypes() const {
+    // SET can replace a tracked HASH or JSON key without a delete event.
     return VALKEYMODULE_NOTIFY_GENERIC | VALKEYMODULE_NOTIFY_EXPIRED |
-           VALKEYMODULE_NOTIFY_EVICTED;
+           VALKEYMODULE_NOTIFY_EVICTED | VALKEYMODULE_NOTIFY_STRING;
   };
   virtual absl::StatusOr<RecordsMap> FetchAllAttributes(
       ValkeyModuleCtx *ctx, const std::optional<std::string> &vector_identifier,

@@ -66,5 +66,14 @@ WINDOW limits contributions per arm, not necessarily the underlying scan work.
 
 This implementation targets Valkey 9.1 or later. Sparse fields support HASH
 input and KNN queries. The stored schema uses a new protobuf field type;
-restore it only on nodes running a module that supports SPARSE. Qualify
-upgrades, AOF replay and replica failover before deploying it on a cluster.
+restore it only on nodes running a module that supports SPARSE.
+
+Use RDB snapshots or AOF with `aof-use-rdb-preamble yes`. Schema metadata lives
+in module RDB auxiliary sections: rewriting a pure AOF with the preamble disabled
+preserves HASH data but loses the index schema. Recreate the schema with
+`FT.CREATE` to backfill those HASHes if recovering from such a file.
+
+Integration tests cover mixed HASH mutations, index recreation, RDB reload,
+AOF rewrite/replay with an RDB preamble, replica full synchronization after a
+restart, and writes after promotion. Qualify rolling upgrades and your managed
+service's failover procedure separately before production deployment.

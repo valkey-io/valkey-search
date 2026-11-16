@@ -180,7 +180,9 @@ void Sparse::ErasePostings(DocId id) {
                            });
       moved_entry->posting_offset = entry.posting_offset;
     }
-    if (posting.empty()) postings_.erase(it);
+    if (posting.empty()) {
+      postings_.erase(it);
+    }
   }
 }
 
@@ -190,7 +192,9 @@ absl::StatusOr<RecordResult> Sparse::ModifyRecord(const InternedStringPtr &key,
   auto entries = Decode(data.GetStringView());
   absl::MutexLock lock(&mutex_);
   auto it = ids_.find(key);
-  if (it == ids_.end()) return absl::NotFoundError("Sparse record not found");
+  if (it == ids_.end()) {
+    return absl::NotFoundError("Sparse record not found");
+  }
   const DocId id = it->second;
   ErasePostings(id);
   if (!entries.ok() || entries->empty()) {
@@ -209,12 +213,15 @@ absl::StatusOr<RecordResult> Sparse::ModifyRecord(const InternedStringPtr &key,
 absl::StatusOr<bool> Sparse::RemoveRecord(const InternedStringPtr &key,
                                           DeletionType deletion_type) {
   absl::MutexLock lock(&mutex_);
-  if (deletion_type == DeletionType::kRecord)
+  if (deletion_type == DeletionType::kRecord) {
     untracked_.erase(key);
-  else
+  } else {
     untracked_.insert(key);
+  }
   auto it = ids_.find(key);
-  if (it == ids_.end()) return false;
+  if (it == ids_.end()) {
+    return false;
+  }
   const DocId id = it->second;
   ErasePostings(id);
   records_[id] = {};
@@ -264,7 +271,10 @@ absl::StatusOr<std::vector<Neighbor>> Sparse::Search(
                ? a.distance < b.distance
                : records_[a.id].key->Str() < records_[b.id].key->Str();
   };
-  std::priority_queue<Hit, std::vector<Hit>, decltype(better)> heap(better);
+  std::vector<Hit> storage;
+  storage.reserve(std::min(count, ids_.size()));
+  std::priority_queue<Hit, std::vector<Hit>, decltype(better)> heap(
+      better, std::move(storage));
   auto add = [&](DocId id, double score)
                  ABSL_NO_THREAD_SAFETY_ANALYSIS -> absl::Status {
     if (count == 0) {
@@ -282,9 +292,9 @@ absl::StatusOr<std::vector<Neighbor>> Sparse::Search(
     }
     VMSDK_RETURN_IF_ERROR(distance.status());
     Hit hit{id, *distance};
-    if (heap.size() < count)
+    if (heap.size() < count) {
       heap.push(hit);
-    else if (better(hit, heap.top())) {
+    } else if (better(hit, heap.top())) {
       heap.pop();
       heap.push(hit);
     }
@@ -300,7 +310,9 @@ absl::StatusOr<std::vector<Neighbor>> Sparse::Search(
         break;
       }
       auto it = ids_.find(key);
-      if (it == ids_.end()) continue;
+      if (it == ids_.end()) {
+        continue;
+      }
       auto score =
           Dot(records_[it->second].entries, entries, cancellation.get());
       if (!score.ok()) {

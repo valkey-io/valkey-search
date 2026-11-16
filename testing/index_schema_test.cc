@@ -941,7 +941,8 @@ TEST_F(IndexSchemaSubscriptionSimpleTest, GetEventTypesTest) {
 
   EXPECT_EQ(index_schema->GetAttributeDataType().GetValkeyEventTypes(),
             VALKEYMODULE_NOTIFY_HASH | VALKEYMODULE_NOTIFY_GENERIC |
-                VALKEYMODULE_NOTIFY_EXPIRED | VALKEYMODULE_NOTIFY_EVICTED);
+                VALKEYMODULE_NOTIFY_EXPIRED | VALKEYMODULE_NOTIFY_EVICTED |
+                VALKEYMODULE_NOTIFY_STRING);
 }
 
 struct IndexSchemaBackfillTestCase {

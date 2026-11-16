@@ -128,7 +128,7 @@ enum VectorDataType {
 // Field numbers are fixed for wire compatibility; declaration order is
 // cosmetic.
 enum SVSCompressionType {
-  // v1 (open): supported in v1-cpp-baseline and v1 submodule.
+  // Supported by the open-source SVS C API.
   SVS_COMPRESSION_NONE = 0;  // FP32 (default)
   SVS_COMPRESSION_FP16 = 1;
   SVS_COMPRESSION_SQ8 = 9;
@@ -153,7 +153,6 @@ message FlatAlgorithm {
 }
 
 message SVSVamanaAlgorithm {
-  // v1 (open) — supported in v1-cpp-baseline and v1 submodule.
   uint32 graph_max_degree = 1;
   uint32 construction_window_size = 2;
   uint32 search_window_size = 3;
@@ -166,7 +165,6 @@ message SVSVamanaAlgorithm {
   // compression trains on the data (SQ8). 0 for the other compressions.
   uint32 training_threshold = 7;
   // 6 is kept out of this build; reserved so it is not reused.
-  reserved 6, 9;
-  reserved "distance_match_epsilon_per_dim";
+  reserved 6;
 }
 

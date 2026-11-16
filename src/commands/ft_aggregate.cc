@@ -78,8 +78,9 @@ absl::Status ResolveLoadsUnderLoadAll(AggregateParameters &params) {
       params.loads_.begin(), params.loads_.end(), [&](const LoadField &f) {
         auto indexer = params.index_schema->GetIndex(f.identifier);
         // On HASH `LOAD *` already returns a vector field under its own name,
-        // so naming it changes nothing. On JSON every named load differs from
-        // 1.2.1's `$`-only reply, a rejected vector load included.
+        // so naming it changes nothing. Every other named load counted here may
+        // still end up with the same reply, such as JSON `$` itself or a column
+        // an APPLY overwrites.
         if (f.after_groupby || (!is_json && !f.renamed && indexer.ok() &&
                                 indexes::IsVectorIndex(*indexer))) {
           return false;

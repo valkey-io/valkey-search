@@ -291,6 +291,12 @@ class TestAggregateLoadAs(ValkeySearchTestCaseDebugMode):
                                match="rename onto `\\$`"):
                 client.execute_command(
                     "FT.AGGREGATE", "idx_json", "@price:[-inf inf]", *loads)
+        # A rename of `$` onto itself names one field.
+        for loads in [("LOAD", "*", "LOAD", "3", "$", "AS", "$"),
+                      ("LOAD", "3", "$", "AS", "$", "LOAD", "*")]:
+            assert pairs(client.execute_command(
+                "FT.AGGREGATE", "idx_json", "@price:[-inf inf]", *loads)) == [
+                    [("$", doc)]], loads
         assert sorted(pairs(client.execute_command(
             "FT.AGGREGATE", "idx_json", "@price:[-inf inf]",
             "LOAD", "*", "LOAD", "3", "@qty", "AS", "$"))[0]) == [

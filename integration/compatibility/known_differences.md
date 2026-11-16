@@ -342,6 +342,11 @@ The same holds for `FILTER` and `SORTBY`: they act on the renamed value, which
 the reply does not show. `LOAD 3 @q AS p1 LOAD * FILTER @p1==5` keeps a record
 whose `p1` reads 99, where Redis keeps none.
 
+The renamed field may also be one the index does not declare.
+`LOAD 3 @x AS b LOAD * FILTER @b==99`, on a key holding `x 5` and `b 99`, keeps
+no record, where Redis keeps it. Without a stage on the name, the reply is the
+same as Redis's.
+
 The rename and the original field share one column, so making stages see the
 stored field would change what `@price` reads too. The command uses one name
 for two fields, so this is best effort under "A note on ambiguous input" in

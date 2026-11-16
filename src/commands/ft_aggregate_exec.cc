@@ -1252,6 +1252,22 @@ absl::StatusOr<expr::Value> ProcessFieldValue(
   }
 }
 
+namespace {
+
+// An APPLY's output replaces whatever its column loaded.
+absl::flat_hash_set<size_t> AppliedColumns(
+    const AggregateParameters &parameters) {
+  absl::flat_hash_set<size_t> applied;
+  for (const auto &stage : parameters.stages_) {
+    if (const auto *apply = dynamic_cast<const Apply *>(stage.get())) {
+      applied.insert(apply->name_->record_index_);
+    }
+  }
+  return applied;
+}
+
+}  // namespace
+
 // Create records from neighbors and populate their fields
 absl::Status CreateRecordsFromNeighbors(
     std::vector<indexes::Neighbor> &neighbors, AggregateParameters &parameters,
@@ -1260,9 +1276,13 @@ absl::Status CreateRecordsFromNeighbors(
   // On JSON, `LOAD *` is the `$` root; named paths only feed columns.
   const bool is_json =
       data_type == data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON;
+  // A hidden legacy column that an APPLY wrote is shown, so the `$` root it
+  // replaces must not also be kept.
+  const auto applied = AppliedColumns(parameters);
   bool root_is_a_column = false;
   for (size_t i = 0; i < parameters.record_info_by_index_.size(); ++i) {
-    const bool shown = !parameters.legacy_loadall_hidden_.contains(i);
+    const bool shown =
+        !parameters.legacy_loadall_hidden_.contains(i) || applied.contains(i);
     if (shown && parameters.record_info_by_index_[i].output_name_ ==
                      kJsonRootElementQuery) {
       root_is_a_column = true;
@@ -1447,6 +1467,7 @@ void AggregateParameters::ReplyRecords(ValkeyModuleCtx *ctx, RecordSet &records,
   // RediSearch applies LOAD clauses in command order, so under the 1.3.0
   // `LOAD *` rule a stored field shown by a later `LOAD *` replaces an earlier
   // rename onto its name; known only after the pipeline ran.
+  const auto applied = AppliedColumns(parameters);
   absl::flat_hash_map<std::string_view, std::vector<size_t>> columns_by_name;
   absl::flat_hash_set<size_t> yields_to_stored;
   if (parameters.loadall_named_loads_ &&
@@ -1460,12 +1481,6 @@ void AggregateParameters::ReplyRecords(ValkeyModuleCtx *ctx, RecordSet &records,
       if (load.renamed && load.alias != load.identifier &&
           load.alias != "__key" && load.alias != score_name) {
         renamed_onto.insert(load.alias);
-      }
-    }
-    absl::flat_hash_set<size_t> applied;
-    for (const auto &stage : parameters.stages_) {
-      if (const auto *apply = dynamic_cast<const Apply *>(stage.get())) {
-        applied.insert(apply->name_->record_index_);
       }
     }
     for (size_t i = 0; i < parameters.record_info_by_index_.size(); ++i) {
@@ -1484,16 +1499,6 @@ void AggregateParameters::ReplyRecords(ValkeyModuleCtx *ctx, RecordSet &records,
       [](const auto &stage) {
         return dynamic_cast<const GroupBy *>(stage.get()) != nullptr;
       });
-  // A named load's column is hidden below 1.3.0, but an APPLY that writes into
-  // that column replaces the raw value with a computed one, which 1.2.1 shows.
-  absl::flat_hash_set<size_t> legacy_applied;
-  if (hide_legacy_loads) {
-    for (const auto &stage : parameters.stages_) {
-      if (const auto *apply = dynamic_cast<const Apply *>(stage.get())) {
-        legacy_applied.insert(apply->name_->record_index_);
-      }
-    }
-  }
   for (size_t n = 0; n < count; ++n) {
     auto rec = records.pop_front();
     ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_ARRAY_LEN);
@@ -1506,8 +1511,10 @@ void AggregateParameters::ReplyRecords(ValkeyModuleCtx *ctx, RecordSet &records,
         continue;
       }
       const auto &name = parameters.record_info_by_index_[i].output_name_;
+      // A named load's column is hidden below 1.3.0, but an APPLY that writes
+      // into it replaces the raw value with a computed one, which 1.2.1 shows.
       if (hide_legacy_loads && parameters.legacy_loadall_hidden_.contains(i) &&
-          !legacy_applied.contains(i)) {
+          !applied.contains(i)) {
         continue;
       }
       if (yields_to_stored.contains(i) &&

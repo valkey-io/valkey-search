@@ -117,8 +117,8 @@ absl::Status CheckAmbiguousName(const AggregateParameters &parameters,
                        "` is also loaded"));
     }
   }
-  if (renamed && alias == kJsonRootElementQuery && parameters.loadall_ &&
-      LoadAllReturnsRoot(parameters)) {
+  if (renamed && alias == kJsonRootElementQuery && identifier != alias &&
+      parameters.loadall_ && LoadAllReturnsRoot(parameters)) {
     return RenameOntoRoot();
   }
   if (!renamed || alias == written) {
@@ -200,7 +200,8 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
               std::any_of(parameters.loads_.begin(), parameters.loads_.end(),
                           [](const LoadField &f) {
                             return f.renamed && !f.after_groupby &&
-                                   f.alias == kJsonRootElementQuery;
+                                   f.alias == kJsonRootElementQuery &&
+                                   f.identifier != f.alias;
                           })) {
             parameters.ambiguous_load_name_ = RenameOntoRoot();
           }

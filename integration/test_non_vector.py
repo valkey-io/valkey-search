@@ -9,7 +9,7 @@ from valkey.cluster import ValkeyCluster
 from valkey_search_test_case import ValkeySearchClusterTestCase, ValkeySearchClusterTestCaseDebugMode
 import struct
 import time
-from utils import IndexingTestHelper
+from utils import IndexingTestHelper, compatibility_usage
 from valkeytestframework.util import waiters
 
 """
@@ -1424,12 +1424,11 @@ class TestSortByAlias(ValkeySearchTestCaseDebugMode):
                           ("sbw:3", 6, 100)):
             assert client.execute_command("HSET", key, "a", a, "b", b) == 2
         IndexingTestHelper.wait_for_indexing_complete_on_node(client, "sbw_idx")
-        counters = ("search_compatibility-ft_search_sortkey_type_prefix",
-                    "search_compatibility-ft_search_sortkey_nil")
+        counters = ("ft_search_sortkey_type_prefix", "ft_search_sortkey_nil")
 
         def uses():
-            info = client.info("SEARCH")
-            return [info.get(c, 0) for c in counters]
+            usage = compatibility_usage(client)
+            return [usage.get(c, 0) for c in counters]
 
         for release, per_reply in (("1.2.1", 1), ("1.3.0", 0)):
             assert client.execute_command(

@@ -14,6 +14,8 @@
 #include <utility>
 #include <vector>
 
+#include "absl/strings/str_cat.h"
+#include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
@@ -604,6 +606,12 @@ class CompatibilityFixTest : public vmsdk::ValkeyTest {
     return info_ctx.info_capture.GetInfo();
   }
 
+  // Regex for `label:count` as one entry of the compatibility_usage list.
+  static std::string UsageEntry(absl::string_view label, int count) {
+    return absl::StrCat("compatibility_usage: '([^']*,)?", label, ":", count,
+                        "[,']");
+  }
+
  private:
   vmsdk::ValkeyVersion saved_emulate_release_{0};
 };
@@ -658,7 +666,7 @@ TEST_F(CompatibilityFixTest, OldPathIncrementsLabelInfoField) {
   }
 
   EXPECT_THAT(DumpCompatibilitySection(),
-              ::testing::HasSubstr("compatibility-test_label_increments: 3"));
+              ::testing::ContainsRegex(UsageEntry("test_label_increments", 3)));
 }
 
 TEST_F(CompatibilityFixTest, FixedPathDoesNotIncrementCounter) {
@@ -670,10 +678,10 @@ TEST_F(CompatibilityFixTest, FixedPathDoesNotIncrementCounter) {
         [&] { return 0; });
   }
 
-  // The counter is initialized on first macro invocation regardless of which
-  // path runs, but the fixed path must not increment it.
+  // The entry is inserted on first macro invocation regardless of which path
+  // runs, but the fixed path must not increment it.
   EXPECT_THAT(DumpCompatibilitySection(),
-              ::testing::HasSubstr("compatibility-test_label_no_increment: 0"));
+              ::testing::ContainsRegex(UsageEntry("test_label_no_increment", 0)));
 }
 
 class MockPthreadAtfork {

@@ -9,6 +9,8 @@
 #include <string_view>
 #include <vector>
 
+#include "absl/strings/str_cat.h"
+#include "absl/synchronization/mutex.h"
 #include "valkey_search.h"
 #include "version.h"
 #include "vmsdk/src/concurrency.h"
@@ -925,6 +927,34 @@ bool EnabledInVersion(vmsdk::ValkeyVersion version) {
   return version <= ScopedMinimumRelease::Minimum() ||
          GetEmulateRelease().GetValue() >= version;
 }
+
+std::map<std::string, std::atomic<int>, std::less<>> CompatibilityUsageMap;
+
+// Serializes inserts into CompatibilityUsageMap against each other and against
+// the INFO walk below. Increments of an existing entry do not take it.
+static absl::Mutex compatibility_usage_mutex;
+
+std::map<std::string, std::atomic<int>, std::less<>>::iterator
+RegisterCompatibilityUsage(absl::string_view label) {
+  absl::MutexLock lock(&compatibility_usage_mutex);
+  return CompatibilityUsageMap.try_emplace(std::string(label), 0).first;
+}
+
+static vmsdk::info_field::String compatibility_usage(
+    "compatibility", "compatibility_usage",
+    vmsdk::info_field::StringBuilder().App().ComputedString(
+        []() -> std::string {
+          absl::MutexLock lock(&compatibility_usage_mutex);
+          std::string result;
+          for (const auto &[label, count] : CompatibilityUsageMap) {
+            if (!result.empty()) {
+              result += ',';
+            }
+            absl::StrAppend(&result, label, ":",
+                            count.load(std::memory_order_relaxed));
+          }
+          return result;
+        }));
 
 }  // namespace options
 }  // namespace valkey_search

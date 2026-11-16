@@ -19,6 +19,7 @@
 #include "src/indexes/vector_base.h"
 #include "src/utils/string_interning.h"
 #include "src/vector_registry.h"
+#include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
@@ -38,7 +39,59 @@ inline bool IsMoveFromEvent(const char *event) {
 inline bool IsMoveToEvent(const char *event) {
   return event && (event == kRenameToEvent || event == kMoveToEvent);
 }
+
 }  // namespace
+
+SharedBlockedClient ClientBlockingContext::AcquireBlock(
+    vmsdk::BlockedClientCategory category) const {
+  return manager_.AcquireBlockedClient(ctx_, category);
+}
+
+SharedBlockedClient KeyspaceEventManager::AcquireBlockedClient(
+    ValkeyModuleCtx *ctx, vmsdk::BlockedClientCategory category) {
+  if (vmsdk::MultiOrLua(ctx) || !vmsdk::IsRealUserClient(ctx)) {
+    return nullptr;
+  }
+  auto client_id = ValkeyModule_GetClientId(ctx);
+  auto &command_blocks = command_blocks_.Get();
+  auto existing = command_blocks.find(client_id);
+  if (existing != command_blocks.end()) {
+    return existing->second;
+  }
+
+  if (command_blocks.empty()) {
+    // Schedule before blocking: loading and read-only replicas reject jobs.
+    if (ValkeyModule_AddPostNotificationJob(
+            ctx,
+            [](ValkeyModuleCtx *, void *manager) {
+              static_cast<KeyspaceEventManager *>(manager)
+                  ->OnExecutionUnitEnd();
+            },
+            this, nullptr) != VALKEYMODULE_OK) {
+      return nullptr;
+    }
+  }
+
+  auto blocked_client = std::make_shared<vmsdk::BlockedClient>(ctx, category);
+  command_blocks.emplace(client_id, blocked_client);
+  return blocked_client;
+}
+
+void KeyspaceEventManager::OnExecutionUnitEnd() {
+  command_blocks_.Get().clear();
+}
+
+vmsdk::BlockedClientCategory
+KeyspaceEventSubscription::GetBlockedClientCategory() const {
+  switch (GetAttributeDataType().ToProto()) {
+    case data_model::ATTRIBUTE_DATA_TYPE_HASH:
+      return vmsdk::BlockedClientCategory::kHash;
+    case data_model::ATTRIBUTE_DATA_TYPE_JSON:
+      return vmsdk::BlockedClientCategory::kJson;
+    default:
+      return vmsdk::BlockedClientCategory::kOther;
+  }
+}
 
 static absl::NoDestructor<std::unique_ptr<KeyspaceEventManager>>
     keyspace_event_manager_instance;
@@ -69,23 +122,21 @@ KeyspaceEventManager::GetMatchingSubscriptions(absl::string_view key, int type,
   return subscriptions_to_notify;
 }
 
-void KeyspaceEventManager::ProcessMoveNotification(ValkeyModuleCtx *ctx,
-                                                   int type,
-                                                   ValkeyModuleString *dst_key,
-                                                   const char *dst_event) {
-  int dst_db_num = ValkeyModule_GetSelectedDb(ctx);
+void KeyspaceEventManager::ProcessMoveNotification(
+    ValkeyModuleCtx *ctx, int type, ValkeyModuleString *dst_key,
+    const char *dst_event, int dst_db_num,
+    const std::vector<KeyspaceEventSubscription *> &src_subscriptions,
+    const ClientBlockingContext &blocking_context) {
   auto cleanup = absl::MakeCleanup([this]() {
     moved_src_key_.reset();
     src_db_num_ = -1;
   });
 
-  auto src_key_view = vmsdk::ToStringView(moved_src_key_.get());
-  auto src_subscriptions =
-      GetMatchingSubscriptions(src_key_view, type, src_db_num_);
   if (src_subscriptions.empty()) {
     return;
   }
 
+  auto src_key_view = vmsdk::ToStringView(moved_src_key_.get());
   auto dst_key_view = vmsdk::ToStringView(dst_key);
   auto src_interned_key = StringInternStore::Intern(src_key_view);
 
@@ -127,8 +178,8 @@ void KeyspaceEventManager::ProcessMoveNotification(ValkeyModuleCtx *ctx,
   {
     vmsdk::ValkeySelectDbGuard db_guard(ctx, src_db_num_);
     for (const auto &subscription : src_subscriptions) {
-      subscription->OnKeyspaceNotification(ctx, type, src_event,
-                                           moved_src_key_.get());
+      subscription->OnKeyspaceNotification(
+          ctx, type, src_event, moved_src_key_.get(), blocking_context);
     }
   }
 }
@@ -136,6 +187,7 @@ void KeyspaceEventManager::ProcessMoveNotification(ValkeyModuleCtx *ctx,
 void KeyspaceEventManager::NotifySubscribers(ValkeyModuleCtx *ctx, int type,
                                              const char *event,
                                              ValkeyModuleString *key) {
+  const ClientBlockingContext blocking_context(ctx, *this);
   if (IsMoveFromEvent(event)) {
     moved_src_key_ = vmsdk::RetainUniqueValkeyString(key);
     src_db_num_ = ValkeyModule_GetSelectedDb(ctx);
@@ -144,14 +196,27 @@ void KeyspaceEventManager::NotifySubscribers(ValkeyModuleCtx *ctx, int type,
 
   if (IsMoveToEvent(event)) {
     CHECK(moved_src_key_);
-    ProcessMoveNotification(ctx, type, key, event);
+    const int dst_db_num = ValkeyModule_GetSelectedDb(ctx);
+    auto src_subscriptions = GetMatchingSubscriptions(
+        vmsdk::ToStringView(moved_src_key_.get()), type, src_db_num_);
+    auto dst_subscriptions =
+        GetMatchingSubscriptions(vmsdk::ToStringView(key), type, dst_db_num);
+    ProcessMoveNotification(ctx, type, key, event, dst_db_num,
+                            src_subscriptions, blocking_context);
+    CHECK(!moved_src_key_);
+    for (const auto &subscription : dst_subscriptions) {
+      subscription->OnKeyspaceNotification(ctx, type, event, key,
+                                           blocking_context);
+    }
+    return;
   }
   CHECK(!moved_src_key_);
 
-  auto subscriptions_to_notify =
-      GetMatchingSubscriptions(vmsdk::ToStringView(key), type);
+  auto subscriptions_to_notify = GetMatchingSubscriptions(
+      vmsdk::ToStringView(key), type, ValkeyModule_GetSelectedDb(ctx));
   for (const auto &subscription : subscriptions_to_notify) {
-    subscription->OnKeyspaceNotification(ctx, type, event, key);
+    subscription->OnKeyspaceNotification(ctx, type, event, key,
+                                         blocking_context);
   }
 }
 

@@ -234,13 +234,12 @@ inline thread_local bool compat_counters_suppressed = false;
 // to VALKEY_SEARCH_COMPATIBILITY_FIX. Reported as the single INFO field
 // compatibility_usage. Inserts are serialized by an internal mutex; the counts
 // themselves are updated without it.
-extern std::map<std::string, std::atomic<int>, std::less<>>
-    CompatibilityUsageMap;
+extern std::map<std::string, std::atomic<int>> CompatibilityUsageMap;
 
 // Return the entry for `label` in CompatibilityUsageMap, inserting it with a
 // count of 0 if absent. Takes the map's mutex.
-std::map<std::string, std::atomic<int>, std::less<>>::iterator
-RegisterCompatibilityUsage(absl::string_view label);
+std::map<std::string, std::atomic<int>>::iterator RegisterCompatibilityUsage(
+    absl::string_view label);
 
 }  // namespace options
 }  // namespace valkey_search

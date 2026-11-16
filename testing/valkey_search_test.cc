@@ -680,8 +680,8 @@ TEST_F(CompatibilityFixTest, FixedPathDoesNotIncrementCounter) {
 
   // The entry is inserted on first macro invocation regardless of which path
   // runs, but the fixed path must not increment it.
-  EXPECT_THAT(DumpCompatibilitySection(),
-              ::testing::ContainsRegex(UsageEntry("test_label_no_increment", 0)));
+  EXPECT_THAT(DumpCompatibilitySection(), ::testing::ContainsRegex(UsageEntry(
+                                              "test_label_no_increment", 0)));
 }
 
 class MockPthreadAtfork {

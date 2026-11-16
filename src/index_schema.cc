@@ -75,6 +75,14 @@ namespace valkey_search {
 
 namespace {
 constexpr size_t kMaxTextFieldsCount{64};
+
+ABSL_CONST_INIT absl::Mutex huge_map_migration_mutex(absl::kConstInit);
+// Schemas whose hash maps may need migration, drained by server cron.
+std::vector<std::weak_ptr<IndexSchema>> &HugeMapMigrationRequests()
+    ABSL_EXCLUSIVE_LOCKS_REQUIRED(huge_map_migration_mutex) {
+  static auto *requests = new std::vector<std::weak_ptr<IndexSchema>>();
+  return *requests;
+}
 }  // namespace
 
 LogLevel GetLogSeverity(bool ok) { return ok ? DEBUG : WARNING; }
@@ -785,6 +793,7 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
   // resulting mutations.
   bool all_records_deleted = true;
   bool invalid_data = false;
+  bool needs_migration = false;
   for (auto &attribute_data_itr : mutated_attributes) {
     const auto itr = attributes_.find(attribute_data_itr.first);
     if (itr == attributes_.end()) {
@@ -797,6 +806,11 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
     if (ProcessAttributeMutation(ctx, itr->second, key,
                                  std::move(attribute_data_itr.second))) {
       invalid_data = true;
+    }
+    auto index = itr->second.GetIndex();
+    if (index->NeedsMigration()) {
+      needs_migration = true;
+      RequestIndexMigration(index);
     }
   }
   CHECK(!all_records_deleted || !invalid_data);
@@ -830,14 +844,26 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
       invalid_data_drops_key_compat_counter.Increment();
     }
   }
+  if (needs_migration || IndexKeyInfoNeedsMigration()) {
+    RequestHugeMapMigration();
+  }
 }
 
 void IndexSchema::RemoveKeyFromAllIndexes(ValkeyModuleCtx *ctx,
                                           const Key &key) {
+  bool needs_migration = false;
   for (const auto &attribute_itr : attributes_) {
     auto index = attribute_itr.second.GetIndex();
     auto res = index->RemoveRecord(key, indexes::DeletionType::kRecord);
     TrackResults(ctx, res, "Remove", stats_.subscription_remove);
+    // An erase can start a shrink.
+    if (index->NeedsMigration()) {
+      needs_migration = true;
+      RequestIndexMigration(index);
+    }
+  }
+  if (needs_migration) {
+    RequestHugeMapMigration();
   }
   if (text_index_schema_) {
     // The bad key's text tokens were just committed above; remove them. The
@@ -1093,6 +1119,9 @@ void IndexSchema::ProcessMutation(ValkeyModuleCtx *ctx,
                                   bool is_delete, float document_score) {
   auto this_mutation = UpdateDbInfoKey(ctx, mutated_attributes, interned_key,
                                        from_backfill, is_delete);
+  if (db_key_info_.Get().NeedsMigration()) {
+    RequestHugeMapMigration();
+  }
 
   const bool inside_multi_exec = vmsdk::MultiOrLua(ctx);
   if (ABSL_PREDICT_FALSE(inside_multi_exec)) {
@@ -1159,15 +1188,43 @@ void IndexSchema::BackfillScanCallback(ValkeyModuleCtx *ctx,
 CONTROLLED_BOOLEAN(StopBackfill, false);
 CONTROLLED_BOOLEAN(ForceRDBLoadFailure, false);
 
+void IndexSchema::RequestHugeMapMigration() {
+  // Pairs with the fence in MigrateWriterMaps(): the maps' migration flags are
+  // relaxed, so order the caller's map update before the request flag read.
+  std::atomic_thread_fence(std::memory_order_seq_cst);
+  if (huge_map_migration_requested_.load() ||
+      huge_map_migration_requested_.exchange(true)) {
+    return;
+  }
+  absl::MutexLock lock(&huge_map_migration_mutex);
+  HugeMapMigrationRequests().push_back(GetWeakPtr());
+}
+
+void IndexSchema::MigrateRequestedHugeMaps(size_t n) {
+  std::vector<std::weak_ptr<IndexSchema>> requests;
+  {
+    absl::MutexLock lock(&huge_map_migration_mutex);
+    requests.swap(HugeMapMigrationRequests());
+  }
+  for (const auto &weak_index_schema : requests) {
+    if (auto index_schema = weak_index_schema.lock()) {
+      index_schema->MigrateHugeMaps(n);
+    }
+  }
+}
+
 void IndexSchema::MigrateHugeMaps(size_t n) {
+  huge_map_migration_requested_.store(false);
   auto &db_key_info = db_key_info_.Get();
   if (db_key_info.NeedsMigration()) {
     db_key_info.MigrateSome(n);
+    if (db_key_info.NeedsMigration()) {
+      RequestHugeMapMigration();
+    }
   }
-  if (writer_migration_scheduled_.load() || !WriterMapsNeedMigration()) {
+  if (writer_migration_scheduled_.exchange(true)) {
     return;
   }
-  writer_migration_scheduled_.store(true);
   bool scheduled = mutations_thread_pool_->Schedule(
       [weak_index_schema = GetWeakPtr(), n]() {
         auto index_schema = weak_index_schema.lock();
@@ -1182,33 +1239,57 @@ void IndexSchema::MigrateHugeMaps(size_t n) {
   }
 }
 
-bool IndexSchema::WriterMapsNeedMigration() const {
-  if (index_key_info_.NeedsMigration()) {
-    return true;
+bool IndexSchema::IndexKeyInfoNeedsMigration() const {
+  return index_key_info_.NeedsMigration();
+}
+
+void IndexSchema::RequestIndexMigration(
+    const std::shared_ptr<indexes::IndexBase> &index) {
+  // Same pairing as in RequestHugeMapMigration().
+  std::atomic_thread_fence(std::memory_order_seq_cst);
+  if (index->MarkMigrationRequested()) {
+    absl::MutexLock lock(&migrating_indexes_mutex_);
+    migrating_indexes_.push_back(index);
   }
-  for (const auto &[_, attribute] : attributes_) {
-    if (attribute.GetIndex()->NeedsMigration()) {
-      return true;
-    }
-  }
-  return false;
 }
 
 void IndexSchema::MigrateWriterMaps(size_t n) {
-  if (!is_destructing_) {
+  std::vector<std::shared_ptr<indexes::IndexBase>> indexes;
+  {
+    absl::MutexLock lock(&migrating_indexes_mutex_);
+    indexes.swap(migrating_indexes_);
+  }
+  if (!is_destructing_ && (IndexKeyInfoNeedsMigration() || !indexes.empty())) {
     vmsdk::WriterMutexLock lock(&time_sliced_mutex_);
     {
       absl::MutexLock records_lock(&mutated_records_mutex_);
       index_key_info_.MigrateSome(n);
     }
-    for (const auto &[_, attribute] : attributes_) {
-      auto index = attribute.GetIndex();
-      if (index->NeedsMigration()) {
-        index->MigrateSome(n);
-      }
+    for (const auto &index : indexes) {
+      index->MigrateSome(n);
     }
   }
   writer_migration_scheduled_.store(false);
+  for (const auto &index : indexes) {
+    index->ClearMigrationRequested();
+  }
+  // Either the checks below see a writer's map update, or that writer sees the
+  // cleared flags and queues the work itself.
+  std::atomic_thread_fence(std::memory_order_seq_cst);
+  for (const auto &index : indexes) {
+    if (index->NeedsMigration()) {
+      RequestIndexMigration(index);
+    }
+  }
+  // Also covers indexes queued by writers after the swap above.
+  bool indexes_pending;
+  {
+    absl::MutexLock lock(&migrating_indexes_mutex_);
+    indexes_pending = !migrating_indexes_.empty();
+  }
+  if (!is_destructing_ && (indexes_pending || IndexKeyInfoNeedsMigration())) {
+    RequestHugeMapMigration();
+  }
 }
 
 uint32_t IndexSchema::PerformBackfill(ValkeyModuleCtx *ctx,

@@ -942,16 +942,7 @@ void SchemaManager::OnServerCronCallback(ValkeyModuleCtx *ctx,
       ctx, options::GetBackfillBatchSize().GetValue());
   // Drain the schemas' hash-table backgrounds without any traffic.
   if (vmsdk::HugeMapAdvisoryMigrationEnabled()) {
-    SchemaManager::Instance().MigrateHugeMaps(vmsdk::HugeMapCronMigrateBatch());
-  }
-}
-
-void SchemaManager::MigrateHugeMaps(size_t n) {
-  absl::MutexLock lock(&db_to_index_schemas_mutex_);
-  for (const auto &[db_num, inner_map] : db_to_index_schemas_) {
-    for (const auto &[name, schema] : inner_map) {
-      schema->MigrateHugeMaps(n);
-    }
+    IndexSchema::MigrateRequestedHugeMaps(vmsdk::HugeMapCronMigrateBatch());
   }
 }
 

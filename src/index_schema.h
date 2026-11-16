@@ -250,8 +250,8 @@ class IndexSchema : public KeyspaceEventSubscription,
 
   uint32_t PerformBackfill(ValkeyModuleCtx *ctx, uint32_t batch_size);
 
-  // Called from server cron.
-  void MigrateHugeMaps(size_t n);
+  // Migrates the schemas that requested it. Called from server cron.
+  static void MigrateRequestedHugeMaps(size_t n);
 
   bool IsBackfillInProgress() const {
     auto &backfill_job = backfill_job_.Get();
@@ -542,8 +542,20 @@ class IndexSchema : public KeyspaceEventSubscription,
   // exclusion is provided by mutated_records_mutex_.
   IndexKeyInfoMap index_key_info_ ABSL_GUARDED_BY(mutated_records_mutex_);
 
-  bool WriterMapsNeedMigration() const ABSL_NO_THREAD_SAFETY_ANALYSIS;
-  void MigrateWriterMaps(size_t n);
+  // Callable from any thread; the request is served by server cron.
+  void RequestHugeMapMigration();
+  void MigrateHugeMaps(size_t n);
+  bool IndexKeyInfoNeedsMigration() const ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  void RequestIndexMigration(const std::shared_ptr<indexes::IndexBase> &index)
+      ABSL_LOCKS_EXCLUDED(migrating_indexes_mutex_);
+  void MigrateWriterMaps(size_t n)
+      ABSL_LOCKS_EXCLUDED(migrating_indexes_mutex_);
+  absl::Mutex migrating_indexes_mutex_;
+  // Indexes whose maps need migration, drained by MigrateWriterMaps().
+  std::vector<std::shared_ptr<indexes::IndexBase>> migrating_indexes_
+      ABSL_GUARDED_BY(migrating_indexes_mutex_);
+  // This schema is in the migration request list.
+  std::atomic<bool> huge_map_migration_requested_{false};
   // A MigrateWriterMaps() task is queued or running.
   std::atomic<bool> writer_migration_scheduled_{false};
 

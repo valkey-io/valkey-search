@@ -1274,6 +1274,22 @@ inline size_t TestValkeyModule_MallocUsableSize(void *ptr) {
   return kMockValkeyModule->MallocUsableSize(ptr);
 }
 
+// Like the allocator entry points above, these bypass kMockValkeyModule: a
+// huge table can outlive the test that grew it (StringInternStore is a
+// process-lifetime singleton), and would report its release through a deleted
+// mock. Tests read the running total, as a difference from a baseline.
+inline std::atomic<int64_t> test_external_memory_bytes{0};
+
+inline int TestValkeyModule_IncrExternalMemory(size_t bytes) {
+  test_external_memory_bytes.fetch_add(bytes, std::memory_order_relaxed);
+  return VALKEYMODULE_OK;
+}
+
+inline int TestValkeyModule_DecrExternalMemory(size_t bytes) {
+  test_external_memory_bytes.fetch_sub(bytes, std::memory_order_relaxed);
+  return VALKEYMODULE_OK;
+}
+
 inline size_t TestValkeyModule_GetClusterSize() {
   return kMockValkeyModule->GetClusterSize();
 }
@@ -1721,6 +1737,8 @@ inline void TestValkeyModule_Init() {
   ValkeyModule_Realloc = &TestValkeyModule_Realloc;
   ValkeyModule_Calloc = &TestValkeyModule_Calloc;
   ValkeyModule_MallocUsableSize = &TestValkeyModule_MallocUsableSize;
+  ValkeyModule_IncrExternalMemory = &TestValkeyModule_IncrExternalMemory;
+  ValkeyModule_DecrExternalMemory = &TestValkeyModule_DecrExternalMemory;
   ValkeyModule_GetClusterSize = &TestValkeyModule_GetClusterSize;
   ValkeyModule_ClusterKeySlot = &TestValkeyModule_ClusterKeySlot;
   ValkeyModule_GetSharedAPI = &TestValkeyModule_GetSharedAPI;

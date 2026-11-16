@@ -13,7 +13,7 @@ Some metrics are reported only when they apply. The `coordinator_*` metrics appe
 
 | Metric Name                                                      |      Section       |     Unit     | Description                                                                                                                                                         |
 | :--------------------------------------------------------------- | :----------------: | :----------: | :------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `compatibility-invalid_data_drops_key`                           |  `compatibility`   |    Count     | Count of key mutations with malformed indexed data that kept the key indexed (field treated as missing) because `search.emulate-release` is below 1.3.0 (see below) |
+| `compatibility_usage`                                            |  `compatibility`   |    String    | Comma-separated `label=count` list of legacy behaviors used because `search.emulate-release` is below the release that fixed them (see below)                       |
 | `coordinator_bytes_in`                                           |   `coordinator`    |    Bytes     | Total size (in bytes) of incoming gRPC response messages received by the coordinator client from remote nodes                                                       |
 | `coordinator_bytes_out`                                          |   `coordinator`    |    Bytes     | Total size (in bytes) of outgoing gRPC request messages sent by the coordinator client to remote nodes                                                              |
 | `coordinator_client_get_global_metadata_failure_count`           |   `coordinator`    |    Count     | Count of failed client requests to get global metadata                                                                                                              |
@@ -29,6 +29,7 @@ Some metrics are reported only when they apply. The `coordinator_*` metrics appe
 | `coordinator_server_get_global_metadata_success_count`           |   `coordinator`    |    Count     | Count of successful server requests to get global metadata                                                                                                          |
 | `coordinator_server_get_global_metadata_success_latency_usec`    |   `coordinator`    | Microseconds | Latency distribution (in microseconds) for successful server metadata requests                                                                                      |
 | `coordinator_server_listening_port`                              |   `coordinator`    |     Port     | The port number the coordinator server is listening on                                                                                                              |
+| `coordinator_server_search_index_partition_cpu_time_usec`        |   `coordinator`    | Microseconds | Cumulative CPU time (in microseconds) spent handling remote query operations on this node                                                                           |
 | `coordinator_server_search_index_partition_failure_count`        |   `coordinator`    |    Count     | Count of failed server searches on index partitions                                                                                                                 |
 | `coordinator_server_search_index_partition_failure_latency_usec` |   `coordinator`    | Microseconds | Latency distribution (in microseconds) for failed server partition searches                                                                                         |
 | `coordinator_server_search_index_partition_success_count`        |   `coordinator`    |    Count     | Count of successful server searches on index partitions                                                                                                             |
@@ -81,7 +82,7 @@ Some metrics are reported only when they apply. The `coordinator_*` metrics appe
 
 ## Compatibility counters
 
-Each `compatibility-*` metric counts how often a legacy, incompatible behavior was used because `search.emulate-release` is set below
-the release that fixed it. See [Compatibility Defects](../../COMPATIBILITY.md#compatibility-defects) for the full list and what each one
-changes. `compatibility-invalid_data_drops_key` is always reported; the others appear in `INFO SEARCH` only after the code path is first
-reached.
+The `compatibility_usage` metric is a comma-separated list of `label=count` pairs. Each count is how often a legacy, incompatible
+behavior was used because `search.emulate-release` is set below the release that fixed it. See
+[Compatibility Defects](../../COMPATIBILITY.md#compatibility-defects) for the full list of labels and what each one changes. The metric
+is always reported; a label appears in the list only after its legacy behavior is first used, and an absent label has a count of 0.

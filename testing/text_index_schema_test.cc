@@ -60,6 +60,14 @@ class TextIndexSchemaTest : public vmsdk::ValkeyTest {
           return root->distinct_docs;
         });
   }
+
+  // Whether the word's root has a stem-tree target at all, even an empty one.
+  bool HasStemRoot(TextIndexSchema &schema, absl::string_view word) {
+    const std::string stemmed = schema.StemWord(word);
+    return schema.WithStemTreeLock([&](const Rax &stem_tree) {
+      return static_cast<bool>(stem_tree.FindStemParentsTarget(stemmed));
+    });
+  }
 };
 
 // A document counts once per stem root however many inflections it holds, so
@@ -138,6 +146,87 @@ TEST_F(TextIndexSchemaTest, StemDistinctDocsSurvivesConcurrentDeleteAndAdd) {
   deleter.join();
 
   EXPECT_EQ(StemDistinctDocs(*schema, "runs"), 1);
+}
+
+// doc1's delete has removed its "runs" posting but not yet uncounted the root
+// when doc2's delete empties "runs" and doc3 re-adds it. doc1's late uncount
+// must remove doc1's own count, not one from the root doc3 re-created.
+TEST_F(TextIndexSchemaTest, StemDistinctDocsSurvivesDeferredUncount) {
+  auto schema = CreateSchema();
+  data_model::TextIndex proto;
+  auto text = std::make_shared<Text>(proto, schema);
+  schema->SetStemTextFieldMask(1);
+
+  auto key1 = StringInternStore::Intern("doc1");
+  auto key2 = StringInternStore::Intern("doc2");
+  auto key3 = StringInternStore::Intern("doc3");
+  CommitStemmed(*schema, key1, "runs");
+  CommitStemmed(*schema, key2, "runs");
+  ASSERT_EQ(StemDistinctDocs(*schema, "runs"), 2);
+
+  constexpr absl::string_view kPausePoint = "delete_key_data_stem_update";
+  vmsdk::debug::PausePointControl(kPausePoint, true);
+  std::thread deleter([&] { schema->DeleteKeyData(key1); });
+  while (vmsdk::debug::PausePointWaiters(kPausePoint).value_or(0) == 0) {
+    absl::SleepFor(absl::Milliseconds(1));
+  }
+  // The main thread passes the pause point, so doc2's delete runs to the end.
+  schema->DeleteKeyData(key2);
+  CommitStemmed(*schema, key3, "runs");
+  vmsdk::debug::PausePointControl(kPausePoint, false);
+  deleter.join();
+
+  // Only doc3 holds "runs".
+  EXPECT_EQ(StemDistinctDocs(*schema, "runs"), 1);
+}
+
+// Without a re-add, the paused delete's uncount is the last count on the root,
+// so it must drop the root's target.
+TEST_F(TextIndexSchemaTest, StemRootDroppedWhenDeferredUncountDrains) {
+  auto schema = CreateSchema();
+  data_model::TextIndex proto;
+  auto text = std::make_shared<Text>(proto, schema);
+  schema->SetStemTextFieldMask(1);
+
+  auto key1 = StringInternStore::Intern("doc1");
+  auto key2 = StringInternStore::Intern("doc2");
+  CommitStemmed(*schema, key1, "runs");
+  CommitStemmed(*schema, key2, "runs");
+
+  constexpr absl::string_view kPausePoint = "delete_key_data_stem_update";
+  vmsdk::debug::PausePointControl(kPausePoint, true);
+  std::thread deleter([&] { schema->DeleteKeyData(key1); });
+  while (vmsdk::debug::PausePointWaiters(kPausePoint).value_or(0) == 0) {
+    absl::SleepFor(absl::Milliseconds(1));
+  }
+  schema->DeleteKeyData(key2);
+  vmsdk::debug::PausePointControl(kPausePoint, false);
+  deleter.join();
+
+  EXPECT_FALSE(HasStemRoot(*schema, "runs"));
+}
+
+// A word held only in a NOSTEM field keeps its postings, but no document
+// counts toward the root any more, so the root's target must go.
+TEST_F(TextIndexSchemaTest, StemRootDroppedWhenOnlyNostemHoldersRemain) {
+  auto schema = CreateSchema();
+  data_model::TextIndex proto;
+  auto stem_field = std::make_shared<Text>(proto, schema);
+  auto nostem_field = std::make_shared<Text>(proto, schema);
+  schema->SetStemTextFieldMask(1);
+
+  auto key1 = StringInternStore::Intern("doc1");
+  auto key2 = StringInternStore::Intern("doc2");
+  CommitStemmed(*schema, key1, "runs");
+  ASSERT_TRUE(schema
+                  ->StageAttributeData(key2, "runs", 1, /*stem=*/false,
+                                       /*suffix=*/false)
+                  .ok());
+  schema->CommitKeyData(key2);
+  ASSERT_TRUE(HasStemRoot(*schema, "runs"));
+
+  schema->DeleteKeyData(key1);
+  EXPECT_FALSE(HasStemRoot(*schema, "runs"));
 }
 
 // Concurrent CommitKeyData calls with overlapping words must

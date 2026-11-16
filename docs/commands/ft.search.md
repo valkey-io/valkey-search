@@ -36,14 +36,14 @@ FT.SEARCH <index> <query>
 - `SLOP <slop>` (Optional): Specifies a slop value for proximity matching of text terms in the query.
 - `VERBATIM` (Optional): If specified, stemming is not applied to text terms in the query.
 - `SOMESHARDS` (Optional): If specified, the command will generate a best-effort reply if all shards have not responded within the timeout interval.
-- `SORTBY <field> [ASC | DESC]` (Optional): If present, results are sorted according the value of the specified field and the optional sort-direction instruction. By default, KNN results are sorted in distance order and other results are not sorted in any particular order. Sorting is applied before the `LIMIT` clause is applied.
+- `SORTBY <field> [ASC | DESC]` (Optional): If present, results are sorted according the value of the specified field and the optional sort-direction instruction. By default, KNN results are sorted by distance, nearest first, unless the KNN filter contains a text or tag clause. Other results, including KNN results with a text or tag filter, are sorted by relevance score, highest first. Results with equal scores are sorted by key name, in byte order. Sorting is applied before the `LIMIT` clause is applied. See [Search - Scoring](../topics/search-scoring.md).
 - `TIMEOUT <timeout>` (optional): Lets you set a timeout value for the search command. This must be an integer in milliseconds.
-- `SCORER <scorer>` (Optional): Selects the relevance scoring function used to rank text results. The only supported scorer is `BM25STD`, which is also the default.
+- `SCORER <scorer>` (Optional): Selects the relevance scoring function used to rank results. The only supported scorer now is `BM25STD`, which is also the default. See [Search - Scoring](../topics/search-scoring.md).
 - `WITHCURSOR [COUNT <count>] [MAXIDLE <maxidle>]` (Optional): Returns at most `<count>` of the keys selected by the `LIMIT` clause and saves the remaining keys in a cursor, which is read with [`FT.CURSOR`](ft.cursor.md). `<count>` must be between 1 and `search.cursor-max-count`, the default is 1000. `<maxidle>` is the number of milliseconds the cursor may go unread before it is destroyed; it must be between 1 and `search.cursor-max-idle-ms`, the default is 300000. If it is given more than once, the last one is used. This option is a Valkey extension.
 - `WITHSCORES` (Optional): Augments the output with the relevance score computed for each returned key.
 - `WITHSORTKEYS` (Optional): If `SORTBY` is specified then enabling this option augments the output with the value of the field used for sorting.
 
-Response
+## Reply
 
 The shape and contents of the response depend on the options specified in the command.
 In all cases, the response is an array with the first element being a count of the number of keys which match the query.
@@ -77,11 +77,11 @@ The response is a three element array:
 
 1. The count of the number of keys which match the query, as above.
 2. An array with one element per returned key. Each element is an array holding the entries for that key described above, e.g. the key name and its array of name/value pairs.
-3. The cursor id to pass to [`FT.CURSOR READ`](ft.cursor.md), or 0 if all keys were returned, in which case no cursor is created.
+3. The cursor id to pass to [`FT.CURSOR READ`](ft.cursor.md), or 0 if this reply contains all the remaining keys, in which case no cursor is created.
 
-# Examples
+## Examples
 
-## Non-vector Queries On Hash Index
+### Non-vector Queries On Hash Index
 
 For these queries the following index and data definitions were used:
 
@@ -146,7 +146,7 @@ FT.SEARCH index @color:{bl*} RETURN 2 color city
    4) "Paris"
 ```
 
-## Non-vector Queries On JSON Index
+### Non-vector Queries On JSON Index
 
 Repeating the queries above, except the data is JSON
 
@@ -205,7 +205,7 @@ FT.SEARCH index @color:{bl*} RETURN 2 color city
    4) "London"
 ```
 
-## Pure vector search query
+### Pure vector search query
 
 For this example, assume we're building a property searching index where customers can search properties based on some features.
 Assume we have a list of properties with the following attributes:
@@ -267,14 +267,14 @@ Returned result:
     4) \x00\x00\x80?\x00\x00\x00\x00\x00\x00\x00\x00
 ```
 
-## Query On JSON Index without RETURN clause
+### Query On JSON Index without RETURN clause
 
 Simple query showing the JSON output
 
-## Simple Query with RETURN Clause
+### Simple Query with RETURN Clause
 
 Simple query showing selecting return of additional fields
 
-## Query showing NOCONTENT
+### Query showing NOCONTENT
 
-## Query showing SORTBY
+### Query showing SORTBY

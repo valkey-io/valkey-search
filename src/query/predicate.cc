@@ -30,7 +30,6 @@
 #include "src/indexes/vector_base.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/debug.h"
-#include "vmsdk/src/info.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 
@@ -220,21 +219,18 @@ void InfixPredicate::ForEachMatch(
   CHECK(false) << "Infix Search - Not implemented";
 }
 
-// INFO counter for the fuzzy code-point distance compatibility defect (see
-// COMPATIBILITY.md). Statically constructed because predicates are also built
-// off the main thread (e.g. shard-side gRPC requests). Counts every fuzzy term
-// that uses byte distance: whether the result differs depends on the indexed
-// words, which a cheap check on the term cannot tell. Counted here, once per
-// term, because Search runs per key in Evaluate.
-static vmsdk::info_field::Integer fuzzy_code_point_distance_compat_counter(
-    "compatibility", "compatibility-fuzzy_code_point_distance",
-    vmsdk::info_field::IntegerBuilder().App());
-
+// Counts every fuzzy term that uses byte distance for the fuzzy code-point
+// distance compatibility defect (see COMPATIBILITY.md): whether the result
+// differs depends on the indexed words, which a cheap check on the term cannot
+// tell. Counted here, once per term, because Search runs per key in Evaluate.
+// `unit` already selected the legacy path (GetLengthUnit); the macro only
+// records it.
 static indexes::text::LengthUnit FuzzyLengthUnit(
     const indexes::text::TextIndexSchema &schema) {
   auto unit = schema.GetLanguage().GetLengthUnit();
   if (unit == indexes::text::LengthUnit::kBytes) {
-    fuzzy_code_point_distance_compat_counter.Increment();
+    VALKEY_SEARCH_COMPATIBILITY_FIX(
+        1, 3, 0, "fuzzy_code_point_distance", [] {}, [] {});
   }
   return unit;
 }
@@ -454,15 +450,14 @@ EvaluationResult ComposedPredicate::EvaluateWithContext(Evaluator &evaluator,
                         indexes::text::kProximityTermsInlineCapacity>
         iterators;
     for (const auto &child : children_) {
-      // In AND: skip text children when in prefilter evaluation because text in
-      // AND is fully (recursively) resolved in the entries fetcher layer
-      // already. The only cases where this is not true are:
+      // In AND: skip text children when the entries fetcher layer already fully
+      // (recursively) resolved them. The only cases where this is not true are:
       // 1) when an AND predicate contains an OR which has some other non text
       // children and an AND child containing text. This is not solved in
       // entries fetcher yet.
       // 2) when the query has negation on text. Currently, a universal set is
       // used in the entries fetcher layer for text+negate queries.
-      if (evaluator.IsPrefilterEvaluator() &&
+      if (evaluator.SourceResolvesText() &&
           child->GetType() == PredicateType::kText && !from_or &&
           !(evaluator.GetQueryOperations() &
             QueryOperations::kContainsNegate)) {

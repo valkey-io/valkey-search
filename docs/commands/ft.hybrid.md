@@ -6,6 +6,8 @@ The two ranked lists are then fused into one. Fusion is what makes this a hybrid
 
 The fused list is then fed through the same processing stages as `FT.AGGREGATE`, so the result can be projected, filtered, grouped, sorted and trimmed before it is returned.
 
+Unlike `FT.AGGREGATE`, which returns every record, `FT.HYBRID` returns at most 10 records when the command writes no `LIMIT` clause. An explicit `LIMIT` stays where it is written in the pipeline; only the default is appended, so it runs after every other stage.
+
 ```
 FT.HYBRID <index-name>
     SEARCH <query> [SCORER <scorer>] [YIELD_SCORE_AS <alias>]
@@ -26,7 +28,7 @@ FT.HYBRID <index-name>
     (
       | APPLY <expression> AS <field>
       | FILTER <expression>
-      | GROUPBY <count> <field> [<field> ... ] [[REDUCE <reducer> <count> [<expression> [<expression> ...]]] [ REDUCE ...]]
+      | GROUPBY <count> [<field> ... ] [[REDUCE <reducer> <count> [<expression> [<expression> ...]]] [ REDUCE ...]]
       | LIMIT <offset> <count>
       | SORTBY <count> <expression> [ASC | DESC] [<expression> [ASC | DESC] ...] [MAX <num>]
     )*
@@ -34,7 +36,7 @@ FT.HYBRID <index-name>
 
 - `<index-name>` (required): The index to query. Both arms search the same index.
 - `SEARCH <query>` (required): The non-vector arm. `<query>` is any query the search parser accepts, see [Search - query language](../topics/search-query.md). A vector query is rejected here — the vector search is the `VSIM` clause's job.
-  - `SCORER <scorer>` (optional): The relevance scorer for this arm. The only supported scorer is `BM25STD`, which is also the default.
+  - `SCORER <scorer>` (optional): The relevance scorer for this arm. The only supported scorer now is `BM25STD`, which is also the default.
   - `YIELD_SCORE_AS <alias>` (optional): Emits this arm's score under `<alias>`, making it available to `COMBINE FUNCTION` and to the processing stages.
 - `VSIM <field> <vector>` (required): The vector arm. `<field>` is a declared vector attribute and `<vector>` is a binary blob, supplied through `PARAMS`.
   - `KNN <count> [K <k>] [EF_RUNTIME <ef>] [SHARD_K_RATIO <ratio>]` (optional): The vector search parameters. `<count>` is a count of the arguments that follow within the block, not a count of parameters. `K` is the number of nearest neighbors to retrieve, between 1 and 10000, and defaults to 10. Omitting the whole block, or writing `KNN 0`, is the same as taking every default. `EF_RUNTIME` tunes the HNSW search breadth. `SHARD_K_RATIO` is accepted for compatibility and ignored.
@@ -45,24 +47,20 @@ FT.HYBRID <index-name>
 - `LOAD * | LOAD <count> <field> [AS <alias>] [...]` (optional): Which fields of the matched keys are loaded into the working set, exactly as for `FT.AGGREGATE`. Without a `LOAD` clause the result carries the key, the fused score, and any per-arm scores that were named. `AS <alias>` requires `search.emulate-release` to be at least `1.3.0`; below that the `AS` keyword is read as another field name and the load fails.
 - `PARAMS <count> <name> <value> [...]` (optional): `<count>` is the number of arguments, i.e. twice the number of name/value pairs. Used to supply the `VSIM` query vector. A `$name` reference inside either arm's query text is not substituted — the same limitation `FT.SEARCH` and `FT.AGGREGATE` have.
 - `TIMEOUT <timeout>` (optional): A timeout for the command, in milliseconds, between 1 and 60000.
-- `WITHCURSOR [COUNT <count>] [MAXIDLE <maxidle>]` (optional): Returns at most `<count>` records and saves the remaining records in a cursor, which is read with [`FT.CURSOR`](ft.cursor.md), exactly as for [`FT.AGGREGATE`](ft.aggregate.md). `<count>` must be between 1 and `search.cursor-max-count`, the default is 1000. `<maxidle>` is the number of milliseconds the cursor may go unread before it is destroyed; it must be between 1 and `search.cursor-max-idle-ms`, the default is 300000. `WITHCURSOR` may appear anywhere among the clauses that follow `SEARCH`, `VSIM` and `COMBINE`, and ends any of those three clauses the way `LOAD` does. If it is given more than once, the last one is used. A cursor is no exception to the cancellation rules: a query cancelled by its `TIMEOUT` is an error, as it is without `WITHCURSOR`.
+- `WITHCURSOR [COUNT <count>] [MAXIDLE <maxidle>]` (optional): Returns at most `<count>` records and saves the remaining records in a cursor, which is read with [`FT.CURSOR`](ft.cursor.md), exactly as for [`FT.AGGREGATE`](ft.aggregate.md). `<count>` must be between 1 and `search.cursor-max-count`, the default is 1000. `<maxidle>` is the number of milliseconds the cursor may go unread before it is destroyed; it must be between 1 and `search.cursor-max-idle-ms`, the default is 300000. `WITHCURSOR` may appear anywhere among the clauses that follow `SEARCH`, `VSIM` and `COMBINE`, and ends any of those three clauses the way `LOAD` does. If it is given more than once, the last one is used. A cursor is no exception to the cancellation rules: a query cancelled by its `TIMEOUT` is an error, as it is without `WITHCURSOR`. The cursor pages through the records the command would have returned without `WITHCURSOR`, so the default `LIMIT` of 10 described above still applies.
 - `APPLY`, `FILTER`, `GROUPBY`, `LIMIT`, `SORTBY` (optional): The `FT.AGGREGATE` processing stages, applied to the fused list in the order written. See [FT.AGGREGATE](ft.aggregate.md#processing-stages) for what each stage does.
 
-# Result
+## Fusion methods
 
-The output is an array. The first element is a scalar that repeats the number of records returned and carries no other information — in particular it is not the total number of matches. The remainder is one element per record.
+Fusion sees each arm's results ranked best-first. The `VSIM` arm's distance, defined in [Vector Distance](../topics/search-scoring.md#vector-distance), is converted to a similarity before fusion:
 
-Each record is an array of field/value pairs. Without a `LOAD` clause every record carries `__key` and the fused score, under `__score` or under the alias given by `COMBINE ... YIELD_SCORE_AS`. A `LOAD` clause replaces those two implicit columns with the fields it names: load `@__key` to keep the key, and name the fused score with `COMBINE ... YIELD_SCORE_AS` to keep it. Per-arm scores appear under their own `YIELD_SCORE_AS` aliases either way.
+- `L2`: the similarity is `1 / (1 + distance)`, so a nearer document scores higher.
+- `COSINE`: the similarity is `1 - distance / 2`, so a nearer document scores higher.
+- `IP`: the similarity is `(1 + distance) / 2`, so a nearer document scores lower.
 
-If `WITHCURSOR` is specified the output is a two element array, as for `FT.AGGREGATE`. The first element is an array whose first element is the number of records returned, followed by one element for each returned record. The second element is the cursor id to pass to [`FT.CURSOR READ`](ft.cursor.md), or 0 if all records were returned, in which case no cursor is created. The cursor pages through the records the command would have returned without `WITHCURSOR`, so the default `LIMIT` of 10 described below still applies.
+`RRF` uses only the ranks and is not affected. `LINEAR` and `FUNCTION` use the similarity value directly, so on an `IP` index a positive `BETA` favors farther documents.
 
-Unlike `FT.AGGREGATE`, which returns every record, `FT.HYBRID` returns at most 10 records when the command writes no `LIMIT` clause. An explicit `LIMIT` stays where it is written in the pipeline; only the default is appended, so it runs after every other stage.
-
-# Fusion methods
-
-Fusion sees each arm's results ranked best-first, and every arm's score in the same direction: higher is better. The `VSIM` arm's distance is converted to a similarity before fusion, so a nearer document scores higher.
-
-## RRF
+### RRF
 
 ```
 COMBINE RRF <count> [CONSTANT <c>] [WINDOW <w>] [YIELD_SCORE_AS <alias>]
@@ -75,7 +73,7 @@ Reciprocal Rank Fusion scores a document by its _rank_ in each arm rather than b
 
 This is the default method: a command with no `COMBINE` clause fuses with `RRF` using these defaults.
 
-## LINEAR
+### LINEAR
 
 ```
 COMBINE LINEAR <count> [ALPHA <a> BETA <b>] [WINDOW <w>] [YIELD_SCORE_AS <alias>]
@@ -93,7 +91,7 @@ Any finite value is accepted, including negative values and values greater than 
 
 The scores are used as they stand, with no per-arm normalization. Normalizing would make a document's fused score depend on which _other_ documents happened to come back in the same arm, so the same document against the same query would score differently as the corpus around it changed. Use `ALPHA` and `BETA` to balance the arms instead.
 
-## FUNCTION
+### FUNCTION
 
 ```
 COMBINE FUNCTION <count> EXPR <expression> [WINDOW <w>] [YIELD_SCORE_AS <alias>]
@@ -116,7 +114,7 @@ FT.HYBRID idx
 
 An arm that did not return a given document has no score for it, and an expression that reads a missing arm score evaluates to 0 for that document as a whole — not merely for that term. `@v * 0 + 100` yields 0, not 100, for a document the vector arm did not return. Guard with `exists(@alias)`, which is 0 for a missing score and 1 otherwise, if such a document should keep a non-zero fused score.
 
-## WINDOW
+### WINDOW
 
 `WINDOW` bounds how many of each arm's top results take part in fusion. It is a per-arm count, so with two arms the fused list can hold up to twice the window before the processing stages run.
 
@@ -124,7 +122,7 @@ An arm that did not return a given document has no score for it, and an expressi
 
 The ceiling bounds a window the command asks for, and the window `FUNCTION` takes when it asks for none. It does not clamp the RRF and LINEAR default of 20: lowering the configuration below 20 rejects an explicit `WINDOW 20` while leaving the default untouched.
 
-# Score naming
+## Score naming
 
 The fused score is emitted under `__score` unless `COMBINE ... YIELD_SCORE_AS` names it otherwise.
 
@@ -132,7 +130,13 @@ The fused score is emitted under `__score` unless `COMBINE ... YIELD_SCORE_AS` n
 
 `__score` cannot be used by `COMBINE ... YIELD_SCORE_AS` when the command has no `LOAD` clause, because that is already the name of the default score column; give the score a different name, or add a `LOAD` clause. A per-arm `YIELD_SCORE_AS` cannot use `__score` at all, with or without a `LOAD` clause, since it would collide with the fused score's own column.
 
-# Notes
+## Reply
+
+The reply has the same structure as the [`FT.AGGREGATE` reply](ft.aggregate.md#reply), with and without `WITHCURSOR`; see that page for details. As there, N is the number of records returned, not the total number of matches.
+
+Without a `LOAD` clause every record carries `__key` and the fused score, under `__score` or under the alias given by `COMBINE ... YIELD_SCORE_AS`. A `LOAD` clause replaces those two implicit columns with the fields it names: load `@__key` to keep the key, and name the fused score with `COMBINE ... YIELD_SCORE_AS` to keep it. Per-arm scores appear under their own `YIELD_SCORE_AS` aliases either way.
+
+## Notes
 
 - **`VSIM RANGE` is not implemented.** The clause parses, so a command written for another engine is checked rather than misread, but executing one returns an error. Use `KNN`.
 - **`POLICY` is active inside a counted VSIM `FILTER`.** `ADHOC` forces exact filter-first execution and `BATCHES` forces vector-search-first execution with inline filtering. Other values, duplicate declarations, and placement outside the counted FILTER block are rejected.

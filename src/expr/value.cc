@@ -13,8 +13,8 @@
 #include <sstream>
 #include <system_error>
 
+#include "absl/strings/ascii.h"
 #include "absl/strings/str_cat.h"
-#include "src/utils/scanner.h"
 #include "src/valkey_search_options.h"  // VALKEY_SEARCH_COMPATIBILITY_FIX
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -23,27 +23,31 @@
 namespace valkey_search {
 namespace expr {
 
-// -ffast-math disables std::is_nan and std::is_inf
 static const uint64_t kSignBitMask = 0x8000000000000000ull;
 static const uint64_t kExponentMask = 0x7FF0000000000000ull;
-static const uint64_t kMantissaMask = 0x000FFFFFFFFFFFFFull;
 
-// Built-in isnan doesn't work when compiling with fast-math, which is what we
-// want to do.
-static bool IsNan(const double& d) {
+// Canonicalizes a double's bit pattern for unambiguous, lossless
+// serialization and hashing: every NaN collapses to one bit pattern and
+// -0.0 maps to +0.0, matching the equivalences CompareDoubles() already
+// treats as equal.
+uint64_t CanonicalDoubleBits(double d) {
   uint64_t v = *(uint64_t*)&d;
-  return ((v & kExponentMask) == kExponentMask) && ((v & kMantissaMask) != 0);
-}
-
-static bool IsInf(const double& d) {
-  uint64_t v = *(uint64_t*)&d;
-  return ((v & kExponentMask) == kExponentMask) && ((v & kMantissaMask) == 0);
+  if (std::isnan(d)) {
+    return kExponentMask | 1;
+  }
+  if (v == kSignBitMask) {
+    return 0;
+  }
+  return v;
 }
 
 // Redisearch has no string form for an array and compares it as the empty
 // string -- `@array == ""` is true there, for an empty and a populated array
 // alike. Matching that keeps string comparisons against an array compatible.
 static constexpr absl::string_view kArrayAsString{""};
+
+// Unused by any other element encoding's first byte.
+static constexpr char kDoubleTag = '\0';
 
 Value::Value(double d) { value_ = d; }
 
@@ -111,7 +115,7 @@ std::optional<Value::Nil> Value::AsNil() const {
 }
 
 std::string FormatDouble(double d) {
-  if (IsNan(d)) {
+  if (std::isnan(d)) {
     if (std::signbit(d)) {
       return "-nan";
     } else {
@@ -126,7 +130,7 @@ std::string FormatDouble(double d) {
   // integrality is an artifact of the binary representation, and the fixed
   // expansion of a value like 1e300 would not fit storage, so the fixed path
   // stops at 1e17 -- still well past epoch microseconds.
-  if (!IsInf(d) && d == std::floor(d) && std::fabs(d) < 1e17) {
+  if (!std::isinf(d) && d == std::floor(d) && std::fabs(d) < 1e17) {
     auto [ptr, ec] = std::to_chars(storage, storage + sizeof(storage), d,
                                    std::chars_format::fixed, 0);
     CHECK(ec == std::errc()) << "to_chars failed formatting integral double "
@@ -147,7 +151,7 @@ std::optional<bool> Value::AsBool() const {
     return *result;
   }
   if (auto result = std::get_if<double>(&value_)) {
-    if (IsNan(*result)) {
+    if (std::isnan(*result)) {
       return true;
     }
     return !(*result == 0.0);
@@ -199,7 +203,7 @@ std::optional<double> Value::AsDouble() const {
   }
   char* end{nullptr};
   double val = std::strtod(sv.begin(), &end);
-  if (end != sv.end() || IsNan(val)) {
+  if (end != sv.end() || std::isnan(val)) {
     return std::nullopt;
   } else {
     return val;
@@ -256,6 +260,56 @@ std::optional<Value::Array> Value::AsArray() const {
   return std::nullopt;
 }
 
+std::string Value::Serialize() const {
+  if (IsNil()) {
+    return "";
+  }
+  if (IsArray()) {
+    auto arr = GetArray();
+    std::string result = "[";
+    for (size_t i = 0; i < arr->size(); ++i) {
+      if (i > 0) {
+        absl::StrAppend(&result, ",");
+      }
+      const auto& elem = (*arr)[i];
+      if (elem.IsString()) {
+        auto sv = elem.GetStringView();
+        absl::StrAppend(&result, "\"");
+        for (char c : sv) {
+          if (c == '"' || c == '\\') {
+            result += '\\';
+          }
+          result += c;
+        }
+        absl::StrAppend(&result, "\"");
+      } else if (elem.IsArray()) {
+        absl::StrAppend(&result, elem.Serialize());
+      } else if (elem.IsNil()) {
+        absl::StrAppend(&result, "null");
+      } else if (elem.IsBool()) {
+        absl::StrAppend(&result, elem.GetBool() ? "true" : "false");
+      } else if (elem.IsDouble()) {
+        // %.12g (used by AsStringView()) loses precision and collapses -0.0
+        // with 0.0 and all NaNs together; append the canonicalized 8-byte bit
+        // pattern instead so nested doubles hash unambiguously and losslessly.
+        result += kDoubleTag;
+        uint64_t bits = CanonicalDoubleBits(elem.GetDouble());
+        result.append(reinterpret_cast<const char*>(&bits), sizeof(bits));
+      } else {
+        absl::StrAppend(&result, *elem.AsStringView());
+      }
+    }
+    absl::StrAppend(&result, "]");
+    return result;
+  }
+  // Scalar: bool/double/string
+  auto sv = AsStringView();
+  if (sv.has_value()) {
+    return std::string(*sv);
+  }
+  return "";
+}
+
 Value::Array Value::GetArray() const { return std::get<Array>(value_); }
 
 Value Value::GetArrayElement(size_t index) const {
@@ -297,9 +351,9 @@ std::ostream& operator<<(std::ostream& os, const Value& v) {
 }
 
 static Ordering CompareDoubles(double l, double r) {
-  // -ffast-math doesn't handle compares correctly with infinities or nans, we
-  // do it integer.
-  if (IsNan(l) || IsNan(r)) {
+  // NaN is unordered. Other values compare as sign-magnitude integers, with
+  // -0 equal to 0.
+  if (std::isnan(l) || std::isnan(r)) {
     return Ordering::kUNORDERED;
   }
   union {
@@ -1140,17 +1194,8 @@ Value FuncLower(const Value& o) {
   if (!os) {
     return Value(Value::Nil("lower: operand has no string representation"));
   }
-  std::string result;
-  result.reserve(os->size());
-  utils::Scanner in(*os);
-  for (auto utf8 = in.NextUtf8(); utf8 != utils::Scanner::kEOF;
-       utf8 = in.NextUtf8()) {
-    if (utf8 < 0x80) {
-      utf8 = std::tolower(utf8);
-    }
-    utils::Scanner::PushBackUtf8(result, utf8);
-  }
-  return Value(std::move(result));
+  // Maps ASCII bytes only. Other bytes, valid UTF-8 or not, are copied as-is.
+  return Value(absl::AsciiStrToLower(*os));
 }
 
 Value FuncUpper(const Value& o) {
@@ -1164,17 +1209,7 @@ Value FuncUpper(const Value& o) {
   if (!os) {
     return Value(Value::Nil("upper: operand has no string representation"));
   }
-  std::string result;
-  result.reserve(os->size());
-  utils::Scanner in(*os);
-  for (auto utf8 = in.NextUtf8(); utf8 != utils::Scanner::kEOF;
-       utf8 = in.NextUtf8()) {
-    if (utf8 < 0x80) {
-      utf8 = std::toupper(utf8);
-    }
-    utils::Scanner::PushBackUtf8(result, utf8);
-  }
-  return Value(std::move(result));
+  return Value(absl::AsciiStrToUpper(*os));
 }
 
 // 1.2.1 fix shared by all date functions: pre-epoch (negative) timestamps
@@ -1216,7 +1251,7 @@ Value FuncConcat(const absl::InlinedVector<Value, 4>& values) {
     if (!ts) {                                                   \
       return Value(Value::Nil("timestamp not a number"));        \
     }                                                            \
-    if (IsNan(*ts) || IsInf(*ts)) {                              \
+    if (std::isnan(*ts) || std::isinf(*ts)) {                    \
       return Value(Value::Nil("timestamp is not finite"));       \
     }                                                            \
     if (*ts < 0 && DateNegativeTsReturnsNil()) {                 \
@@ -1242,7 +1277,7 @@ Value FuncDayofweek(const Value& o) {
   }
   // Always-on UB hardening: pure-arithmetic implementation propagates
   // NaN/inf into UB at the int64 cast below, so refuse them here.
-  if (IsNan(*tsd) || IsInf(*tsd)) {
+  if (std::isnan(*tsd) || std::isinf(*tsd)) {
     return Value(Value::Nil("dayofweek: timestamp is not finite"));
   }
   // 1.2.1 fix: pre-epoch → Nil.
@@ -1260,7 +1295,7 @@ Value FuncTimefmt(const Value& ts, const Value& fmt) {
   if (!timestampd) {
     return Value(Value::Nil("timefmt: timestamp was not a number"));
   }
-  if (IsInf(*timestampd)) {
+  if (std::isinf(*timestampd)) {
     return Value(Value::Nil("timefmt: timestamp is not finite"));
   }
   // Note: unlike the component extractors (month/day/hour/…), timefmt
@@ -1344,7 +1379,7 @@ Value FuncMonth(const Value& o) {
   if (!tsd) {
     return Value(Value::Nil("month: timestamp not a number"));
   }
-  if (IsNan(*tsd) || IsInf(*tsd)) {
+  if (std::isnan(*tsd) || std::isinf(*tsd)) {
     return Value(Value::Nil("month: timestamp is not finite"));
   }
   if (*tsd < 0 && DateNegativeTsReturnsNil()) {
@@ -1378,7 +1413,7 @@ static Value RoundToPeriod(const Value& o, double period, const char* notnum,
   if (!tsd) {
     return Value(Value::Nil(notnum));
   }
-  if (IsNan(*tsd) || IsInf(*tsd)) {
+  if (std::isnan(*tsd) || std::isinf(*tsd)) {
     return Value(Value::Nil(notfinite));
   }
   // 1.2.1 fix: pre-epoch → Nil.

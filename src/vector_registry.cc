@@ -151,7 +151,7 @@ VectorRegistry::ExtractTrackedRecord(
   }
   RemoveFromTrackedKeysIndex(db_num, key, attribute_identifier);
   auto record = it->second;
-  db_it->second.erase(it);
+  db_it->second.erase_and_migrate(it);
   if (db_it->second.empty()) {
     tracked_vectors_.erase(db_it);
   }
@@ -523,7 +523,7 @@ void VectorRegistry::RemoveIndexKeys(
 
 void VectorRegistry::RemoveIndexKeys(
     int db_num, const InternedStringPtr &attribute_identifier,
-    absl::flat_hash_map<uint64_t, InternedStringPtr> keys) {
+    vmsdk::HugeFlatHashMap<uint64_t, InternedStringPtr> keys) {
   vmsdk::VerifyMainThread();
   if (keys.empty()) {
     return;
@@ -590,7 +590,7 @@ size_t VectorRegistry::ProcessPendingUnshares(uint32_t batch_size) {
       }
       RemoveFromTrackedKeysIndex(db_num, rk.key, rk.attribute_identifier);
       auto record = tracked_it->second;
-      tracked_db_it->second.erase(tracked_it);
+      tracked_db_it->second.erase_and_migrate(tracked_it);
       if (tracked_db_it->second.empty()) {
         tracked_vectors_.erase(tracked_db_it);
       }
@@ -625,6 +625,20 @@ void VectorRegistry::OnServerCronCallback(ValkeyModuleCtx *ctx,
                                           ValkeyModuleEvent eid,
                                           uint64_t subevent, void *data) {
   vmsdk::VerifyMainThread();
+  // Drain every db's tables, so they finish even without traffic.
+  if (vmsdk::HugeMapAdvisoryMigrationEnabled()) {
+    size_t n = vmsdk::HugeMapCronMigrateBatch();
+    for (auto &[_, tracked] : tracked_vectors_) {
+      if (tracked.NeedsMigration()) {
+        tracked.MigrateSome(n);
+      }
+    }
+    for (auto &[_, pending] : pending_unshares_) {
+      if (pending.NeedsMigration()) {
+        pending.MigrateSome(n);
+      }
+    }
+  }
   if (pending_unshares_.empty()) {
     return;
   }

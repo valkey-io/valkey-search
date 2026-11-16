@@ -1187,8 +1187,16 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
 
         self.wait_for_docs(idx_64, 2)
         self.wait_for_docs(idx_128, 2)
-        assert self.knn_hits(idx_64, query=[0.1] * 64) == 1
-        assert self.knn_hits(idx_128, query=[0.2] * 128) == 1
+        # num_docs is updated on the main thread and does not mean the vector
+        # insert has run. Both indexes match these keys, and the HSET reply
+        # does not always wait for the second one, so poll until each index
+        # is searchable.
+        waiters.wait_for_equal(
+            lambda: self.knn_hits(idx_64, query=[0.1] * 64), 1
+        )
+        waiters.wait_for_equal(
+            lambda: self.knn_hits(idx_128, query=[0.2] * 128), 1
+        )
         assert self.registry_stat("entry_cnt") == 2
 
         # Drop idx_64. 'doc:64' is unshared and erased because idx_128 has dimension 128 != 64.
@@ -2006,7 +2014,7 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         out of the index prefix must not crash in MoveKey -> UnshareWithValkey."""
         self.client.execute_command("DEBUG", "SET-ACTIVE-EXPIRE", "0")
         index = self.build_index()
-        index.create(self.client)
+        index.create(self.client, wait_for_backfill=True)
 
         # Case 1: Explicit HDEL followed by RENAME out of prefix
         self.client.hset("doc:0", mapping={"vec": vector(0), "other": "x"})

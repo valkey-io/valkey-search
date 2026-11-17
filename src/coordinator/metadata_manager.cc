@@ -475,7 +475,7 @@ void MetadataManager::HandleBroadcastedMetadata(
           }
           VMSDK_LOG_EVERY_N_SEC(DEBUG, ctx, 1)
               << "Got GlobalMetadata from " << address << ": "
-              << schema->DebugString();
+              << vmsdk::config::RedactIfNeeded(schema->DebugString());
           auto &metadata_manager = MetadataManager::Instance();
           auto status = metadata_manager.ReconcileMetadata(*schema, address);
           if (!status.ok()) {
@@ -485,7 +485,8 @@ void MetadataManager::HandleBroadcastedMetadata(
           }
           VMSDK_LOG_EVERY_N_SEC(DEBUG, ctx, 1)
               << "Successfully reconciled schemas! New GlobalMetadata: "
-              << metadata_manager.GetGlobalMetadata()->DebugString();
+              << vmsdk::config::RedactIfNeeded(
+                     metadata_manager.GetGlobalMetadata()->DebugString());
         });
       });
 }
@@ -831,7 +832,8 @@ void MetadataManager::RegisterForClusterMessages(ValkeyModuleCtx *ctx) {
 absl::Status MetadataManager::ShowMetadata(
     ValkeyModuleCtx *ctx, [[maybe_unused]] vmsdk::ArgsIterator &itr) const {
   auto metadata = metadata_.Get().DebugString();
-  VMSDK_LOG(DEBUG, ctx) << "Metadata: " << metadata;
+  VMSDK_LOG(DEBUG, ctx) << "Metadata: "
+                        << vmsdk::config::RedactIfNeeded(metadata);
   ValkeyModule_ReplyWithStringBuffer(ctx, metadata.data(), metadata.size());
   return absl::OkStatus();
 }

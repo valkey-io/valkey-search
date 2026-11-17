@@ -315,12 +315,12 @@ TEST_F(ResponseGeneratorTest, ProcessNeighborsForReplyContentLimits) {
 // When a document mutates between shard-side scoring and content fetch
 // (db_seq != sequence_number), VerifyFilter recomputes its relevance score
 // through the same Scorer seam ScoreTextQuery uses (search.cc
-// RecomputeDocumentScore) and ProcessNeighborsForReply writes it to
+// ScoreDocument) and ProcessNeighborsForReply writes it to
 // Neighbor.score, then re-ranks the survivors. These tests exercise that
 // wiring end-to-end with weight leaves; the per-leaf scoring math (including
 // text via Scorer::ScoreLeaf and AND/OR composition) is covered by
-// ScoreNodeTest in search_test.cc, and RecomputeDocumentScore reuses that
-// exact ScoreNode walk, so a matched leaf recomputes to the same value here.
+// ScoreTextQueryTest in search_test.cc, and VerifyFilter reuses that
+// exact scoring walk, so a matched leaf recomputes to the same value here.
 
 namespace {
 // Builds a single-neighbor scenario, runs ProcessNeighborsForReply, and returns

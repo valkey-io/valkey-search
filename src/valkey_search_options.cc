@@ -629,9 +629,10 @@ static auto query_string_depth =
                                             kQueryStringDepthConfig))
         .Build();
 
-/// Register the "--vector-unshare-batch-size" flag. Controls how many vector
-/// registry keys, per database, the server cron sweep visits per tick looking
-/// for records no index references.
+/// Register the "--vector-unshare-batch-size" flag. With vector-lazy-unshare,
+/// how many vector registry keys, per database, the server cron sweep visits
+/// per tick looking for records no index references; without it, the batch
+/// size of vector records unshared per server cron tick.
 constexpr absl::string_view kVectorUnshareBatchSizeConfig{
     "vector-unshare-batch-size"};
 constexpr uint32_t kDefaultVectorUnshareBatchSize{1024 * 10};
@@ -641,6 +642,13 @@ static auto vector_unshare_batch_size =
                           kDefaultVectorUnshareBatchSize,
                           kMinimumVectorUnshareBatchSize, UINT_MAX)
         .Build();
+
+/// Register the "--vector-lazy-unshare" flag. Selects how the vector registry
+/// stops sharing vectors no index uses: yes sweeps for records no index
+/// references, no queues a dropped index's keys for unsharing. Startup only.
+constexpr absl::string_view kVectorLazyUnshareConfig{"vector-lazy-unshare"};
+static auto vector_lazy_unshare =
+    config::BooleanBuilder(kVectorLazyUnshareConfig, true).Immutable().Build();
 
 uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }
 
@@ -884,6 +892,10 @@ config::Number &GetMutationWeightNumeric() {
 
 config::Number &GetMutationWeightTag() {
   return dynamic_cast<config::Number &>(*mutation_weight_tag);
+}
+
+const config::Boolean &GetVectorLazyUnshare() {
+  return dynamic_cast<const config::Boolean &>(*vector_lazy_unshare);
 }
 
 config::Number &GetVectorUnshareBatchSize() {

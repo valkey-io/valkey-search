@@ -26,6 +26,14 @@
 
 namespace valkey_search {
 
+// The ForceHashSharingError controlled variable, shared with
+// LegacyVectorRegistry.
+bool IsHashSharingErrorForced();
+
+// True when the registry unshares lazily (VectorRegistry); false selects the
+// pending-unshare LegacyVectorRegistry. Fixed at startup.
+bool UseLazyVectorUnshare();
+
 class VectorRegistry {
  public:
   static VectorRegistry &Instance() {

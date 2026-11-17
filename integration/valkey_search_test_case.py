@@ -421,6 +421,21 @@ def EnableDebugMode(config: List[str]):
     load_module = f"loadmodule {os.getenv('MODULE_PATH')}"
     return [x.replace(load_module, load_module + " --debug-mode yes") for x in config]
 
+class VectorUnshareModeMixin:
+    '''
+    Sets the vector-lazy-unshare startup option from LAZY_UNSHARE. A subclass
+    with LAZY_UNSHARE = False reruns a test class with pending unshares.
+    '''
+    LAZY_UNSHARE = True
+
+    def get_config_file_lines(self, testdir, port) -> List[str]:
+        load_module = f"loadmodule {os.getenv('MODULE_PATH')}"
+        flag = f" --vector-lazy-unshare {'yes' if self.LAZY_UNSHARE else 'no'}"
+        return [
+            x.replace(load_module, load_module + flag)
+            for x in super().get_config_file_lines(testdir, port)
+        ]
+
 class ValkeySearchTestCaseDebugMode(ValkeySearchTestCaseBase):
     '''
     Same as ValkeySearchTestCaseBase, except that "debug-mode" is enabled.

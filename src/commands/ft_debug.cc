@@ -14,7 +14,7 @@
 #include "src/index_schema.h"
 #include "src/schema_manager.h"
 #include "src/utils/string_interning.h"
-#include "src/vector_registry.h"
+#include "src/vector_registry_dispatch.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/info.h"
@@ -318,15 +318,17 @@ absl::Status StringPoolStats(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
 absl::Status VectorSharingStatsCmd(ValkeyModuleCtx *ctx,
                                    vmsdk::ArgsIterator &itr) {
   VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
-  auto stats = VectorRegistry::Instance().GetStats();
+  auto stats = vector_registry::GetStats();
 
-  ValkeyModule_ReplyWithArray(ctx, 8);
+  ValkeyModule_ReplyWithArray(ctx, 10);
   ValkeyModule_ReplyWithCString(ctx, "entry_cnt");
   ValkeyModule_ReplyWithLongLong(ctx, stats.entry_cnt);
   ValkeyModule_ReplyWithCString(ctx, "hash_sharing_errors");
   ValkeyModule_ReplyWithLongLong(ctx, stats.hash_sharing_errors);
   ValkeyModule_ReplyWithCString(ctx, "hash_sharing_hits");
   ValkeyModule_ReplyWithLongLong(ctx, stats.hash_sharing_hits);
+  ValkeyModule_ReplyWithCString(ctx, "pending_unshare_cnt");
+  ValkeyModule_ReplyWithLongLong(ctx, stats.pending_unshare_cnt);
   ValkeyModule_ReplyWithCString(ctx, "unshare_cnt");
   ValkeyModule_ReplyWithLongLong(ctx, stats.unshare_cnt);
 

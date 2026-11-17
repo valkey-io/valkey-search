@@ -282,8 +282,12 @@ target_link_libraries(server_events PUBLIC metadata_manager)
 target_link_libraries(server_events PUBLIC string_interning)
 target_link_libraries(server_events PUBLIC valkey_module)
 
-set(SRCS_vector_registry ${CMAKE_CURRENT_LIST_DIR}/vector_registry.cc
-                               ${CMAKE_CURRENT_LIST_DIR}/vector_registry.h)
+set(SRCS_vector_registry
+    ${CMAKE_CURRENT_LIST_DIR}/vector_registry.cc
+    ${CMAKE_CURRENT_LIST_DIR}/vector_registry.h
+    ${CMAKE_CURRENT_LIST_DIR}/vector_registry_legacy.cc
+    ${CMAKE_CURRENT_LIST_DIR}/vector_registry_legacy.h
+    ${CMAKE_CURRENT_LIST_DIR}/vector_registry_dispatch.h)
 valkey_search_add_static_library(vector_registry
                                  "${SRCS_vector_registry}")
 target_include_directories(vector_registry PUBLIC ${CMAKE_CURRENT_LIST_DIR})

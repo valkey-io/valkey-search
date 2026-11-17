@@ -40,7 +40,7 @@
 #include "src/server_events.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
-#include "src/vector_registry.h"
+#include "src/vector_registry_dispatch.h"
 #include "vmsdk/src/huge/flat_hash_map.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/module_config.h"
@@ -116,7 +116,7 @@ inline AttributeData MakeAttributeData(indexes::VectorBase &index,
                                        const InternedStringPtr &key,
                                        absl::string_view data) {
   auto valkey_str = vmsdk::MakeUniqueValkeyString(data);
-  auto vec = VectorRegistry::Instance().DedupOrConstruct(
+  auto vec = vector_registry::DedupOrConstruct(
       key, valkey_str.get(), data_model::ATTRIBUTE_DATA_TYPE_HASH,
       index.GetDBNum(), &index);
   return AttributeData(std::move(vec));
@@ -145,7 +145,7 @@ inline absl::StatusOr<indexes::RecordResult> AddVectorRecord(
     indexes::VectorBase &index, const InternedStringPtr &key,
     absl::string_view data) {
   auto valkey_str = vmsdk::MakeUniqueValkeyString(data);
-  auto vec = VectorRegistry::Instance().DedupOrConstruct(
+  auto vec = vector_registry::DedupOrConstruct(
       key, valkey_str.get(), data_model::ATTRIBUTE_DATA_TYPE_HASH,
       index.GetDBNum(), &index);
   return index.AddRecord(key, AttributeData(std::move(vec)));
@@ -174,7 +174,7 @@ inline absl::StatusOr<indexes::RecordResult> ModifyVectorRecord(
     indexes::VectorBase &index, const InternedStringPtr &key,
     absl::string_view data) {
   auto valkey_str = vmsdk::MakeUniqueValkeyString(data);
-  auto vec = VectorRegistry::Instance().DedupOrConstruct(
+  auto vec = vector_registry::DedupOrConstruct(
       key, valkey_str.get(), data_model::ATTRIBUTE_DATA_TYPE_HASH,
       index.GetDBNum(), &index);
   return index.ModifyRecord(key, AttributeData(std::move(vec)));
@@ -607,7 +607,7 @@ class ValkeySearchTest : public vmsdk::ValkeyTest {
         .WillByDefault([&](ValkeyModuleCtx *ctx) {
           return ctx == &registry_ctx_ ? ctx : nullptr;
         });
-    VectorRegistry::Construct(&registry_ctx_);
+    vector_registry::Construct(&registry_ctx_);
   }
   void TearDown() override {
     if (ValkeySearch::HasInstance()) {
@@ -622,10 +622,13 @@ class ValkeySearchTest : public vmsdk::ValkeyTest {
     SchemaManager::InitInstance(nullptr);
     ValkeySearch::InitInstance(nullptr);
     KeyspaceEventManager::InitInstance(nullptr);
-    VectorRegistry::Destruct();
+    vector_registry::Destruct();
     auto &enable_sharing =
         const_cast<vmsdk::config::Boolean &>(options::GetEnableVectorSharing());
     VMSDK_EXPECT_OK(enable_sharing.SetValue(true));
+    auto &lazy_unshare =
+        const_cast<vmsdk::config::Boolean &>(options::GetVectorLazyUnshare());
+    VMSDK_EXPECT_OK(lazy_unshare.SetValue(true));
     ValkeyTest::TearDown();
   }
 };
@@ -683,7 +686,7 @@ class ValkeySearchTestWithParam : public vmsdk::ValkeyTestWithParam<T> {
         .WillByDefault([&](ValkeyModuleCtx *ctx) {
           return ctx == &registry_ctx_ ? ctx : nullptr;
         });
-    VectorRegistry::Construct(&registry_ctx_);
+    vector_registry::Construct(&registry_ctx_);
   }
   void TearDown() override {
     if (ValkeySearch::HasInstance()) {
@@ -698,7 +701,10 @@ class ValkeySearchTestWithParam : public vmsdk::ValkeyTestWithParam<T> {
     SchemaManager::InitInstance(nullptr);
     ValkeySearch::InitInstance(nullptr);
     KeyspaceEventManager::InitInstance(nullptr);
-    VectorRegistry::Destruct();
+    vector_registry::Destruct();
+    auto &lazy_unshare =
+        const_cast<vmsdk::config::Boolean &>(options::GetVectorLazyUnshare());
+    VMSDK_EXPECT_OK(lazy_unshare.SetValue(true));
     vmsdk::ValkeyTestWithParam<T>::TearDown();
   }
 };

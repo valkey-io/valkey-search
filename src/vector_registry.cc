@@ -27,6 +27,12 @@ namespace valkey_search {
 
 CONTROLLED_BOOLEAN(ForceHashSharingError, false);
 
+bool IsHashSharingErrorForced() { return ForceHashSharingError.GetValue(); }
+
+bool UseLazyVectorUnshare() {
+  return options::GetVectorLazyUnshare().GetValue();
+}
+
 void VectorRegistry::Init(ValkeyModuleCtx *ctx) {
   hash_vector_sharing_ = options::GetEnableVectorSharing().GetValue();
   ctx_ = vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx);

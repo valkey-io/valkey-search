@@ -15,7 +15,7 @@
 #include "src/schema_manager.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
-#include "src/vector_registry.h"
+#include "src/vector_registry_dispatch.h"
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/huge/flat_hash_map.h"
 #include "vmsdk/src/utils.h"
@@ -34,7 +34,7 @@ void OnFlushDBCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
     auto *flush_info = static_cast<ValkeyModuleFlushInfo *>(data);
     SchemaManager::Instance().OnFlushEndDBCallback(ctx, eid, subevent,
                                                    flush_info);
-    VectorRegistry::Instance().OnFlushDB(flush_info);
+    vector_registry::OnFlushDB(flush_info);
   }
 }
 
@@ -51,7 +51,7 @@ void OnSwapDBCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
                       uint64_t subevent, void *data) {
   auto *swap_info = static_cast<ValkeyModuleSwapDbInfo *>(data);
   SchemaManager::Instance().OnSwapDB(swap_info);
-  VectorRegistry::Instance().OnSwapDB(swap_info);
+  vector_registry::OnSwapDB(swap_info);
 }
 
 void OnServerCronCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
@@ -62,7 +62,7 @@ void OnServerCronCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
     coordinator::MetadataManager::Instance().OnServerCronCallback(
         ctx, eid, subevent, data);
   }
-  VectorRegistry::Instance().OnServerCronCallback(ctx, eid, subevent, data);
+  vector_registry::OnServerCronCallback(ctx, eid, subevent, data);
   // Drain the intern store's hash-table background without any traffic.
   if (vmsdk::HugeMapAdvisoryMigrationEnabled()) {
     StringInternStore::MigrateSome(vmsdk::HugeMapCronMigrateBatch());
@@ -99,7 +99,7 @@ void OnShutdownCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
   vmsdk::MarkAsShuttingDown();
   vmsdk::DrainPendingMainCallbacks();
   SchemaManager::Instance().OnShutdownCallback(ctx, eid, subevent, data);
-  VectorRegistry::Destruct();
+  vector_registry::Destruct();
 }
 
 void AtForkPrepare() { ValkeySearch::Instance().AtForkPrepare(); }

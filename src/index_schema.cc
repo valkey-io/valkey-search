@@ -51,7 +51,7 @@
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
 #include "src/valkey_search_options.h"
-#include "src/vector_registry.h"
+#include "src/vector_registry_dispatch.h"
 #include "version.h"
 #include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/debug.h"
@@ -630,12 +630,12 @@ void AppendMutatedAttribute(
     auto *vector_base = static_cast<indexes::VectorBase *>(index.get());
     CHECK(vector_base);
     if (deletion_type != indexes::DeletionType::kNone || !attr_val) {
-      VectorRegistry::Instance().DedupOrConstruct(
-          key, nullptr, attribute_data_type, db_num, vector_base);
+      vector_registry::DedupOrConstruct(key, nullptr, attribute_data_type,
+                                        db_num, vector_base);
       mutated_attributes[alias] = AttributeData(deletion_type);
       return;
     }
-    auto vector_record_with_size = VectorRegistry::Instance().DedupOrConstruct(
+    auto vector_record_with_size = vector_registry::DedupOrConstruct(
         key, attr_val.get(), attribute_data_type, db_num, vector_base);
     mutated_attributes[alias] =
         AttributeData(std::move(vector_record_with_size));
@@ -734,14 +734,16 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
     filter_rejected = true;
     // The index no longer uses the key's vectors, but a deleted HNSW node may
     // keep the record referenced, so the sweep would never unshare them.
-    std::vector<InternedStringPtr> vector_attributes;
-    for (const auto *vector_index : GetVectorIndexes()) {
-      vector_attributes.push_back(
-          vector_index->GetInternedAttributeIdentifier());
-    }
-    if (!vector_attributes.empty()) {
-      VectorRegistry::Instance().UnshareAttributes(db_num_, interned_key,
-                                                   vector_attributes);
+    if (UseLazyVectorUnshare()) {
+      std::vector<InternedStringPtr> vector_attributes;
+      for (const auto *vector_index : GetVectorIndexes()) {
+        vector_attributes.push_back(
+            vector_index->GetInternedAttributeIdentifier());
+      }
+      if (!vector_attributes.empty()) {
+        VectorRegistry::Instance().UnshareAttributes(db_num_, interned_key,
+                                                     vector_attributes);
+      }
     }
   }
 
@@ -2346,7 +2348,33 @@ void IndexSchema::MarkAsDestructing() {
 
   backfill_job_.Get()->MarkScanAsDone();
 
+  // The lazy registry needs nothing here: its sweep unshares the keys once
+  // the index releases their records.
+  absl::flat_hash_map<indexes::VectorBase *, std::vector<InternedStringPtr>>
+      pending_keys_by_index;
+  if (!UseLazyVectorUnshare()) {
+    for (auto &[key, mutation] : tracked_mutated_records_) {
+      if (mutation.attributes) {
+        for (const auto &[alias, attr_data] : *mutation.attributes) {
+          if (attr_data.IsVector()) {
+            auto it = attributes_.find(alias);
+            if (it != attributes_.end()) {
+              auto *vb = dynamic_cast<indexes::VectorBase *>(
+                  it->second.GetIndex().get());
+              if (vb) {
+                pending_keys_by_index[vb].push_back(key);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
   tracked_mutated_records_.clear();
+  for (auto &[vb, keys] : pending_keys_by_index) {
+    LegacyVectorRegistry::Instance().RemoveIndexKeys(
+        db_num_, vb->GetInternedAttributeIdentifier(), keys);
+  }
   is_destructing_ = true;
 }
 

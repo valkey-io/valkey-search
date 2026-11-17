@@ -34,7 +34,7 @@
 #include "src/utils/allocator.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
-#include "src/vector_registry.h"
+#include "src/vector_registry_dispatch.h"
 #include "vmsdk/src/huge_page_allocation.h"
 #include "vmsdk/src/info.h"
 #include "vmsdk/src/latency_sampler.h"
@@ -389,37 +389,43 @@ static vmsdk::info_field::Integer ft_internal_update_call_failures_cnt(
 static vmsdk::info_field::Integer vector_registry_entry_cnt(
     "vector_registry", "vector_registry_entry_cnt",
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
-      return VectorRegistry::Instance().GetStats().entry_cnt;
+      return vector_registry::GetStats().entry_cnt;
     }));
 
 static vmsdk::info_field::Integer vector_registry_shared_externally_cnt(
     "vector_registry", "vector_registry_shared_externally_cnt",
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
-      return VectorRegistry::Instance().GetStats().hash_sharing_hits;
+      return vector_registry::GetStats().hash_sharing_hits;
     }));
 
 static vmsdk::info_field::Integer vector_registry_shared_externally_errors(
     "vector_registry", "vector_registry_shared_externally_errors",
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
-      return VectorRegistry::Instance().GetStats().hash_sharing_errors;
+      return vector_registry::GetStats().hash_sharing_errors;
     }));
 
 static vmsdk::info_field::Integer vector_registry_dedup_cnt(
     "vector_registry", "vector_registry_dedup_cnt",
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
-      return VectorRegistry::Instance().GetStats().dedup_cnt;
+      return vector_registry::GetStats().dedup_cnt;
     }));
 
 static vmsdk::info_field::Integer vector_registry_sharing_active(
     "vector_registry", "vector_registry_sharing_active",
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
-      return VectorRegistry::Instance().IsSharingActive() ? 1 : 0;
+      return vector_registry::IsSharingActive() ? 1 : 0;
+    }));
+
+static vmsdk::info_field::Integer vector_registry_pending_unshare_cnt(
+    "vector_registry", "vector_registry_pending_unshare_cnt",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      return vector_registry::GetStats().pending_unshare_cnt;
     }));
 
 static vmsdk::info_field::Integer vector_registry_unshare_cnt(
     "vector_registry", "vector_registry_unshare_cnt",
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
-      return VectorRegistry::Instance().GetStats().unshare_cnt;
+      return vector_registry::GetStats().unshare_cnt;
     }));
 
 static vmsdk::info_field::Integer vector_registry_active_allocations(
@@ -1291,7 +1297,7 @@ absl::Status ValkeySearch::OnLoad(ValkeyModuleCtx *ctx,
   // Apply command line arguments and initialize the module
   VMSDK_RETURN_IF_ERROR(LoadAndParseArgv(ctx, argv, argc));
   vmsdk::InitHugePageAllocation(ctx);
-  VectorRegistry::Construct(ctx_);
+  vector_registry::Construct(ctx_);
   VMSDK_RETURN_IF_ERROR(Startup(ctx));
 
   ValkeyModule_SetModuleOptions(
@@ -1333,7 +1339,7 @@ bool ValkeySearch::IsChildProcess() {
 void ValkeySearch::OnUnload(ValkeyModuleCtx *ctx) {
   reader_thread_pool_ = nullptr;
   writer_thread_pool_ = nullptr;
-  VectorRegistry::Destruct();
+  vector_registry::Destruct();
   ValkeyModule_FreeThreadSafeContext(ctx_);
 }
 

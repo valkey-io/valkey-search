@@ -19,6 +19,7 @@
 #include "src/indexes/vector_base.h"
 #include "src/utils/string_interning.h"
 #include "src/vector_registry.h"
+#include "src/vector_registry_legacy.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
@@ -80,14 +81,50 @@ void KeyspaceEventManager::ProcessMoveNotification(ValkeyModuleCtx *ctx,
   });
 
   auto src_key_view = vmsdk::ToStringView(moved_src_key_.get());
-  // The registry follows every rename, indexed or not, so the shared bytes
-  // stay keyed by the hash that holds them.
-  VectorRegistry::Instance().MoveKey(src_db_num_, src_key_view, dst_db_num,
-                                     vmsdk::ToStringView(dst_key));
+  // The lazy registry follows every rename, indexed or not, so the shared
+  // bytes stay keyed by the hash that holds them.
+  if (UseLazyVectorUnshare()) {
+    VectorRegistry::Instance().MoveKey(src_db_num_, src_key_view, dst_db_num,
+                                       vmsdk::ToStringView(dst_key));
+  }
   auto src_subscriptions =
       GetMatchingSubscriptions(src_key_view, type, src_db_num_);
   if (src_subscriptions.empty()) {
     return;
+  }
+
+  if (!UseLazyVectorUnshare()) {
+    auto dst_key_view = vmsdk::ToStringView(dst_key);
+    auto src_interned_key = StringInternStore::Intern(src_key_view);
+
+    // Classify each source vector attribute as either kMove or kUnshare.
+    vmsdk::UniqueValkeyOpenKey dst_key_obj;
+    absl::flat_hash_map<InternedStringPtr, LegacyVectorRegistry::Action>
+        actions;
+    for (const auto *sub : src_subscriptions) {
+      for (const auto *src_index : sub->GetVectorIndexes()) {
+        const auto &attr_id = src_index->GetInternedAttributeIdentifier();
+        auto it =
+            actions.try_emplace(attr_id, LegacyVectorRegistry::Action::kUnshare)
+                .first;
+        if (it->second == LegacyVectorRegistry::Action::kUnshare) {
+          if (!dst_key_obj) {
+            dst_key_obj = vmsdk::MakeUniqueValkeyOpenKey(
+                ctx, dst_key,
+                VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
+          }
+          if (dst_key_obj &&
+              LegacyVectorRegistry::Instance().HasMatchingVectorIndex(
+                  dst_db_num, dst_key_view, attr_id, dst_key_obj.get(),
+                  src_index->GetVectorDataSize())) {
+            it->second = LegacyVectorRegistry::Action::kMove;
+          }
+        }
+      }
+    }
+
+    LegacyVectorRegistry::Instance().MoveKey(src_db_num_, src_interned_key,
+                                             dst_db_num, dst_key, actions);
   }
 
   // Source subscriptions must be notified with the source event (e.g.
@@ -127,7 +164,9 @@ void KeyspaceEventManager::NotifySubscribers(ValkeyModuleCtx *ctx, int type,
   for (const auto &subscription : subscriptions_to_notify) {
     subscription->OnKeyspaceNotification(ctx, type, event, key);
   }
-  VectorRegistry::Instance().OnKeyspaceEvent(ctx, event, key);
+  if (UseLazyVectorUnshare()) {
+    VectorRegistry::Instance().OnKeyspaceEvent(ctx, event, key);
+  }
 }
 
 absl::Status KeyspaceEventManager::RemoveSubscription(

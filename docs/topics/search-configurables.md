@@ -17,6 +17,7 @@ The search module uses the Valkey configuration mechanism. Thus each of the name
 | search.utility-threads                        | Number  |               | Controls the utility thread pool size; dynamically resizes pool on modification                                                   |
 | search.max-worker-suspension-secs             | Number  |               | Max time in seconds that worker thread pool is suspended after fork started                                                       |
 | search.use-coordinator                        | Boolean |               | Controls whether this instance uses coordinator; can only be set at startup                                                       |
+| search.vector-lazy-unshare                    | Boolean |      yes      | Unshare a vector once no index references it (yes), or queue a dropped index's keys for unsharing (no); can only be set at startup |
 | search.skip-rdb-load                          | Boolean |               | Skip loading vector index data from RDB file                                                                                      |
 | search.skip-corrupted-internal-update-entries | Boolean |               | Skip corrupted AOF entries during internal updates                                                                                |
 | search.log-level                              |  Enum   |               | Controls module log level verbosity                                                                                               |

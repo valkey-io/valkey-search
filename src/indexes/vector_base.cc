@@ -46,7 +46,7 @@
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
-#include "src/vector_registry.h"
+#include "src/vector_registry_dispatch.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -235,7 +235,16 @@ VectorBase::ComputeDistanceFromRecord(const InternedStringPtr &key,
   return ComputeDistanceFromRecord(key, query, query_magnitude);
 }
 
-VectorBase::~VectorBase() = default;
+VectorBase::~VectorBase() {
+  vmsdk::VerifyMainThread();
+  // The lazy registry needs nothing here: its sweep unshares the keys once
+  // this index releases their records.
+  if (!UseLazyVectorUnshare()) {
+    LegacyVectorRegistry::Instance().RemoveIndexKeys(
+        db_num_, interned_attribute_identifier_,
+        std::move(key_by_internal_id_));
+  }
+}
 
 absl::StatusOr<RecordResult> VectorBase::AddRecord(const InternedStringPtr &key,
                                                    AttributeData &&data) {
@@ -593,9 +602,9 @@ std::optional<VectorRecord> VectorBase::ShareIfUnchangedSinceSave(
   if (comparable != saved) {
     return std::nullopt;
   }
-  return VectorRegistry::Instance()
-      .DedupOrConstruct(key, attribute_val.get(),
-                        attribute_data_type->ToProto(), db_num_, this)
+  return vector_registry::DedupOrConstruct(key, attribute_val.get(),
+                                           attribute_data_type->ToProto(),
+                                           db_num_, this)
       .vector_record;
 }
 

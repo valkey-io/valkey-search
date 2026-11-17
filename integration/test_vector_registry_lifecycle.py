@@ -13,6 +13,7 @@ against the `memory_sharing` branch; each carries the mode it covers. The rest
 pass and guard behaviour that is currently correct.
 """
 
+import functools
 import os
 import shutil
 import time
@@ -21,7 +22,11 @@ import valkey
 from valkey import Valkey
 from indexes import Index, KeyDataType, Numeric, Tag, Vector, float_to_bytes
 from utils import run_in_thread
-from valkey_search_test_case import LOGS_DIR, ValkeySearchTestCaseDebugMode
+from valkey_search_test_case import (
+    LOGS_DIR,
+    ValkeySearchTestCaseDebugMode,
+    VectorUnshareModeMixin,
+)
 from valkeytestframework.util import waiters
 from valkeytestframework.conftest import resource_port_tracker  # noqa: F401
 
@@ -32,12 +37,23 @@ VALID = [float(i) for i in range(DIM)]
 SHORT = [1.0, 2.0]
 
 
+def lazy_unshare_only(test):
+    """Skips a test whose behavior only the lazy-unshare registry has; most
+    pin bugs the pending-unshare registry still carries."""
+    @functools.wraps(test)
+    def wrapper(self, *args, **kwargs):
+        if not self.LAZY_UNSHARE:
+            pytest.skip("lazy unshare only")
+        return test(self, *args, **kwargs)
+    return wrapper
+
+
 def vector(seed: int, salt: float = 0.0) -> bytes:
     """A vector distinct per seed, so a key can be told apart by its bytes."""
     return float_to_bytes([seed + salt + i / DIM for i in range(DIM)])
 
 
-class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
+class TestVectorRegistryLifecycle(VectorUnshareModeMixin, ValkeySearchTestCaseDebugMode):
     """One server per test -- setup_test is function scoped, which matters
     because test_fm1_* crashes the server it runs against."""
 
@@ -1715,8 +1731,10 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0, timeout=10)
 
     def test_drop_index_rate_limited_drain(self):
-        """Verifies that with a small sweep batch size the registry still drains
-        completely via server cron after FT.DROPINDEX, unsharing every vector."""
+        """Verifies that with a small batch size the registry still drains
+        completely via server cron after FT.DROPINDEX, unsharing every vector.
+        Pending unshares queue the dropped keys; the lazy sweep visits
+        `batch_size` entries per tick."""
         r = self.client
         num_docs = 25
         batch_size = 5
@@ -1734,12 +1752,12 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
 
             waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), num_docs, timeout=10)
 
-            # Dropping the index unshares nothing itself; the cron sweep visits
-            # `batch_size` entries per tick and unshares the unreferenced ones.
             unshared_before = self.registry_stat("unshare_cnt")
             r.execute_command("FT.DROPINDEX", "idx_rate_limit")
+            waiters.wait_for_equal(lambda: self.registry_stat("pending_unshare_cnt"), 0, timeout=10)
             waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0, timeout=10)
-            assert self.registry_stat("unshare_cnt") == unshared_before + num_docs
+            if self.LAZY_UNSHARE:
+                assert self.registry_stat("unshare_cnt") == unshared_before + num_docs
 
             # Verify that the underlying hash data in Valkey is intact and unshared
             for i in range(num_docs):
@@ -1779,6 +1797,9 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
             )
             r.hset("cancel_doc:49", mapping={"vec": vec_raw})
 
+            # Pending unshares cancel cancel_doc:49's queued unshare; the lazy
+            # sweep keeps it because the new index references its record.
+            waiters.wait_for_equal(lambda: self.registry_stat("pending_unshare_cnt"), 0, timeout=10)
             # cancel_doc:49 stays tracked and searchable.
             waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 1, timeout=10)
 
@@ -1959,8 +1980,9 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         )
 
     def drop_index_leaving_shared_keys(self):
-        """GAP_KEYS shared keys under doc:*, index dropped. With a sweep batch
-        of one key per cron tick, most are still shared afterwards."""
+        """GAP_KEYS shared keys under doc:*, index dropped. With a batch of one
+        key per cron tick, most are still shared (or queued for unshare)
+        afterwards."""
         self.client.config_set("search.vector-unshare-batch-size", "1")
         index = self.build_index()
         index.create(self.client)
@@ -1969,7 +1991,10 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         self.wait_for_docs(index, self.GAP_KEYS)
         assert self.registry_stat("entry_cnt") == self.GAP_KEYS
         index.drop(self.client)
-        assert self.registry_stat("entry_cnt") > 0
+        if self.LAZY_UNSHARE:
+            assert self.registry_stat("entry_cnt") > 0
+        else:
+            waiters.wait_for_true(lambda: self.registry_stat("pending_unshare_cnt") > 0)
 
     def reuse_freed_vector_memory(self) -> Index:
         """Allocate GAP_KEYS new shared vectors; relies on the allocator
@@ -1979,6 +2004,7 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         self.write_distinct_keys("fill", salt=0.5)
         return fill
 
+    @lazy_unshare_only
     def test_dropindex_keeps_expired_key_vector(self):
         """Unsharing must not free the bytes a logically expired hash holds.
 
@@ -2020,6 +2046,7 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         self.client.execute_command("DEBUG", "SET-ACTIVE-EXPIRE", "1")
         self.wait_for_registry_entries(0)
 
+    @lazy_unshare_only
     def test_rename_during_pending_unshare_keeps_vector(self):
         """A RENAME after the index is dropped, while its keys are still shared,
         must keep the renamed hash's bytes.
@@ -2048,8 +2075,9 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         Stimulus: drop an index with keys still shared, then HDEL the vector
         field.
 
-        Expected: each hdel event erases its key's entry at once, so the sweep
-        never touches a field that no longer exists.
+        Expected: no crash. With lazy unshares each hdel event erases its key's
+        entry at once, so the sweep never touches a field that no longer
+        exists; pending unshares skip the missing field when they drain.
         """
         self.drop_index_leaving_shared_keys()
         pipe = self.client.pipeline(transaction=True)
@@ -2057,9 +2085,16 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
             pipe.hdel(f"doc:{k}", "vec")
         pipe.execute_command("INFO", "everything")
         info = pipe.execute()[-1]
-        assert self._parse_registry_stat(info, "entry_cnt") == 0
+        if self.LAZY_UNSHARE:
+            assert self._parse_registry_stat(info, "entry_cnt") == 0
+        else:
+            assert self._parse_registry_stat(info, "pending_unshare_cnt") > 0
+            waiters.wait_for_equal(
+                lambda: self.registry_stat("pending_unshare_cnt"), 0, timeout=60
+            )
         assert self.client.ping()
 
+    @lazy_unshare_only
     def test_filter_rejected_key_is_released(self):
         """A FILTER-rejected key's vector must not stay registered once the
         index is dropped.
@@ -2086,6 +2121,7 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         self.client.delete("doc:keep", "doc:drop")
         self.wait_for_registry_entries(0)
 
+    @lazy_unshare_only
     def test_filter_flip_unshares_vector(self):
         """A key that stops passing the FILTER is unshared right away.
 
@@ -2143,11 +2179,12 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         assert self.registry_stat("entry_cnt") == 1
         self.client.rename("doc:1", "outside:1")
         assert self.client.ping()
-        # The logically expired field still holds the shared bytes, so the
-        # entry stays until the engine reclaims the field.
-        time.sleep(0.3)
-        assert self.registry_stat("entry_cnt") == 1
-        self.client.execute_command("DEBUG", "SET-ACTIVE-EXPIRE", "1")
+        if self.LAZY_UNSHARE:
+            # The logically expired field still holds the shared bytes, so the
+            # entry stays until the engine reclaims the field.
+            time.sleep(0.3)
+            assert self.registry_stat("entry_cnt") == 1
+            self.client.execute_command("DEBUG", "SET-ACTIVE-EXPIRE", "1")
         waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0)
 
 
@@ -2160,6 +2197,7 @@ class TestVectorRegistryPersistence(ValkeySearchTestCaseDebugMode):
     setting differ between the writer and the reader.
     """
 
+    LAZY_UNSHARE = True
     DIM = 8
     # Deliberately unnormalized, and spread out enough that the three metrics
     # order them differently.
@@ -2174,7 +2212,8 @@ class TestVectorRegistryPersistence(ValkeySearchTestCaseDebugMode):
             f"loadmodule {os.getenv('JSON_MODULE_PATH')}",
             f"dir {testdir}",
             f"loadmodule {os.getenv('MODULE_PATH')} --debug-mode yes "
-            f"--info-developer-visible yes --enable-vector-sharing {sharing_flag}",
+            f"--info-developer-visible yes --enable-vector-sharing {sharing_flag} "
+            f"--vector-lazy-unshare {'yes' if self.LAZY_UNSHARE else 'no'}",
         ]
 
     def append_startup_args(self, args: dict[str, str]) -> dict[str, str]:
@@ -2354,3 +2393,15 @@ class TestVectorRegistryPersistence(ValkeySearchTestCaseDebugMode):
         # The vector data in hash is still readable
         assert client.hget("shared_doc:1", "vec") == vec_bytes
         server.exit()
+
+
+class TestVectorRegistryLifecyclePendingUnshare(TestVectorRegistryLifecycle):
+    """The lifecycle tests with vector-lazy-unshare off."""
+
+    LAZY_UNSHARE = False
+
+
+class TestVectorRegistryPersistencePendingUnshare(TestVectorRegistryPersistence):
+    """The persistence tests with vector-lazy-unshare off."""
+
+    LAZY_UNSHARE = False

@@ -2,7 +2,7 @@ import os
 import struct
 import pytest
 from valkey import Valkey
-from valkey_search_test_case import ValkeySearchTestCaseDebugMode, LOGS_DIR
+from valkey_search_test_case import ValkeySearchTestCaseDebugMode, VectorUnshareModeMixin, LOGS_DIR
 from valkeytestframework.conftest import resource_port_tracker
 from indexes import Index, Vector, KeyDataType, float_to_bytes
 from util import waiters
@@ -42,7 +42,7 @@ def _get_vector_registry_stats(client: Valkey) -> dict[str, int]:
     return stats_data
 
 
-class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
+class TestVectorRegistrySharingOn(VectorUnshareModeMixin, ValkeySearchTestCaseDebugMode):
     """
     Integration tests for Vector Registry with memory sharing enabled (default).
     Tests requirements #1 (HNSW) and #2 (FLAT).
@@ -110,6 +110,10 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
 
         waiters.wait_for_equal(
             lambda: int(_get_vmsdk_info(client)["vector_registry_entry_cnt"]),
+            0,
+        )
+        waiters.wait_for_equal(
+            lambda: int(_get_vmsdk_info(client)["vector_registry_pending_unshare_cnt"]),
             0,
         )
         assert _get_active_allocations(client) == 0
@@ -196,6 +200,7 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
         )
         stats = _get_vector_registry_stats(client)
         assert stats["entry_cnt"] == 0
+        assert stats["pending_unshare_cnt"] == 0
 
     @pytest.mark.parametrize("data_type", [KeyDataType.HASH, KeyDataType.JSON])
     @pytest.mark.parametrize("index_type,distance_metric", [
@@ -255,6 +260,7 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
 
         stats = _get_vector_registry_stats(client)
         assert stats["entry_cnt"] == 0
+        assert stats["pending_unshare_cnt"] == 0
 
     @pytest.mark.parametrize("data_type", [KeyDataType.HASH, KeyDataType.JSON])
     @pytest.mark.parametrize("index_type,distance_metric", [
@@ -317,6 +323,7 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
 
         stats = _get_vector_registry_stats(client)
         assert stats["entry_cnt"] == 0
+        assert stats["pending_unshare_cnt"] == 0
 
     @pytest.mark.parametrize("data_type", [KeyDataType.HASH, KeyDataType.JSON])
     @pytest.mark.parametrize("index_type,distance_metric", [
@@ -367,10 +374,14 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
         stats = _get_vector_registry_stats(client)
         assert stats["entry_cnt"] == num_docs
 
-        # Drop the index and verify entry count drops to 0
+        # Drop the index and verify entry count and pending unshares drop to 0
         vector_index.drop(client)
         waiters.wait_for_equal(
             lambda: _get_vector_registry_stats(client)["entry_cnt"],
+            0,
+        )
+        waiters.wait_for_equal(
+            lambda: _get_vector_registry_stats(client)["pending_unshare_cnt"],
             0,
         )
         assert _get_active_allocations(client) == 0
@@ -423,6 +434,13 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
         finally:
             # Ensure we reset the control variable even if asserts fail
             client.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET ForceHashSharingError 0")
+
+
+class TestVectorRegistrySharingOnPendingUnshare(TestVectorRegistrySharingOn):
+    """The sharing tests with vector-lazy-unshare off."""
+
+    LAZY_UNSHARE = False
+
 
 class TestVectorFieldTypeConflict(ValkeySearchTestCaseDebugMode):
     """A HASH field may not be indexed as two different vector data types.

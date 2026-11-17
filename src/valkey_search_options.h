@@ -188,6 +188,9 @@ config::Number &GetQueryStringDepth();
 /// Return the configuration entry for vector unshare batch size
 config::Number &GetVectorUnshareBatchSize();
 
+/// Return whether the vector registry unshares lazily (startup only).
+const config::Boolean &GetVectorLazyUnshare();
+
 /// Return the configuration entry that controls compatibility-bug emulation.
 /// See COMPATIBILITY.md for the semantics.
 config::Version &GetEmulateRelease();

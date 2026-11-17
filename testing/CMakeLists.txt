@@ -131,7 +131,9 @@ finalize_test_flags(indexes_test)
 set(VECTOR_INDEX_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/vector_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/vector_registry_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/vector_registry_state_machine_test.cc)
+    ${CMAKE_CURRENT_LIST_DIR}/vector_registry_state_machine_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/vector_registry_legacy_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/vector_registry_legacy_state_machine_test.cc)
 
 add_executable(vector_index_test ${VECTOR_INDEX_TEST_SOURCES})
 target_include_directories(vector_index_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})

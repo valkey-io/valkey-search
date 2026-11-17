@@ -126,7 +126,9 @@ void VectorRegistry::RemoveFromTrackedKeysIndex(
   }
   key_it->second.erase(attribute_identifier);
   if (key_it->second.empty()) {
-    db_it->second.erase(key_it);
+    // Nothing else into this db's table is held, so a migration may move
+    // its entries.
+    db_it->second.erase_and_migrate(key_it);
     if (db_it->second.empty()) {
       tracked_keys_by_db_.erase(db_it);
     }
@@ -631,6 +633,11 @@ void VectorRegistry::OnServerCronCallback(ValkeyModuleCtx *ctx,
     for (auto &[_, tracked] : tracked_vectors_) {
       if (tracked.NeedsMigration()) {
         tracked.MigrateSome(n);
+      }
+    }
+    for (auto &[_, keys] : tracked_keys_by_db_) {
+      if (keys.NeedsMigration()) {
+        keys.MigrateSome(n);
       }
     }
     for (auto &[_, pending] : pending_unshares_) {

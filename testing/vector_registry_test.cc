@@ -39,6 +39,11 @@ class VectorRegistryTest : public ValkeySearchTest {
     auto it = registry.tracked_vectors_.find(db_num);
     return it != registry.tracked_vectors_.end() && it->second.NeedsMigration();
   }
+  bool TrackedKeysNeedsMigration(VectorRegistry &registry, int db_num) {
+    auto it = registry.tracked_keys_by_db_.find(db_num);
+    return it != registry.tracked_keys_by_db_.end() &&
+           it->second.NeedsMigration();
+  }
   vmsdk::UniqueValkeyString MakeFloatVectorString(
       const std::vector<float> &vec_data = {1.0f, 2.0f}) {
     std::string vec_str(reinterpret_cast<const char *>(vec_data.data()),
@@ -1212,7 +1217,9 @@ TEST_F(VectorRegistryTest, ServerCronDrainsEveryDbsBackground) {
   size_t entries = 0;
   for (int db_num : {0, 1}) {
     MockIndex index(2, attr->Str(), db_num);
-    for (int i = 0; i < 64 || !TrackedNeedsMigration(registry, db_num); ++i) {
+    for (int i = 0; i < 64 || !TrackedNeedsMigration(registry, db_num) ||
+                    !TrackedKeysNeedsMigration(registry, db_num);
+         ++i) {
       ASSERT_LT(i, 100000);
       registry.DedupOrConstruct(
           StringInternStore::Intern(absl::StrCat("key", i)), valkey_vec.get(),
@@ -1223,7 +1230,9 @@ TEST_F(VectorRegistryTest, ServerCronDrainsEveryDbsBackground) {
   }
   int ticks = 0;
   while (TrackedNeedsMigration(registry, 0) ||
-         TrackedNeedsMigration(registry, 1)) {
+         TrackedNeedsMigration(registry, 1) ||
+         TrackedKeysNeedsMigration(registry, 0) ||
+         TrackedKeysNeedsMigration(registry, 1)) {
     ASSERT_LT(ticks++, 100000);
     registry.OnServerCronCallback(nullptr, ValkeyModuleEvent_CronLoop, 0,
                                   nullptr);

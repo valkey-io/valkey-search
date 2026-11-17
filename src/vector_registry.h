@@ -192,9 +192,11 @@ class VectorRegistry {
   using BorrowedAttrSet =
       absl::flat_hash_set<BorrowedInternedStringPtr, InternedStringPtrHash,
                           InternedStringPtrEq>;
+  // A HugeFlatHashMap, like tracked_vectors_, because it holds an entry per
+  // tracked key and an absl table that size would rehash in one step.
   using PerDbTrackedKeysMap =
-      absl::flat_hash_map<BorrowedInternedStringPtr, BorrowedAttrSet,
-                          BorrowedKeyStringHash, BorrowedKeyStringEq>;
+      vmsdk::HugeFlatHashMap<BorrowedInternedStringPtr, BorrowedAttrSet,
+                             BorrowedKeyStringHash, BorrowedKeyStringEq>;
 
   // Maps db_num -> key -> tracked attribute_identifiers for O(1) per-key
   // lookup. Uses BorrowedInternedStringPtr because lifetime is tied 1-to-1

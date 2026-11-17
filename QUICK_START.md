@@ -34,13 +34,14 @@ valkey-cli
 ### Create a Vector Index
 
 ```bash
-FT.CREATE myIndex SCHEMA embedding VECTOR HNSW 6 TYPE FLOAT32 DIM 3 DISTANCE_METRIC COSINE
+FT.CREATE myIndex SCHEMA embedding VECTOR HNSW 6 TYPE FLOAT32 DIM 3 DISTANCE_METRIC COSINE category TAG
 ```
 
 - `embedding` is the field name for storing vectors.
 - `VECTOR HNSW` uses the Hierarchical Navigable Small World algorithm for approximate nearest neighbor search. The other option is `VECTOR FLAT` for exact brute-force search.
 - `DIM 3` sets the vector dimensionality to 3.
 - `DISTANCE_METRIC COSINE` sets the distance metric to cosine similarity. Other options are `L2` and `IP`.
+- `category` is a TAG field, used below to filter a vector query.
 
 ### Insert Some Vectors
 
@@ -48,9 +49,9 @@ Vectors must be encoded in little-endian byte order using the element type the i
 
 ```bash
 # [0.0, 0.0, 1.0]
-HSET my_hash_key_1 embedding "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x80?"
+HSET my_hash_key_1 embedding "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x80?" category "electronics"
 # [0.000145, 0.0, 1.0]
-HSET my_hash_key_2 embedding "\x00\xaa\x00\x00\x00\x00\x00\x00\x00\x00\x80?"
+HSET my_hash_key_2 embedding "\x00\xaa\x00\x00\x00\x00\x00\x00\x00\x00\x80?" category "books"
 ```
 
 ### Issue a Vector Query

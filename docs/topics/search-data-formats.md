@@ -27,7 +27,7 @@ After splitting, each tag is processed as follows:
 2. Empty tags (those that are empty or whitespace only after trimming) are silently discarded.
 3. Duplicate tags within a single field value are deduplicated.
 
-If the field value produces no valid tags after processing, the key is untracked for that field and counted in `hash_indexing_failures`.
+If the field value produces no valid tags after processing, the key is untracked for that field and, if the field was not already indexed for that key, counted in `hash_indexing_failures`.
 
 ### Case Sensitivity
 
@@ -318,7 +318,8 @@ HSET doc:1 vec "\x00\x3c\x00\x00\x00\x00"
 
 A value that is rejected as invalid data (a malformed `NUMERIC` value, a wrong-size
 `VECTOR`, or, with 1.3.0 behavior, a non-UTF-8 `TAG` value) is counted in
-`hash_indexing_failures`. With `search.emulate-release` below 1.3.0 (the default),
+`hash_indexing_failures` when the field was not already indexed for that key; a
+rejected update to an already-indexed field is not counted. With `search.emulate-release` below 1.3.0 (the default),
 only that field is treated as missing; the key is still indexed for its other
 fields. With 1.3.0 or later, the whole key is removed from the index, matching
 RediSearch. See [COMPATIBILITY.md](../../COMPATIBILITY.md) (`invalid_data_drops_key`).

@@ -705,6 +705,8 @@
         "type": "block",
         "token": "SORTBY",
         "optional": true,
+        "multiple": true,
+        "multiple_token": true,
         "arguments": [
           {
             "name": "count",

@@ -60,7 +60,7 @@ FT.AGGREGATE <index-name> <query>
 
 ### APPLY Stage
 
-The `APPLY` stage processes each record of the working set in sequence. For each record the expression is computed with output being set into the record with the provided field name. It is allowed to overwrite an existing field. The apply stage normally keeps every record. With `search.emulate-release` 1.3.0 or later, a record whose expression refers to a field the key does not have is dropped, and an expression that fails with an error fails the command. See [COMPATIBILITY.md](../../COMPATIBILITY.md).
+The `APPLY` stage processes each record of the working set in sequence. For each record the expression is computed with output being set into the record with the provided field name. It is allowed to overwrite an existing field. The apply stage normally keeps every record. With `search.emulate-release` 1.3.0 or later, a record whose expression refers to a field the key does not have is dropped. An expression that fails with an error fails the command. See [COMPATIBILITY.md](../../COMPATIBILITY.md).
 
 ### FILTER Stage
 
@@ -79,7 +79,7 @@ The `SORTBY` stage reorders the records in accordance with a sort key. A sort ke
 ### GROUPBY Stage
 
 The `GROUPBY` stage organizes the input records into buckets based on the values of the specified fields.
-For each unique combination of values a separate bucket is created to hold all records that have that combination of values.
+For each unique combination of values a separate bucket is created to hold all records that have that combination of values. A field whose value is an array (such as a multi-value JSON field or the output of `TOLIST`) puts the record into one bucket per element, or one per combination when several fields hold arrays; an empty array groups as nil. A record that would go into more than `search.max-group-key-expansion` buckets fails the command.
 
 Each bucket of records is processed into a single output record, discarding the bucket contents. That output record has two sections. The first section has one value for each of the specified `GROUPBY` fields. This section provides the values that formed (named) this unique bucket.
 
@@ -91,7 +91,7 @@ With a `<count>` of 0 (`GROUPBY 0`) no fields are specified and all records go i
 
 #### Reducers
 
-The following reducer functions are available. SUM, AVG, STDDEV and QUANTILE convert their input to a number. MIN and MAX do so only with `search.emulate-release` 1.3.0 or later: values that are not numbers are skipped, and a group with no numeric value gives `inf` for MIN and `-inf` for MAX. Below 1.3.0, MIN and MAX compare values as they are, so a `TAG` or text field gives a string, and a group with no value gives nil. The other reducers operate on the values as they are.
+The following reducer functions are available. SUM, AVG, STDDEV and QUANTILE convert their input to a number. A group with no numeric value gives `0` for SUM and AVG, or `nan` with `search.emulate-release` 1.3.0 or later. MIN and MAX do so only with `search.emulate-release` 1.3.0 or later: values that are not numbers are skipped, and a group with no numeric value gives `inf` for MIN and `-inf` for MAX. Below 1.3.0, MIN and MAX compare values as they are, so a `TAG` or text field gives a string, and a group with no value gives nil. The other reducers operate on the values as they are.
 
 Without `AS <name>`, the reducer's output is named from the reducer and its arguments. With `search.emulate-release` 1.3.0 or later the name is `__generated_alias` followed by the lowercased reducer name and its arguments without `@`, joined by commas (`REDUCE SUM 1 @price` gives `__generated_aliassumprice`). Below 1.3.0 it is `<REDUCER>(<args>)` (`SUM(@price)`, `COUNT()`). `FIRST_VALUE` always uses the `FIRST_VALUE(<args>)` form. Use `AS` to give the output a stable name for later stages. See [COMPATIBILITY.md](../../COMPATIBILITY.md).
 

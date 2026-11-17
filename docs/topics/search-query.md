@@ -274,6 +274,7 @@ hello*                  matches words that start with hello such as hello, hello
 A term with a leading `*` matches any word that ends with that term.
 
 Note that suffix searching will only locate words in fields that have `WITHSUFFIXTRIE` specified, i.e., fields declared with `NOSUFFIXTRIE` will not be searched.
+Without a field specifier, a suffix term searches every text field that has `WITHSUFFIXTRIE`; if no text field has it, an error is issued.
 If a field specifier is added to a suffix term search and that particular field was declared with `NOSUFFIXTRIE` then an error will be issued.
 
 ```
@@ -283,7 +284,9 @@ If a field specifier is added to a suffix term search and that particular field 
 
 ### Exact Phrase Search
 
-The exact phrase search operator matches an exact sequence of words in a text field. The words to be matched are enclosed in double quotes. With `search.emulate-release` 1.3.0 or later, single quotes also delimit a phrase, for example `'hello world'`; with the default setting (1.0.0), single quotes are treated as punctuation. Each word in a phrase is matched exactly; prefix, suffix and fuzzy operators are not supported inside a phrase. The words are not subject to stop word removal nor stemming, otherwise this is equivalent to having the same words in a query with `SLOP 0` and `INORDER` options being specified.
+The exact phrase search operator matches an exact sequence of words in a text field. The words to be matched are enclosed in double quotes. Each word in a phrase is matched exactly; prefix, suffix and fuzzy operators are not supported inside a phrase. The words are not subject to stop word removal nor stemming, otherwise this is equivalent to having the same words in a query with `SLOP 0` and `INORDER` options being specified.
+
+Note: with `search.emulate-release` 1.3.0 or later, single quotes also delimit a phrase, for example `'hello world'`; with the default setting (1.0.0), single quotes are treated as punctuation.
 
 ```
 "hello world"            matches the exact phrase "hello world" in any text field

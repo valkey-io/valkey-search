@@ -12,7 +12,7 @@ The search module uses the Valkey configuration mechanism. Each configuration be
 | search.async-fanout-threshold                 | Number | 30 | Minimum number of fanout targets for which remote requests are issued asynchronously. Range: 1 to 10000. |
 | search.backfill-batch-size                    | Number | 10240 | Controls the batch size for backfilling indexes. Range: 1 to 2147483647. |
 | search.cluster-map-expiration-ms              | Number | 250 | Controls how long (in milliseconds) the coordinator caches the cluster topology map before refreshing it from the Valkey cluster. Range: 0 to 3600000. |
-| search.coordinator-query-timeout-secs         | Number | 25 | Controls the gRPC deadline timeout (in seconds) for distributed coordinator query operations. Range: 1 to 3600. |
+| search.coordinator-query-timeout-secs         | Number | 25 | Controls the gRPC deadline timeout (in seconds) for distributed coordinator query operations. It is independent of the query timeout: with the default `search.default-timeout-ms` of 50000, a remote shard still running after this deadline is treated as a failed shard (see `search.enable-partial-results`). Range: 1 to 3600. |
 | search.cursor-max-count                       | Number | 100000 | Maximum `COUNT` accepted by `WITHCURSOR` and `FT.CURSOR READ`. Range: 1 to `INT64_MAX`. |
 | search.cursor-max-idle-ms                     | Number | `INT64_MAX` | Maximum `MAXIDLE` (milliseconds) accepted by `WITHCURSOR` |
 | search.default-scorer                         | Enum | BM25STD | Scorer used when a query omits `SCORER`. See [Search - Scoring](search-scoring.md). Values: `BM25STD`. |

@@ -189,7 +189,7 @@ A vector query measures the distance between the query vector and each indexed v
 A smaller distance is a better match.
 See [Vector Distance](#vector-distance) for the distance formulas of `L2`, `IP`, and `COSINE`.
 
-A KNN query (`*=>[KNN ...]`) sorts its results by distance and returns the distance in the `__<field>_score` field.
+A KNN query (`*=>[KNN ...]`) sorts its results by distance and returns the distance in the `__<field>_score` field, unless `NOCONTENT` is given or a `RETURN` clause does not list that field.
 A KNN query can have a filter with no text or tag clause, such as `(@price:[0 100])=>[KNN ...]`.
 Then the score of each result is its distance, and the results stay sorted by distance.
 `WITHSCORES` does not return the distance. It reports 0, so read the distance from `__<field>_score`.
@@ -208,7 +208,7 @@ These options return scores to the client:
 | [`FT.SEARCH`](../commands/ft.search.md) | `WITHSCORES` | The score follows each key name in the reply. |
 | [`FT.AGGREGATE`](../commands/ft.aggregate.md) | `ADDSCORES` | Each record contains a `__score` field. Later stages can use it as `@__score`. |
 | [`FT.HYBRID`](../commands/ft.hybrid.md) | `COMBINE ... YIELD_SCORE_AS` | Without a `LOAD` clause, each record contains the fused score, under `__score` or under the alias that you name. With a `LOAD` clause, the fused score appears only if you name it with `YIELD_SCORE_AS` or load `@__score`. |
-| `FT.SEARCH` with a KNN query | `AS <name>` | Each result contains the vector distance, under `__<field>_score` or under `<name>`. A smaller distance is a better match. See [Vector Fields](#vector-fields). |
+| `FT.SEARCH` with a KNN query | `AS <name>` | Each result contains the vector distance, under `__<field>_score` or under `<name>`, unless `NOCONTENT` is given or a `RETURN` clause does not list that name. A smaller distance is a better match. See [Vector Fields](#vector-fields). |
 
 `SCORER <scorer>` selects the scoring function for `FT.SEARCH`, `FT.AGGREGATE`, and the `SEARCH` arm of `FT.HYBRID`.
 When `SCORER` is omitted, the [`search.default-scorer`](search-configurables.md) configuration is used (default `BM25STD`).

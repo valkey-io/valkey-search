@@ -7,7 +7,7 @@ the field if desired.
 
 For indexes on `JSON` keys, the path is a `JSON` path to the data of the declared type. The `AS` clause is required in order to provide a field name without the special characters of a `JSON` path.
 
-The same source field may be indexed more than once, for example as both `TEXT` and `TAG`, as long as each entry has a distinct `AS` alias. Aliases must be unique within an index and may not contain ASCII punctuation characters.
+The same source field may be indexed more than once, for example as both `TEXT` and `TAG`, as long as each entry has a distinct `AS` alias. Aliases must be unique within an index. An alias, or the field identifier when `AS` is omitted, may not contain any of the characters `,.<>{}[]"':;!@#$%^&*()-+=~/\|?` (`_` is allowed).
 
 ```
 FT.CREATE <index-name>
@@ -53,7 +53,7 @@ FT.CREATE <index-name>
 
   See [Search - expressions](../topics/search-expressions.md) for details on the expression syntax.
 
-  A field's value always reaches the expression as its stored bytes, whatever type the `SCHEMA` declares — a `NUMERIC` field is not a number to a `FILTER`. A comparison is numeric only when one side really is a number, meaning a bare numeric literal such as `5` or a number-returning function such as `strlen()`. So `@price > 100` compares numerically, while `@price > '100'` and `@price > @cost` compare the values as strings, byte by byte. If one side is a number and the other is a string that is not a number, `==` is false and `!=` is true. `<`, `<=`, `>` and `>=` are an evaluation error, which rejects the key even when the comparison is negated: `!(@price > 100)` does not admit a key whose `price` is not a number.
+  For a `HASH` index, a field's value reaches the expression as its stored bytes, whatever type the `SCHEMA` declares — a `NUMERIC` field is not a number to a `FILTER`. For a `JSON` index, a `NUMERIC` field is a number, so `@price > @cost` compares numerically; the rest of this paragraph describes `HASH` indexes. A comparison is numeric only when one side really is a number, meaning a bare numeric literal such as `5` or a number-returning function such as `strlen()`. So `@price > 100` compares numerically, while `@price > '100'` and `@price > @cost` compare the values as strings, byte by byte. If one side is a number and the other is a string that is not a number, `==` is false and `!=` is true. `<`, `<=`, `>` and `>=` are an evaluation error, which rejects the key even when the comparison is negated: `!(@price > 100)` does not admit a key whose `price` is not a number.
 
   Field references use the `@<name>` syntax. For a `HASH` index the expression may reference a field that is **not** declared in the `SCHEMA`; its value is read directly off the key at ingestion time (an absent field makes the comparison false). Because an undeclared field name is read verbatim from the key, a **misspelled** field name does not produce an error — watch `filter_rejected_keys` in `FT.INFO` to detect this. For a `JSON` index every field referenced by the expression must be declared in the `SCHEMA`; referencing an undeclared field is rejected when the index is created.
 

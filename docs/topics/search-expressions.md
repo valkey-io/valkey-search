@@ -74,7 +74,7 @@ A field-ref is used to access values from the record currently being processed. 
 
 ## Arithmetic Operators
 
-The following numeric operators are available. String values are converted to numeric, but become a Nil if the conversion fails. If either input to a numeric operator is Nil, then the output is Nil.
+The following numeric operators are available. String values are converted to numeric, but become a Nil if the conversion fails. An empty string converts to 0 with `search.emulate-release` below 1.3.0, and does not convert with 1.3.0 or later. If either input to a numeric operator is Nil, then the output is Nil. Division by zero gives `nan` below 1.3.0; with 1.3.0 or later it gives `inf`, `-inf`, or `nan` for `0/0`.
 
 | Syntax | Operation      |
 | :----: | :------------- |
@@ -114,7 +114,7 @@ The logical operators `&&`, `||` and `!` generate 0 for false and 1 for true. A 
 
 ## Numeric Processing Functions
 
-Supported numeric functions are listed. Numeric functions always convert their inputs to a number. If the conversion fails then a Nil is returned.
+Supported numeric functions are listed. Numeric functions always convert their inputs to a number. A Nil input gives Nil. An input that does not convert gives Nil with `search.emulate-release` below 1.2.1, and `nan` with 1.2.1 or later.
 
 |      Syntax       | Operation                                    |
 | :---------------: | :------------------------------------------- |
@@ -128,7 +128,7 @@ Supported numeric functions are listed. Numeric functions always convert their i
 
 ## String Processing Functions
 
-String processing functions. Inputs are converted to strings as appropriate.
+String processing functions. With `search.emulate-release` below 1.3.0, inputs are converted to strings (or, for the `offset` and `length` of `substr`, to numbers) as appropriate, except that with 1.2.1 or later `lower` and `upper` of a value that is not a string give Nil. With 1.3.0 or later a number is never converted: `lower` and `upper` of a number give Nil, and a number given to `strlen`, `startswith`, `contains` or as `s` of `substr`, or a string given as `offset` or `length` of `substr`, is an error that fails the command.
 
 |          Syntax           | Operation                                                                                                              |
 | :-----------------------: | ---------------------------------------------------------------------------------------------------------------------- |
@@ -142,7 +142,7 @@ String processing functions. Inputs are converted to strings as appropriate.
 
 ## Timestamp Processing Functions
 
-Time functions extract various time fields from a numeric UTC Unix timestamp using the `gmtime` C library function, or round the timestamp down.
+Time functions extract various time fields from a numeric UTC Unix timestamp using the `gmtime` C library function, or round the timestamp down. With `search.emulate-release` 1.2.1 or later, a timestamp before 1970 gives Nil in every function below except `timefmt`; below 1.2.1 the value is computed from the negative timestamp.
 
 Supported time functions include:
 
@@ -156,9 +156,11 @@ Supported time functions include:
 |      minute(timestamp)      | Timestamp rounded down to the start of its minute |
 |       hour(timestamp)       | Timestamp rounded down to the start of its hour  |
 |       day(timestamp)        | Timestamp rounded down to the start of its day   |
-|      month(timestamp)       | Timestamp rounded down to the start of its month |
+|      month(timestamp)       | Timestamp rounded down to the start of its month (below 1.2.1, the start of the day before) |
 | timefmt(timestamp [, fmt])  | Convert timestamp to string using strftime. `fmt` defaults to `%FT%TZ`. |
 | parsetime(time_string [, fmt]) | Parse time string into timestamp using strptime. `fmt` defaults to `%FT%TZ`. |
+
+With `search.emulate-release` 1.2.1 or later, `timefmt` with an empty format and `parsetime` of a string that does not match the format give Nil. Below 1.2.1, `timefmt` gives an empty string and `parsetime` does not detect the mismatch.
 
 ## Exists Function
 
@@ -178,8 +180,9 @@ field that the record does not have.
 | :--------------------------------: | :-------------------------------------------------------- |
 | case(condition, if_true, if_false) | `if_true` when `condition` is true, otherwise `if_false`. |
 
-The condition is false when it is 0, an empty string, or Nil, and true
-otherwise. When it refers to a missing field or fails with an error:
+The condition is false when it is 0, Nil, an empty array or an empty string
+(with `search.emulate-release` below 1.2.1, any string), and true otherwise.
+When it refers to a missing field or fails with an error:
 
 - In `FT.AGGREGATE` with `search.emulate-release` below `1.3.0` (the default),
   a missing field is Nil, so the condition is false.

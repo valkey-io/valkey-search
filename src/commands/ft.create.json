@@ -11,7 +11,7 @@
         "Added Text Indexing and Search support"
       ],
       [
-        "1.3.0-RC1",
+        "1.3.0",
         "Added FILTER, SCORE_FIELD, NOHL and SORTABLE UNF options; SCORE accepts values in [0, 1]; FLOAT16 and BFLOAT16 vector types; LANGUAGE values beyond ENGLISH, with per-language punctuation, stop words, and stemming; the same field may be indexed under multiple aliases; options between ON and SCHEMA may appear in any order; FLAT BLOCK_SIZE and INITIAL_CAP are bounded to [1, 10000000]. With `search.emulate-release` 1.3.0 or later, invalid field data drops the whole key and TAG rejects non-UTF-8 values"
       ]
     ],

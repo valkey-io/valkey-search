@@ -3,13 +3,13 @@ from valkey.client import Valkey
 from valkey_search_test_case import ValkeySearchTestCaseBase, ValkeySearchTestCaseDebugMode
 from valkeytestframework.conftest import resource_port_tracker
 import json
+import pytest
 import random
 from valkey.cluster import ValkeyCluster
 from valkey_search_test_case import ValkeySearchClusterTestCase, ValkeySearchClusterTestCaseDebugMode
 import struct
 import time
-import pytest
-from utils import IndexingTestHelper
+from utils import IndexingTestHelper, compatibility_usage
 from valkeytestframework.util import waiters
 
 """
@@ -973,6 +973,158 @@ def validate_aggregate_complex_queries(client: Valkey):
         else:
             assert min_price == 2.0, f"Books min_price should be 2.0, got {min_price}"
 
+    # 22. QUANTILE reducer - median (0.5)
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 100]",
+        "LOAD", "1", "price",
+        "GROUPBY", "0",
+        "REDUCE", "QUANTILE", "2", "@price", "0.5", "AS", "median_price"
+    )
+    assert result[0] == 1
+    median = float(result[1][1])
+    assert 49.5 <= median <= 51.5, f"Expected median near 50.5, got {median}"
+
+    # 23. QUANTILE reducer - 99th percentile (0.99)
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 100]",
+        "LOAD", "1", "price",
+        "GROUPBY", "0",
+        "REDUCE", "QUANTILE", "2", "@price", "0.99", "AS", "p99"
+    )
+    assert result[0] == 1
+    p99 = float(result[1][1])
+    assert 98.0 <= p99 <= 100.0, f"Expected p99 near 99, got {p99}"
+
+    # 24. Multiple QUANTILE reducers in same query
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 100]",
+        "LOAD", "1", "price",
+        "GROUPBY", "0",
+        "REDUCE", "QUANTILE", "2", "@price", "0.5", "AS", "median",
+        "REDUCE", "QUANTILE", "2", "@price", "0.99", "AS", "p99",
+        "REDUCE", "QUANTILE", "2", "@price", "0.25", "AS", "q1"
+    )
+    assert result[0] == 1
+    row = dict(zip(result[1][::2], result[1][1::2]))
+    median = float(row[b'median'])
+    p99 = float(row[b'p99'])
+    q1 = float(row[b'q1'])
+    assert 49.5 <= median <= 51.5, f"Expected median near 50.5, got {median}"
+    assert 98.0 <= p99 <= 100.0, f"Expected p99 near 99, got {p99}"
+    assert 24.0 <= q1 <= 27.0, f"Expected q1 near 25.75, got {q1}"
+
+    # 25. QUANTILE with GROUPBY operations
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 100]",
+        "LOAD", "2", "price", "category",
+        "GROUPBY", "1", "@category",
+        "REDUCE", "QUANTILE", "2", "@price", "0.5", "AS", "median_price"
+    )
+    assert result[0] == 2
+    for i in range(1, len(result)):
+        row = dict(zip(result[i][::2], result[i][1::2]))
+        median_price = float(row[b'median_price'])
+        # electronics: odd prices 1..99 (n=50); books: even prices 2..100 (n=50).
+        if row[b'category'] == b'electronics':
+            assert 48.0 <= median_price <= 52.0, f"Expected electronics median near 50, got {median_price}"
+        else:
+            assert 49.0 <= median_price <= 53.0, f"Expected books median near 51, got {median_price}"
+
+    # 26. QUANTILE with numeric fields (rating)
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@rating:[1 100]",
+        "LOAD", "1", "rating",
+        "GROUPBY", "0",
+        "REDUCE", "QUANTILE", "2", "@rating", "0.5", "AS", "median_rating"
+    )
+    assert result[0] == 1
+    median_rating = float(result[1][1])
+    # rating = (i % 100) + 1.0 for i in 0..999 (n=1000), uniform over 1..100.
+    assert 48.5 <= median_rating <= 52.5, f"Expected rating median near 50.5, got {median_rating}"
+
+def validate_quantile_cluster_queries(client: Valkey):
+    """
+        Test FT.AGGREGATE QUANTILE reducer against a sharded dataset.
+    """
+    # Median over the full price range (1..1000), fanned out across shards.
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 1000]",
+        "LOAD", "1", "price",
+        "GROUPBY", "0",
+        "REDUCE", "QUANTILE", "2", "@price", "0.5", "AS", "median_price"
+    )
+    assert result[0] == 1
+    median = float(result[1][1])
+    assert 490.0 <= median <= 510.0, f"Expected median near 500, got {median}"
+
+def validate_aggregate_count_distinctish(client: Valkey):
+    """
+        Test FT.AGGREGATE with COUNT_DISTINCTISH reducer.
+        Uses the 1000-record dataset: price 1-1000 (unique), rating cycles
+        through (i%100)+1.0 so each category gets 50 distinct ratings,
+        category alternates electronics/books (500 each).
+        The estimates are deterministic for a given hash input.
+    """
+    expected_prices = {b'electronics': 501, b'books': 501}
+    # 1. Basic COUNT_DISTINCTISH - count distinct prices per category
+    # 500 unique prices per category
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 1000]",
+        "LOAD", "2", "price", "category",
+        "GROUPBY", "1", "@category",
+        "REDUCE", "COUNT_DISTINCTISH", "1", "@price", "AS", "approx_distinct"
+    )
+    assert result[0] == 2
+    for i in range(1, len(result)):
+        row = dict(zip(result[i][::2], result[i][1::2]))
+        approx = float(row[b'approx_distinct'])
+        assert approx == expected_prices[row[b'category']], f"{row[b'category']}: got {approx}"
+
+    # 2. Multiple COUNT_DISTINCTISH reducers in same query
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 1000]",
+        "LOAD", "3", "price", "rating", "category",
+        "GROUPBY", "1", "@category",
+        "REDUCE", "COUNT_DISTINCTISH", "1", "@price", "AS", "approx_prices",
+        "REDUCE", "COUNT_DISTINCTISH", "1", "@rating", "AS", "approx_ratings"
+    )
+    assert result[0] == 2
+    for i in range(1, len(result)):
+        row = dict(zip(result[i][::2], result[i][1::2]))
+        approx_prices = float(row[b'approx_prices'])
+        approx_ratings = float(row[b'approx_ratings'])
+        assert approx_prices == expected_prices[row[b'category']], f"{row[b'category']}: got {approx_prices}"
+        assert approx_ratings == 50, f"Expected 50, got {approx_ratings}"
+
+    # 3. COUNT_DISTINCTISH vs COUNT_DISTINCT comparison
+    result_exact = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 1000]",
+        "LOAD", "2", "rating", "category",
+        "GROUPBY", "1", "@category",
+        "REDUCE", "COUNT_DISTINCT", "1", "@rating", "AS", "exact"
+    )
+    result_approx = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 1000]",
+        "LOAD", "2", "rating", "category",
+        "GROUPBY", "1", "@category",
+        "REDUCE", "COUNT_DISTINCTISH", "1", "@rating", "AS", "approx"
+    )
+    assert result_exact[0] == 2
+    assert result_approx[0] == 2
+    exact_by_category = {}
+    for i in range(1, len(result_exact)):
+        row_exact = dict(zip(result_exact[i][::2], result_exact[i][1::2]))
+        exact_by_category[row_exact[b'category']] = float(row_exact[b'exact'])
+    for i in range(1, len(result_approx)):
+        row_approx = dict(zip(result_approx[i][::2], result_approx[i][1::2]))
+        category = row_approx[b'category']
+        exact_val = exact_by_category[category]
+        approx_val = float(row_approx[b'approx'])
+        # No register collisions: equals COUNT_DISTINCT
+        assert approx_val == exact_val, f"{category}: exact={exact_val}, approx={approx_val}"
+
+
+
 class TestNonVector(ValkeySearchTestCaseBase):
 
     def test_basic(self):
@@ -1007,6 +1159,14 @@ class TestNonVector(ValkeySearchTestCaseBase):
         # Test RANDOM_SAMPLE functionality
         validate_random_sample_queries(client, aggregate_complex_hash_docs)
         validate_random_sample_error_queries(client)
+        validate_aggregate_count_distinctish(client)
+
+    def test_aggregate_count_distinctish(self):
+        client: Valkey = self.server.get_new_client()
+        create_indexes(client)
+        for doc in aggregate_complex_hash_docs:
+            assert client.execute_command(*doc) == 3
+        validate_aggregate_count_distinctish(client)
 
     def test_uningested_multi_field(self):
         """
@@ -1264,12 +1424,11 @@ class TestSortByAlias(ValkeySearchTestCaseDebugMode):
                           ("sbw:3", 6, 100)):
             assert client.execute_command("HSET", key, "a", a, "b", b) == 2
         IndexingTestHelper.wait_for_indexing_complete_on_node(client, "sbw_idx")
-        counters = ("search_compatibility-ft_search_sortkey_type_prefix",
-                    "search_compatibility-ft_search_sortkey_nil")
+        counters = ("ft_search_sortkey_type_prefix", "ft_search_sortkey_nil")
 
         def uses():
-            info = client.info("SEARCH")
-            return [info.get(c, 0) for c in counters]
+            usage = compatibility_usage(client)
+            return [usage.get(c, 0) for c in counters]
 
         for release, per_reply in (("1.2.1", 1), ("1.3.0", 0)):
             assert client.execute_command(
@@ -1587,6 +1746,9 @@ class TestNonVectorCluster(ValkeySearchClusterTestCase):
         # Test RANDOM_SAMPLE functionality in cluster mode
         validate_random_sample_queries(cluster_client, aggregate_complex_hash_docs)
         validate_random_sample_error_queries(cluster_client)
+        # Test QUANTILE functionality in cluster mode
+        validate_quantile_cluster_queries(cluster_client)
+        validate_aggregate_count_distinctish(cluster_client)
     
     def test_max_search_keys_fetch_limited(self):
         """

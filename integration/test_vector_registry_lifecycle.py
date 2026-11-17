@@ -1187,8 +1187,16 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
 
         self.wait_for_docs(idx_64, 2)
         self.wait_for_docs(idx_128, 2)
-        assert self.knn_hits(idx_64, query=[0.1] * 64) == 1
-        assert self.knn_hits(idx_128, query=[0.2] * 128) == 1
+        # num_docs is updated on the main thread and does not mean the vector
+        # insert has run. Both indexes match these keys, and the HSET reply
+        # does not always wait for the second one, so poll until each index
+        # is searchable.
+        waiters.wait_for_equal(
+            lambda: self.knn_hits(idx_64, query=[0.1] * 64), 1
+        )
+        waiters.wait_for_equal(
+            lambda: self.knn_hits(idx_128, query=[0.2] * 128), 1
+        )
         assert self.registry_stat("entry_cnt") == 2
 
         # Drop idx_64. 'doc:64' is unshared and erased because idx_128 has dimension 128 != 64.
@@ -2006,7 +2014,7 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         out of the index prefix must not crash in MoveKey -> UnshareWithValkey."""
         self.client.execute_command("DEBUG", "SET-ACTIVE-EXPIRE", "0")
         index = self.build_index()
-        index.create(self.client)
+        index.create(self.client, wait_for_backfill=True)
 
         # Case 1: Explicit HDEL followed by RENAME out of prefix
         self.client.hset("doc:0", mapping={"vec": vector(0), "other": "x"})
@@ -2027,6 +2035,49 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         self.client.rename("doc:1", "outside:1")
         assert self.client.ping()
         waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0)
+
+    def test_rename_during_pending_unshare_keeps_vector(self):
+        """A RENAME while the dropped index's keys are still queued
+        frees the renamed hash's bytes.
+
+        Stimulus: drop an index with keys pending unshare, then RENAME them.
+        The subscription is already gone, so the registry entry stays under the
+        old name and the cron erases it as a deleted key while the renamed hash
+        still holds the pointer.
+
+        Expected: the renamed hash keeps its vector.
+        Observed: it reads whatever now occupies the freed record.
+        """
+        self.drop_index_leaving_pending_unshares()
+        pipe = self.client.pipeline(transaction=False)
+        for k in range(self.GAP_KEYS):
+            pipe.rename(f"doc:{k}", f"moved:{k}")
+        pipe.execute()
+        self.wait_for_unshare_drain()
+        assert self.registry_stat("entry_cnt") == 0
+
+        self.reuse_freed_vector_memory()
+
+        for k in range(self.GAP_KEYS):
+            assert self.client.hget(f"moved:{k}", "vec") == vector(k), f"moved:{k} reads freed memory"
+
+    def test_move_during_pending_unshare_keeps_vector(self):
+        """A MOVE across databases while the dropped index's keys are still
+        queued frees the moved hash's bytes."""
+        self.drop_index_leaving_pending_unshares()
+        pipe = self.client.pipeline(transaction=False)
+        for k in range(self.GAP_KEYS):
+            pipe.move(f"doc:{k}", 1)
+        pipe.execute()
+        self.wait_for_unshare_drain()
+        assert self.registry_stat("entry_cnt") == 0
+
+        self.reuse_freed_vector_memory()
+
+        client_db1 = self.server.get_new_client()
+        client_db1.select(1)
+        for k in range(self.GAP_KEYS):
+            assert client_db1.hget(f"doc:{k}", "vec") == vector(k), f"doc:{k} in DB 1 reads freed memory"
 
 
 class TestVectorRegistryPersistence(ValkeySearchTestCaseDebugMode):

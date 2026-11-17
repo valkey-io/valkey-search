@@ -35,6 +35,7 @@ class Expression {
     kString,
     kArray,   // TOLIST and RANDOM_SAMPLE results
     kVector,  // a VECTOR field: a blob on HASH, JSON text on JSON
+    kMixed,   // a case() whose branches have different types
   };
   //
   // These objects are provided at evaluation time.

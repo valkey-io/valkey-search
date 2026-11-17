@@ -23,7 +23,7 @@ FT.AGGREGATE <index-name> <query>
     (
       | APPLY <expression> AS <field>
       | FILTER <expression>
-      | GROUPBY <count> <field> [<field> ... ] [[REDUCE <reducer> <count> [<expression> [<expression> ...]]] [ REDUCE ...]]
+      | GROUPBY <count> [<field> ... ] [[REDUCE <reducer> <count> [<expression> [<expression> ...]]] [ REDUCE ...]]
       | LIMIT <offset> <count>
       | SORTBY <count> <expression> [ASC | DESC] [<expression [ASC | DESC] ...] [MAX <num>]
     )+
@@ -52,7 +52,7 @@ FT.AGGREGATE <index-name> <query>
 
 - `APPLY <expression> as <field>` (optional): An expression is computed and insert into the record. See [APPLY Stage](#apply-stage) below. See [Search - expressions](../topics/search-expressions.md) for details on the expression syntax.
 - `FILTER <expression>` (optional): The filter expression is applied, see [FILTER Stage](#filter-stage) for more details. See [Search - expressions](../topics/search-expressions.md) for details on the expression syntax.
-- `GROUPBY <count> <field> <field> ... [REDUCE <reducer> <count> [<expression> [<expression> ...]]]` (optional): The working set is grouped into buckets according to the input fields. One summarization record is generated for each bucket including the outputs of each reducer. See [GROUPBY Stage](#groupby-stage) for details.
+- `GROUPBY <count> [<field> ...] [REDUCE <reducer> <count> [<expression> [<expression> ...]]]` (optional): The working set is grouped into buckets according to the input fields. One summarization record is generated for each bucket including the outputs of each reducer. See [GROUPBY Stage](#groupby-stage) for details.
 - `LIMIT <offset> <count>` (optional): The working set is trimmed, see [LIMIT Stage](#limit-stage) for details.
 - `SORTBY <count> <expression> [ASC | DESC] [<expression> [ASC | DESC] ...] [MAX <num>]` (optional): The working set is sorted. See [SORTBY Stage](#sortby-stage) for more details.
 
@@ -87,6 +87,8 @@ The second section is the output of the reducers for that bucket. Reducers provi
 
 The output of the `GROUPBY`stage is one record for each unique bucket.
 
+With a `<count>` of 0 (`GROUPBY 0`) no fields are specified and all records go into a single bucket, so the output is one record holding only the reducer outputs, or no record if the working set is empty.
+
 #### Reducers
 
 The following reducer functions are available. The reducer functions that take an input expression will convert that expression into a number.
@@ -95,6 +97,7 @@ The following reducer functions are available. The reducer functions that take a
 | :---------------------------- | :--------------------------------------------------------------------------------------------------------------------------------- |
 | COUNT 0                       | Number of records                                                                                                                  |
 | COUNT_DISTINCT 1 <expression> | The exact number of distinct values of the expression. Caution this consumes memory proportional to the number of distinct values. |
+| COUNT_DISTINCTISH 1 <expression> | Approximate number of distinct values using HyperLogLog (P=14), with ~0.81% standard error. Uses at most ~12KB memory per group. Preferred over COUNT_DISTINCT for large groups. Nil values are excluded. |
 | SUM 1 <expression>            | The numerical sum of the values of the expression.                                                                                 |
 | MIN 1 <expression>            | The smallest numerical values of the expression.                                                                                   |
 | MAX 1 <expression>            | The largest numerical values of the expression.                                                                                    |
@@ -104,6 +107,7 @@ The following reducer functions are available. The reducer functions that take a
 | FIRST_VALUE 3 <expression> BY <expression> | The value of the first expression from the record with the smallest comparison expression (ascending). Ties broken by first-encountered order. |
 | FIRST_VALUE 4 <expression> BY <expression> ASC\|DESC | The value of the first expression from the record with the minimum (ASC) or maximum (DESC) comparison expression. Ties broken by first-encountered order. Invalid keyword arguments (e.g., wrong BY token or unrecognized direction) produce a parse-time error. |
 | RANDOM_SAMPLE 2 <expression> <sample_size> | A random sample of values from the expression using reservoir sampling. Returns an array of up to sample_size elements (maximum 1000). Nil values are excluded. Output is non-deterministic. |
+| QUANTILE 2 <expression> <quantile> | An approximation of the value at the given quantile of the expression. `<quantile>` is a number from 0 to 1; 0 returns the smallest value and 1 the largest. Nil, NaN and non-numeric strings are ignored. If any values remain, the result is one of them: with n values, its position in sorted order (1 for the smallest) differs from `<quantile>` × n, rounded up and at least 1, by at most 1% of n. For groups of more than 500 values the result can depend on the order in which records are processed. If a group has no remaining numeric values, the result is `nan`. |
 
 ## Reply
 

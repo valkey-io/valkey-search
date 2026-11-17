@@ -299,10 +299,14 @@ class VectorRegistryStateMachineTest
         .WillRepeatedly([this](ValkeyModuleKey *key, int flags,
                                ValkeyModuleString *field,
                                ValkeyModuleString *value, void *) -> int {
-          keyspace_[key->key][field->data] = value->data;
+          auto &fields = keyspace_[key->key];
+          // Faithful to VM_HashSet: returns the number of existing fields
+          // updated.
+          int updated = fields.contains(field->data) ? 1 : 0;
+          fields[field->data] = value->data;
           // Writing a plain value drops any shared reference on the field.
           shared_refs_[key->key].erase(field->data);
-          return VALKEYMODULE_OK;
+          return updated;
         });
 
     // The engine reports whether the field is *eligible* to hold a string
@@ -734,18 +738,22 @@ TEST_P(VectorRegistryStateMachineTest, InvalidNonVectorFieldWithValidVector) {
 
 // --- dropping the index --------------------------------------------------
 
-// Destroying the vector index must drain its keys out of the registry and
-// hand the engine back plain values.
+// Destroying the vector index leaves the bytes shared; the sweep then drains
+// its keys out of the registry and hands the engine back plain values.
 TEST_P(VectorRegistryStateMachineTest, DroppingIndexUntracksAndDetaches) {
   WriteKey(kKey, FieldState::kValid, 1.0f);
   ExpectTracked(kKey, 1.0f);
   EXPECT_EQ(GetStats().entry_cnt, 1);
+  const bool shared = HasSharedRef(kKey);
 
   index_schema_.reset();
   vector_index_.reset();
   numeric_index_.reset();
   tag_index_.reset();
 
+  EXPECT_EQ(GetStats().entry_cnt, 1);
+  EXPECT_EQ(HasSharedRef(kKey), shared);
+  VectorRegistry::Instance().SweepUnreferenced(10);
   EXPECT_EQ(GetStats().entry_cnt, 0);
   EXPECT_FALSE(HasSharedRef(kKey))
       << "engine still holds a reference into freed registry memory";

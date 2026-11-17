@@ -235,11 +235,7 @@ VectorBase::ComputeDistanceFromRecord(const InternedStringPtr &key,
   return ComputeDistanceFromRecord(key, query, query_magnitude);
 }
 
-VectorBase::~VectorBase() {
-  vmsdk::VerifyMainThread();
-  VectorRegistry::Instance().RemoveIndexKeys(
-      db_num_, interned_attribute_identifier_, std::move(key_by_internal_id_));
-}
+VectorBase::~VectorBase() = default;
 
 absl::StatusOr<RecordResult> VectorBase::AddRecord(const InternedStringPtr &key,
                                                    AttributeData &&data) {

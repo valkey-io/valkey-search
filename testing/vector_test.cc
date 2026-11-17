@@ -2823,6 +2823,8 @@ TEST_F(VectorIndexTest, LoadTrackedKeysWithoutKeyspaceVector) {
             (*index)->SaveTrackedKeys(RDBChunkOutputStream(&labels_rdb)));
         proto = (*index)->ToProto()->vector_index();
       }
+      // The load below stands for a fresh server.
+      VectorRegistry::Instance().OnFlushDB(nullptr);
       // An update queued at save time: the opposite direction, so the key is
       // no longer its saved vector's nearest neighbor under either metric.
       std::vector<float> changed_vector(kDimensions);

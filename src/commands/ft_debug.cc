@@ -327,9 +327,8 @@ absl::Status VectorSharingStatsCmd(ValkeyModuleCtx *ctx,
   ValkeyModule_ReplyWithLongLong(ctx, stats.hash_sharing_errors);
   ValkeyModule_ReplyWithCString(ctx, "hash_sharing_hits");
   ValkeyModule_ReplyWithLongLong(ctx, stats.hash_sharing_hits);
-  ValkeyModule_ReplyWithCString(ctx, "pending_unshare_cnt");
-  ValkeyModule_ReplyWithLongLong(
-      ctx, VectorRegistry::Instance().GetPendingUnsharesCount());
+  ValkeyModule_ReplyWithCString(ctx, "unshare_cnt");
+  ValkeyModule_ReplyWithLongLong(ctx, stats.unshare_cnt);
 
   return absl::OkStatus();
 }

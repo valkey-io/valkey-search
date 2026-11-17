@@ -1715,8 +1715,8 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0, timeout=10)
 
     def test_drop_index_rate_limited_drain(self):
-        """Verifies that vector unsharing on FT.DROPINDEX respects the batch size
-        limit, queues pending unshares, and drains completely via server cron."""
+        """Verifies that with a small sweep batch size the registry still drains
+        completely via server cron after FT.DROPINDEX, unsharing every vector."""
         r = self.client
         num_docs = 25
         batch_size = 5
@@ -1734,13 +1734,12 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
 
             waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), num_docs, timeout=10)
 
-            # Drop the index. The drop command synchronously processes at most `batch_size` keys.
-            # The rest are placed in pending_unshares and drained by server cron.
+            # Dropping the index unshares nothing itself; the cron sweep visits
+            # `batch_size` entries per tick and unshares the unreferenced ones.
+            unshared_before = self.registry_stat("unshare_cnt")
             r.execute_command("FT.DROPINDEX", "idx_rate_limit")
-
-            # Verify that pending unshares and entry_cnt eventually drain to 0 via cron
-            waiters.wait_for_equal(lambda: self.registry_stat("pending_unshare_cnt"), 0, timeout=10)
             waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0, timeout=10)
+            assert self.registry_stat("unshare_cnt") == unshared_before + num_docs
 
             # Verify that the underlying hash data in Valkey is intact and unshared
             for i in range(num_docs):
@@ -1750,12 +1749,11 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
             r.execute_command("CONFIG", "SET", "search.vector-unshare-batch-size", "10240")
 
     def test_reinsert_key_while_pending_unshare_queued(self):
-        """Verifies that if a key is re-inserted or updated while queued in pending_unshares,
-        CancelPendingUnshare cancels the unshare and retains the vector."""
+        """Verifies that a key re-indexed before the sweep reaches it stays
+        tracked, while the dropped index's other keys are unshared."""
         r = self.client
         num_docs = 50
-        # Set batch size to 1 so FT.DROPINDEX only processes 1 key synchronously,
-        # leaving 49 keys in pending_unshares.
+        # Set batch size to 1 so the sweep visits one key per cron tick.
         r.execute_command("CONFIG", "SET", "search.vector-unshare-batch-size", "1")
         try:
             r.execute_command(
@@ -1769,12 +1767,11 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
 
             waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), num_docs, timeout=10)
 
-            # Drop the index. 1 key is processed synchronously; remaining keys are queued.
             r.execute_command("FT.DROPINDEX", "idx_cancel_drop")
 
             # Immediately create a new index covering cancel_doc:49 and re-insert it.
-            # This triggers CancelPendingUnshare for cancel_doc:49, while the remaining 49
-            # pending unshare entries drain and get untracked.
+            # The new index references cancel_doc:49's record, so the sweep keeps
+            # it while the remaining 49 entries are unshared and untracked.
             r.execute_command(
                 "FT.CREATE", "idx_cancel_new", "ON", "HASH", "PREFIX", "1", "cancel_doc:49",
                 "SCHEMA", "vec", "VECTOR", "FLAT", "6",
@@ -1782,11 +1779,7 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
             )
             r.hset("cancel_doc:49", mapping={"vec": vec_raw})
 
-            # Wait for all pending unshares to drain
-            waiters.wait_for_equal(lambda: self.registry_stat("pending_unshare_cnt"), 0, timeout=10)
-
-            # Since cancel_doc:49 was re-inserted and cancelled from pending unshares,
-            # it should still be in entry_cnt (at least 1 entry) and searchable.
+            # cancel_doc:49 stays tracked and searchable.
             waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 1, timeout=10)
 
             res = r.execute_command(
@@ -1865,9 +1858,8 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         r.execute_command("SELECT", 0)
 
     def test_drop_hash_index_retains_json_index_with_same_field(self):
-        """Verifies that HasMatchingVectorIndex properly discriminates by data type
-        (JSON vs HASH) when an index on one type is dropped while an index on another
-        type shares the same vector attribute name."""
+        """Verifies that dropping an index on one type leaves the registry entries
+        of an index on another type that shares the same vector attribute name."""
         r = self.client
         vec_raw = float_to_bytes(VALID)
 
@@ -1961,14 +1953,14 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         for k in range(count or self.GAP_KEYS):
             client.hset(f"{prefix}:{k}", mapping={"vec": vector(k, salt), **fields})
 
-    def wait_for_unshare_drain(self):
+    def wait_for_registry_entries(self, count: int):
         waiters.wait_for_equal(
-            lambda: self.registry_stat("pending_unshare_cnt"), 0, timeout=60
+            lambda: self.registry_stat("entry_cnt"), count, timeout=60
         )
 
-    def drop_index_leaving_pending_unshares(self):
-        """GAP_KEYS shared keys under doc:*, index dropped with all but one
-        still queued for unshare."""
+    def drop_index_leaving_shared_keys(self):
+        """GAP_KEYS shared keys under doc:*, index dropped. With a sweep batch
+        of one key per cron tick, most are still shared afterwards."""
         self.client.config_set("search.vector-unshare-batch-size", "1")
         index = self.build_index()
         index.create(self.client)
@@ -1977,7 +1969,7 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         self.wait_for_docs(index, self.GAP_KEYS)
         assert self.registry_stat("entry_cnt") == self.GAP_KEYS
         index.drop(self.client)
-        waiters.wait_for_true(lambda: self.registry_stat("pending_unshare_cnt") > 0)
+        assert self.registry_stat("entry_cnt") > 0
 
     def reuse_freed_vector_memory(self) -> Index:
         """Allocate GAP_KEYS new shared vectors; relies on the allocator
@@ -1987,27 +1979,112 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         self.write_distinct_keys("fill", salt=0.5)
         return fill
 
-    def test_hdel_during_pending_unshare_does_not_crash(self):
-        """Removing a queued key's vector field crashes the server.
+    def test_dropindex_keeps_expired_key_vector(self):
+        """Unsharing must not free the bytes a logically expired hash holds.
 
-        Stimulus: drop an index with keys pending unshare, then HDEL the vector
-        field. The cron's UnshareWithValkey asks the engine whether the field
-        is a string ref, and hashTypeHasStringRef dereferences the missing
-        field's lookup result.
+        Stimulus: index a key, let it expire with active expiry off, drop the
+        index. A NOEFFECTS open reports the logically expired key as absent.
 
-        Expected: the unshare is a no-op for a field that no longer exists.
-        Observed: SIGSEGV on a NULL entry.
+        Expected: the sweep leaves the entry, so the expired hash keeps its
+        vector until the engine reclaims the key and its expired event erases
+        the entry.
         """
-        self.drop_index_leaving_pending_unshares()
+        # Keep the expired key physically present.
+        self.client.execute_command("DEBUG", "SET-ACTIVE-EXPIRE", "0")
+        index = self.build_index()
+        index.create(self.client)
+        # Created before doc:0: a backfill scan would lazily expire it.
+        fill = self.build_index(name="fill", prefix="fill")
+        fill.create(self.client, wait_for_backfill=True)
+        self.client.hset("doc:0", mapping={"vec": vector(0)})
+        self.client.pexpire("doc:0", 1)
+        time.sleep(0.05)
+        # DEBUG DIGEST hashes every stored value, expired or not, so it reads
+        # the bytes behind doc:0 without triggering lazy expiry.
+        before = self.client.execute_command("DEBUG", "DIGEST")
+
+        index.drop(self.client)
+        # Allocate new shared vectors, then remove them again so the digest
+        # covers only doc:0.
+        self.write_distinct_keys("fill", salt=0.5)
+        self.client.delete(*[f"fill:{k}" for k in range(self.GAP_KEYS)])
+        fill.drop(self.client)
+        self.wait_for_registry_entries(1)
+
+        assert self.client.info("keyspace")["db0"]["keys"] == 1
+        assert self.client.execute_command("DEBUG", "DIGEST") == before, (
+            "expired doc:0 reads different vector bytes: its field points at freed memory"
+        )
+
+        # Reclaiming the key fires its expired event, which erases the entry.
+        self.client.execute_command("DEBUG", "SET-ACTIVE-EXPIRE", "1")
+        self.wait_for_registry_entries(0)
+
+    def test_rename_during_pending_unshare_keeps_vector(self):
+        """A RENAME after the index is dropped, while its keys are still shared,
+        must keep the renamed hash's bytes.
+
+        Stimulus: drop an index, then RENAME its keys before the sweep reaches
+        them. No subscription matches any more.
+
+        Expected: the registry entry follows the rename and the sweep unshares
+        the renamed hash, which keeps its vector.
+        """
+        self.drop_index_leaving_shared_keys()
+        pipe = self.client.pipeline(transaction=False)
+        for k in range(self.GAP_KEYS):
+            pipe.rename(f"doc:{k}", f"moved:{k}")
+        pipe.execute()
+        self.wait_for_registry_entries(0)
+
+        self.reuse_freed_vector_memory()
+
+        for k in range(self.GAP_KEYS):
+            assert self.client.hget(f"moved:{k}", "vec") == vector(k), f"moved:{k} reads freed memory"
+
+    def test_hdel_during_pending_unshare_does_not_crash(self):
+        """Removing the vector field of a key the sweep has not reached yet.
+
+        Stimulus: drop an index with keys still shared, then HDEL the vector
+        field.
+
+        Expected: each hdel event erases its key's entry at once, so the sweep
+        never touches a field that no longer exists.
+        """
+        self.drop_index_leaving_shared_keys()
         pipe = self.client.pipeline(transaction=True)
         for k in range(self.GAP_KEYS):
             pipe.hdel(f"doc:{k}", "vec")
         pipe.execute_command("INFO", "everything")
         info = pipe.execute()[-1]
-        assert self._parse_registry_stat(info, "pending_unshare_cnt") > 0
-
-        self.wait_for_unshare_drain()
+        assert self._parse_registry_stat(info, "entry_cnt") == 0
         assert self.client.ping()
+
+    def test_filter_rejected_key_is_released(self):
+        """A FILTER-rejected key's vector must not stay registered once the
+        index is dropped.
+
+        Stimulus: an index with a FILTER, one key it admits and one it rejects,
+        then FT.DROPINDEX followed by DEL. The vector is registered and shared
+        before the FILTER runs; a rejected key is then tracked by no index.
+
+        Expected: no registry entry survives the drop and the deletes.
+        """
+        self.assert_sharing_active()
+        self.client.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc",
+            "FILTER", "@tag=='keep'",
+            "SCHEMA", "tag", "TAG",
+            "vec", "VECTOR", "HNSW", "6", "TYPE", "FLOAT32", "DIM", str(DIM), "DISTANCE_METRIC", "L2",
+        )
+        index = Index("idx", [], prefixes=["doc"])
+        self.client.hset("doc:keep", mapping={"tag": "keep", "vec": vector(0)})
+        self.client.hset("doc:drop", mapping={"tag": "drop", "vec": vector(1)})
+        assert index.info(self.client).num_docs == 1
+
+        index.drop(self.client)
+        self.client.delete("doc:keep", "doc:drop")
+        self.wait_for_registry_entries(0)
 
     def test_hdel_then_rename_out_of_prefix_does_not_crash(self):
         """HDEL or logical field expiry of the vector field followed by RENAME
@@ -2034,6 +2111,11 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         assert self.registry_stat("entry_cnt") == 1
         self.client.rename("doc:1", "outside:1")
         assert self.client.ping()
+        # The logically expired field still holds the shared bytes, so the
+        # entry stays until the engine reclaims the field.
+        time.sleep(0.3)
+        assert self.registry_stat("entry_cnt") == 1
+        self.client.execute_command("DEBUG", "SET-ACTIVE-EXPIRE", "1")
         waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0)
 
 

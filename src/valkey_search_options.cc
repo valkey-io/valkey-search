@@ -629,8 +629,9 @@ static auto query_string_depth =
                                             kQueryStringDepthConfig))
         .Build();
 
-/// Register the "--vector-unshare-batch-size" flag. Controls the batch size
-/// of vector records unshared per server cron tick.
+/// Register the "--vector-unshare-batch-size" flag. Controls how many vector
+/// registry keys, per database, the server cron sweep visits per tick looking
+/// for records no index references.
 constexpr absl::string_view kVectorUnshareBatchSizeConfig{
     "vector-unshare-batch-size"};
 constexpr uint32_t kDefaultVectorUnshareBatchSize{1024 * 10};

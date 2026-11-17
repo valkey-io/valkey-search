@@ -112,10 +112,6 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
             lambda: int(_get_vmsdk_info(client)["vector_registry_entry_cnt"]),
             0,
         )
-        waiters.wait_for_equal(
-            lambda: int(_get_vmsdk_info(client)["vector_registry_pending_unshare_cnt"]),
-            0,
-        )
         assert _get_active_allocations(client) == 0
         assert _get_chunk_count(client) == 0
 
@@ -200,7 +196,6 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
         )
         stats = _get_vector_registry_stats(client)
         assert stats["entry_cnt"] == 0
-        assert stats["pending_unshare_cnt"] == 0
 
     @pytest.mark.parametrize("data_type", [KeyDataType.HASH, KeyDataType.JSON])
     @pytest.mark.parametrize("index_type,distance_metric", [
@@ -260,7 +255,6 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
 
         stats = _get_vector_registry_stats(client)
         assert stats["entry_cnt"] == 0
-        assert stats["pending_unshare_cnt"] == 0
 
     @pytest.mark.parametrize("data_type", [KeyDataType.HASH, KeyDataType.JSON])
     @pytest.mark.parametrize("index_type,distance_metric", [
@@ -323,7 +317,6 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
 
         stats = _get_vector_registry_stats(client)
         assert stats["entry_cnt"] == 0
-        assert stats["pending_unshare_cnt"] == 0
 
     @pytest.mark.parametrize("data_type", [KeyDataType.HASH, KeyDataType.JSON])
     @pytest.mark.parametrize("index_type,distance_metric", [
@@ -374,14 +367,10 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
         stats = _get_vector_registry_stats(client)
         assert stats["entry_cnt"] == num_docs
 
-        # Drop the index and verify entry count and pending unshares drop to 0
+        # Drop the index and verify entry count drops to 0
         vector_index.drop(client)
         waiters.wait_for_equal(
             lambda: _get_vector_registry_stats(client)["entry_cnt"],
-            0,
-        )
-        waiters.wait_for_equal(
-            lambda: _get_vector_registry_stats(client)["pending_unshare_cnt"],
             0,
         )
         assert _get_active_allocations(client) == 0

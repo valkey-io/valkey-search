@@ -2335,29 +2335,7 @@ void IndexSchema::MarkAsDestructing() {
 
   backfill_job_.Get()->MarkScanAsDone();
 
-  absl::flat_hash_map<indexes::VectorBase *, std::vector<InternedStringPtr>>
-      pending_keys_by_index;
-  for (auto &[key, mutation] : tracked_mutated_records_) {
-    if (mutation.attributes) {
-      for (const auto &[alias, attr_data] : *mutation.attributes) {
-        if (attr_data.IsVector()) {
-          auto it = attributes_.find(alias);
-          if (it != attributes_.end()) {
-            auto *vb = dynamic_cast<indexes::VectorBase *>(
-                it->second.GetIndex().get());
-            if (vb) {
-              pending_keys_by_index[vb].push_back(key);
-            }
-          }
-        }
-      }
-    }
-  }
   tracked_mutated_records_.clear();
-  for (auto &[vb, keys] : pending_keys_by_index) {
-    VectorRegistry::Instance().RemoveIndexKeys(
-        db_num_, vb->GetInternedAttributeIdentifier(), keys);
-  }
   is_destructing_ = true;
 }
 

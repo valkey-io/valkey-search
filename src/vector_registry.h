@@ -14,7 +14,7 @@
 
 #include "absl/base/no_destructor.h"
 #include "absl/container/flat_hash_map.h"
-#include "absl/container/flat_hash_set.h"
+#include "absl/container/inlined_vector.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
 #include "src/index_schema.pb.h"
@@ -57,31 +57,21 @@ class VectorRegistry {
       const data_model::AttributeDataType &attribute_data_type, int db_num,
       const indexes::VectorBase *vector_base);
 
-  // Checks whether any registered vector index in db_num matches the given
-  // key and attribute_identifier. Also checks that the index vector data size
-  // matches. If require_tracked is true, additionally checks that the index
-  // currently tracks the key.
-  bool HasMatchingVectorIndex(int db_num, absl::string_view key,
-                              const InternedStringPtr &attribute_identifier,
-                              ValkeyModuleKey *key_obj, size_t vector_size,
-                              bool require_tracked = false) const;
+  // Visits up to batch_size entries per database, resuming where the
+  // previous call stopped. An entry referenced only by the registry is no
+  // longer used by any index: its bytes are copied back into the hash if the
+  // hash still shares them, and the entry is erased. Returns the number of
+  // entries visited.
+  size_t SweepUnreferenced(uint32_t batch_size);
 
-  // Removes entries from VectorRegistry for a dropped vector index.
-  void RemoveIndexKeys(int db_num,
-                       const InternedStringPtr &attribute_identifier,
-                       absl::Span<const InternedStringPtr> keys);
-  void RemoveIndexKeys(
-      int db_num, const InternedStringPtr &attribute_identifier,
-      vmsdk::HugeFlatHashMap<uint64_t, InternedStringPtr> keys);
+  // Called after subscribers for every keyspace event, whether or not an
+  // index matches the key. Erases entries whose hash field no longer shares
+  // the registry's bytes.
+  void OnKeyspaceEvent(ValkeyModuleCtx *ctx, const char *event,
+                       ValkeyModuleString *key);
 
-  // Processes up to batch_size pending unshare keys across all databases.
-  // Returns the number of keys processed.
-  size_t ProcessPendingUnshares(uint32_t batch_size);
-
-  // Returns the total number of keys pending unshare.
-  size_t GetPendingUnsharesCount() const;
-
-  // Also migrates every db's tables, so they drain without any traffic.
+  // Sweeps every db's entries and migrates their tables, so both finish
+  // without any traffic.
   void OnServerCronCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
                             uint64_t subevent, void *data);
 
@@ -90,6 +80,7 @@ class VectorRegistry {
     uint64_t hash_sharing_errors{0};
     uint64_t hash_sharing_hits{0};
     uint64_t dedup_cnt{0};
+    uint64_t unshare_cnt{0};
   };
   const Stats &GetStats() const;
 
@@ -99,42 +90,30 @@ class VectorRegistry {
 
   void OnFlushDB(const ValkeyModuleFlushInfo *flush_info);
   void OnSwapDB(const ValkeyModuleSwapDbInfo *swap_info);
-  enum class Action {
-    kMove,
-    kUnshare,
-  };
 
-  // Moves or unshares tracked vector records during RENAME / MOVE operations.
-  void MoveKey(int src_db_num, const InternedStringPtr &src_key, int dst_db_num,
-               ValkeyModuleString *dst_key,
-               const absl::flat_hash_map<InternedStringPtr, Action> &actions);
+  // RENAME / MOVE: the hash object moves with its shared fields, so every
+  // entry of src_key moves to dst_key. Entries of the overwritten dst_key are
+  // dropped first; that hash is gone.
+  void MoveKey(int src_db_num, absl::string_view src_key, int dst_db_num,
+               absl::string_view dst_key);
 
  private:
-  struct RegistryKey {
-    InternedStringPtr key;
-    InternedStringPtr attribute_identifier;
+  // Vector attributes of one key. Almost always a single attribute.
+  using AttrRecords = absl::InlinedVector<
+      std::pair<InternedStringPtr, indexes::VectorRecordWithSize>, 1>;
+  using PerDbRegistryMap =
+      vmsdk::HugeFlatHashMap<InternedStringPtr, AttrRecords>;
 
-    bool operator==(const RegistryKey &o) const {
-      return key == o.key && attribute_identifier == o.attribute_identifier;
-    }
-
-    template <typename H>
-    friend H AbslHashValue(H h, const RegistryKey &k) {
-      return H::combine(std::move(h), k.key, k.attribute_identifier);
-    }
+  struct DbRegistry {
+    PerDbRegistryMap keys;
+    // Number of (key, attribute) entries in keys.
+    size_t entry_cnt{0};
+    // Next key SweepUnreferenced visits; null restarts from the beginning.
+    InternedStringPtr sweep_cursor;
   };
 
-  using PerDbRegistryMap =
-      vmsdk::HugeFlatHashMap<RegistryKey, indexes::VectorRecordWithSize>;
-
-  // Maps db_num -> inner map to track active vector records per database.
-  absl::flat_hash_map<int, PerDbRegistryMap> tracked_vectors_;
-
-  // Maps db_num -> pending unshare keys queued for rate-limited processing.
-  absl::flat_hash_map<int, vmsdk::HugeFlatHashSet<RegistryKey>>
-      pending_unshares_;
-
-  void CancelPendingUnshare(int db_num, const RegistryKey &key);
+  // Maps db_num -> tracked vector records of that database.
+  absl::flat_hash_map<int, DbRegistry> tracked_vectors_;
 
   friend class VectorRegistryTest;
   bool hash_vector_sharing_{false};
@@ -156,16 +135,21 @@ class VectorRegistry {
       absl::string_view attribute_identifier,
       const indexes::VectorRecord &vector_record, size_t vector_size,
       const data_model::AttributeDataType &attribute_data_type);
-  std::optional<indexes::VectorRecordWithSize> ExtractTrackedRecord(
-      int db_num, const InternedStringPtr &key,
-      const InternedStringPtr &attribute_identifier);
-  void EraseTrackedRecord(int db_num, const RegistryKey &key);
+  void EraseTrackedRecord(int db_num, const InternedStringPtr &key,
+                          const InternedStringPtr &attribute_identifier);
+  // Erases the entries of a key's attributes for which erase(attr, record)
+  // returns true, and the key once it has none left.
+  template <typename Pred>
+  void EraseAttrsIf(int db_num, PerDbRegistryMap::iterator it, Pred erase);
+  size_t SweepDb(int db_num, DbRegistry &db, uint32_t batch_size);
   // Replaces a shared string memory reference in the Valkey Hash data model
   // with an independent owned copy.
-  bool UnshareWithValkey(ValkeyModuleKey *key_obj,
-                         absl::string_view attribute_identifier,
+  // The field must currently be shared.
+  bool UnshareWithValkey(ValkeyModuleKey *key_obj, ValkeyModuleString *attr_str,
                          const indexes::VectorRecord &vector_record,
                          size_t vector_size);
+  // Unshares and erases the key's entries that only the registry references.
+  void UnshareIfUnreferenced(int db_num, const InternedStringPtr &key);
   bool IsEraseTrackedRecordSafe(
       int db_num, const InternedStringPtr &key, absl::string_view vector_str,
       absl::string_view attribute_identifier,

@@ -32,6 +32,8 @@ FT.INFO
 FT._LIST
 FT.SEARCH
 FT.AGGREGATE
+FT.HYBRID
+FT.CURSOR
 ```
 
 For a detailed description of the supported commands, examples and configuration options, see the [Command Reference](../commands/#search).
@@ -47,7 +49,7 @@ Indexes are created through the [`FT.CREATE`](../commands/ft.create.md) command 
 
 ## Data Ingestion
 
-Index updates are side effects of data mutation, based on prefix matching. A Valkey keyspace notification is used to capture a copy of the data associated with a key mutation. If this key belongs to multiple indexes, then the captured data goes into the mutation queue for each index independently. The client which executed the mutation command is blocked until all indexes are updated.
+Index updates are side effects of data mutation, based on prefix matching and, if the index was created with a `FILTER` expression, on that expression (see [`FT.CREATE`](../commands/ft.create.md)). A Valkey keyspace notification is used to capture a copy of the data associated with a key mutation. If this key belongs to multiple indexes, then the captured data goes into the mutation queue for each index independently. The client which executed the mutation command is blocked until all indexes are updated.
 
 Processing of the mutation queue does not respect the order of mutations. If multiple clients are updating different keys the updates may happen in any order not necessarily related to the order in which the mutation commands were executed. If a previous update for the same key is already in the mutation queue then these can be combined. An exception to the reordering rules applies to keys which are updated as part of a multi/exec block or a Lua script. These keys are always ingested as a group which cannot be split or reordered.
 
@@ -103,7 +105,7 @@ The `FT.INFO` command has options that allow aggregation of index statistics and
 
 ## Query Consistency
 
-The query operations: `FT.SEARCH` and `FT.AGGREGATE` can only be executed by nodes that share the same index definition and slot ownership map. Cross-shard query commands contain a checksum of the coordinator's index definition and slot ownership. If a receiving node's index checksum or slot ownership checksum mismatches then the query is rejected and the coordinator will retry the operation. If a timeout occurs then by default an error is returned. The `SOMESHARDS` option of the `FT.SEARCH` command can be used to override this behavior to allow a result to be generated if only a subset of the cross-shard query operations succeed. The `INCONSISTENT` option of `FT.SEARCH` can be used to allow results from nodes with different views of the cluster.
+The query operations: `FT.SEARCH` and `FT.AGGREGATE` can only be executed by nodes that share the same index definition and slot ownership map. Cross-shard query commands contain a checksum of the coordinator's index definition and slot ownership. If a receiving node's index checksum or slot ownership checksum mismatches then the query is rejected and the coordinator will retry the operation. If a timeout occurs then by default (`search.enable-partial-results` is `yes`) a result is generated from the subset of the cross-shard query operations that succeeded, as with the `SOMESHARDS` option of the `FT.SEARCH` command. The `ALLSHARDS` option overrides this behavior so that a timeout returns an error. Likewise, by default (`search.enable-consistent-results` is `no`) results from nodes with different views of the cluster are allowed, as with the `INCONSISTENT` option of `FT.SEARCH`; the `CONSISTENT` option returns an error instead.
 
 ## Configuration Settings
 

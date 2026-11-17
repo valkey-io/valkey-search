@@ -7,8 +7,6 @@ Follow these steps to set up, build, and run the Valkey server with the valkey-s
 1. Follow the [instructions to build Valkey from source](https://github.com/valkey-io/valkey?tab=readme-ov-file#building-valkey-using-makefile). Make sure to use Valkey version 9.1.0 or later.
 2. Follow the [instructions to build the valkey-search module from source](https://github.com/valkey-io/valkey-search/tree/main?tab=readme-ov-file#build-instructions).
 
-Alternatively, you can get started quickly using the [pre-built Docker bundle](https://github.com/valkey-io/valkey-search#docker), which includes both Valkey and valkey-search ready to run.
-
 ## Step 2: Run the Valkey Server
 
 Once valkey-search is built, run the Valkey server with the valkey-search module loaded:

@@ -12,7 +12,7 @@
       ],
       [
         "1.3.0-RC1",
-        "Added FILTER, SCORE_FIELD, NOHL and SORTABLE UNF options, FLOAT16 and BFLOAT16 vector types, and LANGUAGE values beyond ENGLISH, with per-language punctuation, stop words, and stemming"
+        "Added FILTER, SCORE_FIELD, NOHL and SORTABLE UNF options; SCORE accepts values in [0, 1]; FLOAT16 and BFLOAT16 vector types; LANGUAGE values beyond ENGLISH, with per-language punctuation, stop words, and stemming; the same field may be indexed under multiple aliases; options before SCHEMA may appear in any order; FLAT BLOCK_SIZE and INITIAL_CAP are bounded to [1, 10000000]. With `search.emulate-release` 1.3.0 or later, invalid field data drops the whole key and TAG rejects non-UTF-8 values"
       ]
     ],
     "arguments": [
@@ -89,8 +89,70 @@
       {
         "name": "LANGUAGE",
         "token": "LANGUAGE",
-        "type": "string",
-        "optional": true
+        "type": "oneof",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "arabic",
+            "type": "pure-token",
+            "token": "ARABIC"
+          },
+          {
+            "name": "dutch",
+            "type": "pure-token",
+            "token": "DUTCH"
+          },
+          {
+            "name": "english",
+            "type": "pure-token",
+            "token": "ENGLISH"
+          },
+          {
+            "name": "french",
+            "type": "pure-token",
+            "token": "FRENCH"
+          },
+          {
+            "name": "german",
+            "type": "pure-token",
+            "token": "GERMAN"
+          },
+          {
+            "name": "indonesian",
+            "type": "pure-token",
+            "token": "INDONESIAN"
+          },
+          {
+            "name": "italian",
+            "type": "pure-token",
+            "token": "ITALIAN"
+          },
+          {
+            "name": "portuguese",
+            "type": "pure-token",
+            "token": "PORTUGUESE"
+          },
+          {
+            "name": "russian",
+            "type": "pure-token",
+            "token": "RUSSIAN"
+          },
+          {
+            "name": "spanish",
+            "type": "pure-token",
+            "token": "SPANISH"
+          },
+          {
+            "name": "swedish",
+            "type": "pure-token",
+            "token": "SWEDISH"
+          },
+          {
+            "name": "turkish",
+            "type": "pure-token",
+            "token": "TURKISH"
+          }
+        ]
       },
       {
         "name": "SKIPINITIALSCAN",
@@ -103,6 +165,12 @@
         "token": "MINSTEMSIZE",
         "type": "integer",
         "optional": true
+      },
+      {
+        "name": "NOSTEM",
+        "type": "pure-token",
+        "optional": true,
+        "token": "NOSTEM"
       },
       {
         "name": "NOHL",
@@ -290,7 +358,7 @@
                       {
                         "name": "vector-params",
                         "type": "block",
-                        "description": "Vector algorithm parameters (DIM, TYPE, DISTANCE_METRIC, INITIAL_CAP, M, EF_CONSTRUCTION, EF_RUNTIME)",
+                        "description": "Vector algorithm parameters, in any order (DIM, TYPE, DISTANCE_METRIC, INITIAL_CAP; HNSW only: M, EF_CONSTRUCTION, EF_RUNTIME; FLAT only: BLOCK_SIZE)",
                         "arguments": [
                           {
                             "name": "type",
@@ -362,6 +430,12 @@
                           {
                             "name": "ef_runtime",
                             "token": "EF_RUNTIME",
+                            "type": "integer",
+                            "optional": true
+                          },
+                          {
+                            "name": "block_size",
+                            "token": "BLOCK_SIZE",
                             "type": "integer",
                             "optional": true
                           }

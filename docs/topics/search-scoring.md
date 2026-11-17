@@ -210,8 +210,9 @@ These options return scores to the client:
 | [`FT.HYBRID`](../commands/ft.hybrid.md) | `COMBINE ... YIELD_SCORE_AS` | Without a `LOAD` clause, each record contains the fused score, under `__score` or under the alias that you name. With a `LOAD` clause, the fused score appears only if you name it with `YIELD_SCORE_AS` or load `@__score`. |
 | `FT.SEARCH` with a KNN query | `AS <name>` | Each result contains the vector distance, under `__<field>_score` or under `<name>`. A smaller distance is a better match. See [Vector Fields](#vector-fields). |
 
-`SCORER <scorer>` selects the scoring function.
-The only supported value now is `BM25STD`, which is also the default. Any other value returns an error.
+`SCORER <scorer>` selects the scoring function for `FT.SEARCH`, `FT.AGGREGATE`, and the `SEARCH` arm of `FT.HYBRID`.
+When `SCORER` is omitted, the [`search.default-scorer`](search-configurables.md) configuration is used (default `BM25STD`).
+The only supported value now is `BM25STD`. Any other value returns an error.
 
 ## How Scores Order Results
 

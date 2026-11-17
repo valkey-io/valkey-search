@@ -2,7 +2,7 @@ The `FT.AGGREGATE` command extends the query capabilities of the `FT.SEARCH` com
 
 The first step of the command is to use the index name and query string to locate a list of Valkey keys. This process is identical to the `FT.SEARCH` command.
 
-The second step is executed once for each key found in the first step. The contents of the key are extracted as directed by the `LOAD` clause, resulting in a set of name/value pairs which are collected into a record. Thus the output of this step is the working set of records, one record for each key found in the first step. If the query is a KNN query then the initial working set will be sorted by distance, otherwise the working set will be in no particular order.
+The second step is executed once for each key found in the first step. The contents of the key are extracted as directed by the `LOAD` clause, plus any declared attribute (other than a vector field) that a later stage references as `@<name>`, resulting in a set of name/value pairs which are collected into a record. Thus the output of this step is the working set of records, one record for each key found in the first step. If the query is a KNN query then the initial working set will be sorted by distance, otherwise the working set will be in no particular order.
 
 The next steps are to execute the list of stages provided on the command, sequentially one at a time. Each step takes as input the working set of records and performs some transformation on it, i.e., the output of one stage is fed into the input of the next stage.
 
@@ -21,38 +21,40 @@ FT.AGGREGATE <index-name> <query>
     [VERBATIM]
     [WITHCURSOR [COUNT <count>] [MAXIDLE <maxidle>]]
     (
-      | APPLY <expression> AS <field>
+        APPLY <expression> AS <field>
       | FILTER <expression>
-      | GROUPBY <count> [<field> ... ] [[REDUCE <reducer> <count> [<expression> [<expression> ...]]] [ REDUCE ...]]
+      | GROUPBY <count> [<field> ... ] [REDUCE <reducer> <count> [<expression> ...] [AS <name>] [REDUCE ...]]
       | LIMIT <offset> <count>
-      | SORTBY <count> <expression> [ASC | DESC] [<expression [ASC | DESC] ...] [MAX <num>]
+      | SORTBY <count> <expression> [ASC | DESC] [<expression> [ASC | DESC] ...] [MAX <num>]
     )+
 ```
 
 - `<index>` (required): This index name you want to query.
 - `<query>` (required): The query string, see [Search - query language](../topics/search-query.md) for details.
 - `ADDSCORES` (optional): Adds the relevance score computed for each key to its record as the field `__score`, which later stages can reference as `@__score`.
-- `DIALECT <dialect>` (optional): Specifies your dialect. The only supported dialect is 2.
+- `DIALECT <dialect>` (optional): Specifies your dialect. Dialects 2, 3 and 4 are accepted; the default is 2. With a JSON index, dialects 3 and 4 return each value wrapped in a JSON array.
 - `INORDER` (optional): Indicates that proximity matching of terms must be in order.
-- `LOAD * | LOAD <count> <field> [AS <alias>] [<field> [AS <alias>] ...]` (optional): This controls which fields of those keys are loaded into the working set. A star (\*) indicates that all of the fields of the keys are loaded. The key itself can be loaded by specifying `@__key`. For vector queries, the distance can also be loaded by using the name of that field.
+- `LOAD * | LOAD <count> <field> [AS <alias>] [<field> [AS <alias>] ...]` (optional): This controls which fields of those keys are loaded into the working set. A star (\*) indicates that all of the fields of the keys are loaded. The key itself can be loaded by specifying `@__key`. For vector queries, the distance can also be loaded by using its `AS` name (for KNN the default is `__<field>_score`).
+
+  Fields that a later stage references as `@<name>` are loaded automatically when they are declared attributes, so they need not be listed in `LOAD`. Vector fields are not loaded automatically.
 
   `<count>` is a count of the arguments that follow, not a count of fields. An `AS` keyword and its alias each count against `<count>`, so `LOAD 4 @a @b AS c` loads two fields using four arguments.
 
   Each `<field>` may be a declared attribute name (`@price`), or, for a JSON index, a JSON path (`$.price`). A JSON path that resolves to a declared attribute is loaded as that attribute.
 
-  `AS <alias>` renames the loaded field: it is emitted under `<alias>` in the result and is referenced as `@<alias>` by later stages. Without an `AS` clause the field is emitted under the name given in the `LOAD` clause. An alias may reuse the name of a declared attribute, in which case it hides that attribute for the remainder of the pipeline. A single `LOAD` clause must not produce the same output name twice; doing so is an error.
+  `AS <alias>` renames the loaded field: it is emitted under `<alias>` in the result and is referenced as `@<alias>` by later stages. Without an `AS` clause the field is emitted under the name given in the `LOAD` clause (for a JSON attribute this requires `search.emulate-release` 1.3.0 or later; below that it is emitted under its JSON path). An alias may reuse the name of a declared attribute, in which case it hides that attribute for the remainder of the pipeline. If an `AS` alias collides with another output name in the same `LOAD` clause, the command fails; loading the same field twice without `AS` is allowed.
 
   Honoring `AS` in the `LOAD` clause is a compatibility fix gated on `search.emulate-release` being `1.3.0` or greater; under an emulated release below that, `AS` is treated as an ordinary field name. Accepting a JSON path as `<field>` is not gated, since before it was supported such a load simply failed. See [COMPATIBILITY.md](../../COMPATIBILITY.md) for details.
-- `PARAMS <count> <name> <value> [<name> <value> ...]` (optional): `count` is of the number of arguments, i.e., twice the number of `name`/`value` pairs. `PARAMS` can be used in both the query string as well as within an expression context. See [Search - query language](../topics/search-query.md) for usage details.
+- `PARAMS <count> <name> <value> [<name> <value> ...]` (optional): `<count>` is the number of arguments that follow, i.e., twice the number of `name`/`value` pairs. `PARAMS` can be used in both the query string as well as within an expression context. See [Search - query language](../topics/search-query.md) for usage details.
 - `SCORER <scorer>` (optional): Selects the relevance scoring function used to rank text results. The only supported scorer is `BM25STD`, which is also the default.
 - `SLOP <slop>` (Optional): Specifies a slop value for proximity matching of terms.
 - `TIMEOUT <timeout>` (optional): Lets you set a timeout value for the search command. This must be an integer in milliseconds.
 - `VERBATIM` (Optional): If specified stemming is not applied to term searches.
-- `WITHCURSOR [COUNT <count>] [MAXIDLE <maxidle>]` (optional): Returns at most `<count>` records and saves the remaining records in a cursor, which is read with [`FT.CURSOR`](ft.cursor.md). `<count>` must be between 1 and `search.cursor-max-count`, the default is 1000. `<maxidle>` is the number of milliseconds the cursor may go unread before it is destroyed; it must be between 1 and `search.cursor-max-idle-ms`, the default is 300000. `WITHCURSOR` may appear anywhere after the query, including between stages. If it is given more than once, the last one is used.
+- `WITHCURSOR [COUNT <count>] [MAXIDLE <maxidle>]` (optional): Returns at most `<count>` records and saves the remaining records in a cursor, which is read with [`FT.CURSOR`](ft.cursor.md). `<count>` must be between 1 and `search.cursor-max-count` (default 100000), the default is 1000. `<maxidle>` is the number of milliseconds the cursor may go unread before it is destroyed; it must be between 1 and `search.cursor-max-idle-ms` (default unlimited, see [configurables](../topics/search-configurables.md)), the default is 300000 (or `search.cursor-max-idle-ms` if that is smaller). `WITHCURSOR` may appear anywhere after the query, including between stages. If it is given more than once, the last one is used. See [`FT.CURSOR`](ft.cursor.md) for an example.
 
-- `APPLY <expression> as <field>` (optional): An expression is computed and insert into the record. See [APPLY Stage](#apply-stage) below. See [Search - expressions](../topics/search-expressions.md) for details on the expression syntax.
+- `APPLY <expression> AS <field>` (optional): An expression is computed and inserted into the record. See [APPLY Stage](#apply-stage) below. See [Search - expressions](../topics/search-expressions.md) for details on the expression syntax.
 - `FILTER <expression>` (optional): The filter expression is applied, see [FILTER Stage](#filter-stage) for more details. See [Search - expressions](../topics/search-expressions.md) for details on the expression syntax.
-- `GROUPBY <count> [<field> ...] [REDUCE <reducer> <count> [<expression> [<expression> ...]]]` (optional): The working set is grouped into buckets according to the input fields. One summarization record is generated for each bucket including the outputs of each reducer. See [GROUPBY Stage](#groupby-stage) for details.
+- `GROUPBY <count> [<field> ...] [REDUCE <reducer> <count> [<expression> ...] [AS <name>] ...]` (optional): The working set is grouped into buckets according to the input fields, each written as `@<field>`. `AS <name>` names the reducer's output; see [Reducers](#reducers) for the default name. One summarization record is generated for each bucket including the outputs of each reducer. See [GROUPBY Stage](#groupby-stage) for details.
 - `LIMIT <offset> <count>` (optional): The working set is trimmed, see [LIMIT Stage](#limit-stage) for details.
 - `SORTBY <count> <expression> [ASC | DESC] [<expression> [ASC | DESC] ...] [MAX <num>]` (optional): The working set is sorted. See [SORTBY Stage](#sortby-stage) for more details.
 
@@ -60,11 +62,11 @@ FT.AGGREGATE <index-name> <query>
 
 ### APPLY Stage
 
-The `APPLY` stage processes each record of the working set in sequence. For each record the expression is computed with output being set into the record with the provided field name. It is allowed to overwrite an existing field. The apply stage does not change the number of records in the working set.
+The `APPLY` stage processes each record of the working set in sequence. For each record the expression is computed with output being set into the record with the provided field name. It is allowed to overwrite an existing field. The apply stage normally keeps every record. With `search.emulate-release` 1.3.0 or later, a record whose expression refers to a field the key does not have is dropped, and an expression that fails with an error fails the command. See [COMPATIBILITY.md](../../COMPATIBILITY.md).
 
 ### FILTER Stage
 
-The `FILTER` stage processes each record of the working set in sequence. For each record the expression is computed. If the expression evaluates to zero then the record is discarded else the record remains.
+The `FILTER` stage processes each record of the working set in sequence. For each record the expression is computed. If the expression is false (see [Logical Operators](../topics/search-expressions.md#logical-operators)) the record is discarded, else the record remains. An expression that fails with an error fails the command.
 
 ### LIMIT Stage
 
@@ -72,9 +74,9 @@ The `LIMIT` stage discards records from the working set based on the provided of
 
 ### SORTBY Stage
 
-The `SORTBY` stage reorders the records in accordance with a sort key. A sort key can be constructed using a number of expressions optionally combined with a direction.
+The `SORTBY` stage reorders the records in accordance with a sort key. A sort key can be constructed using a number of expressions optionally combined with a direction. `<count>` counts the arguments that follow, including each `ASC` or `DESC`, so `SORTBY 2 @price DESC` sorts by one key.
 
-If the MAX clause is present, then the output is trimmed after the first N records. It is more efficient to use the MAX clause than to follow the `SORTBY` stage with a limit stage.
+`SORTBY` keeps at most `MAX` records; without `MAX` it keeps 10. With `search.emulate-release` 1.3.0 or later, `MAX 0` is the same as omitting it, and a `LIMIT <offset> <count>` stage directly before or after the `SORTBY` raises this bound to at least `<offset>`+`<count>`, so `SORTBY 2 @price ASC LIMIT 100 10` returns records 101-110. Below 1.3.0 only `MAX` sets the bound, so a following `LIMIT` sees at most `MAX` (by default 10) records. See [COMPATIBILITY.md](../../COMPATIBILITY.md).
 
 ### GROUPBY Stage
 
@@ -91,7 +93,9 @@ With a `<count>` of 0 (`GROUPBY 0`) no fields are specified and all records go i
 
 #### Reducers
 
-The following reducer functions are available. The reducer functions that take an input expression will convert that expression into a number.
+The following reducer functions are available. SUM, MIN, MAX, AVG, STDDEV and QUANTILE convert their input to a number; the other reducers operate on the values as they are.
+
+Without `AS <name>`, the reducer's output is named from the reducer and its arguments. With `search.emulate-release` 1.3.0 or later the name is `__generated_alias` followed by the lowercased reducer name and its arguments without `@`, joined by commas (`REDUCE SUM 1 @price` gives `__generated_aliassumprice`). Below 1.3.0 it is `<REDUCER>(<args>)` (`SUM(@price)`, `COUNT()`). `FIRST_VALUE` always uses the `FIRST_VALUE(<args>)` form. Use `AS` to give the output a stable name for later stages. See [COMPATIBILITY.md](../../COMPATIBILITY.md).
 
 | Syntax                        | Function                                                                                                                           |
 | :---------------------------- | :--------------------------------------------------------------------------------------------------------------------------------- |
@@ -107,7 +111,8 @@ The following reducer functions are available. The reducer functions that take a
 | FIRST_VALUE 3 <expression> BY <expression> | The value of the first expression from the record with the smallest comparison expression (ascending). Ties broken by first-encountered order. |
 | FIRST_VALUE 4 <expression> BY <expression> ASC\|DESC | The value of the first expression from the record with the minimum (ASC) or maximum (DESC) comparison expression. Ties broken by first-encountered order. Invalid keyword arguments (e.g., wrong BY token or unrecognized direction) produce a parse-time error. |
 | RANDOM_SAMPLE 2 <expression> <sample_size> | A random sample of values from the expression using reservoir sampling. Returns an array of up to sample_size elements (maximum 1000). Nil values are excluded. Output is non-deterministic. |
-| QUANTILE 2 <expression> <quantile> | An approximation of the value at the given quantile of the expression. `<quantile>` is a number from 0 to 1; 0 returns the smallest value and 1 the largest. Nil, NaN and non-numeric strings are ignored. If any values remain, the result is one of them: with n values, its position in sorted order (1 for the smallest) differs from `<quantile>` × n, rounded up and at least 1, by at most 1% of n. For groups of more than 500 values the result can depend on the order in which records are processed. If a group has no remaining numeric values, the result is `nan`. |
+| TOLIST 1 <expression>         | An array of the distinct values of the expression in the group, in first-encountered order. Nil values are skipped; an array value contributes its elements. |
+| QUANTILE 2 <expression> <quantile> | An approximation of the value at the given quantile of the expression. `<quantile>` is a numeric literal from 0 to 1; 0 returns the smallest value and 1 the largest. Nil, NaN and non-numeric strings are ignored. If any values remain, the result is one of them: with n values, its position in sorted order (1 for the smallest) differs from `<quantile>` × n, rounded up and at least 1, by at most 1% of n. For groups of more than 500 values the result can depend on the order in which records are processed. If a group has no remaining numeric values, the result is `nan`. |
 
 ## Reply
 
@@ -132,3 +137,24 @@ If `WITHCURSOR` was specified, then the output is an array of two elements:
 | ...      |         |                                                                                                                                                       |
 | `[0][N]` | Array   | The last record: its field/value pairs.                                                                                                               |
 | `[1]`    | Integer | The cursor id to pass to [`FT.CURSOR READ`](ft.cursor.md), or 0 if this reply contains all the remaining records, in which case no cursor is created. |
+
+## Examples
+
+Count the products in each category and total their prices, most numerous category first:
+
+```
+> FT.AGGREGATE idx * GROUPBY 1 @category REDUCE COUNT 0 AS count REDUCE SUM 1 @price AS total SORTBY 2 @count DESC
+1) (integer) 2
+2) 1) "category"
+   2) "books"
+   3) "count"
+   4) "3"
+   5) "total"
+   6) "60"
+3) 1) "category"
+   2) "toys"
+   3) "count"
+   4) "2"
+   5) "total"
+   6) "25"
+```

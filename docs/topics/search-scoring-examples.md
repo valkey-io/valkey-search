@@ -5,6 +5,7 @@ description: Worked scoring example and recipes to tune the ranking of Valkey Se
 
 These examples use the scores described in [Search - Scoring](search-scoring.md).
 They require Valkey Search 1.3.0 or later.
+They omit `SCORER`, so they use the scorer set by `search.default-scorer` (default `BM25STD`).
 
 # Read and Check Scores
 

@@ -11,6 +11,9 @@ Only Application metrics are listed here. These are kept compatible across relea
 Some metrics are reported only when they apply. The `coordinator_*` metrics appear only when the module is loaded with
 `--use-coordinator`. Metrics ending in `_latency_usec` additionally appear only after at least one sample has been recorded.
 
+Valkey prefixes each field with `search_` and each section with `search_` in `INFO` output, so `compatibility_usage` appears as
+`search_compatibility_usage` in section `search_compatibility`.
+
 | Metric Name                                                      |      Section       |     Unit     | Description                                                                                                                                                         |
 | :--------------------------------------------------------------- | :----------------: | :----------: | :------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `compatibility_usage`                                            |  `compatibility`   |    String    | Comma-separated `label=count` list of legacy behaviors used because `search.emulate-release` is below the release that fixed them (see below)                       |
@@ -53,7 +56,7 @@ Some metrics are reported only when they apply. The `coordinator_*` metrics appe
 | `used_memory_human`                                              |      `memory`      |    String    | Total memory used by the module (in human readable format)                                                                                                          |
 | `successful_requests_count`                                      |      `query`       |    Count     | Total count of successful query requests                                                                                                                            |
 | `failure_requests_count`                                         |      `query`       |    Count     | Total count of failed query requests                                                                                                                                |
-| `hybrid_requests_count`                                          |      `query`       |    Count     | Count of hybrid queries (combining vector and non-vector filters)                                                                                                   |
+| `hybrid_requests_count`                                          |      `query`       |    Count     | Count of KNN queries that also have a non-vector filter, for example `@color:{red}=>[KNN 10 @vec $v]`                                                              |
 | `nonvector_requests_count`                                       |      `query`       |    Count     | Number of requests that are exclusively non-vector search queries, including vector range (`VECTOR_RANGE`) queries                                                  |
 | `vector_requests_count`                                          |      `query`       |    Count     | Number of query requests that include a vector component                                                                                                            |
 | `inline_filtering_requests_count`                                |      `query`       |    Count     | Count of queries using inline filtering                                                                                                                             |

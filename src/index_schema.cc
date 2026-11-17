@@ -732,6 +732,17 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
     }
     ++stats_.filter_rejected_keys;
     filter_rejected = true;
+    // The index no longer uses the key's vectors, but a deleted HNSW node may
+    // keep the record referenced, so the sweep would never unshare them.
+    std::vector<InternedStringPtr> vector_attributes;
+    for (const auto *vector_index : GetVectorIndexes()) {
+      vector_attributes.push_back(
+          vector_index->GetInternedAttributeIdentifier());
+    }
+    if (!vector_attributes.empty()) {
+      VectorRegistry::Instance().UnshareAttributes(db_num_, interned_key,
+                                                   vector_attributes);
+    }
   }
 
   if (added) {

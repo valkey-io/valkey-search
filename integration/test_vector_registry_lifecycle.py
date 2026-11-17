@@ -2086,6 +2086,38 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         self.client.delete("doc:keep", "doc:drop")
         self.wait_for_registry_entries(0)
 
+    def test_filter_flip_unshares_vector(self):
+        """A key that stops passing the FILTER is unshared right away.
+
+        Stimulus: an indexed key's non-vector field changes so the FILTER
+        rejects it. The HNSW L2 deleted node keeps the record referenced, so
+        the sweep alone would leave the entry until FT.DROPINDEX.
+
+        Expected: the HSET unshares the vector and erases the entry, and the
+        hash keeps its vector after the index frees the record.
+        """
+        self.assert_sharing_active()
+        self.client.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc",
+            "FILTER", "@tag=='keep'",
+            "SCHEMA", "tag", "TAG",
+            "vec", "VECTOR", "HNSW", "6", "TYPE", "FLOAT32", "DIM", str(DIM), "DISTANCE_METRIC", "L2",
+        )
+        index = Index("idx", [], prefixes=["doc"])
+        self.client.hset("doc:1", mapping={"tag": "keep", "vec": vector(1)})
+        waiters.wait_for_equal(lambda: index.info(self.client).num_docs, 1)
+        assert self.registry_stat("entry_cnt") == 1
+        unshared_before = self.registry_stat("unshare_cnt")
+
+        self.client.hset("doc:1", "tag", "drop")
+        assert self.registry_stat("entry_cnt") == 0
+        assert self.registry_stat("unshare_cnt") == unshared_before + 1
+        waiters.wait_for_equal(lambda: index.info(self.client).num_docs, 0)
+
+        index.drop(self.client)
+        self.reuse_freed_vector_memory()
+        assert self.client.hget("doc:1", "vec") == vector(1)
+
     def test_hdel_then_rename_out_of_prefix_does_not_crash(self):
         """HDEL or logical field expiry of the vector field followed by RENAME
         out of the index prefix must not crash in MoveKey -> UnshareWithValkey."""

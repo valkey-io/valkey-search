@@ -364,8 +364,9 @@ void VectorRegistry::OnKeyspaceEvent(ValkeyModuleCtx *ctx, const char *event,
   });
 }
 
-void VectorRegistry::UnshareIfUnreferenced(int db_num,
-                                           const InternedStringPtr &key) {
+template <typename Pred>
+void VectorRegistry::UnshareAttrsIf(int db_num, const InternedStringPtr &key,
+                                    Pred select) {
   auto db_it = tracked_vectors_.find(db_num);
   if (db_it == tracked_vectors_.end()) {
     return;
@@ -393,7 +394,7 @@ void VectorRegistry::UnshareIfUnreferenced(int db_num,
     is_hash = key_type == VALKEYMODULE_KEYTYPE_HASH;
   }
   EraseAttrsIf(db_num, it, [&](const auto &attr, const auto &record) {
-    if (record.vector_record.RefCount() != 1) {
+    if (!select(attr, record)) {
       return false;
     }
     // Nothing can share these bytes: sharing is off, or the key was replaced
@@ -417,6 +418,23 @@ void VectorRegistry::UnshareIfUnreferenced(int db_num,
         return true;
     }
     return false;
+  });
+}
+
+void VectorRegistry::UnshareIfUnreferenced(int db_num,
+                                           const InternedStringPtr &key) {
+  UnshareAttrsIf(db_num, key, [](const auto &, const auto &record) {
+    return record.vector_record.RefCount() == 1;
+  });
+}
+
+void VectorRegistry::UnshareAttributes(
+    int db_num, const InternedStringPtr &key,
+    absl::Span<const InternedStringPtr> attributes) {
+  vmsdk::VerifyMainThread();
+  UnshareAttrsIf(db_num, key, [&](const auto &attr, const auto &) {
+    return std::find(attributes.begin(), attributes.end(), attr) !=
+           attributes.end();
   });
 }
 

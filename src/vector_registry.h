@@ -97,6 +97,13 @@ class VectorRegistry {
   void MoveKey(int src_db_num, absl::string_view src_key, int dst_db_num,
                absl::string_view dst_key);
 
+  // An index's FILTER rejected the key, so the index no longer uses its
+  // vectors. Unshares and erases the key's entries for those attributes
+  // without waiting for the refcount: a deleted HNSW node may hold the record
+  // until the index is dropped.
+  void UnshareAttributes(int db_num, const InternedStringPtr &key,
+                         absl::Span<const InternedStringPtr> attributes);
+
  private:
   // Vector attributes of one key. Almost always a single attribute.
   using AttrRecords = absl::InlinedVector<
@@ -150,6 +157,10 @@ class VectorRegistry {
                          size_t vector_size);
   // Unshares and erases the key's entries that only the registry references.
   void UnshareIfUnreferenced(int db_num, const InternedStringPtr &key);
+  // Unshares and erases the key's entries for which select(attr, record)
+  // returns true.
+  template <typename Pred>
+  void UnshareAttrsIf(int db_num, const InternedStringPtr &key, Pred select);
   bool IsEraseTrackedRecordSafe(
       int db_num, const InternedStringPtr &key, absl::string_view vector_str,
       absl::string_view attribute_identifier,

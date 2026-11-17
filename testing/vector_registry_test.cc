@@ -925,6 +925,46 @@ TEST_F(VectorRegistryTest, SweepCopiesBackSharedFieldAndErases) {
   EXPECT_EQ(registry.GetStats().unshare_cnt, before + 1);
 }
 
+TEST_F(VectorRegistryTest, UnshareAttributesCopiesBackReferencedEntries) {
+  auto &registry = VectorRegistry::Instance();
+  auto key = StringInternStore::Intern("doc");
+  auto vec_a = StringInternStore::Intern("vec_a");
+  auto vec_b = StringInternStore::Intern("vec_b");
+  MockIndex index_a(2, vec_a->Str(), 0);
+  MockIndex index_b(2, vec_b->Str(), 0);
+  // Held references stand for a deleted HNSW node: the sweep keeps both.
+  auto rec_a = Register("doc", index_a);
+  auto rec_b = Register("doc", index_b);
+  ASSERT_EQ(registry.GetStats().entry_cnt, 2);
+
+  ExpectSweepOpensHash();
+  EXPECT_CALL(*kMockValkeyModule, HashHasStringRef(testing::_, testing::_))
+      .WillOnce(Return(1));
+  EXPECT_CALL(*kMockValkeyModule, HashSet(testing::_, VALKEYMODULE_HASH_NONE,
+                                          testing::_, testing::_, nullptr))
+      .WillOnce(Return(1));  // fields updated
+  auto before = registry.GetStats().unshare_cnt;
+  std::vector<InternedStringPtr> attrs{vec_a};
+  registry.UnshareAttributes(0, key, attrs);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 1);
+  EXPECT_EQ(registry.GetStats().unshare_cnt, before + 1);
+}
+
+TEST_F(VectorRegistryTest, UnshareAttributesOfUntrackedKeyDoesNotOpenKey) {
+  auto &registry = VectorRegistry::Instance();
+  auto attr = StringInternStore::Intern("vec");
+  MockIndex index(2, attr->Str(), 0);
+  auto rec = Register("doc", index);
+
+  EXPECT_CALL(*kMockValkeyModule,
+              OpenKey(testing::_, testing::_,
+                      VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_WRITE))
+      .Times(0);
+  std::vector<InternedStringPtr> attrs{attr};
+  registry.UnshareAttributes(0, StringInternStore::Intern("other"), attrs);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 1);
+}
+
 TEST_F(VectorRegistryTest, SweepErasesUnsharedFieldWithoutCopy) {
   auto &registry = VectorRegistry::Instance();
   auto attr = StringInternStore::Intern("vec");
@@ -1164,6 +1204,7 @@ TEST_F(VectorRegistryTest, FieldRemovalEventErasesMissingField) {
   MockIndex index(2, attr->Str(), 0);
   const std::vector<std::string> events = {"hset", "hdel", "hexpired"};
   std::vector<indexes::VectorRecordWithSize> held;
+  held.reserve(events.size());
   for (const auto &event : events) {
     held.push_back(Register(event, index));
   }

@@ -66,7 +66,7 @@ String constants are enclosed with single (`'`) or double quotes(`"`). A backsla
 
 A parameter-ref selects a string value provided by the `PARAMS` clause of the executing `FT.AGGREGATE` command. With `search.emulate-release` 1.3.0 or later, a parameter whose text is a number is a numeric value.
 
-A field-ref is used to access values from the record currently being processed. If the field doesn't exist then the reference returns a Nil value. With `search.emulate-release` 1.3.0 or later, a reference to a field the key does not have is _missing_: an operator or function (other than `exists` and `&&`) given a missing value returns missing, and an `APPLY` whose expression is missing drops the record.
+A field-ref is used to access values from the record currently being processed. If the field doesn't exist then the reference returns a Nil value. With `search.emulate-release` 1.3.0 or later, a reference to a field the key does not have is _missing_: an operator or function (other than `exists`, `concat` and `&&`) given a missing value returns missing, and an `APPLY` whose expression is missing drops the record. `concat` given a missing value returns Nil instead, so an `APPLY` that uses it keeps the record.
 
 # Operators
 
@@ -106,7 +106,7 @@ With `search.emulate-release` 1.3.0 or later, the kind of comparison is instead 
 
 ## Logical Operators
 
-The logical operators `&&`, `||` and `!` generate 0 for false and 1 for true. A value is false when it is 0, Nil or an empty string (with `search.emulate-release` below 1.2.1, any string), and true otherwise. With `search.emulate-release` 1.3.0 or later, `&&` and `||` evaluate their right operand only when the left one does not decide the result.
+The logical operators `&&`, `||` and `!` generate 0 for false and 1 for true. A value is false when it is 0, Nil, an empty array or an empty string (with `search.emulate-release` below 1.2.1, any string), and true otherwise. With `search.emulate-release` 1.3.0 or later, `&&` and `||` evaluate their right operand only when the left one does not decide the result.
 
 # Functions
 

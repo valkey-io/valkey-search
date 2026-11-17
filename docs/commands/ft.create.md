@@ -35,7 +35,7 @@ FT.CREATE <index-name>
         )+
 ```
 
-Options before `SCHEMA` may appear in any order. `PREFIX` may be given only once.
+`ON`, if given, must immediately follow the index name. The other options before `SCHEMA` may appear in any order. `PREFIX` may be given only once.
 
 - `<index-name>` (required): This is the name you give to your index. If an index with the same name exists already, an error is returned.
 

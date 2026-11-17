@@ -22,16 +22,15 @@ Defect Corrections
 (https://github.com/valkey-io/valkey-search/blob/1.3/COMPATIBILITY.md#known-compatibility-defect-corrections).
 The search_compatibility_usage INFO field reports how often each legacy behavior
 has been used; it replaces the search_compatibility-* INFO fields of the release
-candidates. FT._DEBUG no longer requires debug mode; it is in the @search,
-@slow, @admin and @dangerous ACL categories, so a user granted @search can run
-it. Restrict it with ACLs where needed.
+candidates.
 
 Upgrade notes
 =============
+* The minimum Valkey core version is now 9.1.0 (1.2 required 9.0.1)
 * Non-vector FT.SEARCH results without SORTBY are now ordered by relevance score, with ties in key order, and a KNN query filtered by text or tag clauses ranks its K nearest documents by that score instead of by distance. Add SORTBY for a fixed order (#1287, #1490)
 * 1.2.x cannot load an RDB file that contains an index using FLOAT16 or BFLOAT16 vectors, FILTER, or a LANGUAGE other than English. In a cluster, upgrade every node before creating such indexes or using other features new in 1.3
 * The search_vector_externing_* INFO fields are removed; vector sharing is reported by the search_vector_registry_* fields (#1316)
-* search.prefiltering-threshold-ratio is now a developer config, so changing it requires debug mode (#1063)
+* FT._DEBUG no longer requires debug mode; it is in the @search, @slow, @admin and @dangerous ACL categories, so a user granted @search can run it. Restrict it with ACLs where needed (#914)
 
 New Features
 ============
@@ -53,7 +52,6 @@ Other new features:
 * In cluster mode, FT.SEARCH and FT.AGGREGATE can run inside MULTI/EXEC or Lua scripts when the index is single-slot (hash-tagged) and the local node owns that slot (#866)
 * Compatibility framework: the new search.emulate-release config selects which release's behavior to emulate, so compatibility fixes can ship in minor and patch releases without changing default behavior. The search_compatibility_usage INFO field reports how often each legacy behavior has been used, and COMPATIBILITY.md documents the compatibility contract (#1063, #981, #1059, #1386, #1729)
 * Resource protection: queries are rejected before fan-out when the reader queue exceeds search.max-query-queue-depth (default 100000, 0 disables the check), and queries that are already cancelled are dropped before they run; search.max-timeout-ms caps the TIMEOUT a query may request (default and maximum 60000); and queued mutations reserve memory in proportion to their expected index size, so maxmemory checks account for pending ingestion (#1276, #1368, #934)
-* FT._DEBUG no longer requires debug mode; it is in the @search, @slow, @admin and @dangerous ACL categories (#914)
 * search.debug-mode can now be changed at runtime with CONFIG SET, so developer configs can be adjusted on a running server; developer configs in the config file are accepted at load regardless of debug mode (#1485)
 * The cluster coordinator supports IPv6 node addresses (#759)
 * The search_coordinator_server_search_index_partition_cpu_time_usec INFO field reports the CPU time a node spends handling queries fanned out from other nodes (#923)
@@ -70,7 +68,7 @@ Optimizations
 
 Bug fixes
 =========
-* Fixed server crashes and hangs in FT.AGGREGATE expressions: APPLY of a string function (lower, upper, strlen, startswith, contains, substr, concat, timefmt, parsetime) on a missing value aborted the server, timefmt could loop forever on a format that produces no output, and lower and upper aborted the server on a value that is not valid UTF-8. A TEXT field is now also accepted as an APPLY operand (#1086, #1366, #1699)
+* Fixed server crashes and hangs in FT.AGGREGATE expressions: APPLY of a string function (lower, upper, strlen, startswith, contains, substr, concat, timefmt, parsetime) on a missing value aborted the server, timefmt could loop forever on a format that produces no output, and lower and upper aborted the server on a value that is not valid UTF-8. A TEXT field is now also accepted as an APPLY operand (#963, #1086, #1366, #1699)
 * Fixed memory corruption when an FT.AGGREGATE alias was reused for a different field (#1273)
 * Fixed reads of freed memory in replies: FT.HYBRID LOAD of named fields could return missing or garbled columns, and FT.CURSOR READ could return the wrong value for a parameter bound with PARAMS in FT.AGGREGATE or FT.HYBRID (#1690, #1650)
 * Fixed deadlocks and crashes around forks and thread pools: a permanent main-thread deadlock when FT.SEARCH drained the MULTI/EXEC mutation queue during BGSAVE, AOF rewrite or a replica full sync; a crash when a thread pool was resized during a fork; and a lock-ordering deadlock during index destruction (#1292, #1331, #967)
@@ -121,14 +119,14 @@ Valkey Search 1.3.0 RC2 - Released Mon Oct 26th 2026
 ================================================================================
 
 This is the second release candidate of Valkey Search 1.3. It contains bug
-fixes and a query optimization on top of 1.3.0 RC1. Like RC1, this release 
+fixes and a query optimization on top of 1.3.0 RC1. Like RC1, this release
 requires Valkey core 9.1.0 or higher.
 
 Optimizations
 =============
 * Filtering and scoring share a per-query cache of resolved text terms and tag values, so each is looked up once per query instead of once per candidate document. The
-main thread no longer waits on the index-wide lock to revalidate results. In benchmarks, queries that combine NUMERIC and TAG filters have more than twice the 
-throughput, TEXT queries filtered by TAG or NUMERIC clauses have 17% to 68% more, and KNN queries with a TAG or NUMERIC prefilter have 8% to 16% more; with concurrent 
+main thread no longer waits on the index-wide lock to revalidate results. In benchmarks, queries that combine NUMERIC and TAG filters have more than twice the
+throughput, TEXT queries filtered by TAG or NUMERIC clauses have 17% to 68% more, and KNN queries with a TAG or NUMERIC prefilter have 8% to 16% more; with concurrent
 writes, read p95 latency drops by up to 70%. Pure TEXT queries are unchanged (#1472)
 
 Bug fixes

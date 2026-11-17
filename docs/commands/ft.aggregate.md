@@ -36,8 +36,6 @@ FT.AGGREGATE <index-name> <query>
 - `INORDER` (optional): Indicates that proximity matching of terms must be in order.
 - `LOAD * | LOAD <count> <field> [AS <alias>] [<field> [AS <alias>] ...]` (optional): This controls which fields of those keys are loaded into the working set. A star (\*) indicates that all of the fields of the keys are loaded. The key itself can be loaded by specifying `@__key`. For vector queries, the distance can also be loaded by using its `AS` name (for KNN the default is `__<field>_score`).
 
-  Fields that a later stage references as `@<name>` are loaded automatically when they are declared attributes, so they need not be listed in `LOAD`. Vector fields are not loaded automatically.
-
   `<count>` is a count of the arguments that follow, not a count of fields. An `AS` keyword and its alias each count against `<count>`, so `LOAD 4 @a @b AS c` loads two fields using four arguments.
 
   Each `<field>` may be a declared attribute name (`@price`), or, for a JSON index, a JSON path (`$.price`). A JSON path that resolves to a declared attribute is loaded as that attribute.

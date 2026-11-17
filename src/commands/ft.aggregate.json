@@ -12,7 +12,7 @@
       ],
       [
         "1.3.0-RC1",
-        "Added WITHCURSOR, ADDSCORES and SCORER options; TOLIST, FIRST_VALUE, RANDOM_SAMPLE, COUNT_DISTINCTISH and QUANTILE reducers; the case() expression function; GROUPBY 0; VECTOR_RANGE queries and HYBRID_POLICY; VERBATIM, INORDER and SLOP are honored; fields referenced by a stage are loaded implicitly. With `search.emulate-release 1.3.0`: LOAD ... AS, Redisearch-compatible default reducer names, SORTBY bounded by an adjacent LIMIT, Redisearch-compatible operator precedence, type-sensitive comparisons and missing-field handling in expressions"
+        "Added WITHCURSOR, ADDSCORES and SCORER options; TOLIST, FIRST_VALUE, RANDOM_SAMPLE, COUNT_DISTINCTISH and QUANTILE reducers; the case() expression function; GROUPBY 0; VECTOR_RANGE queries and HYBRID_POLICY; VERBATIM, INORDER and SLOP are honored. With `search.emulate-release 1.3.0`: LOAD ... AS, Redisearch-compatible default reducer names, SORTBY bounded by an adjacent LIMIT, Redisearch-compatible operator precedence, type-sensitive comparisons and missing-field handling in expressions"
       ]
     ],
     "arguments": [

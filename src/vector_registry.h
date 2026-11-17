@@ -91,6 +91,9 @@ class VectorRegistry {
     uint64_t hash_sharing_errors{0};
     uint64_t hash_sharing_hits{0};
     uint64_t dedup_cnt{0};
+    // Unshare batches in which every item was deferred because its vector was
+    // still referenced, while other pending unshares waited.
+    uint64_t unshare_stalled_batches{0};
   };
   const Stats &GetStats() const;
 
@@ -210,12 +213,14 @@ class VectorRegistry {
       pending_unshares_;
 
   void CancelPendingUnshare(int db_num, const RegistryKey &key);
+  void AddToTrackedKeysIndex(int db_num, const RegistryKey &key);
   void RemoveFromTrackedKeysIndex(
       int db_num, const InternedStringPtr &key,
       const InternedStringPtr &attribute_identifier);
 
   friend class VectorRegistryTest;
   bool hash_vector_sharing_{false};
+  bool in_process_pending_unshares_{false};
   mutable Stats stats_;
   vmsdk::UniqueValkeyDetachedThreadSafeContext ctx_;
 
@@ -240,14 +245,20 @@ class VectorRegistry {
   void EraseTrackedRecord(int db_num, const RegistryKey &key);
   void EraseTrackedRecordsForKey(int db_num, absl::string_view key);
   // Replaces a shared string memory reference in the Valkey Hash data model
-  // with an independent owned copy.
+  // with an independent owned copy. Returns true when the field no longer
+  // references the record: it was unshared here or already held its own copy.
+  // Returns false when the field is not visible, which includes a logically
+  // expired field that still holds the reference, or when the copy failed;
+  // the caller must then keep the record.
   bool UnshareWithValkey(ValkeyModuleKey *key_obj,
                          absl::string_view attribute_identifier,
                          const indexes::VectorRecord &vector_record,
                          size_t vector_size);
+  bool ShouldRetainMissingVector(
+      int db_num, const RegistryKey &search_key,
+      const data_model::AttributeDataType &attribute_data_type);
   bool IsEraseTrackedRecordSafe(
-      int db_num, const InternedStringPtr &key, absl::string_view vector_str,
-      absl::string_view attribute_identifier,
+      int db_num, const RegistryKey &search_key, absl::string_view vector_str,
       const data_model::AttributeDataType &attribute_data_type);
 };
 

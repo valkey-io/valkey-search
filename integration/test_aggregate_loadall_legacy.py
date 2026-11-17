@@ -19,10 +19,11 @@ from valkey_search_test_case import (
 )
 from valkeytestframework.conftest import resource_port_tracker  # noqa: F401
 from valkeytestframework.util import waiters
+from utils import compatibility_usage
 
 LEGACY = "1.0.0"
 FIXED = "1.3.0"
-COUNTER = "search_compatibility-ft_aggregate_loadall_fetch"
+COUNTER = "ft_aggregate_loadall_fetch"
 QUERY = "@price:[0 100]"
 
 
@@ -65,12 +66,12 @@ def _rows(reply) -> list:
 def _ticks(client: Valkey, release: str, *tail):
     """The rows (or error) of `FT.AGGREGATE idx QUERY *tail`, and the ticks."""
     client.execute_command("CONFIG", "SET", "search.emulate-release", release)
-    before = client.info("SEARCH").get(COUNTER, 0)
+    before = compatibility_usage(client).get(COUNTER, 0)
     try:
         rows = _rows(client.execute_command("FT.AGGREGATE", "idx", QUERY, *tail))
     except ResponseError as e:
         rows = str(e)
-    return rows, client.info("SEARCH").get(COUNTER, 0) - before
+    return rows, compatibility_usage(client).get(COUNTER, 0) - before
 
 
 class TestAggregateLoadAllLegacy(ValkeySearchTestCaseBase):
@@ -171,7 +172,7 @@ class TestAggregateLoadAllLegacy(ValkeySearchTestCaseBase):
         client = self._client("HASH")
         client.execute_command("CONFIG", "SET", "search.emulate-release",
                                LEGACY)
-        before = client.info("SEARCH").get(COUNTER, 0)
+        before = compatibility_usage(client).get(COUNTER, 0)
         page, cursor = client.execute_command(
             "FT.AGGREGATE", "idx", QUERY, "LOAD", "*", "LOAD", "1", "@__key",
             "WITHCURSOR", "COUNT", "1")
@@ -181,7 +182,7 @@ class TestAggregateLoadAllLegacy(ValkeySearchTestCaseBase):
                 "FT.CURSOR", "READ", "idx", cursor)
             pages += 1
         assert pages >= 2
-        assert client.info("SEARCH").get(COUNTER, 0) - before == 1
+        assert compatibility_usage(client).get(COUNTER, 0) - before == 1
 
 
 class TestAggregateLoadAllLegacyCluster(ValkeySearchClusterTestCase):

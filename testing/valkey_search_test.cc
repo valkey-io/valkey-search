@@ -8,12 +8,16 @@
 #include "src/valkey_search.h"
 
 #include <cstddef>
+#include <latch>
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
+#include "absl/strings/str_cat.h"
+#include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
@@ -604,6 +608,12 @@ class CompatibilityFixTest : public vmsdk::ValkeyTest {
     return info_ctx.info_capture.GetInfo();
   }
 
+  // Regex for `label=count` as one entry of the compatibility_usage list.
+  static std::string UsageEntry(absl::string_view label, int count) {
+    return absl::StrCat("compatibility_usage: '([^']*,)?", label, "=", count,
+                        "[,']");
+  }
+
  private:
   vmsdk::ValkeyVersion saved_emulate_release_{0};
 };
@@ -658,7 +668,7 @@ TEST_F(CompatibilityFixTest, OldPathIncrementsLabelInfoField) {
   }
 
   EXPECT_THAT(DumpCompatibilitySection(),
-              ::testing::HasSubstr("compatibility-test_label_increments: 3"));
+              ::testing::ContainsRegex(UsageEntry("test_label_increments", 3)));
 }
 
 TEST_F(CompatibilityFixTest, FixedPathDoesNotIncrementCounter) {
@@ -670,10 +680,38 @@ TEST_F(CompatibilityFixTest, FixedPathDoesNotIncrementCounter) {
         [&] { return 0; });
   }
 
-  // The counter is initialized on first macro invocation regardless of which
-  // path runs, but the fixed path must not increment it.
+  // The fixed path neither counts nor registers the label.
   EXPECT_THAT(DumpCompatibilitySection(),
-              ::testing::HasSubstr("compatibility-test_label_no_increment: 0"));
+              ::testing::Not(::testing::HasSubstr("test_label_no_increment")));
+}
+
+// Off-main-thread use: threads released together race to register the same
+// label, then keep incrementing it. Exactly one registration must win and no
+// increment may be lost. Most useful under TSAN (unittests-tsan.yml).
+TEST_F(CompatibilityFixTest, ConcurrentThreadsIncrementLabel) {
+  // Set before the threads start: the config value is not atomic.
+  SetEmulateRelease({1, 0, 0});
+  constexpr int kThreads = 8;
+  constexpr int kIterations = 10000;
+  std::latch start(kThreads);
+  std::vector<std::thread> threads;
+  threads.reserve(kThreads);
+  for (int t = 0; t < kThreads; ++t) {
+    threads.emplace_back([&start] {
+      start.arrive_and_wait();
+      for (int i = 0; i < kIterations; ++i) {
+        VALKEY_SEARCH_COMPATIBILITY_FIX(
+            1, 1, 0, "test_label_concurrent", [] {}, [] {});
+      }
+    });
+  }
+  for (auto& thread : threads) {
+    thread.join();
+  }
+
+  EXPECT_THAT(DumpCompatibilitySection(),
+              ::testing::ContainsRegex(
+                  UsageEntry("test_label_concurrent", kThreads * kIterations)));
 }
 
 class MockPthreadAtfork {

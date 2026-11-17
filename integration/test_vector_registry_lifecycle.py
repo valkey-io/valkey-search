@@ -2154,6 +2154,41 @@ class TestVectorRegistryLifecycle(VectorUnshareModeMixin, ValkeySearchTestCaseDe
         self.reuse_freed_vector_memory()
         assert self.client.hget("doc:1", "vec") == vector(1)
 
+    @lazy_unshare_only
+    def test_replaced_key_empties_registry_immediately(self):
+        """COPY and RESTORE with REPLACE, and SET, delete the old hash without
+        a del event.
+
+        Stimulus: keys renamed out of an HNSW L2 index, so a deleted node holds
+        each record and the sweep never erases their entries, are replaced by
+        COPY of a string, COPY of a hash without the vector, RESTORE of that
+        hash, and SET.
+
+        Expected: each replacement erases the key's entry before it returns.
+        """
+        self.assert_sharing_active()
+        index = self.build_index()
+        index.create(self.client, wait_for_backfill=True)
+        for k in range(4):
+            self.client.hset(f"doc:{k}", mapping={"vec": vector(k)})
+        self.wait_for_docs(index, 4)
+        for k in range(4):
+            self.client.rename(f"doc:{k}", f"out:{k}")
+        self.wait_for_docs(index, 0)
+        assert self.registry_stat("entry_cnt") == 4
+
+        self.client.set("str", "x")
+        self.client.hset("plain", mapping={"other": "x"})
+        self.client.copy("str", "out:0", replace=True)
+        assert self.registry_stat("entry_cnt") == 3
+        self.client.copy("plain", "out:1", replace=True)
+        assert self.registry_stat("entry_cnt") == 2
+        self.client.restore("out:2", 0, self.client.dump("plain"), replace=True)
+        assert self.registry_stat("entry_cnt") == 1
+        # SET replaces the value in place, with no del event.
+        self.client.set("out:3", "x")
+        assert self.registry_stat("entry_cnt") == 0
+
     def test_hdel_then_rename_out_of_prefix_does_not_crash(self):
         """HDEL or logical field expiry of the vector field followed by RENAME
         out of the index prefix must not crash in MoveKey -> UnshareWithValkey."""

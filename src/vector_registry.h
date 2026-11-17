@@ -99,6 +99,11 @@ class VectorRegistry {
   void OnFlushDB(const ValkeyModuleFlushInfo *flush_info);
   void OnSwapDB(const ValkeyModuleSwapDbInfo *swap_info);
 
+  // The key's value was replaced in place (SET, a *STORE, a module set-value
+  // call) with no del event: erases every entry of the key. RENAME and MOVE
+  // never overwrite this way.
+  void OnKeyOverwritten(int db_num, absl::string_view key);
+
   // RENAME / MOVE: the hash object moves with its shared fields, so every
   // entry of src_key moves to dst_key. Entries of the overwritten dst_key are
   // dropped first; that hash is gone.

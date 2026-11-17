@@ -345,17 +345,29 @@ void VectorRegistry::OnKeyspaceEvent(ValkeyModuleCtx *ctx, const char *event,
   if (!hash_vector_sharing_) {
     return;
   }
-  // Anything but a hash we can read is left to the sweep: an absent key may
-  // be logically expired, still holding the shared bytes.
+  // An absent key is left to the sweep: it may be logically expired, still
+  // holding the shared bytes.
   auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
       ctx, key, VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
-  if (!key_obj ||
-      ValkeyModule_KeyType(key_obj.get()) != VALKEYMODULE_KEYTYPE_HASH) {
+  if (!key_obj) {
+    return;
+  }
+  // COPY or RESTORE with REPLACE deletes the hash without a del event. A
+  // value of another type cannot share the bytes. JSON keys (module type)
+  // have their own entries, which nothing shares.
+  int key_type = ValkeyModule_KeyType(key_obj.get());
+  if (key_type == VALKEYMODULE_KEYTYPE_MODULE) {
+    return;
+  }
+  if (key_type != VALKEYMODULE_KEYTYPE_HASH) {
+    EraseAttrsIf(db_num, it, [](const auto &, const auto &) { return true; });
     return;
   }
   // An absent field may also be logically expired, unless this event just
-  // removed it.
-  bool field_removed = ev == "hdel" || ev == "hexpired";
+  // removed it, or replaced the whole hash: a copied or restored hash owns
+  // its bytes, and only fields an index just shared are still shared.
+  bool field_removed =
+      ev == "hdel" || ev == "hexpired" || ev == "copy_to" || ev == "restore";
   EraseAttrsIf(db_num, it, [&](const auto &attr, const auto &) {
     auto attr_str = vmsdk::MakeUniqueValkeyString(attr->Str());
     switch (GetHashFieldRefState(key_obj.get(), attr_str.get())) {
@@ -368,6 +380,19 @@ void VectorRegistry::OnKeyspaceEvent(ValkeyModuleCtx *ctx, const char *event,
     }
     return false;
   });
+}
+
+void VectorRegistry::OnKeyOverwritten(int db_num, absl::string_view key) {
+  vmsdk::VerifyMainThread();
+  auto db_it = tracked_vectors_.find(db_num);
+  if (db_it == tracked_vectors_.end()) {
+    return;
+  }
+  auto it = db_it->second.keys.find(StringInternStore::Intern(key));
+  if (it == db_it->second.keys.end()) {
+    return;
+  }
+  EraseAttrsIf(db_num, it, [](const auto &, const auto &) { return true; });
 }
 
 template <typename Pred>

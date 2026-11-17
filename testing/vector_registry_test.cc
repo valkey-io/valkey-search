@@ -1202,7 +1202,8 @@ TEST_F(VectorRegistryTest, FieldRemovalEventErasesMissingField) {
   auto &registry = VectorRegistry::Instance();
   auto attr = StringInternStore::Intern("vec");
   MockIndex index(2, attr->Str(), 0);
-  const std::vector<std::string> events = {"hset", "hdel", "hexpired"};
+  const std::vector<std::string> events = {"hset", "hdel", "hexpired",
+                                           "copy_to", "restore"};
   std::vector<indexes::VectorRecordWithSize> held;
   held.reserve(events.size());
   for (const auto &event : events) {
@@ -1224,28 +1225,87 @@ TEST_F(VectorRegistryTest, FieldRemovalEventErasesMissingField) {
       .Times(0);
   // Any other event may see a logically expired field as missing.
   SendEvent("hset", "hset");
-  EXPECT_EQ(registry.GetStats().entry_cnt, 3);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 5);
   SendEvent("hdel", "hdel");
-  EXPECT_EQ(registry.GetStats().entry_cnt, 2);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 4);
   SendEvent("hexpired", "hexpired");
+  EXPECT_EQ(registry.GetStats().entry_cnt, 3);
+  // COPY / RESTORE with REPLACE replaced the hash: its fields own their bytes.
+  SendEvent("copy_to", "copy_to");
+  EXPECT_EQ(registry.GetStats().entry_cnt, 2);
+  SendEvent("restore", "restore");
   EXPECT_EQ(registry.GetStats().entry_cnt, 1);
 }
 
-TEST_F(VectorRegistryTest, EventOnAbsentOrNonHashKeyKeepsEntry) {
+TEST_F(VectorRegistryTest, EventOnAbsentKeyKeepsEntry) {
   auto &registry = VectorRegistry::Instance();
   auto attr = StringInternStore::Intern("vec");
   MockIndex index(2, attr->Str(), 0);
   auto rec = Register("doc", index);
 
+  // An absent key may be logically expired, still holding the bytes.
   EXPECT_CALL(*kMockValkeyModule,
               OpenKey(testing::_, testing::_,
                       VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ))
-      .WillOnce(Return(nullptr))
+      .WillOnce(Return(nullptr));
+  SendEvent("hset", "doc");
+  EXPECT_EQ(registry.GetStats().entry_cnt, 1);
+}
+
+TEST_F(VectorRegistryTest, ReplaceByOtherTypeErasesEveryAttribute) {
+  auto &registry = VectorRegistry::Instance();
+  MockIndex index_a(2, "vec_a", 0);
+  MockIndex index_b(2, "vec_b", 0);
+  // Held references stand for an index still holding the records: the
+  // replacement erases the entries anyway.
+  auto rec_a = Register("doc", index_a);
+  auto rec_b = Register("doc", index_b);
+  ASSERT_EQ(registry.GetStats().entry_cnt, 2);
+
+  // COPY of a string over the hash deletes it without a del event.
+  EXPECT_CALL(*kMockValkeyModule,
+              OpenKey(testing::_, testing::_,
+                      VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ))
       .WillOnce(TestValkeyModule_OpenKeyDefaultImpl);
   EXPECT_CALL(*kMockValkeyModule, KeyType(testing::_))
       .WillOnce(Return(VALKEYMODULE_KEYTYPE_STRING));
-  SendEvent("hset", "doc");
-  SendEvent("set", "doc");
+  EXPECT_CALL(*kMockValkeyModule, HashHasStringRef(testing::_, testing::_))
+      .Times(0);
+  SendEvent("copy_to", "doc");
+  EXPECT_EQ(registry.GetStats().entry_cnt, 0);
+}
+
+TEST_F(VectorRegistryTest, OverwriteErasesEveryAttribute) {
+  auto &registry = VectorRegistry::Instance();
+  MockIndex index_a(2, "vec_a", 0);
+  MockIndex index_b(2, "vec_b", 0);
+  MockIndex index_db1(2, "vec_a", 1);
+  // Held references stand for an index still holding the records.
+  auto rec_a = Register("doc", index_a);
+  auto rec_b = Register("doc", index_b);
+  auto rec_db1 = Register("doc", index_db1, 1);
+  ASSERT_EQ(registry.GetStats().entry_cnt, 3);
+
+  EXPECT_CALL(*kMockValkeyModule, OpenKey(testing::_, testing::_, testing::_))
+      .Times(0);
+  registry.OnKeyOverwritten(0, "other");
+  EXPECT_EQ(registry.GetStats().entry_cnt, 3);
+  registry.OnKeyOverwritten(0, "doc");
+  EXPECT_EQ(registry.GetStats().entry_cnt, 1);
+}
+
+TEST_F(VectorRegistryTest, EventOnJsonKeyKeepsEntry) {
+  auto &registry = VectorRegistry::Instance();
+  MockIndex index(2, "$.vec", 0);
+  auto rec = Register("doc", index);
+
+  EXPECT_CALL(*kMockValkeyModule,
+              OpenKey(testing::_, testing::_,
+                      VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ))
+      .WillOnce(TestValkeyModule_OpenKeyDefaultImpl);
+  EXPECT_CALL(*kMockValkeyModule, KeyType(testing::_))
+      .WillOnce(Return(VALKEYMODULE_KEYTYPE_MODULE));
+  SendEvent("json.set", "doc");
   EXPECT_EQ(registry.GetStats().entry_cnt, 1);
 }
 

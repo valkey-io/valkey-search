@@ -73,6 +73,12 @@ TEST_F(ServerEventsTest, SubscribesToServerEvents) {
           testing::_, vmsdk::IsValkeyModuleEvent(ValkeyModuleEvent_Shutdown),
           testing::_))
       .WillOnce(testing::Return(1));
+  // The lazy-unshare registry erases overwritten keys' entries.
+  EXPECT_CALL(*kMockValkeyModule,
+              SubscribeToServerEvent(
+                  testing::_, vmsdk::IsValkeyModuleEvent(ValkeyModuleEvent_Key),
+                  testing::_))
+      .WillOnce(testing::Return(1));
   SubscribeToServerEvents();
 }
 

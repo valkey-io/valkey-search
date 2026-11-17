@@ -513,6 +513,9 @@ typedef void (*ValkeyModuleEventLoopOneShotFunc)(void *user_data);
 #define VALKEYMODULE_EVENT_EVENTLOOP 15
 #define VALKEYMODULE_EVENT_CONFIG 16
 #define VALKEYMODULE_EVENT_CLUSTER_STATE_CHANGED 17
+/* Upstream Valkey's id 17 (valkeymodule.h); CLUSTER_STATE_CHANGED above is
+ * unused and not an upstream event. */
+#define VALKEYMODULE_EVENT_KEY 17
 #define _VALKEYMODULE_EVENT_NEXT \
   18 /* Next event flag, should be updated if a new event added. */
 
@@ -575,8 +578,9 @@ static const ValkeyModuleEvent
     ValkeyModuleEvent_ForkChild = {VALKEYMODULE_EVENT_FORK_CHILD, 1},
     ValkeyModuleEvent_EventLoop = {VALKEYMODULE_EVENT_EVENTLOOP, 1},
     ValkeyModuleEvent_Config = {VALKEYMODULE_EVENT_CONFIG, 1},
-    ValkeyModuleEvent_ClusterStateChanged = {
-        VALKEYMODULE_EVENT_CLUSTER_STATE_CHANGED, 1};
+    ValkeyModuleEvent_ClusterStateChanged =
+        {VALKEYMODULE_EVENT_CLUSTER_STATE_CHANGED, 1},
+    ValkeyModuleEvent_Key = {VALKEYMODULE_EVENT_KEY, 1};
 
 /* Those are values that are used for the 'subevent' callback argument. */
 #define VALKEYMODULE_SUBEVENT_PERSISTENCE_RDB_START 0
@@ -653,6 +657,12 @@ static const ValkeyModuleEvent
 #define VALKEYMODULE_SUBEVENT_CLUSTERSTATECHANGED_NOW_OK 0
 #define VALKEYMODULE_SUBEVENT_CLUSTERSTATECHANGED_NOW_FAIL 1
 #define _VALKEYMODULE_SUBEVENT_CLUSTERSTATECHANGED_NEXT 2
+
+#define VALKEYMODULE_SUBEVENT_KEY_DELETED 0
+#define VALKEYMODULE_SUBEVENT_KEY_EXPIRED 1
+#define VALKEYMODULE_SUBEVENT_KEY_EVICTED 2
+#define VALKEYMODULE_SUBEVENT_KEY_OVERWRITTEN 3
+#define _VALKEYMODULE_SUBEVENT_KEY_NEXT 4
 
 /* ValkeyModuleClientInfo flags. */
 #define VALKEYMODULE_CLIENTINFO_FLAG_SSL (1 << 0)
@@ -762,6 +772,16 @@ typedef struct ValkeyModuleLoadingProgressInfo {
 } ValkeyModuleLoadingProgressV1;
 
 #define ValkeyModuleLoadingProgress ValkeyModuleLoadingProgressV1
+
+#define VALKEYMODULE_KEYINFO_VERSION 1
+typedef struct ValkeyModuleKeyInfo {
+  uint64_t version;            /* Not used since this structure is never passed
+                                  from the module to the core right now. Here
+                                  for future compatibility. */
+  struct ValkeyModuleKey *key; /* Opened key. */
+} ValkeyModuleKeyInfoV1;
+
+#define ValkeyModuleKeyInfo ValkeyModuleKeyInfoV1
 
 #define VALKEYMODULE_SWAPDBINFO_VERSION 1
 typedef struct ValkeyModuleSwapDbInfo {

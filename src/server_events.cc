@@ -18,6 +18,7 @@
 #include "src/vector_registry_dispatch.h"
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/huge/flat_hash_map.h"
+#include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -52,6 +53,19 @@ void OnSwapDBCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
   auto *swap_info = static_cast<ValkeyModuleSwapDbInfo *>(data);
   SchemaManager::Instance().OnSwapDB(swap_info);
   vector_registry::OnSwapDB(swap_info);
+}
+
+void OnKeyCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
+                   uint64_t subevent, void *data) {
+  // Only an overwrite deletes a hash without a del event; RENAME and MOVE
+  // report the source as deleted, so that subevent must not erase it.
+  if (subevent != VALKEYMODULE_SUBEVENT_KEY_OVERWRITTEN) {
+    return;
+  }
+  auto *key = static_cast<ValkeyModuleKeyInfo *>(data)->key;
+  VectorRegistry::Instance().OnKeyOverwritten(
+      ValkeyModule_GetDbIdFromModuleKey(key),
+      vmsdk::ToStringView(ValkeyModule_GetKeyNameFromModuleKey(key)));
 }
 
 void OnServerCronCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
@@ -126,6 +140,10 @@ void SubscribeToServerEvents() {
                                       &OnFlushDBCallback);
   ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_Shutdown,
                                       &OnShutdownCallback);
+  if (UseLazyVectorUnshare()) {
+    ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_Key,
+                                        &OnKeyCallback);
+  }
 }
 
 }  // namespace valkey_search::server_events

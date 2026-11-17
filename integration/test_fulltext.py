@@ -9,7 +9,7 @@ from valkeytestframework.util import waiters
 import threading
 import time
 import os
-from utils import IndexingTestHelper
+from utils import IndexingTestHelper, compatibility_usage
 
 """
 This file contains tests for full text search.
@@ -2379,7 +2379,7 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
     def test_non_utf8_tag_emulate_release(self):
         """Non-UTF-8 TAG values are indexed before 1.3.0 and rejected from 1.3.0"""
         client: Valkey = self.server.get_new_client()
-        counter = "search_compatibility-tag_rejects_non_utf8"
+        counter = "tag_rejects_non_utf8"
         for release, expected in (("1.2.0", 1), ("1.3.0", 0)):
             assert client.execute_command(
                 "CONFIG", "SET", "search.emulate-release", release) == b"OK"
@@ -2387,13 +2387,14 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
             client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA",
                                    "category", "TAG")
             IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
-            before = client.info("SEARCH")[counter]
+            before = compatibility_usage(client).get(counter, 0)
             client.execute_command("HSET", "doc:1", "category", b"invalid\xc3")
             IndexingTestHelper.wait_for_indexing_complete_on_node(client, "idx")
             info_data = IndexingTestHelper.get_ft_info(client, "idx").parsed_data
             assert info_data["hash_indexing_failures"] == 1 - expected, release
             assert info_data["num_records"] == expected, release
-            assert client.info("SEARCH")[counter] - before == expected, release
+            assert (compatibility_usage(client).get(counter, 0) - before
+                    == expected), release
             if expected:
                 assert client.execute_command(
                     "FT.SEARCH", "idx", b"@category:{invalid\xc3}")[0] == 1

@@ -409,7 +409,6 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
   if ((!empty_words.empty() || !stem_roots.empty()) &&
       (stem_text_field_mask_ != 0u)) {
     absl::WriterMutexLock stem_lock(&stem_tree_mutex_);
-    // Before the parent removals below, which can drop a root's target.
     auto stem_uncount_fn = CreateSimpleTargetMutateFn<StemParents>(
         [](InvasivePtr<StemParents> existing) {
           if (existing) {
@@ -417,6 +416,13 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
             DCHECK_GT(existing->distinct_docs, 0u);
             if (existing->distinct_docs > 0) {
               --existing->distinct_docs;
+            }
+            // distinct_docs is exact, so the root's lifetime follows it alone.
+            // parents is not: it is pruned from main-tree removals that can
+            // reach here out of order, and may still list words held only in
+            // NOSTEM fields.
+            if (existing->distinct_docs == 0) {
+              existing.Clear();
             }
           }
           return existing;
@@ -441,18 +447,13 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
               // The term may not exist in the stem tree if it was only present
               // in NOSTEM fields.
               if (existing) {
-                CHECK(!existing->parents.empty())
-                    << "Stem tree entry should not be empty";
+                // Parents may become empty while another key's uncount is
+                // pending; stem_uncount_fn drops the target.
                 auto it = std::find(existing->parents.begin(),
                                     existing->parents.end(), word);
                 if (it != existing->parents.end()) {
                   *it = std::move(existing->parents.back());
                   existing->parents.pop_back();
-                }
-                if (existing->parents.empty()) {
-                  // No parent left, so no document can hold an inflection.
-                  DCHECK_EQ(existing->distinct_docs, 0u);
-                  existing.Clear();
                 }
               }
               return existing;

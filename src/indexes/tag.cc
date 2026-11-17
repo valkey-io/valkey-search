@@ -37,14 +37,6 @@ namespace valkey_search::indexes {
 
 namespace {
 
-// INFO counter for the non-UTF-8 TAG compatibility defect (see
-// COMPATIBILITY.md). Statically constructed because AddRecord/ModifyRecord run
-// on worker threads, where VALKEY_SEARCH_COMPATIBILITY_FIX's lazily
-// constructed counter is unsafe.
-vmsdk::info_field::Integer tag_rejects_non_utf8_compat_counter(
-    "compatibility", "compatibility-tag_rejects_non_utf8",
-    vmsdk::info_field::IntegerBuilder().App());
-
 // Redisearch rejects non-UTF-8 TAG data. This is gated on
 // search.emulate-release so the legacy behavior (index it) is preserved by
 // default.
@@ -52,11 +44,9 @@ bool RejectNonUtf8(absl::string_view data) {
   if (ABSL_PREDICT_TRUE(utils::IsValidUtf8(data))) {
     return false;
   }
-  if (options::EnabledInVersion(1, 3, 0)) {
-    return true;
-  }
-  tag_rejects_non_utf8_compat_counter.Increment();
-  return false;
+  return VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 3, 0, "tag_rejects_non_utf8", [] { return true; },
+      [] { return false; });
 }
 
 inline uintptr_t SlotToStorage(void *p) {

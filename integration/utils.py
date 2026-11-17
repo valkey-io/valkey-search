@@ -234,3 +234,11 @@ class IndexingTestHelper:
             )
         
         waiters.wait_for_true(check_all_nodes_complete)
+
+
+def compatibility_usage(client: Valkey) -> Dict[str, int]:
+    """The INFO field search_compatibility_usage as {label: count}.
+
+    The server reports it as a comma-separated list of label=count, which
+    valkey-py parses into a dict; an empty list comes back as ""."""
+    return client.info("SEARCH").get("search_compatibility_usage") or {}

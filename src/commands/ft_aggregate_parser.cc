@@ -326,8 +326,10 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
             claimed_columns.insert(
                 parameters.AddRenamedRecordAttribute(identifier, alias));
           } else if (!in_schema && !after_groupby) {
-            VMSDK_RETURN_IF_ERROR(
-                parameters.MakeReference(identifier, true).status());
+            parameters.making_load_column_ = true;
+            auto column = parameters.MakeReference(identifier, true);
+            parameters.making_load_column_ = false;
+            VMSDK_RETURN_IF_ERROR(column.status());
           }
           // FT.HYBRID ignores a late LOAD, its rename included.
           if (renamed && !alias_only &&
@@ -590,7 +592,9 @@ AggregateParameters::MakeReference(const absl::string_view name, bool create) {
   DBG << "MakeReference : " << name << " Create:" << create << "\n";
   // Note each name a stage reads or writes; see `read_names_`.
   if (create) {
-    if (groupby_writes_.has_value()) {
+    if (making_load_column_) {
+      // A LOAD makes this column, not a stage.
+    } else if (groupby_writes_.has_value()) {
       groupby_writes_->emplace_back(name);
     } else {
       written_names_.emplace(name);

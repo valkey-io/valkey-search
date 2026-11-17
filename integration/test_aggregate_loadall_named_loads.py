@@ -13,7 +13,7 @@ from valkey_search_test_case import ValkeySearchTestCaseDebugMode
 from valkeytestframework.conftest import resource_port_tracker
 from utils import IndexingTestHelper
 
-COUNTER = "search_compatibility-ft_aggregate_loadall_named_loads"
+COUNTER = "search_compatibility-ft_aggregate_loadall_fetch"
 LOAD_AS_COUNTER = "search_compatibility-ft_aggregate_load_as"
 SORTBY = ["SORTBY", "2", "@n", "ASC"]
 
@@ -68,7 +68,9 @@ class TestAggregateLoadallNamedLoads(ValkeySearchTestCaseDebugMode):
     def test_legacy_reply_is_kept_and_counted_below_1_3_0(self):
         client = self._client("1.0.0")
         for loads, legacy, _ in CASES:
-            counted = "@__key" in loads or "@n" in loads
+            # SORTBY already reads `n` as a number, so naming it changes
+            # nothing; `AS` is counted by the LOAD AS counter.
+            counted = "@__key" in loads
             ticks = (int(counted), int("AS" in loads))
             assert self._run(client, *loads, *SORTBY) == (legacy, ticks), loads
 
@@ -100,9 +102,9 @@ class TestAggregateLoadallNamedLoads(ValkeySearchTestCaseDebugMode):
             [b"__score", b"__score", b"extra", b"g"]] * 2
 
     def test_apply_into_a_named_load_column_shows_below_1_3_0(self):
-        """Below 1.3.0 a named load's own column is hidden, but an APPLY that
-        writes into that column replaces the raw value with a computed one,
-        which 1.2.1 shows. The loadall_named_loads counter ticks once."""
+        """Below 1.3.0 a named load adds nothing, but an APPLY that writes into
+        its name shows the computed value, as in 1.2.1. The APPLY hides the
+        named load, so the counter does not tick."""
         client = self._client("1.0.0")
         client.execute_command(
             "FT.CREATE", "ja", "ON", "JSON", "PREFIX", "1", "ja:", "SCHEMA",
@@ -115,13 +117,13 @@ class TestAggregateLoadallNamedLoads(ValkeySearchTestCaseDebugMode):
             "APPLY", "7", "AS", "n")
         row = dict(zip(reply[1][::2], reply[1][1::2]))
         assert row.get(b"$.n") == b"7", row
-        assert client.info("SEARCH").get(COUNTER, 0) - before == 1
-        # A fresh APPLY name is shown; the named load's own column stays hidden.
+        assert client.info("SEARCH").get(COUNTER, 0) - before == 0
+        # As in 1.2.1, an APPLY that reads the field finds nothing in `$`.
         reply = client.execute_command(
             "FT.AGGREGATE", "ja", "*", "LOAD", "*", "LOAD", "1", "@n",
             "APPLY", "@n*2", "AS", "d")
         row = dict(zip(reply[1][::2], reply[1][1::2]))
-        assert row.get(b"d") == b"10" and b"$.n" not in row, row
+        assert set(row) == {b"$"}, row
         # An APPLY onto `$` replaces the document, so the `$` root kept for
         # `LOAD *` is not shown a second time.
         before = client.info("SEARCH").get(COUNTER, 0)
@@ -129,7 +131,7 @@ class TestAggregateLoadallNamedLoads(ValkeySearchTestCaseDebugMode):
             "FT.AGGREGATE", "ja", "*", "LOAD", "*", "LOAD", "1", "$",
             "APPLY", "7", "AS", "$")
         assert reply[1] == [b"$", b"7"], reply
-        assert client.info("SEARCH").get(COUNTER, 0) - before == 1
+        assert client.info("SEARCH").get(COUNTER, 0) - before == 0
         client.execute_command("CONFIG", "SET", "search.emulate-release", "1.3.0")
         assert client.execute_command(
             "FT.AGGREGATE", "ja", "*", "LOAD", "*", "LOAD", "1", "$",
@@ -175,9 +177,10 @@ class TestAggregateLoadallNamedLoads(ValkeySearchTestCaseDebugMode):
             assert run("1.0.0", "j", *args) == ([{b"$": doc}], 1), load
         assert run("1.3.0", "j", "LOAD", "*", "LOAD", "1", "$.x") == (
             [{b"$.x": b"a", b"$": doc}], 0)
+        # As in 1.2.1, the stage finds no field in the `$` document.
         assert run("1.0.0", "j", "LOAD", "*", "LOAD", "1", "$.x", "GROUPBY",
                    "1", "@$.x", "REDUCE", "COUNT", "0", "AS", "c") == (
-            [{b"$.x": b"a", b"c": b"1"}], 1)
+            [{b"c": b"1"}], 1)
         rows, ticks = run("1.0.0", "v", "LOAD", "*", "LOAD", "1", "@price")
         assert rows[0][b"price"] == b"10.50" and ticks == 1
         # On HASH `LOAD *` returns the vector, so naming it adds nothing.

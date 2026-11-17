@@ -1550,15 +1550,9 @@ absl::Status CreateRecordsFromNeighbors(
   // On JSON, `LOAD *` is the `$` root; named paths only feed columns.
   const bool is_json =
       data_type == data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON;
-  // A hidden legacy column that an APPLY wrote is shown, so the `$` root it
-  // replaces must not also be kept.
-  const auto applied = AppliedColumns(parameters);
   bool root_is_a_column = false;
-  for (size_t i = 0; i < parameters.record_info_by_index_.size(); ++i) {
-    const bool shown =
-        !parameters.legacy_loadall_hidden_.contains(i) || applied.contains(i);
-    if (shown && parameters.record_info_by_index_[i].output_name_ ==
-                     kJsonRootElementQuery) {
+  for (const auto &info : parameters.record_info_by_index_) {
+    if (info.output_name_ == kJsonRootElementQuery) {
       root_is_a_column = true;
     }
   }
@@ -1767,12 +1761,6 @@ void AggregateParameters::ReplyRecords(ValkeyModuleCtx *ctx, RecordSet &records,
     }
   }
 
-  // After a GROUPBY the reply holds groups, which show their keys.
-  const bool hide_legacy_loads = std::none_of(
-      parameters.stages_.begin(), parameters.stages_.end(),
-      [](const auto &stage) {
-        return dynamic_cast<const GroupBy *>(stage.get()) != nullptr;
-      });
   for (size_t n = 0; n < count; ++n) {
     auto rec = records.pop_front();
     ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_ARRAY_LEN);
@@ -1785,12 +1773,6 @@ void AggregateParameters::ReplyRecords(ValkeyModuleCtx *ctx, RecordSet &records,
         continue;
       }
       const auto &name = parameters.record_info_by_index_[i].output_name_;
-      // A named load's column is hidden below 1.3.0, but an APPLY that writes
-      // into it replaces the raw value with a computed one, which 1.2.1 shows.
-      if (hide_legacy_loads && parameters.legacy_loadall_hidden_.contains(i) &&
-          !applied.contains(i)) {
-        continue;
-      }
       if (yields_to_stored.contains(i) &&
           std::any_of(rec->extra_fields_.begin(), rec->extra_fields_.end(),
                       [&](const auto &field) { return field.first == name; })) {

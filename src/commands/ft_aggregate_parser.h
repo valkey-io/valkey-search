@@ -94,9 +94,6 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   size_t loads_before_loadall_{0};
   // The 1.3.0 rule for named loads under `LOAD *`.
   bool loadall_named_loads_{false};
-  // Below 1.3.0 on JSON, columns of named loads under `LOAD *`: they feed
-  // later stages, but 1.2.1's reply showed only the `$` root.
-  absl::flat_hash_set<size_t> legacy_loadall_hidden_;
   // The first ambiguous LOAD name, returned once the command also loads a
   // field outside the schema.
   absl::Status ambiguous_load_name_;
@@ -217,6 +214,9 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   // Reducers read the input rows, so in `AS n ... @n` the `@n` is the stored
   // field. A GROUPBY's output names wait here until the stage ends.
   std::optional<std::vector<std::string>> groupby_writes_;
+  // Set while LOAD makes a column for a field outside the schema, so the
+  // counter does not mistake it for a stage overwriting that name.
+  bool making_load_column_{false};
   //
   // Maps indexes in a record into metadata for that index
   //

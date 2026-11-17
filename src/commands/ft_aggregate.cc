@@ -67,43 +67,9 @@ absl::Status CheckLoadAfterGroupby(const AggregateParameters &params) {
       [] { return absl::OkStatus(); });
 }
 
-// 1.2.1 ignored every named load under `LOAD *`. Only those that change its
-// reply are counted: on HASH the stored field is in the record already, with
-// the same text unless it is numeric, under the same name unless the
-// attribute is declared under another one.
-absl::Status ResolveLoadsUnderLoadAll(AggregateParameters &params) {
-  const bool is_json = params.index_schema->GetAttributeDataType().ToProto() ==
-                       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON;
-  const bool reply_differs = std::any_of(
-      params.loads_.begin(), params.loads_.end(), [&](const LoadField &f) {
-        auto indexer = params.index_schema->GetIndex(f.identifier);
-        // On HASH `LOAD *` already returns a vector field under its own name,
-        // so naming it changes nothing. Every other named load counted here may
-        // still end up with the same reply, such as JSON `$` itself or a column
-        // an APPLY overwrites.
-        if (f.after_groupby || (!is_json && !f.renamed && indexer.ok() &&
-                                indexes::IsVectorIndex(*indexer))) {
-          return false;
-        }
-        if (is_json || f.renamed || f.identifier == "__key") {
-          return true;
-        }
-        if (!indexer.ok()) {
-          return false;
-        }
-        auto field = params.index_schema->GetIdentifier(f.identifier);
-        return (*indexer)->GetIndexerType() == indexes::IndexerType::kNumeric ||
-               (field.ok() && *field != f.identifier);
-      });
-  if (!reply_differs) {
-    return absl::OkStatus();
-  }
-  const bool fixed = VALKEY_SEARCH_COMPATIBILITY_FIX(
-      1, 3, 0, "ft_aggregate_loadall_named_loads", [] { return true; },
-      [] { return false; });
-  if (!fixed) {
-    return absl::OkStatus();
-  }
+// From 1.3.0, named loads next to `LOAD *` add their columns, as in
+// RediSearch; `@__key` adds the key.
+void ResolveLoadsUnderLoadAll(AggregateParameters &params) {
   // An ambiguous command keeps the reply 1.3.0 gave before this rule (see
   // COMPATIBILITY.md), which already included `__key`.
   params.loadall_named_loads_ = params.ambiguous_load_name_.ok();
@@ -112,7 +78,6 @@ absl::Status ResolveLoadsUnderLoadAll(AggregateParameters &params) {
       params.load_key = true;
     }
   }
-  return absl::OkStatus();
 }
 
 // Does the 1.2.1 rule change this reply? The counter ticks only if it does.
@@ -150,7 +115,8 @@ bool LoadAllFetchChangesReply(const AggregateParameters &params) {
         return dynamic_cast<const GroupBy *>(stage.get()) != nullptr;
       });
   for (const auto &load : params.loads_) {
-    if (is_score(load.identifier)) {
+    // CheckLoadAfterGroupby counts a late LOAD.
+    if (is_score(load.identifier) || load.after_groupby) {
       continue;
     }
     // A GROUPBY leaves only groups, and an APPLY onto the name overwrites it.
@@ -161,18 +127,34 @@ bool LoadAllFetchChangesReply(const AggregateParameters &params) {
       }
       continue;
     }
-    // From 1.3.0 this is an error; 1.2.1 ignored the name.
     auto indexer = params.index_schema->GetIndex(load.identifier);
-    if (!indexer.ok() || indexes::IsVectorIndex(*indexer)) {
+    const bool vector = indexer.ok() && indexes::IsVectorIndex(*indexer);
+    // From 1.3.0 a vector is an error on JSON, where `LOAD *` is only `$`.
+    if (vector && is_json) {
+      return true;
+    }
+    // On JSON the field reaches a stage only if it is fetched by name.
+    if (is_json && params.read_names_.contains(load.alias)) {
       return true;
     }
     if (hidden) {
       continue;
     }
-    // A HASH record already holds the field under its own name, as text; a
-    // fetched NUMERIC field is printed as a number instead, as it already is
-    // when a stage reads it.
-    if (is_json ||
+    // On JSON every named field but `$` adds a column. On HASH the record
+    // already holds the field as text, so only a NUMERIC field (printed as a
+    // number unless a stage already reads it) or a renamed one changes.
+    if (is_json) {
+      if (load.identifier != kJsonRootElementQuery) {
+        return true;
+      }
+      continue;
+    }
+    if (!indexer.ok() || vector) {
+      continue;
+    }
+    // From 1.3.0 a field declared under another name also shows that name.
+    auto field = params.index_schema->GetIdentifier(load.identifier);
+    if ((field.ok() && *field != load.alias) ||
         ((*indexer)->GetIndexerType() == indexes::IndexerType::kNumeric &&
          !params.read_names_.contains(load.alias))) {
       return true;
@@ -200,6 +182,8 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
     // #1381 made `LOAD *` fetch more fields, which changed 1.2.1 replies.
     // Below 1.3.0, keep the 1.2.1 reply: fetch only the whole record.
     if (!options::EnabledInVersion(1, 3, 0)) {
+      // 1.3.0 rejects a LOAD after GROUPBY; count it here too.
+      VMSDK_RETURN_IF_ERROR(CheckLoadAfterGroupby(params));
       if (LoadAllFetchChangesReply(params)) {
         VALKEY_SEARCH_COMPATIBILITY_FIX(
             1, 3, 0, "ft_aggregate_loadall_fetch", [] {}, [] {});
@@ -232,8 +216,6 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
   }
   const bool is_json = params.index_schema->GetAttributeDataType().ToProto() ==
                        data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON;
-  const bool legacy_loadall =
-      params.loadall_ && !options::EnabledInVersion(1, 3, 0);
   std::vector<LoadField> loads_to_process;
   for (const auto &load : params.loads_) {
     // FT.HYBRID ignores a late LOAD, but a GROUPBY on the key still needs it.
@@ -246,16 +228,8 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
     if (load.after_groupby && params.loadall_) {
       continue;
     }
-    // Below 1.3.0 the reply is 1.2.1's, which ignored named loads under
-    // `LOAD *`; ResolveLoadsUnderLoadAll counts the difference. A HASH record
-    // already holds the stored field; a JSON path is fetched for later stages
-    // and hidden in the reply.
-    if (legacy_loadall && !is_json) {
-      continue;
-    }
     loads_to_process.push_back(load);
   }
-  const size_t named_loads = loads_to_process.size();
 
   // A field named by a pipeline stage but absent from the LOAD clause still
   // has to be fetched. Redisearch loads such fields implicitly; without that
@@ -300,9 +274,7 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
     }
   }
 
-  for (size_t load_index = 0; load_index < loads_to_process.size();
-       ++load_index) {
-    const auto &load = loads_to_process[load_index];
+  for (const auto &load : loads_to_process) {
     const std::string &identifier = load.identifier;
     const std::string &alias = load.alias;  // output name (== identifier
                                             // when there is no AS clause)
@@ -348,10 +320,8 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
     if (indexer.ok() && indexes::IsVectorIndex(*indexer)) {
       // On HASH, `LOAD *` returns the vector already, so a named load of it
       // adds nothing. On JSON it does not, and a vector cannot be loaded as
-      // its own column any more than `LOAD @v` alone can; below 1.3.0 the
-      // named load is ignored, as in 1.2.1, and from 1.3.0 it is rejected,
-      // as on main.
-      if (params.loadall_ && (!is_json || legacy_loadall)) {
+      // its own column any more than `LOAD @v` alone can.
+      if (params.loadall_ && !is_json) {
         continue;
       }
       return absl::InvalidArgumentError(
@@ -398,14 +368,11 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
     if (renamed) {
       apply_rename(record_index);
     }
-    if (legacy_loadall && load_index < named_loads) {
-      params.legacy_loadall_hidden_.insert(record_index);
-    }
   }
   // After the loop, so a command another check rejects is not counted.
   VMSDK_RETURN_IF_ERROR(CheckLoadAfterGroupby(params));
   if (params.loadall_) {
-    VMSDK_RETURN_IF_ERROR(ResolveLoadsUnderLoadAll(params));
+    ResolveLoadsUnderLoadAll(params);
   }
   // `LOAD *` on its own loads no named field, so `content` stays false even
   // though the whole record is wanted. Nothing is fetched only when neither

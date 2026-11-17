@@ -78,7 +78,9 @@ class TestAggregateLoadAfterGroupby(ValkeySearchTestCaseDebugMode):
             assert self._ticks(client, *late, *sortby) == (
                 "LOAD cannot be applied after GROUPBY", 0), late
 
-    def test_ignored_late_load_keeps_the_groupby_key_on_json(self):
+    def test_late_load_on_json_keeps_the_1_2_1_reply(self):
+        # Below 1.3.0 `LOAD *` fetches only the `$` document, as in 1.2.1, so
+        # the GROUPBY finds no `g` and makes one group.
         client = self._client("1.0.0")
         client.execute_command(
             "FT.CREATE", "jidx", "ON", "JSON", "PREFIX", "1", "j:",
@@ -89,7 +91,7 @@ class TestAggregateLoadAfterGroupby(ValkeySearchTestCaseDebugMode):
         reply = client.execute_command(
             "FT.AGGREGATE", "jidx", "*", "LOAD", "*", *GROUPBY,
             "LOAD", "1", "@g", "SORTBY", "2", "@g", "ASC")
-        assert [row[1::2] for row in reply[1:]] == [[b"a", b"1"], [b"b", b"1"]]
+        assert [row[1::2] for row in reply[1:]] == [[b"2"]]
 
     def test_counter_ticks_once_per_command_across_cursor_pages(self):
         client = self._client("1.0.0")

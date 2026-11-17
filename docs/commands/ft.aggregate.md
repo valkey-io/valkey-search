@@ -11,7 +11,7 @@ Once all stages have been executed, the working set of records output from the l
 ```
 FT.AGGREGATE <index-name> <query>
     [ADDSCORES]
-    [DIALECT <dialect>]
+    [DIALECT 2]
     [INORDER]
     [LOAD * | LOAD <count> <field> [AS <alias>] [<field> [AS <alias>] ...]]
     [PARAMS <count> <name> <value> [ <name> <value> ...]]
@@ -32,7 +32,7 @@ FT.AGGREGATE <index-name> <query>
 - `<index>` (required): This index name you want to query.
 - `<query>` (required): The query string, see [Search - query language](../topics/search-query.md) for details.
 - `ADDSCORES` (optional): Adds the relevance score computed for each key to its record as the field `__score`, which later stages can reference as `@__score`.
-- `DIALECT <dialect>` (optional): Specifies your dialect. The only supported dialect is 2.
+- `DIALECT 2` (optional): Specifies your dialect. The only supported dialect is 2, which is also the default.
 - `INORDER` (optional): Indicates that proximity matching of terms must be in order.
 - `LOAD * | LOAD <count> <field> [AS <alias>] [<field> [AS <alias>] ...]` (optional): This controls which fields of those keys are loaded into the working set. A star (\*) indicates that all of the fields of the keys are loaded. The key itself can be loaded by specifying `@__key`. For vector queries, the distance can also be loaded by using its `AS` name (for KNN the default is `__<field>_score`).
 

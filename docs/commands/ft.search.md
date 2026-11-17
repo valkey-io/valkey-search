@@ -4,7 +4,7 @@ Performs a search of the specified index. The keys which match the query express
 FT.SEARCH <index> <query>
   [ALLSHARDS | SOMESHARDS]
   [CONSISTENT | INCONSISTENT]
-  [DIALECT <dialect>]
+  [DIALECT 2]
   [INKEYS <count> <key> [<key> ...]]
   [INORDER]
   [LIMIT <offset> <num>]
@@ -25,7 +25,7 @@ FT.SEARCH <index> <query>
 - `<query>` (required): The query string, see [Search - query language](../topics/search-query.md) for details, including KNN queries and the [`VECTOR_RANGE` matcher](../topics/search-query.md#vector-range-match).
 - `ALLSHARDS` (Optional): If specified, the command is terminated with a timeout error if a valid response from all shards is not received within the timeout interval. This is the default when `search.enable-partial-results` is `no`; otherwise `SOMESHARDS` is the default.
 - `CONSISTENT` (Optional): If specified, the command is terminated with an error if the cluster is in an inconsistent state. This is the default when `search.enable-consistent-results` is `yes`; otherwise `INCONSISTENT` is the default.
-- `DIALECT <dialect>` (optional): Specifies your dialect. The only supported dialect is 2.
+- `DIALECT 2` (optional): Specifies your dialect. The only supported dialect is 2, which is also the default.
 - `INCONSISTENT` (Optional): If specified, the command will generate a best-effort reply if the cluster remains inconsistent within the timeout interval.
 - `INKEYS <count> <key> [<key> ...]` (optional): Restricts results to the specified set of document keys. `<count>` is the number of keys that follow and must be a non-negative integer. Duplicate keys are deduplicated. If `<count>` is 0, no results are returned. The response count reflects only keys that match both the query and the INKEYS set. On a KNN query, the K nearest neighbors are chosen from the listed keys only.
 - `LIMIT <offset> <count>` (optional): Lets you choose a portion of the result. The first `<offset>` keys are skipped and only a maximum of `<count>` keys are included. The default is LIMIT 0 10, which returns at most 10 keys.

@@ -20,7 +20,7 @@ FT.HYBRID <index-name>
       | LINEAR   <count> [ALPHA <a> BETA <b>] [WINDOW <w>] [YIELD_SCORE_AS <alias>]
       | FUNCTION <count> EXPR <expression> [WINDOW <w>] [YIELD_SCORE_AS <alias>]
       )]
-    [DIALECT <dialect>]
+    [DIALECT 2]
     [LOAD * | LOAD <count> <field> [AS <alias>] [<field> [AS <alias>] ...]]
     [PARAMS <count> <name> <value> [ <name> <value> ...]]
     [TIMEOUT <timeout>]
@@ -49,7 +49,7 @@ FT.HYBRID <index-name>
     - A `FILTER` that directly follows the `VSIM` clause is always this pre-filter, in query syntax, even when it was meant as a processing stage. `VSIM @vec $q FILTER "@price > 10"` is therefore an error. To filter the fused results with an expression, put the `FILTER` stage after `COMBINE`, `LOAD` or another stage. If more than one `FILTER` follows `VSIM`, only the last one is used.
   - `YIELD_SCORE_AS <alias>` (optional): As for the `SEARCH` arm. The value is this arm's similarity, as described in [Fusion methods](#fusion-methods), not the raw distance `FT.SEARCH` reports.
 - `COMBINE` (optional): How the two arms' results are fused. Defaults to `RRF` with its own defaults when the clause is absent. In every form, `<count>` is a count of the arguments that follow within the clause, not a count of sub-arguments; sub-arguments may appear in any order. See [Fusion methods](#fusion-methods) below.
-- `DIALECT <dialect>` (optional): Specifies your dialect. The only supported dialect is 2.
+- `DIALECT 2` (optional): Specifies your dialect. The only supported dialect is 2, which is also the default.
 - `LOAD * | LOAD <count> <field> [AS <alias>] [...]` (optional): Which fields of the matched keys are loaded into the working set, exactly as for `FT.AGGREGATE`. Without a `LOAD` clause the result carries the key, the fused score, and any per-arm scores that were named. `AS <alias>` is always honored: `FT.HYBRID` is new in 1.3.0 and does not depend on `search.emulate-release`.
 - `PARAMS <count> <name> <value> [...]` (optional): `<count>` is the number of arguments, i.e. twice the number of name/value pairs. Used to supply the `VSIM` query vector. A `$name` reference inside either arm's query text is not substituted — the same limitation `FT.SEARCH` and `FT.AGGREGATE` have.
 - `TIMEOUT <timeout>` (optional): A timeout for the command, in milliseconds. It must not exceed `search.max-timeout-ms` (default 60000). The default is the value of `search.default-timeout-ms` (50000).

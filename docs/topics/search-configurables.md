@@ -30,6 +30,7 @@ The search module uses the Valkey configuration mechanism. Each configuration be
 | search.local-fanout-queue-wait-threshold      | Number | 50 | Queue wait threshold in milliseconds for preferring local node in fanout operations. Range: 0 to 10000. |
 | search.log-level                              | Enum | notice | Controls module log level verbosity. Values: `warning`, `notice`, `verbose`, `debug`. |
 | search.max-attributes                         | Number | 1000 | Controls the max number of attributes per index. Range: 1 to 10000. |
+| search.max-combine-window                     | Number | 1000000 | Maximum `COMBINE ... WINDOW` accepted by FT.HYBRID; `WINDOW 0` and the `FUNCTION` default window resolve to this value. Range: 1 to 4294967295. Developer only: requires `search.debug-mode yes`. |
 | search.max-group-key-expansion                | Number | 65536 | Maximum number of groups one record can expand into in an FT.AGGREGATE GROUPBY over multi-value fields; exceeding it fails the query. Range: 1 to 4294967295. |
 | search.max-indexes                            | Number | 1000 | Controls the maximum number of search indexes that can be created in the system. Range: 1 to 10000000. |
 | search.max-mutation-queue-size-on-restore     | Number | 10000 | Limits the mutation queue size during RDB restore to prevent memory spikes. Range: 1 to 1000000. |

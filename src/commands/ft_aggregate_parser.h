@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <limits>
 #include <optional>
+#include <vector>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
@@ -207,6 +208,15 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   // source the same identifier.
   //
   absl::flat_hash_set<std::string> record_identifiers_;
+  //
+  // Only the 1.2.1 `LOAD *` counter uses these. It needs to know which stored
+  // fields a stage reads and which names a stage overwrites.
+  //
+  absl::flat_hash_set<std::string> written_names_;
+  absl::flat_hash_set<std::string> read_names_;
+  // Reducers read the input rows, so in `AS n ... @n` the `@n` is the stored
+  // field. A GROUPBY's output names wait here until the stage ends.
+  std::optional<std::vector<std::string>> groupby_writes_;
   //
   // Maps indexes in a record into metadata for that index
   //
@@ -420,14 +430,19 @@ class GroupBy : public Stage {
     virtual ~Reducer() = default;
     virtual std::unique_ptr<ReducerInstance> MakeInstance() = 0;
 
-    friend std::ostream& operator<<(std::ostream& os, const Reducer& r) {
-      os << r.name_ << '(';
-      for (auto& a : r.args_) {
-        if (&a != &r.args_[0]) {
+    // Overridden by reducers (e.g. QUANTILE) with non-Expression args.
+    virtual void DumpArgs(std::ostream& os) const {
+      for (auto& a : args_) {
+        if (&a != &args_[0]) {
           os << ',';
         }
         os << a.get();
       }
+    }
+
+    friend std::ostream& operator<<(std::ostream& os, const Reducer& r) {
+      os << r.name_ << '(';
+      r.DumpArgs(os);
       return os << ')';
     }
   };
@@ -440,9 +455,11 @@ class GroupBy : public Stage {
   absl::InlinedVector<std::unique_ptr<Reducer>, 4> reducers_;
 
   void Dump(std::ostream& os) const override {
-    os << "GROUPBY ";
+    os << "GROUPBY";
     for (auto& g : groups_) {
-      if (&g != &groups_[0]) {
+      if (&g == &groups_[0]) {
+        os << ' ';
+      } else {
         os << ',';
       }
       os << '@' << g.get();

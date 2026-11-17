@@ -83,9 +83,6 @@ void ReplyScoreTopLevel(ValkeyModuleCtx *ctx, float score) {
       ctx, vmsdk::MakeUniqueValkeyString(score_value).get());
 }
 
-std::optional<std::string> GetSortKeyValue(const indexes::Neighbor &neighbor,
-                                           const SearchCommand &command);
-
 // If the SORTBY field matches the VR distance alias, returns the formatted
 // distance for this neighbor (to be emitted with the numeric '#' prefix for
 // WITHSORTKEYS). Returns std::nullopt when the SORTBY field is not the VR
@@ -134,13 +131,12 @@ bool IsSortByFieldNumeric(const SearchCommand &command,
 // Returns std::nullopt when the query has no SORTBY or the document lacks the
 // sort field.
 std::optional<std::string> GetSortKeyValue(const indexes::Neighbor &neighbor,
-                                           const SearchCommand &command) {
-  if (!command.sortby_parameter.has_value() ||
-      !neighbor.attribute_contents.has_value()) {
+                                           const query::SortByKey &sortby_key) {
+  if (!neighbor.attribute_contents.has_value()) {
     return std::nullopt;
   }
 
-  auto it = neighbor.attribute_contents->find(command.sortby_parameter->field);
+  auto it = sortby_key.Find(*neighbor.attribute_contents);
   if (it == neighbor.attribute_contents->end()) {
     return std::nullopt;
   }
@@ -165,7 +161,8 @@ void PerformSortingOnRelevantPortion(std::vector<indexes::Neighbor> &neighbors,
 
 // Apply sorting to neighbors based on attribute values in attribute_contents
 void ApplySorting(std::vector<indexes::Neighbor> &neighbors,
-                  const SearchCommand &parameters) {
+                  const SearchCommand &parameters,
+                  const query::SortByKey &sortby_key) {
   if (!parameters.sortby_parameter.has_value() || neighbors.empty()) {
     return;
   }
@@ -228,8 +225,8 @@ void ApplySorting(std::vector<indexes::Neighbor> &neighbors,
       return false;
     }
 
-    auto it_a = a.attribute_contents->find(sortby.field);
-    auto it_b = b.attribute_contents->find(sortby.field);
+    auto it_a = sortby_key.Find(*a.attribute_contents);
+    auto it_b = sortby_key.Find(*b.attribute_contents);
 
     if (it_a == a.attribute_contents->end()) {
       return false;
@@ -373,6 +370,9 @@ SearchCommand::RowFormat SearchCommand::GetRowFormat() const {
         1, 3, 0, "ft_search_sortkey_nil", [&]() { return true; },
         [&]() { return false; });
   }
+  if (sortby_parameter.has_value()) {
+    format.sortby_key.emplace(*index_schema, sortby_parameter->field);
+  }
   if (IsVectorRangeQuery()) {
     format.vr_field = query::GetVrScoreFieldName(*this);
   }
@@ -410,8 +410,8 @@ size_t SearchCommand::ReplyRowElements(ValkeyModuleCtx *ctx,
       prefix = "#";
     } else if (format.sort_by_vec_score) {
       value = expr::FormatDouble(neighbor.distance);
-    } else {
-      value = GetSortKeyValue(neighbor, *this);
+    } else if (format.sortby_key.has_value()) {
+      value = GetSortKeyValue(neighbor, *format.sortby_key);
     }
     if (!value.has_value() && format.nil_absent_sort_key) {
       ValkeyModule_ReplyWithNull(ctx);
@@ -486,7 +486,13 @@ size_t SearchCommand::ReplyRowElements(ValkeyModuleCtx *ctx,
 void SearchCommand::ReplyRows(ValkeyModuleCtx *ctx,
                               const query::SearchResult &search_result,
                               size_t start, size_t end) const {
-  auto format = GetRowFormat();
+  ReplyRows(ctx, search_result, start, end, GetRowFormat());
+}
+
+void SearchCommand::ReplyRows(ValkeyModuleCtx *ctx,
+                              const query::SearchResult &search_result,
+                              size_t start, size_t end,
+                              const RowFormat &format) const {
   for (auto i = start; i < end; ++i) {
     ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_LEN);
     ValkeyModule_ReplySetArrayLength(
@@ -529,15 +535,15 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
   if (inkeys.has_value()) {
     ApplyInkeysFilter(search_result, *inkeys);
   }
-  if (!skip_content) {
-    ApplySorting(search_result.neighbors, *this);
+  const auto format = GetRowFormat();
+  if (!skip_content && format.sortby_key.has_value()) {
+    ApplySorting(search_result.neighbors, *this, *format.sortby_key);
   }
 
   auto range = search_result.GetSerializationRange(*this);
   if (!cursor_options) {
     ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_LEN);
     ReplyAvailNeighbors(ctx, search_result, *this);
-    auto format = GetRowFormat();
     size_t elements = 1;
     for (auto i = range.start_index; i < range.end_index; ++i) {
       elements += ReplyRowElements(ctx, search_result.neighbors[i], format);
@@ -551,7 +557,8 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
   ValkeyModule_ReplyWithArray(ctx, 3);
   ReplyAvailNeighbors(ctx, search_result, *this);
   ValkeyModule_ReplyWithArray(ctx, count);
-  ReplyRows(ctx, search_result, range.start_index, range.start_index + count);
+  ReplyRows(ctx, search_result, range.start_index, range.start_index + count,
+            format);
   if (count == range.count()) {
     ValkeyModule_ReplyWithLongLong(ctx, 0);
     return;

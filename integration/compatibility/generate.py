@@ -1981,3 +1981,96 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         )
 
 
+    def test_aggregate_quantile_basic(self, key_type, dialect, vector_data_type):
+        """Test basic QUANTILE functionality with common quantile values."""
+        self.setup_data("sortable numbers", key_type)
+        
+        # Test common quantiles: min, quartiles, median, 99th percentile, max
+        quantiles = ["0.0", "0.25", "0.5", "0.75", "0.99", "1.0"]
+        for q in quantiles:
+            self.check(dialect, 
+                f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1 groupby 0 reduce quantile 2 @n1 {q} as q{q.replace('.', '_')}"
+            )
+            self.check(dialect, 
+                f"ft.aggregate {key_type}_idx1 * load 2 @__key @n2 groupby 0 reduce quantile 2 @n2 {q} as q{q.replace('.', '_')}"
+            )
+        
+        # Test with groupby to verify odd/even number of values in groups
+        self.check(dialect, 
+            f"ft.aggregate {key_type}_idx1 * load 3 @__key @n1 @t1 groupby 1 @t1 reduce quantile 2 @n1 0.5 as median"
+        )
+        self.check(dialect, 
+            f"ft.aggregate {key_type}_idx1 * load 3 @__key @n2 @t3 groupby 1 @t3 reduce quantile 2 @n2 0.5 as median"
+        )
+
+    def test_aggregate_quantile_multiple(self, key_type, dialect, vector_data_type):
+        """Test multiple QUANTILE reducers in same query."""
+        self.setup_data("sortable numbers", key_type)
+        
+        # Two quantiles on same property
+        self.check(dialect, 
+            f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1 groupby 0 reduce quantile 2 @n1 0.5 as median reduce quantile 2 @n1 0.99 as p99"
+        )
+        
+        # Three quantiles on same property
+        self.check(dialect, 
+            f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1 groupby 0 reduce quantile 2 @n1 0.25 as q1 reduce quantile 2 @n1 0.5 as q2 reduce quantile 2 @n1 0.75 as q3"
+        )
+        
+        # Multiple quantiles on different properties
+        self.check(dialect, 
+            f"ft.aggregate {key_type}_idx1 * load 3 @__key @n1 @n2 groupby 0 reduce quantile 2 @n1 0.5 as median_n1 reduce quantile 2 @n2 0.5 as median_n2"
+        )
+        
+        # Multiple quantiles with groupby
+        self.check(dialect, 
+            f"ft.aggregate {key_type}_idx1 * load 3 @__key @n1 @t1 groupby 1 @t1 reduce quantile 2 @n1 0.5 as p50 reduce quantile 2 @n1 0.95 as p95 reduce quantile 2 @n1 0.99 as p99"
+        )
+
+        # Compare two quantile outputs: lo=5, hi=19 is true numerically but
+        # false as text ("5" > "19"), so this checks the outputs are numbers.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 1 @n1 apply 10+@n1 as m groupby 0 reduce quantile 2 @m 0 as lo reduce quantile 2 @m 1 as hi filter @lo<@hi"
+        )
+
+    def test_aggregate_quantile_edge_cases(self, key_type, dialect, vector_data_type):
+        """Test QUANTILE with edge cases: nil values, duplicates, negatives."""
+        self.setup_data("hard numbers", key_type)
+        
+        # Test with hard numbers dataset which includes nil, negative, inf values
+        for q in ["0.0", "0.5", "1.0"]:
+            self.check(dialect, 
+                f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1 groupby 0 reduce quantile 2 @n1 {q} as q{q.replace('.', '_')}"
+            )
+            self.check(dialect, 
+                f"ft.aggregate {key_type}_idx1 * load 2 @__key @n2 groupby 0 reduce quantile 2 @n2 {q} as q{q.replace('.', '_')}"
+            )
+            self.check(dialect, 
+                f"ft.aggregate {key_type}_idx1 * load 2 @__key @n3 groupby 0 reduce quantile 2 @n3 {q} as q{q.replace('.', '_')}"
+            )
+        
+        # Test with groupby to get groups with different characteristics
+        self.check(dialect, 
+            f"ft.aggregate {key_type}_idx1 * load 3 @__key @n1 @t1 groupby 1 @t1 reduce quantile 2 @n1 0.5 as median"
+        )
+        
+        # Test single value groups and small groups
+        self.check(dialect, 
+            f"ft.aggregate {key_type}_idx1 * load 3 @__key @n1 @t3 groupby 1 @t3 reduce quantile 2 @n1 0.5 as median"
+        )
+
+    # COUNT_DISTINCTISH uses HyperLogLog: ours is P=14 with MurmurHash64A,
+    # Redis's is P=8 with FNV, so estimates diverge at larger cardinalities.
+    # Only tiny cardinalities, where both estimate exactly, are compared here.
+    # Functional testing is covered in integration/test_non_vector.py.
+    def test_count_distinctish_close_doubles(self, key_type, dialect, vector_data_type):
+        """Doubles that differ beyond 12 significant digits stay distinct."""
+        self.setup_data("sortable numbers", key_type)
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * "
+            f"load 2 @n2 @t3 "
+            f"apply 1+(@n2>0)*0.0000000000001 as close "
+            f"groupby 1 @t3 "
+            f"reduce count_distinctish 1 @close as approx "
+            f"reduce count_distinct 1 @close as exact"
+        )

@@ -103,21 +103,14 @@ See [Numeric Field Format](../topics/search-data-formats.md#numeric-fields) for 
 
 See [Vector Field Format](../topics/search-data-formats.md#vector-fields) for more details and examples.
 
-The KNN search algorithm operates to locate vectors that are the nearest to the query vector, i.e., looking for the smallest distance value.
-The computation of the distance metrics is adjusted from their classical definitions in order to posses this property.
-This table shows the actual computation that Search uses when computing the distance between two vectors: $X$ and $Y$.
-
-| Classical Name | Valkey Search Distance Metric Name |   Classical Distance Formula Definition   | Valkey Search Distance Formula                  |
-| :------------: | :--------------------------------: | :---------------------------------------: | :---------------------------------------------- |
-| Inner Product  |                 IP                 |                 dot(X,Y)                  | 1 - dot(X,Y)                                    |
-|   Euclidean    |                 L2                 |         sqrt(sum((x[i]-y[i])^2))          | sum((x[i]-y[i])^2)                              |
-|     Cosine     |               COSINE               | dot(x,y) / (magnitude(X) \* magnitude(Y)) | 1 - (dot(X,Y) / (magnitude(X) \* magnitude(Y))) |
+The KNN search algorithm finds the vectors nearest to the query vector, which are the vectors with the smallest distance.
+For the distance formula of each metric, see [Vector Distance](../topics/search-scoring.md#vector-distance).
 
 ### Field options
 
 `SORTABLE` (optional): This parameter is not required. Any field may be used with `SORTBY` whether or not it is declared `SORTABLE`. It is recorded on the attribute and reported by [`FT.INFO`](ft.info.md), but does not otherwise affect indexing or query behavior.
 
-- `UNF` (optional): Only valid immediately after `SORTABLE`. In RediSearch this keeps the sort value of a `SORTABLE` field in its original form instead of converting it to lowercase. `SORTBY` already compares the stored field value directly, so this has no effect beyond being reported by [`FT.INFO`](ft.info.md).
+- `UNF` (optional): Only valid immediately after `SORTABLE`. In RediSearch this keeps the sort value of a `SORTABLE` field in its original form instead of converting it to lowercase. `SORTBY` never converts the sort value to lowercase, so this has no effect beyond being reported by [`FT.INFO`](ft.info.md).
 
 ## Reply
 

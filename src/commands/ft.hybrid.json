@@ -592,7 +592,8 @@
           {
             "name": "field",
             "type": "string",
-            "multiple": true
+            "multiple": true,
+            "optional": true
           },
           {
             "name": "REDUCE",
@@ -649,6 +650,11 @@
                     "name": "FIRST_VALUE",
                     "type": "pure-token",
                     "token": "FIRST_VALUE"
+                  },
+                  {
+                    "name": "QUANTILE",
+                    "type": "pure-token",
+                    "token": "QUANTILE"
                   },
                   {
                     "name": "RANDOM_SAMPLE",

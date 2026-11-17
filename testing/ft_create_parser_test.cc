@@ -2281,6 +2281,87 @@ INSTANTIATE_TEST_SUITE_P(
              },
          },
          {
+             // LANGUAGE keeps its value when an option parsed on a later
+             // pass of the pre-SCHEMA loop follows it.
+             .test_name = "language_french_then_prefix",
+             .success = true,
+             .command_str = "idx1 on HASH LANGUAGE french PREFIX 1 doc: SCHEMA text_field TEXT",
+             .text_parameters = {{
+                 .with_suffix_trie = false,
+                 .no_stem = false,
+             }},
+             .expected = {
+                 .index_schema_name = "idx1",
+                 .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                 .prefixes = {"doc:"},
+                 .attributes = {{
+                     .identifier = "text_field",
+                     .attribute_alias = "text_field",
+                     .indexer_type = indexes::IndexerType::kText,
+                 }},
+                 .per_index_text_params = {
+                     .punctuation = indexes::text::kFrenchPunctuation,
+                     .stop_words = {indexes::text::kFrenchStopWords},
+                     .language = data_model::Language::LANGUAGE_FRENCH,
+                     .with_offsets = true,
+                     .min_stem_size = 4,
+                 }
+             },
+         },
+         {
+             .test_name = "language_french_then_score",
+             .success = true,
+             .command_str = "idx1 on HASH LANGUAGE french SCORE 0.5 SCHEMA text_field TEXT",
+             .text_parameters = {{
+                 .with_suffix_trie = false,
+                 .no_stem = false,
+             }},
+             .expected = {
+                 .index_schema_name = "idx1",
+                 .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                 .score = 0.5,
+                 .attributes = {{
+                     .identifier = "text_field",
+                     .attribute_alias = "text_field",
+                     .indexer_type = indexes::IndexerType::kText,
+                 }},
+                 .per_index_text_params = {
+                     .punctuation = indexes::text::kFrenchPunctuation,
+                     .stop_words = {indexes::text::kFrenchStopWords},
+                     .language = data_model::Language::LANGUAGE_FRENCH,
+                     .with_offsets = true,
+                     .min_stem_size = 4,
+                 }
+             },
+         },
+         {
+             .test_name = "language_french_then_skipinitialscan_prefix",
+             .success = true,
+             .command_str = "idx1 on HASH LANGUAGE french SKIPINITIALSCAN PREFIX 1 doc: SCHEMA text_field TEXT",
+             .text_parameters = {{
+                 .with_suffix_trie = false,
+                 .no_stem = false,
+             }},
+             .expected = {
+                 .index_schema_name = "idx1",
+                 .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                 .prefixes = {"doc:"},
+                 .skip_initial_scan = true,
+                 .attributes = {{
+                     .identifier = "text_field",
+                     .attribute_alias = "text_field",
+                     .indexer_type = indexes::IndexerType::kText,
+                 }},
+                 .per_index_text_params = {
+                     .punctuation = indexes::text::kFrenchPunctuation,
+                     .stop_words = {indexes::text::kFrenchStopWords},
+                     .language = data_model::Language::LANGUAGE_FRENCH,
+                     .with_offsets = true,
+                     .min_stem_size = 4,
+                 }
+             },
+         },
+         {
              .test_name = "language_french_nostopwords_override",
              .success = true,
              .command_str = "idx1 on HASH LANGUAGE french NOSTOPWORDS SCHEMA text_field TEXT",

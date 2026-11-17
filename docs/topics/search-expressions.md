@@ -3,7 +3,9 @@ title: "Valkey Search - Aggregation Expressions"
 description: Valkey Search Module Aggregation Expression Language
 ---
 
-The `FILTER`, `APPLY`, `SORTBY` and `GROUPBY` stages of `FT.AGGREGATE` use expressions to compute values.
+The `FILTER`, `APPLY`, `SORTBY` and `GROUPBY` stages of `FT.AGGREGATE` use expressions to compute values. The processing stages of `FT.HYBRID` and the `FILTER` option of `FT.CREATE` use the same language.
+
+Where this page describes behavior that depends on `search.emulate-release`, the setting applies only to `FT.AGGREGATE`. `FT.HYBRID` and `FT.CREATE ... FILTER` always use the 1.3.0 behavior.
 
 The expression engine operates on input values, generating output values. Values in the expression language are dynamically typed and can be either Nil (missing/invalid), Numeric (64-bit floating point) or String (a sequence of bytes). A value can also be an array, such as the output of the `TOLIST` and `RANDOM_SAMPLE` reducers or a multi-value JSON field.
 
@@ -56,7 +58,7 @@ The syntax of expressions generally follows the "C" language syntax and operator
 
 ```
 
-This grammar applies with `search.emulate-release` 1.3.0 or later. Below 1.3.0 (the default), `^` has the same precedence as `*` and `/` and is left-associative, and `&&` has the same precedence as `||`, so `@a || @b && @c` is `(@a || @b) && @c`. See [COMPATIBILITY.md](../../COMPATIBILITY.md).
+This grammar applies with `search.emulate-release` 1.3.0 or later. Below 1.3.0 (the default for `FT.AGGREGATE`), `^` has the same precedence as `*` and `/` and is left-associative, and `&&` has the same precedence as `||`, so `@a || @b && @c` is `(@a || @b) && @c`. See [COMPATIBILITY.md](../../COMPATIBILITY.md).
 
 # Primary Values
 

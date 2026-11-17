@@ -91,7 +91,7 @@ With a `<count>` of 0 (`GROUPBY 0`) no fields are specified and all records go i
 
 #### Reducers
 
-The following reducer functions are available. SUM, MIN, MAX, AVG, STDDEV and QUANTILE convert their input to a number; the other reducers operate on the values as they are.
+The following reducer functions are available. SUM, AVG, STDDEV and QUANTILE convert their input to a number. MIN and MAX do so only with `search.emulate-release` 1.3.0 or later: values that are not numbers are skipped, and a group with no numeric value gives `inf` for MIN and `-inf` for MAX. Below 1.3.0, MIN and MAX compare values as they are, so a `TAG` or text field gives a string, and a group with no value gives nil. The other reducers operate on the values as they are.
 
 Without `AS <name>`, the reducer's output is named from the reducer and its arguments. With `search.emulate-release` 1.3.0 or later the name is `__generated_alias` followed by the lowercased reducer name and its arguments without `@`, joined by commas (`REDUCE SUM 1 @price` gives `__generated_aliassumprice`). Below 1.3.0 it is `<REDUCER>(<args>)` (`SUM(@price)`, `COUNT()`). `FIRST_VALUE` always uses the `FIRST_VALUE(<args>)` form. Use `AS` to give the output a stable name for later stages. See [COMPATIBILITY.md](../../COMPATIBILITY.md).
 
@@ -101,8 +101,8 @@ Without `AS <name>`, the reducer's output is named from the reducer and its argu
 | COUNT_DISTINCT 1 <expression> | The exact number of distinct values of the expression. Caution this consumes memory proportional to the number of distinct values. |
 | COUNT_DISTINCTISH 1 <expression> | Approximate number of distinct values using HyperLogLog (P=14), with ~0.81% standard error. Uses at most ~12KB memory per group. Preferred over COUNT_DISTINCT for large groups. Nil values are excluded. |
 | SUM 1 <expression>            | The numerical sum of the values of the expression.                                                                                 |
-| MIN 1 <expression>            | The smallest numerical values of the expression.                                                                                   |
-| MAX 1 <expression>            | The largest numerical values of the expression.                                                                                    |
+| MIN 1 <expression>            | The smallest value of the expression (see above for values that are not numbers).                                                  |
+| MAX 1 <expression>            | The largest value of the expression (see above for values that are not numbers).                                                   |
 | AVG 1 <expression>            | The numerical average of the values of the expression.                                                                             |
 | STDDEV 1 <expression>         | The standard deviation the values of the expression.                                                                               |
 | FIRST_VALUE 1 <expression>    | The first value of the expression encountered in the group. Order depends on record retrieval order. Use only when order does not matter. |

@@ -11,10 +11,10 @@ import valkey
 from valkey.client import Valkey
 from valkey_search_test_case import ValkeySearchTestCaseDebugMode
 from valkeytestframework.conftest import resource_port_tracker
-from utils import IndexingTestHelper
+from utils import IndexingTestHelper, compatibility_usage
 
-COUNTER = "search_compatibility-ft_aggregate_loadall_fetch"
-LOAD_AS_COUNTER = "search_compatibility-ft_aggregate_load_as"
+COUNTER = "ft_aggregate_loadall_fetch"
+LOAD_AS_COUNTER = "ft_aggregate_load_as"
 SORTBY = ["SORTBY", "2", "@n", "ASC"]
 
 # (LOAD clauses, rows below 1.3.0, rows from 1.3.0). Field order within a
@@ -60,9 +60,9 @@ class TestAggregateLoadallNamedLoads(ValkeySearchTestCaseDebugMode):
 
     def _run(self, client, *args):
         counters = (COUNTER, LOAD_AS_COUNTER)
-        before = [client.info("SEARCH").get(c, 0) for c in counters]
+        before = [compatibility_usage(client).get(c, 0) for c in counters]
         reply = client.execute_command("FT.AGGREGATE", "idx", "*", *args)
-        after = [client.info("SEARCH").get(c, 0) for c in counters]
+        after = [compatibility_usage(client).get(c, 0) for c in counters]
         return _rows(reply), tuple(a - b for a, b in zip(after, before))
 
     def test_legacy_reply_is_kept_and_counted_below_1_3_0(self):
@@ -111,13 +111,13 @@ class TestAggregateLoadallNamedLoads(ValkeySearchTestCaseDebugMode):
             "$.n", "AS", "n", "NUMERIC")
         client.execute_command("JSON.SET", "ja:1", "$", '{"n":5}')
         IndexingTestHelper.wait_for_backfill_complete_on_node(client, "ja")
-        before = client.info("SEARCH").get(COUNTER, 0)
+        before = compatibility_usage(client).get(COUNTER, 0)
         reply = client.execute_command(
             "FT.AGGREGATE", "ja", "*", "LOAD", "*", "LOAD", "1", "@n",
             "APPLY", "7", "AS", "n")
         row = dict(zip(reply[1][::2], reply[1][1::2]))
         assert row.get(b"$.n") == b"7", row
-        assert client.info("SEARCH").get(COUNTER, 0) - before == 0
+        assert compatibility_usage(client).get(COUNTER, 0) - before == 0
         # As in 1.2.1, an APPLY that reads the field finds nothing in `$`.
         reply = client.execute_command(
             "FT.AGGREGATE", "ja", "*", "LOAD", "*", "LOAD", "1", "@n",
@@ -126,12 +126,12 @@ class TestAggregateLoadallNamedLoads(ValkeySearchTestCaseDebugMode):
         assert set(row) == {b"$"}, row
         # An APPLY onto `$` replaces the document, so the `$` root kept for
         # `LOAD *` is not shown a second time.
-        before = client.info("SEARCH").get(COUNTER, 0)
+        before = compatibility_usage(client).get(COUNTER, 0)
         reply = client.execute_command(
             "FT.AGGREGATE", "ja", "*", "LOAD", "*", "LOAD", "1", "$",
             "APPLY", "7", "AS", "$")
         assert reply[1] == [b"$", b"7"], reply
-        assert client.info("SEARCH").get(COUNTER, 0) - before == 0
+        assert compatibility_usage(client).get(COUNTER, 0) - before == 0
         client.execute_command("CONFIG", "SET", "search.emulate-release", "1.3.0")
         assert client.execute_command(
             "FT.AGGREGATE", "ja", "*", "LOAD", "*", "LOAD", "1", "$",
@@ -166,9 +166,9 @@ class TestAggregateLoadallNamedLoads(ValkeySearchTestCaseDebugMode):
         def run(release, index, *args):
             client.execute_command(
                 "CONFIG", "SET", "search.emulate-release", release)
-            before = client.info("SEARCH").get(COUNTER, 0)
+            before = compatibility_usage(client).get(COUNTER, 0)
             reply = client.execute_command("FT.AGGREGATE", index, "*", *args)
-            ticks = client.info("SEARCH").get(COUNTER, 0) - before
+            ticks = compatibility_usage(client).get(COUNTER, 0) - before
             return [dict(zip(r[::2], r[1::2])) for r in reply[1:]], ticks
 
         doc = b'{"n":1,"x":"a","v":[1,0]}'
@@ -217,15 +217,15 @@ class TestAggregateLoadallNamedLoads(ValkeySearchTestCaseDebugMode):
             "tg", "AS", "t", "TAG")
         client.execute_command("HSET", "a:1", "tg", "red")
         IndexingTestHelper.wait_for_backfill_complete_on_node(client, "a")
-        before = client.info("SEARCH").get(COUNTER, 0)
+        before = compatibility_usage(client).get(COUNTER, 0)
         reply = client.execute_command(
             "FT.AGGREGATE", "a", "*", "LOAD", "*", "LOAD", "1", "@t")
         assert reply[1] == [b"tg", b"red"]
-        assert client.info("SEARCH").get(COUNTER, 0) - before == 1
+        assert compatibility_usage(client).get(COUNTER, 0) - before == 1
 
     def test_counted_once_across_cursor_pages(self):
         client = self._client("1.0.0")
-        before = client.info("SEARCH").get(COUNTER, 0)
+        before = compatibility_usage(client).get(COUNTER, 0)
         _, cursor = client.execute_command(
             "FT.AGGREGATE", "idx", "*", "LOAD", "*", "LOAD", "1", "@__key",
             "WITHCURSOR", "COUNT", "1")
@@ -234,7 +234,7 @@ class TestAggregateLoadallNamedLoads(ValkeySearchTestCaseDebugMode):
             _, cursor = client.execute_command("FT.CURSOR", "READ", "idx", cursor)
             pages += 1
         assert pages > 1
-        assert client.info("SEARCH").get(COUNTER, 0) - before == 1
+        assert compatibility_usage(client).get(COUNTER, 0) - before == 1
 
     def test_hybrid_always_follows_the_1_3_0_rule(self):
         client = self._client("1.3.0")
@@ -269,6 +269,6 @@ class TestAggregateLoadallNamedLoads(ValkeySearchTestCaseDebugMode):
             {**stored(i), "x": f"e{i}".encode()} for i in range(2)]
         # FT.HYBRID is new in 1.3.0 and always emulates at least 1.3.0, so
         # nothing is counted.
-        before = client.info("SEARCH").get(COUNTER, 0)
+        before = compatibility_usage(client).get(COUNTER, 0)
         assert hybrid("1.0.0", *loads) == hybrid("1.3.0", *loads)
-        assert client.info("SEARCH").get(COUNTER, 0) == before
+        assert compatibility_usage(client).get(COUNTER, 0) == before

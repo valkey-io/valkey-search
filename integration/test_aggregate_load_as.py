@@ -14,7 +14,7 @@ import struct
 
 import pytest
 import valkey
-from utils import IndexingTestHelper
+from utils import IndexingTestHelper, compatibility_usage
 from valkey.client import Valkey
 from valkey_search_test_case import ValkeySearchTestCaseDebugMode
 from valkeytestframework.conftest import resource_port_tracker
@@ -171,16 +171,16 @@ class TestAggregateLoadAs(ValkeySearchTestCaseDebugMode):
         client = self._client(emulate_release=LEGACY_RELEASE)
         self._make_hash(client)
         self._make_json(client)
-        counter = "search_compatibility-ft_aggregate_load_as"
+        counter = "ft_aggregate_load_as"
         for index, field in (("idx_hash", "@price"), ("idx_json", "$.price")):
-            before = client.info("SEARCH").get(counter, 0)
+            before = compatibility_usage(client).get(counter, 0)
             with pytest.raises(valkey.exceptions.ResponseError,
                                match=r"^Index field `AS` does not exist$"):
                 client.execute_command(
                     "FT.AGGREGATE", index, "@price:[-inf inf]",
                     "LOAD", "3", field, "AS", "cost",
                 )
-            assert client.info("SEARCH").get(counter, 0) - before == 1
+            assert compatibility_usage(client).get(counter, 0) - before == 1
 
     def test_rename_hides_declared_attribute(self):
         """A rename can shadow a declared attribute: `@price AS qty` makes the

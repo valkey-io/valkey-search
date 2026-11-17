@@ -5,8 +5,9 @@ both releases leave out."""
 from valkey.client import Valkey
 from valkey_search_test_case import ValkeySearchTestCaseBase
 from valkeytestframework.conftest import resource_port_tracker
+from utils import compatibility_usage
 
-COUNTER = "search_compatibility-aggregate_nil_alias_named"
+COUNTER = "aggregate_nil_alias_named"
 
 
 class TestAggregateNilCounter(ValkeySearchTestCaseBase):
@@ -21,9 +22,9 @@ class TestAggregateNilCounter(ValkeySearchTestCaseBase):
         client.execute_command("HSET", "h:1", "price", "10")
 
         def ticks(*args):
-            before = client.info("SEARCH").get(COUNTER, 0)
+            before = compatibility_usage(client).get(COUNTER, 0)
             reply = client.execute_command("FT.AGGREGATE", "idx", "*", *args)
-            return reply, client.info("SEARCH").get(COUNTER, 0) - before
+            return reply, compatibility_usage(client).get(COUNTER, 0) - before
 
         assert ticks("LOAD", "1", "@qty") == ([1, []], 0)
         assert ticks("LOAD", "1", "@extra") == ([1, []], 0)

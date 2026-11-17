@@ -8,12 +8,12 @@ import struct
 
 import pytest
 import valkey
-from utils import IndexingTestHelper
+from utils import IndexingTestHelper, compatibility_usage
 from valkey.client import Valkey
 from valkey_search_test_case import ValkeySearchTestCaseDebugMode
 from valkeytestframework.conftest import resource_port_tracker
 
-COUNTER = "search_compatibility-ft_aggregate_load_after_groupby"
+COUNTER = "ft_aggregate_load_after_groupby"
 GROUPBY = ["GROUPBY", "1", "@g", "REDUCE", "COUNT", "0", "AS", "c"]
 
 
@@ -32,12 +32,12 @@ class TestAggregateLoadAfterGroupby(ValkeySearchTestCaseDebugMode):
         return client
 
     def _ticks(self, client, *args):
-        before = client.info("SEARCH").get(COUNTER, 0)
+        before = compatibility_usage(client).get(COUNTER, 0)
         try:
             reply = client.execute_command("FT.AGGREGATE", "idx", "*", *args)
         except valkey.exceptions.ResponseError as e:
             reply = str(e)
-        return reply, client.info("SEARCH").get(COUNTER, 0) - before
+        return reply, compatibility_usage(client).get(COUNTER, 0) - before
 
     def test_non_schema_field_is_rejected_at_every_release(self):
         for release in ("1.0.0", "1.3.0"):
@@ -95,7 +95,7 @@ class TestAggregateLoadAfterGroupby(ValkeySearchTestCaseDebugMode):
 
     def test_counter_ticks_once_per_command_across_cursor_pages(self):
         client = self._client("1.0.0")
-        before = client.info("SEARCH").get(COUNTER, 0)
+        before = compatibility_usage(client).get(COUNTER, 0)
         reply, cursor = client.execute_command(
             "FT.AGGREGATE", "idx", "*", *GROUPBY, "LOAD", "1", "@n",
             "WITHCURSOR", "COUNT", "1")
@@ -105,7 +105,7 @@ class TestAggregateLoadAfterGroupby(ValkeySearchTestCaseDebugMode):
                 "FT.CURSOR", "READ", "idx", cursor)
             pages += 1
         assert pages > 1
-        assert client.info("SEARCH").get(COUNTER, 0) - before == 1
+        assert compatibility_usage(client).get(COUNTER, 0) - before == 1
 
     def test_hybrid_ignores_a_load_after_groupby_at_every_release(self):
         client = self._client("1.0.0")
@@ -135,9 +135,9 @@ class TestAggregateLoadAfterGroupby(ValkeySearchTestCaseDebugMode):
             expected = hybrid()
             for late in (["LOAD", "1", "@price"], ["LOAD", "1", "@extra"],
                          ["LOAD", "*"], ["LOAD", "1", "@__key"]):
-                before = client.info("SEARCH").get(COUNTER, 0)
+                before = compatibility_usage(client).get(COUNTER, 0)
                 assert hybrid(*late) == expected, (release, late)
-                assert client.info("SEARCH").get(COUNTER, 0) == before
+                assert compatibility_usage(client).get(COUNTER, 0) == before
 
     def test_late_rename_gets_the_late_load_error_not_a_name_error(self):
         client = self._client("1.3.0")

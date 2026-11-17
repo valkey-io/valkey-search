@@ -272,6 +272,16 @@ absl::Status VectorHNSW<T>::AlgoDeleteRecord(uint64_t label) {
         absl::StrCat("Internal ID not found for label: ", label));
   }
   if (!normalize_) {
+    // The deleted node keeps its vector to route the graph. With lazy
+    // unshare, give it its own copy, so it does not hold the registry's
+    // record: the sweep unshares a record once only the registry holds it.
+    if (options::GetVectorLazyUnshare().GetValue()) {
+      const auto &stored_record = algo_->GetDataByInternalId(*hnsw_internal_id);
+      auto copy = VectorRecord::Construct(
+          absl::string_view(stored_record.GetRawVector(), GetVectorDataSize()),
+          stored_record.GetReciprocalMagnitude(), GetVectorAllocator());
+      algo_->SetDataByInternalId(*hnsw_internal_id, std::move(copy));
+    }
     algo_->markDeletedInternal(*hnsw_internal_id);
     return absl::OkStatus();
   }

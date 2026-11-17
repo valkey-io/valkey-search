@@ -512,9 +512,6 @@ typedef void (*ValkeyModuleEventLoopOneShotFunc)(void *user_data);
 #define VALKEYMODULE_EVENT_REPL_ASYNC_LOAD 14
 #define VALKEYMODULE_EVENT_EVENTLOOP 15
 #define VALKEYMODULE_EVENT_CONFIG 16
-#define VALKEYMODULE_EVENT_CLUSTER_STATE_CHANGED 17
-/* Upstream Valkey's id 17 (valkeymodule.h); CLUSTER_STATE_CHANGED above is
- * unused and not an upstream event. */
 #define VALKEYMODULE_EVENT_KEY 17
 #define _VALKEYMODULE_EVENT_NEXT \
   18 /* Next event flag, should be updated if a new event added. */
@@ -578,8 +575,6 @@ static const ValkeyModuleEvent
     ValkeyModuleEvent_ForkChild = {VALKEYMODULE_EVENT_FORK_CHILD, 1},
     ValkeyModuleEvent_EventLoop = {VALKEYMODULE_EVENT_EVENTLOOP, 1},
     ValkeyModuleEvent_Config = {VALKEYMODULE_EVENT_CONFIG, 1},
-    ValkeyModuleEvent_ClusterStateChanged =
-        {VALKEYMODULE_EVENT_CLUSTER_STATE_CHANGED, 1},
     ValkeyModuleEvent_Key = {VALKEYMODULE_EVENT_KEY, 1};
 
 /* Those are values that are used for the 'subevent' callback argument. */
@@ -653,10 +648,6 @@ static const ValkeyModuleEvent
 #define _VALKEYMODULE_SUBEVENT_SHUTDOWN_NEXT 0
 #define _VALKEYMODULE_SUBEVENT_CRON_LOOP_NEXT 0
 #define _VALKEYMODULE_SUBEVENT_SWAPDB_NEXT 0
-
-#define VALKEYMODULE_SUBEVENT_CLUSTERSTATECHANGED_NOW_OK 0
-#define VALKEYMODULE_SUBEVENT_CLUSTERSTATECHANGED_NOW_FAIL 1
-#define _VALKEYMODULE_SUBEVENT_CLUSTERSTATECHANGED_NEXT 2
 
 #define VALKEYMODULE_SUBEVENT_KEY_DELETED 0
 #define VALKEYMODULE_SUBEVENT_KEY_EXPIRED 1

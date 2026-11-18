@@ -129,7 +129,7 @@ An arm that did not return a given document has no score for it, and an expressi
 | Fusion method | `RRF` | Used when there is no `COMBINE` clause. |
 | `RRF CONSTANT` | `60` | Non-negative, finite; fractional values allowed. |
 | `RRF` and `LINEAR` `WINDOW` | `20` | `WINDOW 0` means as wide as allowed. |
-| `FUNCTION` `WINDOW` | As wide as allowed | See [WINDOW](#window). |
+| `FUNCTION` `WINDOW` | As wide as allowed | |
 | `LINEAR ALPHA` / `BETA` | `0.3` / `0.7` | Give both or neither. |
 | Fused score name | `__score` | Renamed by `COMBINE ... YIELD_SCORE_AS`. |
 

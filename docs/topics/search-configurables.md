@@ -15,6 +15,7 @@ The search module uses the Valkey configuration mechanism. Each configuration be
 | search.coordinator-query-timeout-secs         | Number | 25 | Controls the gRPC deadline timeout (in seconds) for distributed coordinator query operations. It is independent of the query timeout: with the default `search.default-timeout-ms` of 50000, a remote shard still running after this deadline is treated as a failed shard (see `search.enable-partial-results`). Range: 1 to 3600. |
 | search.cursor-max-count                       | Number | 100000 | Maximum `COUNT` accepted by `WITHCURSOR` and `FT.CURSOR READ`. Range: 1 to `INT64_MAX`. |
 | search.cursor-max-idle-ms                     | Number | `INT64_MAX` | Maximum `MAXIDLE` (milliseconds) accepted by `WITHCURSOR` |
+| search.debug-mode                             | Boolean | no | Enables developer-only configurations and lifts the upper bound of `search.emulate-release`. Not listed by `CONFIG GET search.*`; read it by its full name. |
 | search.default-scorer                         | Enum | BM25STD | Scorer used when a query omits `SCORER`. See [Search - Scoring](search-scoring.md). Values: `BM25STD`. |
 | search.default-timeout-ms                     | Number | 50000 | Controls the default timeout in milliseconds for FT.SEARCH, FT.AGGREGATE and FT.HYBRID. Range: 1 to 60000. |
 | search.drain-mutation-queue-on-save           | Boolean | no | Drain the mutation queue before RDB save |

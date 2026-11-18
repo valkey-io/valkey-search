@@ -95,7 +95,7 @@ The following relational operators are available. Relational operators perform c
 5. If either input is a number and the other input can be converted to a number, then a numeric comparison is performed.
 6. The two inputs are compared as strings.
 
-With `search.emulate-release` 1.3.0 or later, the kind of comparison is instead chosen from the operand types when the expression is compiled: numeric if either operand is numeric (such as a numeric constant, a `NUMERIC` field or a numeric function), else string if either operand is a string. In a numeric comparison a string that does not convert to a number is an error for `<`, `<=`, `>` and `>=`, which fails the command, while `==` is false and `!=` is true. So `@f < 5` compares numbers, while `@f < '5'` compares strings when `@f` is a `TAG` field.
+With `search.emulate-release` 1.3.0 or later, the kind of comparison is instead chosen from the operand types when the expression is compiled: numeric if either operand is numeric (such as a numeric constant, a `NUMERIC` field or a numeric function), else string if either operand is a string. In a numeric comparison a string that does not convert to a number is an error for `<`, `<=`, `>` and `>=`, while `==` is false and `!=` is true. In `FT.AGGREGATE` and `FT.HYBRID` the error fails the command; in `FT.CREATE ... FILTER` the key is not indexed. So `@f < 5` compares numbers, while `@f < '5'` compares strings when `@f` is a `TAG` field.
 
 | Syntax | Operation                |
 | :----: | :----------------------- |
@@ -128,7 +128,7 @@ Supported numeric functions are listed. Numeric functions always convert their i
 
 ## String Processing Functions
 
-String processing functions. With `search.emulate-release` below 1.3.0, inputs are converted to strings (or, for the `offset` and `length` of `substr`, to numbers) as appropriate, except that with 1.2.1 or later `lower` and `upper` of a value that is not a string give Nil. With 1.3.0 or later a number is never converted: `lower` and `upper` of a number give Nil, and a number given to `strlen`, `startswith`, `contains` or as `s` of `substr`, or a string given as `offset` or `length` of `substr`, is an error that fails the command.
+String processing functions. With `search.emulate-release` below 1.3.0, inputs are converted to strings (or, for the `offset` and `length` of `substr`, to numbers) as appropriate, except that with 1.2.1 or later `lower` and `upper` of a value that is not a string give Nil. With 1.3.0 or later a number is never converted, except by `concat`, which converts numbers to strings (`concat(12, 'x')` gives `12x`): `lower` and `upper` of a number give Nil, and a number given to `strlen`, `startswith`, `contains` or as `s` of `substr`, or a string given as `offset` or `length` of `substr`, is an error that fails the command.
 
 |          Syntax           | Operation                                                                                                              |
 | :-----------------------: | ---------------------------------------------------------------------------------------------------------------------- |
@@ -160,7 +160,7 @@ Supported time functions include:
 | timefmt(timestamp [, fmt])  | Convert timestamp to string using strftime. `fmt` defaults to `%FT%TZ`. |
 | parsetime(time_string [, fmt]) | Parse time string into timestamp using strptime. `fmt` defaults to `%FT%TZ`. |
 
-With `search.emulate-release` 1.2.1 or later, `timefmt` with an empty format and `parsetime` of a string that does not match the format give Nil. Below 1.2.1, `timefmt` gives an empty string and `parsetime` does not detect the mismatch.
+With `search.emulate-release` 1.2.1 or later, `timefmt` with an empty format and `parsetime` of a string that does not match the format give Nil. Below 1.2.1, `timefmt` gives an empty string and `parsetime` does not detect the mismatch. `parsetime` parses only as much of the string as the format matches and ignores any text after it.
 
 ## Exists Function
 

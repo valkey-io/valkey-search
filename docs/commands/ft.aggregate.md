@@ -45,9 +45,9 @@ FT.AGGREGATE <index-name> <query>
   Honoring `AS` in the `LOAD` clause is a compatibility fix gated on `search.emulate-release` being `1.3.0` or greater; under an emulated release below that, `AS` is treated as an ordinary field name. Accepting a JSON path as `<field>` is not gated, since before it was supported such a load simply failed. See [COMPATIBILITY.md](../../COMPATIBILITY.md) for details.
 - `PARAMS <count> <name> <value> [<name> <value> ...]` (optional): `<count>` is the number of arguments that follow, i.e., twice the number of `name`/`value` pairs. `PARAMS` can be used in both the query string as well as within an expression context. See [Search - query language](../topics/search-query.md) for usage details.
 - `SCORER <scorer>` (optional): Selects the relevance scoring function used to rank text results. The only supported scorer is `BM25STD`, which is also the default.
-- `SLOP <slop>` (Optional): Specifies a slop value for proximity matching of terms.
+- `SLOP <slop>` (optional): Specifies a slop value for proximity matching of terms.
 - `TIMEOUT <timeout>` (optional): Lets you set a timeout value for the search command. This must be an integer in milliseconds.
-- `VERBATIM` (Optional): If specified stemming is not applied to term searches.
+- `VERBATIM` (optional): If specified stemming is not applied to term searches.
 - `WITHCURSOR [COUNT <count>] [MAXIDLE <maxidle>]` (optional): Returns at most `<count>` records and saves the remaining records in a cursor, which is read with [`FT.CURSOR`](ft.cursor.md). `<count>` must be between 1 and `search.cursor-max-count` (default 100000), the default is 1000. `<maxidle>` is the number of milliseconds the cursor may go unread before it is destroyed; it must be between 1 and `search.cursor-max-idle-ms` (default unlimited, see [configurables](../topics/search-configurables.md)), the default is 300000 (or `search.cursor-max-idle-ms` if that is smaller). `WITHCURSOR` may appear anywhere after the query, including between stages. If it is given more than once, the last one is used. See [`FT.CURSOR`](ft.cursor.md) for an example.
 
 - `APPLY <expression> AS <field>` (optional): An expression is computed and inserted into the record. See [APPLY Stage](#apply-stage) below. See [Search - expressions](../topics/search-expressions.md) for details on the expression syntax.
@@ -60,7 +60,7 @@ FT.AGGREGATE <index-name> <query>
 
 ### APPLY Stage
 
-The `APPLY` stage processes each record of the working set in sequence. For each record the expression is computed with output being set into the record with the provided field name. It is allowed to overwrite an existing field. The apply stage normally keeps every record. With `search.emulate-release` 1.3.0 or later, a record whose expression refers to a field the key does not have is dropped. An expression that fails with an error fails the command. See [COMPATIBILITY.md](../../COMPATIBILITY.md).
+The `APPLY` stage processes each record of the working set in sequence. For each record the expression is computed with output being set into the record with the provided field name. It is allowed to overwrite an existing field. The apply stage normally keeps every record. With `search.emulate-release` 1.3.0 or later, a record whose expression evaluates to _missing_ is dropped. `exists`, `concat` and `&&` don't produce missing, so `APPLY exists(@f) AS present` keeps the record. See [missing values](../topics/search-expressions.md#primary-values). An expression that fails with an error fails the command. See [COMPATIBILITY.md](../../COMPATIBILITY.md).
 
 ### FILTER Stage
 
@@ -85,20 +85,20 @@ Each bucket of records is processed into a single output record, discarding the 
 
 The second section is the output of the reducers for that bucket. Reducers provide an efficient mechanism for reducing (summarizing) the contents of a bucket. Each reducer function processes each record of the bucket and generates a single output value which is inserted into the second section of `GROUPBY` output record for this bucket.
 
-The output of the `GROUPBY`stage is one record for each unique bucket.
+The output of the `GROUPBY` stage is one record for each unique bucket.
 
 With a `<count>` of 0 (`GROUPBY 0`) no fields are specified and all records go into a single bucket, so the output is one record holding only the reducer outputs, or no record if the working set is empty.
 
 #### Reducers
 
-The following reducer functions are available. SUM, AVG, STDDEV and QUANTILE convert their input to a number. A group with no numeric value gives `0` for SUM and AVG, or `nan` with `search.emulate-release` 1.3.0 or later. MIN and MAX do so only with `search.emulate-release` 1.3.0 or later: values that are not numbers are skipped, and a group with no numeric value gives `inf` for MIN and `-inf` for MAX. Below 1.3.0, MIN and MAX compare values as they are, so a `TAG` or text field gives a string, and a group with no value gives nil. The other reducers operate on the values as they are.
+The following reducer functions are available. SUM, AVG, STDDEV and QUANTILE convert their input to a number. A group with no numeric value gives `0` for SUM and AVG, or `nan` with `search.emulate-release` 1.3.0 or later. MIN and MAX do so only with `search.emulate-release` 1.3.0 or later: values that are not numbers are skipped, and a group with no numeric value gives `inf` for MIN and `-inf` for MAX. Below 1.3.0, MIN and MAX compare values as they are, so a `TAG` or text field gives a string, and a group with no value has no MIN or MAX entry in its output record. The other reducers operate on the values as they are.
 
 Without `AS <name>`, the reducer's output is named from the reducer and its arguments. With `search.emulate-release` 1.3.0 or later the name is `__generated_alias` followed by the lowercased reducer name and its arguments without `@`, joined by commas (`REDUCE SUM 1 @price` gives `__generated_aliassumprice`). Below 1.3.0 it is `<REDUCER>(<args>)` (`SUM(@price)`, `COUNT()`). `FIRST_VALUE` always uses the `FIRST_VALUE(<args>)` form. Use `AS` to give the output a stable name for later stages. See [COMPATIBILITY.md](../../COMPATIBILITY.md).
 
 | Syntax                        | Function                                                                                                                           |
 | :---------------------------- | :--------------------------------------------------------------------------------------------------------------------------------- |
 | COUNT 0                       | Number of records                                                                                                                  |
-| COUNT_DISTINCT 1 <expression> | The exact number of distinct values of the expression. Caution this consumes memory proportional to the number of distinct values. |
+| COUNT_DISTINCT 1 <expression> | The exact number of distinct values of the expression. Caution: this consumes memory proportional to the number of distinct values. |
 | COUNT_DISTINCTISH 1 <expression> | Approximate number of distinct values using HyperLogLog (P=14), with ~0.81% standard error. Uses at most ~12KB memory per group. Preferred over COUNT_DISTINCT for large groups. Nil values are excluded. |
 | SUM 1 <expression>            | The numerical sum of the values of the expression.                                                                                 |
 | MIN 1 <expression>            | The smallest value of the expression (see above for values that are not numbers).                                                  |
@@ -110,7 +110,7 @@ Without `AS <name>`, the reducer's output is named from the reducer and its argu
 | FIRST_VALUE 4 <expression> BY <expression> ASC\|DESC | The value of the first expression from the record with the minimum (ASC) or maximum (DESC) comparison expression. Ties broken by first-encountered order. Invalid keyword arguments (e.g., wrong BY token or unrecognized direction) produce a parse-time error. |
 | RANDOM_SAMPLE 2 <expression> <sample_size> | A random sample of values from the expression using reservoir sampling. Returns an array of up to sample_size elements (maximum 1000). Nil values are excluded. Output is non-deterministic. |
 | TOLIST 1 <expression>         | An array of the distinct values of the expression in the group, in first-encountered order. Nil values are skipped; an array value contributes its elements. |
-| QUANTILE 2 <expression> <quantile> | An approximation of the value at the given quantile of the expression. `<quantile>` is a numeric literal from 0 to 1; 0 returns the smallest value and 1 the largest. Nil, NaN and non-numeric strings are ignored. If any values remain, the result is one of them: with n values, its position in sorted order (1 for the smallest) differs from `<quantile>` × n, rounded up and at least 1, by at most 1% of n. For groups of more than 500 values the result can depend on the order in which records are processed. If a group has no remaining numeric values, the result is `nan`. |
+| QUANTILE 2 <expression> <quantile> | An approximation of the value at the given quantile of the expression. `<quantile>` is a numeric literal from 0 to 1; 0 returns the smallest value and 1 the largest. Nil, NaN and non-numeric strings are ignored. The result is always one of the remaining values: with n values, its position in sorted order (1 for the smallest) differs from `<quantile>` × n, rounded up and at least 1, by at most 1% of n. For groups of more than 500 values the result can depend on the order in which records are processed. If a group has no remaining numeric values, the result is `nan`. |
 
 ## Reply
 

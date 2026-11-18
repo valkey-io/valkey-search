@@ -530,7 +530,9 @@ bool VectorRegistry::HasMatchingVectorIndex(
     interned_key = StringInternStore::Intern(key);
   }
   for (const auto *sub : subscriptions) {
-    if (key_obj && !sub->GetAttributeDataType().IsProperType(key_obj)) {
+    // An empty key may be logically expired: its type is unknown, not wrong.
+    if (key_obj && ValkeyModule_KeyType(key_obj) != VALKEYMODULE_KEYTYPE_EMPTY &&
+        !sub->GetAttributeDataType().IsProperType(key_obj)) {
       continue;
     }
     for (const auto *index : sub->GetVectorIndexes()) {

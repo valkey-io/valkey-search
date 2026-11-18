@@ -96,9 +96,10 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         mixed: bool = False,
         name: str = "idx",
         prefix: str = "doc",
+        distance: str = "L2",
     ) -> Index:
         self.assert_sharing_active()
-        fields = [Vector("vec", DIM, type=algo, distance="L2")]
+        fields = [Vector("vec", DIM, type=algo, distance=distance)]
         if mixed:
             fields += [Numeric("num"), Tag("tag")]
         return Index(
@@ -2141,6 +2142,72 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         # the "expired" keyspace notification, which reclaims doc:0's retained
         # VectorRecord.
         self.client.execute_command("DEBUG", "SET-ACTIVE-EXPIRE", "1")
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0)
+
+    @pytest.mark.parametrize("distance", ["L2", "IP", "COSINE"])
+    @pytest.mark.parametrize("expire", ["key", "field"])
+    @pytest.mark.parametrize("index_count", [1, 2], ids=["one_index", "two_indexes"])
+    def test_dropindex_keeps_expired_hnsw_vectors_readable(
+        self, distance: str, expire: str, index_count: int
+    ):
+        """Dropping the indexes over shared HNSW vectors whose key or field
+        has logically expired frees bytes the hash still points at.
+
+        Stimulus: index GAP_KEYS hashes, expire the key or the vector field,
+        then drop each index in turn and let new vectors reuse freed memory.
+        The cron cannot see the expired key or field, so it skips the unshare
+        but still erased the registry entry that owns the bytes.
+
+        Expected: HGET and DUMP (the RDB serializer, as SAVE uses) still read
+        the original vector after every drop.
+        Observed before the fix: SIGSEGV in HGET, or the entry already gone.
+        """
+        # Import mode stops both active and lazy expiry, and lets an
+        # import-source client read logically expired keys and fields.
+        self.client.config_set("import-mode", "yes")
+        reader = self.server.get_new_client()
+        reader.execute_command("CLIENT", "IMPORT-SOURCE", "ON")
+
+        indexes = [
+            self.build_index(name=f"idx{i}", distance=distance)
+            for i in range(index_count)
+        ]
+        for index in indexes:
+            index.create(self.client)
+        self.write_distinct_keys("doc", other="x")
+        for index in indexes:
+            self.wait_for_docs(index, self.GAP_KEYS)
+        assert self.registry_stat("entry_cnt") == self.GAP_KEYS
+
+        keys = [f"doc:{k}" for k in range(self.GAP_KEYS)]
+        for key in keys:
+            if expire == "key":
+                self.client.pexpire(key, 1)
+            else:
+                self.client.execute_command("HPEXPIRE", key, 1, "FIELDS", 1, "vec")
+        time.sleep(0.05)
+        assert self.client.hget(keys[0], "vec") is None, "vector is not expired"
+        dumps = [reader.dump(key) for key in keys]
+
+        for dropped, index in enumerate(indexes, start=1):
+            index.drop(self.client)
+            self.wait_for_unshare_drain()
+
+            fill = self.reuse_freed_vector_memory()
+            for k, key in enumerate(keys):
+                assert reader.hget(key, "vec") == vector(k), (
+                    f"{key} reads freed memory after {dropped} of {index_count} drops"
+                )
+                assert reader.dump(key) == dumps[k], (
+                    f"{key} serializes freed memory after {dropped} of {index_count} drops"
+                )
+            assert self.client.save()
+            assert self.registry_stat("entry_cnt") == 2 * self.GAP_KEYS
+            self.client.delete(*[f"fill:{k}" for k in range(self.GAP_KEYS)])
+            fill.drop(self.client)
+            self.wait_for_unshare_drain()
+
+        reader.delete(*keys)
         waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0)
 
 

@@ -310,9 +310,21 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
         stats = _get_vector_registry_stats(client)
         assert stats["entry_cnt"] == 1
 
-        # 3. Remove the vector field while keeping the document alive, and verify drop to 0 in vector registry
+        # 3. Remove the vector field while keeping the document alive. A hash
+        # field that is not visible may be logically expired and still hold
+        # the shared bytes, so the registry keeps a hash entry until the key
+        # is deleted.
         if data_type == KeyDataType.HASH:
             client.hdel(key1, "vec")
+            waiters.wait_for_equal(
+                lambda: client.execute_command(
+                    "FT.SEARCH", index_name, "*=>[KNN 1 @vec $q]",
+                    "PARAMS", "2", "q", vec_bytes1, "DIALECT", "2",
+                )[0],
+                0,
+            )
+            assert _get_vector_registry_stats(client)["entry_cnt"] == 1
+            client.delete(key1)
         else:
             client.execute_command("JSON.DEL", key1, "$.vec")
 

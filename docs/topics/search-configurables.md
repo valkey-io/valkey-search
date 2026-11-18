@@ -7,7 +7,7 @@ description: Valkey Search Module Configurable Settings
 
 The search module uses the Valkey configuration mechanism. Each configuration below can be set as a module load argument or with the `CONFIG SET` command.
 
-The module also has developer-only configurations, intended for testing and diagnosing the module. They are not listed on this page. They can be changed with `CONFIG SET` or as module load arguments only while `search.debug-mode` is `yes` (default `no`); values set in the Valkey configuration file are accepted regardless of `search.debug-mode`.
+The module also has developer-only configurations, intended for testing and diagnosing the module. They are not listed on this page. Enabling developer-only configurations is not a supported operating mode. They can be changed with `CONFIG SET` or as module load arguments only while `search.debug-mode` is `yes` (default `no`); values set in the Valkey configuration file are accepted regardless of `search.debug-mode`.
 
 | Name                                          |  Type   | Default Value | Description                                                                                                                       |
 | :-------------------------------------------- | :-----: | :-----------: | :-------------------------------------------------------------------------------------------------------------------------------- |

@@ -137,8 +137,6 @@ An arm that did not return a given document has no score for it, and an expressi
 
 `WINDOW` bounds how many of each arm's top results take part in fusion. It is a per-arm count, so with two arms the fused list can hold up to twice the window before the processing stages run. The `VSIM` arm returns at most `K` results, so a window larger than `K` does not bring in more vector results: raise `K` together with `WINDOW`.
 
-The largest window allowed is 1,000,000, and larger values are rejected. `WINDOW 0` means "as wide as allowed", that is 1,000,000, and `FUNCTION` uses the same width when no `WINDOW` is given.
-
 ## Score naming
 
 The fused score is emitted under `__score` unless `COMBINE ... YIELD_SCORE_AS` names it otherwise.

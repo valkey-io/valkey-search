@@ -1760,11 +1760,11 @@ TEST_F(VectorRegistryTest, ProcessPendingUnsharesCountsStalledBatch) {
   EXPECT_EQ(registry.GetPendingUnsharesCount(), 2);
   EXPECT_EQ(registry.GetStats().unshare_stalled_batches, stalled + 1);
 
-  // With nothing left outside the batch, deferring everything is not a stall.
+  // A batch that holds the whole queue and defers everything is a stall too.
   VMSDK_EXPECT_OK(options::GetVectorUnshareBatchSize().SetValue(2));
   EXPECT_EQ(registry.ProcessPendingUnshares(2), 2);
   EXPECT_EQ(registry.GetPendingUnsharesCount(), 2);
-  EXPECT_EQ(registry.GetStats().unshare_stalled_batches, stalled + 1);
+  EXPECT_EQ(registry.GetStats().unshare_stalled_batches, stalled + 2);
 
   held.clear();
   EXPECT_CALL(*kMockValkeyModule, HashHasStringRef(testing::_, testing::_))

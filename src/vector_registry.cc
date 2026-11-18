@@ -531,7 +531,8 @@ bool VectorRegistry::HasMatchingVectorIndex(
   }
   for (const auto *sub : subscriptions) {
     // An empty key may be logically expired: its type is unknown, not wrong.
-    if (key_obj && ValkeyModule_KeyType(key_obj) != VALKEYMODULE_KEYTYPE_EMPTY &&
+    if (key_obj &&
+        ValkeyModule_KeyType(key_obj) != VALKEYMODULE_KEYTYPE_EMPTY &&
         !sub->GetAttributeDataType().IsProperType(key_obj)) {
       continue;
     }
@@ -696,14 +697,13 @@ size_t VectorRegistry::ProcessPendingUnshares(uint32_t batch_size) {
     ExtractTrackedRecord(db_num, rk.key, rk.attribute_identifier);
   }
 
-  // A batch in which every item was deferred, while other unshares waited
-  // outside it, made no progress: the busy items may keep filling batches.
-  if (!batch.empty() && deferred_nodes.size() == batch.size() &&
-      !pending_unshares_.empty()) {
+  // A batch in which every item was deferred made no progress: the busy items
+  // are retried every cron tick and may keep filling batches.
+  if (!batch.empty() && deferred_nodes.size() == batch.size()) {
     ++stats_.unshare_stalled_batches;
     VMSDK_LOG_EVERY_N_SEC(WARNING, ctx_.get(), 60)
         << "Vector unshare made no progress: all " << batch.size()
-        << " items in the batch are still referenced while "
+        << " items in the batch are still referenced, "
         << GetPendingUnsharesCount() << " other unshares wait";
   }
   for (auto &deferred : deferred_nodes) {

@@ -5,7 +5,9 @@ description: Valkey Search Module Configurable Settings
 
 # Configurables
 
-The search module uses the Valkey configuration mechanism. Each configuration below can be set as a module load argument or with the `CONFIG SET` command, except developer-only configurations, which can be changed only while `search.debug-mode` is `yes` (default `no`). Developer-only configurations set in the Valkey configuration file are accepted regardless of `search.debug-mode`.
+The search module uses the Valkey configuration mechanism. Each configuration below can be set as a module load argument or with the `CONFIG SET` command.
+
+The module also has developer-only configurations, intended for testing and diagnosing the module. They are not listed on this page. They can be changed with `CONFIG SET` or as module load arguments only while `search.debug-mode` is `yes` (default `no`); values set in the Valkey configuration file are accepted regardless of `search.debug-mode`.
 
 | Name                                          |  Type   | Default Value | Description                                                                                                                       |
 | :-------------------------------------------- | :-----: | :-----------: | :-------------------------------------------------------------------------------------------------------------------------------- |
@@ -22,8 +24,6 @@ The search module uses the Valkey configuration mechanism. Each configuration be
 | search.emulate-release                        | Version | 1.0.0 | Release whose behavior is emulated for gated compatibility fixes (see [COMPATIBILITY.md](../../COMPATIBILITY.md#compatibility-defects)). The default is `<major>.0.0` of the running module, so fixes gated at 1.3.0 are off by default. Range: 1.0.0 to the running module version; the upper bound is lifted while `search.debug-mode` is `yes`. |
 | search.enable-consistent-results              | Boolean | no | Default option for delivering consistent results when timeout occurs (uses CONSISTENT if not explicitly provided) |
 | search.enable-partial-results                 | Boolean | yes | Default option for delivering partial results when timeout occurs (uses SOMESHARDS if not explicitly provided) |
-| search.ft-info-rpc-timeout-ms                 | Number | 2500 | RPC timeout in milliseconds for FT.INFO fanout command. Range: 100 to 300000. Developer only: requires `search.debug-mode yes`. |
-| search.ft-info-timeout-ms                     | Number | 5000 | Timeout in milliseconds for FT.INFO fanout command. Range: 100 to 300000. Developer only: requires `search.debug-mode yes`. |
 | search.fuzzy-max-distance                     | Number | 3 | Controls the maximum allowed edit distance for fuzzy search queries. Range: 1 to 50. |
 | search.high-priority-weight                   | Number | 100 | Weight for high priority tasks in thread pools; low priority = 100 - this value. Range: 0 to 100. |
 | search.hnsw-block-size                        | Number | 10240 | HNSW resize configuration parameter for vector index block allocation. Range: 0 to 4294967295. |
@@ -31,7 +31,6 @@ The search module uses the Valkey configuration mechanism. Each configuration be
 | search.local-fanout-queue-wait-threshold      | Number | 50 | Queue wait threshold in milliseconds for preferring local node in fanout operations. Range: 0 to 10000. |
 | search.log-level                              | Enum | notice | Controls module log level verbosity. Values: `warning`, `notice`, `verbose`, `debug`. |
 | search.max-attributes                         | Number | 1000 | Controls the max number of attributes per index. Range: 1 to 10000. |
-| search.max-combine-window                     | Number | 1000000 | Maximum `COMBINE ... WINDOW` accepted by FT.HYBRID; `WINDOW 0` and the `FUNCTION` default window resolve to this value. Range: 1 to 4294967295. Developer only: requires `search.debug-mode yes`. |
 | search.max-group-key-expansion                | Number | 65536 | Maximum number of groups one record can expand into in an FT.AGGREGATE GROUPBY over multi-value fields; exceeding it fails the query. Range: 1 to 4294967295. |
 | search.max-indexes                            | Number | 1000 | Controls the maximum number of search indexes that can be created in the system. Range: 1 to 10000000. |
 | search.max-mutation-queue-size-on-restore     | Number | 10000 | Limits the mutation queue size during RDB restore to prevent memory spikes. Range: 1 to 1000000. |

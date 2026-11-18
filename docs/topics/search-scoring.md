@@ -299,6 +299,16 @@ It uses the number of keys, the number of keys that contain each term, and the a
 Thus the same key can get a different score in cluster mode than on a single node.
 The results from all shards are then sorted together by these scores, so the merged order can compare scores that were computed from different statistics.
 
+# Scores of Keys Changed During a Query
+
+If a key changes while a query is running, the query computes that key's score again from its current content before it returns the results, unless the query skips this processing; see [Query Operations](search.md#query-operations).
+This applies when the score is a relevance score. For a KNN query ranked by distance, the distance is computed again from the current vector instead.
+
+Only the keys that changed are scored again. The other keys keep the scores from the search.
+The new score uses the current statistics of the index, such as the number of keys, the number of keys that contain each term, and the average key length.
+A change can also shift these statistics for keys that did not change, but those keys are not scored again.
+Thus a single reply can contain scores computed from different states of the index, and its order can differ from the order that a new query returns.
+
 # How the Score Is Computed
 
 ## Term Score

@@ -143,3 +143,4 @@ Without a `LOAD` clause every record carries `__key` and the fused score, under 
 - **`BATCH_SIZE` is accepted but ignored.** It is valid only after `POLICY BATCHES`; fixed-size batch iteration is tracked separately.
 - **`NOCONTENT` is rejected.** `FT.HYBRID` always returns records; a query wanting keys only can ask for no `LOAD` clause.
 - **`FT.HYBRID` cannot run inside `MULTI`/`EXEC` or a Lua script**, and is unavailable when the reader thread pool is disabled. All three force synchronous execution, which cannot revalidate the two arms' results against concurrent writes.
+- **Concurrent document changes.** Each arm is revalidated against concurrent changes before fusion. See [Post-search re-filtering and re-scoring](../topics/search.md#post-search-re-filtering-and-re-scoring).

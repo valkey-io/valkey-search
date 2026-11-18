@@ -766,6 +766,27 @@ class HugeFlatHashMap
 
   V &operator[](const K &key) { return try_emplace(key).first->second; }
   V &operator[](K &&key) { return try_emplace(std::move(key)).first->second; }
+
+  // Inserts the element owned by `node`, as from extract(), and migrates as
+  // every insert does, with the same invalidation. Like absl, an empty node
+  // inserts nothing and returns end(), a node whose key is already present is
+  // left untouched, and a node whose element is inserted is left empty.
+  std::pair<iterator, bool> insert_and_migrate(
+      typename Base::node_type &&node) {
+    if (node.empty()) {
+      return {this->end(), false};
+    }
+    auto result =
+        this->Emplace(this->Prehash(node.key()), [&](const auto &ctor) {
+          ctor(std::piecewise_construct,
+               std::forward_as_tuple(std::move(node.key())),
+               std::forward_as_tuple(std::move(node.mapped())));
+        });
+    if (result.second) {
+      node = typename Base::node_type();
+    }
+    return result;
+  }
 };
 
 // The set counterpart of HugeFlatHashMap, with the same rehash behavior.
@@ -795,6 +816,23 @@ class HugeFlatHashSet
     DCHECK(this->fg_.key_eq()(key.key, value));
     return this->Emplace(key,
                          [&](const auto &ctor) { ctor(std::move(value)); });
+  }
+  // Inserts the element owned by `node`, as from extract(), and migrates as
+  // every insert does, with the same invalidation. Like absl, an empty node
+  // inserts nothing and returns end(), a node whose value is already present
+  // is left untouched, and a node whose element is inserted is left empty.
+  std::pair<iterator, bool> insert_and_migrate(
+      typename Base::node_type &&node) {
+    if (node.empty()) {
+      return {this->end(), false};
+    }
+    auto result =
+        this->Emplace(this->Prehash(node.value()),
+                      [&](const auto &ctor) { ctor(std::move(node.value())); });
+    if (result.second) {
+      node = typename Base::node_type();
+    }
+    return result;
   }
 };
 

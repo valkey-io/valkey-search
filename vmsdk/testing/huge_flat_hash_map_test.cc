@@ -1293,6 +1293,85 @@ TEST_F(FlatHashMapTest, ExtractMovesTheElementOutAndMigrates) {
   EXPECT_EQ(values.count(next - 1), 0);
 }
 
+// insert_and_migrate() puts extracted nodes back, migrating a batch as every
+// insert does. An empty node or one whose key is present inserts nothing.
+TEST_F(FlatHashMapTest, InsertAndMigrateReinsertsExtractedNodes) {
+  SetBatch(8);
+  Set s;
+  int64_t next = 0;
+  for (; next < 32; ++next) {
+    s.insert(next);
+  }
+  const size_t cycles = Peer::Cycles(s);
+  while (Peer::Cycles(s) == cycles) {
+    ASSERT_LT(next, 1000000);
+    s.insert(next++);
+  }
+  ASSERT_GT(Peer::Bg(s).size(), 2 * (1 + 8));
+
+  const int64_t key = *Peer::Bg(s).begin();
+  auto node = s.extract(s.find(key));
+  const size_t bg = Peer::Bg(s).size();
+  auto [it, inserted] = s.insert_and_migrate(std::move(node));
+  EXPECT_TRUE(inserted);
+  EXPECT_EQ(*it, key);
+  EXPECT_TRUE(node.empty());
+  EXPECT_TRUE(s.contains(key));
+  EXPECT_EQ(Peer::Bg(s).size(), bg - 8) << "the insert migrated a batch";
+
+  Set::node_type empty;
+  auto [end_it, empty_inserted] = s.insert_and_migrate(std::move(empty));
+  EXPECT_FALSE(empty_inserted);
+  EXPECT_TRUE(end_it == s.end());
+
+  Set other;
+  other.insert(key);
+  auto duplicate = other.extract(other.find(key));
+  const size_t size = s.size();
+  auto [dup_it, dup_inserted] = s.insert_and_migrate(std::move(duplicate));
+  EXPECT_FALSE(dup_inserted);
+  EXPECT_EQ(*dup_it, key);
+  ASSERT_FALSE(duplicate.empty()) << "a rejected node keeps its element";
+  EXPECT_EQ(duplicate.value(), key);
+  EXPECT_EQ(s.size(), size);
+
+  // Drain every element through nodes and put them all back.
+  std::vector<Set::node_type> nodes;
+  while (!s.empty()) {
+    nodes.push_back(s.extract(s.begin()));
+  }
+  for (auto &n : nodes) {
+    const int64_t value = n.value();
+    ASSERT_TRUE(s.insert_and_migrate(std::move(n)).second) << value;
+  }
+  EXPECT_EQ(s.size(), size);
+  for (int64_t k = 0; k < next; ++k) {
+    EXPECT_TRUE(s.contains(k)) << k;
+  }
+}
+
+TEST_F(FlatHashMapTest, MapInsertAndMigrateReinsertsExtractedNodes) {
+  Map m;
+  for (int64_t k = 0; k < 100; ++k) {
+    m[k] = 10 * k;
+  }
+  auto node = m.extract(m.find(7));
+  EXPECT_FALSE(m.contains(7));
+  auto [it, inserted] = m.insert_and_migrate(std::move(node));
+  EXPECT_TRUE(inserted);
+  EXPECT_TRUE(node.empty());
+  EXPECT_EQ(it->first, 7);
+  EXPECT_EQ(m.at(7), 70);
+
+  Map other;
+  other[7] = 1;
+  auto duplicate = other.extract(other.find(7));
+  EXPECT_FALSE(m.insert_and_migrate(std::move(duplicate)).second);
+  ASSERT_FALSE(duplicate.empty());
+  EXPECT_EQ(duplicate.mapped(), 1);
+  EXPECT_EQ(m.at(7), 70);
+}
+
 // The direct check before every insert into fg_: a migration into a full
 // foreground fails, while re-inserting an existing key into it is fine.
 TEST_F(FlatHashMapTest, InsertIntoFullForegroundChecks) {

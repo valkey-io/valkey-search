@@ -272,6 +272,15 @@ absl::Status VectorHNSW<T>::AlgoDeleteRecord(uint64_t label) {
         absl::StrCat("Internal ID not found for label: ", label));
   }
   if (!normalize_) {
+    // A deleted node keeps its data for graph traversal. Give it a private
+    // copy, so that it does not keep a vector shared with others busy.
+    const auto &stored_record = algo_->GetDataByInternalId(*hnsw_internal_id);
+    if (stored_record.RefCount() > 1) {
+      auto vector_record = VectorRecord::Construct(
+          absl::string_view(stored_record.GetRawVector(), GetVectorDataSize()),
+          stored_record.GetReciprocalMagnitude(), GetVectorAllocator());
+      algo_->SetDataByInternalId(*hnsw_internal_id, std::move(vector_record));
+    }
     algo_->markDeletedInternal(*hnsw_internal_id);
     return absl::OkStatus();
   }

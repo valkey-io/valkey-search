@@ -201,7 +201,7 @@ FT.HYBRID idx SEARCH "@title:shoes" YIELD_SCORE_AS ts VSIM @vec $q KNN 2 K 2 YIE
 ## Cluster behavior
 
 - `FT.HYBRID` takes no `SOMESHARDS`, `ALLSHARDS`, `CONSISTENT` or `INCONSISTENT` arguments. Partial and consistent results follow the `search.enable-partial-results` and `search.enable-consistent-results` configurations.
-- A shard where either arm fails is dropped for both arms, so no document is fused from one arm's results only. An arm that no shard answered is an error, even when partial results are enabled. A cluster consistency failure is always an error.
+- A shard where either arm fails is dropped for both arms: none of that shard's results from the other arm are fused either. An arm that no shard answered is an error, even when partial results are enabled. A cluster consistency failure is always an error.
 - Each shard is asked for up to `max(WINDOW, 10)` results for the `SEARCH` arm and `max(K, WINDOW)` for the `VSIM` arm. A `COMBINE FUNCTION` with no `WINDOW` asks each shard for up to the widest window allowed, which can be costly.
 - In cluster mode each arm is checked against concurrent writes on its own shard, so on a given shard the two arms can see different write states.
 - Text scores are computed per shard; see [Per-Shard Values](../topics/search-scoring.md#per-shard-values).

@@ -207,7 +207,9 @@ template <typename T>
 absl::Status VectorFlat<T>::ModifyRecordImpl(uint64_t internal_id,
                                              VectorRecord &&vector_record) {
   absl::ReaderMutexLock lock(&resize_mutex_);
-  VectorRecord *stored_record = algo_->GetPoint(internal_id);
+  // A concurrent removePoint() can move or destroy this slot.
+  std::unique_lock<std::mutex> index_lock(algo_->index_lock);
+  VectorRecord *stored_record = algo_->GetPointLockFree(internal_id);
   if (!stored_record) {
     return absl::InternalError(
         absl::StrCat("Couldn't find internal id: ", internal_id));

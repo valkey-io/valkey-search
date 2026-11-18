@@ -4561,6 +4561,83 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
             static_cast<size_t>(kTotal - kThreads * kDeletedPerThread));
 }
 
+// Modifies racing with removes that compact FLAT slots.
+TEST_F(VectorIndexTest, FlatConcurrentModifyAndRemove)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  constexpr int kThreads = 16;
+  constexpr int kRounds = 32000;
+  constexpr int kDim = 4;
+  auto index = VectorFlat<float>::Create(
+      CreateFlatVectorIndexProto(kDim, data_model::DISTANCE_METRIC_L2,
+                                 /*initial_cap=*/2 * kRounds, kBlockSize),
+      attribute_identifier, attribute_data_type, 0);
+  ASSERT_TRUE(index.ok());
+  std::mt19937 rng(42);
+  std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+  auto random_vectors = [&](int n) {
+    std::vector<std::vector<float>> vs(n, std::vector<float>(kDim));
+    for (auto &v : vs) {
+      for (auto &x : v) x = dist(rng);
+    }
+    return vs;
+  };
+  auto initial = random_vectors(kRounds);
+  auto modified = random_vectors(kRounds);
+  auto fillers = random_vectors(kRounds);
+  std::vector<InternedStringPtr> keys;
+  std::vector<InternedStringPtr> filler_keys;
+  for (int i = 0; i < kRounds; ++i) {
+    keys.push_back(IndexToKey(i));
+    filler_keys.push_back(IndexToKey(kRounds + i));
+  }
+  auto attr = StringInternStore::Intern(attribute_identifier);
+  auto add = [&](const InternedStringPtr &key, const std::vector<float> &v) {
+    return (*index)
+        ->AddRecord(key, testing_infra::MakeVectorAttributeData(key, attr,
+                                                                VectorToStr(v)))
+        .ok();
+  };
+  for (int i = 0; i < kRounds; ++i) {
+    ASSERT_TRUE(add(filler_keys[i], fillers[i]));
+  }
+
+  // A new key lands in the last slot, where a concurrent remove of a filler
+  // can move it while it is being modified.
+  std::vector<std::thread> threads;
+  std::atomic<int> failures{0};
+  for (int t = 0; t < kThreads; ++t) {
+    threads.emplace_back([&, t]() {
+      for (int i = t; i < kRounds; i += kThreads) {
+        if (!add(keys[i], initial[i]) ||
+            !(*index)
+                 ->ModifyRecord(keys[i],
+                                testing_infra::MakeVectorAttributeData(
+                                    keys[i], attr, VectorToStr(modified[i])))
+                 .ok() ||
+            !(*index)
+                 ->RemoveRecord(filler_keys[i], DeletionType::kRecord)
+                 .ok()) {
+          ++failures;
+        }
+      }
+    });
+  }
+  for (auto &th : threads) {
+    th.join();
+  }
+  EXPECT_EQ(failures.load(), 0);
+  int stale = 0;
+  for (int i = 0; i < kRounds; ++i) {
+    auto stored = (*index)->GetVectorDuringSearch(keys[i]);
+    ASSERT_TRUE(stored.ok());
+    if (std::memcmp(stored->data(), modified[i].data(), kDim * sizeof(float)) !=
+        0) {
+      ++stale;
+    }
+  }
+  EXPECT_EQ(stale, 0);
+}
+
 }  // namespace
 
 }  // namespace valkey_search::indexes

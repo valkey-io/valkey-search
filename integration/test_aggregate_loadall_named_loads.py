@@ -145,8 +145,7 @@ class TestAggregateLoadallNamedLoads(ValkeySearchTestCaseDebugMode):
 
     def test_named_loads_add_nothing_below_1_3_0(self):
         """1.2.1 ignored a named load under `LOAD *`: a JSON path added no
-        column and a NUMERIC field kept its stored text. A later stage still
-        reads the field."""
+        column and a NUMERIC field kept its stored text."""
         client = self._client("1.0.0")
         client.execute_command(
             "FT.CREATE", "j", "ON", "JSON", "PREFIX", "1", "j:", "SCHEMA",
@@ -177,10 +176,10 @@ class TestAggregateLoadallNamedLoads(ValkeySearchTestCaseDebugMode):
             assert run("1.0.0", "j", *args) == ([{b"$": doc}], 1), load
         assert run("1.3.0", "j", "LOAD", "*", "LOAD", "1", "$.x") == (
             [{b"$.x": b"a", b"$": doc}], 0)
-        # As in 1.2.1, the stage finds no field in the `$` document.
-        assert run("1.0.0", "j", "LOAD", "*", "LOAD", "1", "$.x", "GROUPBY",
-                   "1", "@$.x", "REDUCE", "COUNT", "0", "AS", "c") == (
-            [{b"c": b"1"}], 1)
+        # 1.2.1 rejects a stage on a JSON path outside the schema.
+        with pytest.raises(valkey.exceptions.ResponseError):
+            run("1.0.0", "j", "LOAD", "*", "LOAD", "1", "$.x", "GROUPBY",
+                "1", "@$.x", "REDUCE", "COUNT", "0", "AS", "c")
         rows, ticks = run("1.0.0", "v", "LOAD", "*", "LOAD", "1", "@price")
         assert rows[0][b"price"] == b"10.50" and ticks == 1
         # On HASH `LOAD *` returns the vector, so naming it adds nothing.

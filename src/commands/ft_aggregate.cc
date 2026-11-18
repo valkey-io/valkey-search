@@ -184,6 +184,17 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
     if (!options::EnabledInVersion(1, 3, 0)) {
       // 1.3.0 rejects a LOAD after GROUPBY; count it here too.
       VMSDK_RETURN_IF_ERROR(CheckLoadAfterGroupby(params));
+      // On JSON a stage would find no such field in `$`, so error as 1.2.1
+      // did rather than answer wrong.
+      if (params.index_schema->GetAttributeDataType().ToProto() ==
+          data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON) {
+        for (const auto &load : params.loads_) {
+          if (load.newly_loadable && params.read_names_.contains(load.alias)) {
+            return absl::NotFoundError(absl::StrCat(
+                "Index field `", load.identifier, "` does not exist"));
+          }
+        }
+      }
       if (LoadAllFetchChangesReply(params)) {
         VALKEY_SEARCH_COMPATIBILITY_FIX(
             1, 3, 0, "ft_aggregate_loadall_fetch", [] {}, [] {});

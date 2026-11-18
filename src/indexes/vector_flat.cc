@@ -375,8 +375,10 @@ VectorRecord &VectorFlat<T>::GetVectorLockFree(uint64_t internal_id) const {
 }
 
 template <typename T>
-VectorRecord &VectorFlat<T>::GetVector(uint64_t internal_id) const {
-  return *algo_->GetPoint(internal_id);
+VectorRecord VectorFlat<T>::GetVector(uint64_t internal_id) const {
+  std::unique_lock<std::mutex> index_lock(algo_->index_lock);
+  auto *ptr = algo_->GetPointLockFree(internal_id);
+  return ptr ? *ptr : VectorRecord();
 }
 
 template class VectorFlat<float>;

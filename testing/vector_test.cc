@@ -4616,7 +4616,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
                  .ok() ||
             !(*index)
                  ->RemoveRecord(filler_keys[i], DeletionType::kRecord)
-                 .ok()) {
+                 .value_or(false)) {
           ++failures;
         }
       }

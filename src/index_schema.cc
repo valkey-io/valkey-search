@@ -599,7 +599,7 @@ void TrackResults(
 void IndexSchema::OnKeyspaceNotification(ValkeyModuleCtx *ctx, int type,
                                          const char *event,
                                          ValkeyModuleString *key) {
-  if (ABSL_PREDICT_FALSE(!IsInCurrentDB(ctx))) {
+  if (ABSL_PREDICT_FALSE(!IsInDB(GetKeyspaceNotificationDb(ctx, event, key)))) {
     return;
   }
   ProcessKeyspaceNotification(ctx, key, false);

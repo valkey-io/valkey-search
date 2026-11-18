@@ -230,6 +230,9 @@ TEST_F(ExprTest, ResultTypes) {
       {"concat(1, 2)", Type::kString},
       {"timefmt(1)", Type::kString},
       {"(lower(1))", Type::kString},
+      {"case(1, 'a', 'b')", Type::kString},
+      {"case(1, 1, 2)", Type::kNumber},
+      {"case(1, 1, 'b')", Type::kMixed},
   };
   for (auto& [expr, type] : cases) {
     auto e = Expression::Compile(cc, expr);
@@ -448,6 +451,34 @@ TEST_F(RedisearchSemanticsTest, FollowsEmulateRelease) {
   EXPECT_TRUE(Eval("lower(5)").IsNull());
   EXPECT_EQ(Eval("1 || (@one < 'abc')"), Value(true));
   VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue(saved));
+}
+
+TEST_F(RedisearchSemanticsTest, CaseEvaluatesOnlyTheSelectedBranch) {
+  cc.known_attr.insert("gone");
+  record_->attrs["gone"] = Value::Missing();
+  EXPECT_EQ(Eval("case(1, @one, @gone)"), Value(1.0));
+  EXPECT_EQ(Eval("case(0, @gone, @two)"), Value(2.0));
+  EXPECT_TRUE(Eval("case(@gone, 1, 2)").IsMissing());
+  EXPECT_TRUE(Eval("case(@one < 'abc', 1, 2)").IsError());
+}
+
+TEST_F(RedisearchSemanticsTest, CaseComparisonFollowsItsBranches) {
+  EXPECT_EQ(Eval("case(1, 'yes', 'no') == 'yes'"), Value(true));
+  EXPECT_EQ(Eval("case(1, 10, 9) < '9'"), Value(false));  // 10 < 9
+  EXPECT_EQ(Eval("case(0, 10, 'abc') == 'abc'"), Value(true));
+  EXPECT_TRUE(Eval("case(1, 10, 'abc') < 'b'").IsError());  // 10 < "b"
+}
+
+TEST_F(RedisearchSemanticsTest, CaseComparesArraysElementByElement) {
+  for (const char* name : {"a", "b"}) {
+    cc.known_attr.insert(name);
+    cc.attr_types[name] = Expression::Type::kArray;
+  }
+  record_->attrs["a"] = Value({Value(1.0)});
+  record_->attrs["b"] = Value({Value(2.0)});
+  EXPECT_EQ(Eval("case(1, @a, 0) == @a"), Value(true));
+  EXPECT_EQ(Eval("case(1, @a, 0) == @b"), Value(false));
+  EXPECT_EQ(Eval("case(1, @a, 0) == ''"), Value(true));  // an array reads as ""
 }
 
 // ---------------------------------------------------------------------------

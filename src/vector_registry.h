@@ -15,11 +15,13 @@
 #include "absl/base/no_destructor.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
+#include "absl/hash/hash.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/vector_base.h"
 #include "src/utils/string_interning.h"
+#include "vmsdk/src/huge/flat_hash_map.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -69,9 +71,9 @@ class VectorRegistry {
   void RemoveIndexKeys(int db_num,
                        const InternedStringPtr &attribute_identifier,
                        absl::Span<const InternedStringPtr> keys);
-  void RemoveIndexKeys(int db_num,
-                       const InternedStringPtr &attribute_identifier,
-                       absl::flat_hash_map<uint64_t, InternedStringPtr> keys);
+  void RemoveIndexKeys(
+      int db_num, const InternedStringPtr &attribute_identifier,
+      vmsdk::HugeFlatHashMap<uint64_t, InternedStringPtr> keys);
 
   // Processes up to batch_size pending unshare keys across all databases.
   // Returns the number of keys processed.
@@ -80,6 +82,7 @@ class VectorRegistry {
   // Returns the total number of keys pending unshare.
   size_t GetPendingUnsharesCount() const;
 
+  // Also migrates every db's tables, so they drain without any traffic.
   void OnServerCronCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
                             uint64_t subevent, void *data);
 
@@ -97,6 +100,9 @@ class VectorRegistry {
 
   void OnFlushDB(const ValkeyModuleFlushInfo *flush_info);
   void OnSwapDB(const ValkeyModuleSwapDbInfo *swap_info);
+  // Purges tracked vector records and cancels pending unshares for a physically
+  // deleted or overwritten key without interning untracked keys.
+  void OnKeyDeleted(int db_num, absl::string_view key);
   enum class Action {
     kMove,
     kUnshare,
@@ -106,6 +112,11 @@ class VectorRegistry {
   void MoveKey(int src_db_num, const InternedStringPtr &src_key, int dst_db_num,
                ValkeyModuleString *dst_key,
                const absl::flat_hash_map<InternedStringPtr, Action> &actions);
+
+  // Returns all attributes and their vector sizes currently tracked in db_num
+  // for the given key.
+  absl::flat_hash_map<InternedStringPtr, size_t> GetTrackedAttributes(
+      int db_num, absl::string_view key) const;
 
  private:
   struct RegistryKey {
@@ -123,15 +134,83 @@ class VectorRegistry {
   };
 
   using PerDbRegistryMap =
-      absl::flat_hash_map<RegistryKey, indexes::VectorRecordWithSize>;
+      vmsdk::HugeFlatHashMap<RegistryKey, indexes::VectorRecordWithSize>;
 
   // Maps db_num -> inner map to track active vector records per database.
   absl::flat_hash_map<int, PerDbRegistryMap> tracked_vectors_;
 
+  // Transparent content hash/equality allowing absl::string_view probes into
+  // tracked_keys_by_db_ without interning untracked keys.
+  struct BorrowedKeyStringHash {
+    using is_transparent = void;
+    size_t operator()(const BorrowedInternedStringPtr &p) const {
+      return absl::HashOf(p ? p.Str() : absl::string_view{});
+    }
+    size_t operator()(const InternedStringPtr &p) const {
+      return absl::HashOf(p ? p->Str() : absl::string_view{});
+    }
+    size_t operator()(absl::string_view sv) const { return absl::HashOf(sv); }
+  };
+
+  struct BorrowedKeyStringEq {
+    using is_transparent = void;
+    bool operator()(const BorrowedInternedStringPtr &a,
+                    const BorrowedInternedStringPtr &b) const {
+      return RawInternedPtr(a) == RawInternedPtr(b);
+    }
+    bool operator()(const BorrowedInternedStringPtr &a,
+                    const InternedStringPtr &b) const {
+      return RawInternedPtr(a) == RawInternedPtr(b);
+    }
+    bool operator()(const InternedStringPtr &a,
+                    const BorrowedInternedStringPtr &b) const {
+      return RawInternedPtr(a) == RawInternedPtr(b);
+    }
+    bool operator()(const InternedStringPtr &a,
+                    const InternedStringPtr &b) const {
+      return RawInternedPtr(a) == RawInternedPtr(b);
+    }
+    bool operator()(const BorrowedInternedStringPtr &a,
+                    absl::string_view b) const {
+      return a && a.Str() == b;
+    }
+    bool operator()(absl::string_view a,
+                    const BorrowedInternedStringPtr &b) const {
+      return b && a == b.Str();
+    }
+    bool operator()(const InternedStringPtr &a, absl::string_view b) const {
+      return a && a->Str() == b;
+    }
+    bool operator()(absl::string_view a, const InternedStringPtr &b) const {
+      return b && a == b->Str();
+    }
+    bool operator()(absl::string_view a, absl::string_view b) const {
+      return a == b;
+    }
+  };
+
+  using BorrowedAttrSet =
+      absl::flat_hash_set<BorrowedInternedStringPtr, InternedStringPtrHash,
+                          InternedStringPtrEq>;
+  using PerDbTrackedKeysMap =
+      absl::flat_hash_map<BorrowedInternedStringPtr, BorrowedAttrSet,
+                          BorrowedKeyStringHash, BorrowedKeyStringEq>;
+
+  // Maps db_num -> key -> tracked attribute_identifiers for O(1) per-key
+  // lookup. Uses BorrowedInternedStringPtr because lifetime is tied 1-to-1
+  // to the owning RegistryKey in tracked_vectors_. RemoveFromTrackedKeysIndex
+  // must always be called before erasing the owning RegistryKey from
+  // tracked_vectors_ because BorrowedKeyStringHash dereferences Str().
+  absl::flat_hash_map<int, PerDbTrackedKeysMap> tracked_keys_by_db_;
+
   // Maps db_num -> pending unshare keys queued for rate-limited processing.
-  absl::flat_hash_map<int, absl::flat_hash_set<RegistryKey>> pending_unshares_;
+  absl::flat_hash_map<int, vmsdk::HugeFlatHashSet<RegistryKey>>
+      pending_unshares_;
 
   void CancelPendingUnshare(int db_num, const RegistryKey &key);
+  void RemoveFromTrackedKeysIndex(
+      int db_num, const InternedStringPtr &key,
+      const InternedStringPtr &attribute_identifier);
 
   friend class VectorRegistryTest;
   bool hash_vector_sharing_{false};
@@ -157,6 +236,7 @@ class VectorRegistry {
       int db_num, const InternedStringPtr &key,
       const InternedStringPtr &attribute_identifier);
   void EraseTrackedRecord(int db_num, const RegistryKey &key);
+  void EraseTrackedRecordsForKey(int db_num, absl::string_view key);
   // Replaces a shared string memory reference in the Valkey Hash data model
   // with an independent owned copy.
   bool UnshareWithValkey(ValkeyModuleKey *key_obj,

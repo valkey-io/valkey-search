@@ -9,6 +9,8 @@ This document describes the data formats accepted by the search module for each 
 
 For both HASH and JSON index types, the incoming data for a tag field is a single UTF-8 string. A tag field can contain one or more tag values within a single string.
 
+With `search.emulate-release` below 1.3.0 (the default), a TAG value with malformed UTF-8 is indexed as raw bytes. With 1.3.0 or later it is rejected as invalid data (see [Invalid Values](#invalid-values)). See [COMPATIBILITY.md](../../COMPATIBILITY.md) (`tag_rejects_non_utf8`).
+
 ## Tag Ingestion
 
 On ingestion, the input string is split using the declared `SEPARATOR` character into individual tags. The default separator is `,` (comma). A different separator can be specified when the field is declared with [`FT.CREATE`](../commands/ft.create.md):
@@ -17,7 +19,7 @@ On ingestion, the input string is split using the declared `SEPARATOR` character
 FT.CREATE idx SCHEMA color TAG SEPARATOR "|"
 ```
 
-The valid separator characters are: `,.<>{}[]"':;!@#$%^&*()-+=~`
+The separator must be a single byte (one ASCII character). A multi-byte character is rejected.
 
 After splitting, each tag is processed as follows:
 
@@ -25,7 +27,7 @@ After splitting, each tag is processed as follows:
 2. Empty tags (those that are empty or whitespace only after trimming) are silently discarded.
 3. Duplicate tags within a single field value are deduplicated.
 
-If the field value produces no valid tags after processing, the key is tracked but not indexed for that field.
+If the field value produces no valid tags after processing, the key is untracked for that field and, if the field was not already indexed for that key, counted in `hash_indexing_failures`.
 
 ### Case Sensitivity
 
@@ -80,9 +82,9 @@ The following formats are accepted on ingestion:
 The following are rejected:
 
 - **NaN**: `"nan"`, `"NaN"`, `"NAN"` -- explicitly rejected on ingestion.
-- **Non-numeric strings**: `"hello"`, `""` -- the key becomes untracked for this field.
+- **Non-numeric strings**: `"hello"`, `""`.
 
-When a value is rejected, the key is not indexed for that field. This is not treated as an error; the key simply does not appear in numeric range queries.
+A rejected value is invalid data; see [Invalid Values](#invalid-values).
 
 ## Precision and Range
 
@@ -100,8 +102,8 @@ HSET product:2 price "42"         --> stored as 42.0
 HSET product:3 price "-100"       --> stored as -100.0
 HSET product:4 price "1e2"        --> stored as 100.0
 HSET product:5 price "inf"        --> stored as +infinity
-HSET product:6 price "nan"        --> rejected (key untracked for this field)
-HSET product:7 price "hello"      --> rejected (key untracked for this field)
+HSET product:6 price "nan"        --> rejected (invalid data)
+HSET product:7 price "hello"      --> rejected (invalid data)
 ```
 
 See the [query documentation](search-query.md#numeric-range-match) for details on querying numeric ranges.
@@ -222,7 +224,7 @@ The `ml_dtypes` package provides a `bfloat16` dtype usable with `numpy` if you
 would rather not hand-roll the conversion.
 
 If the blob size does not match the size implied by `DIM` and `TYPE`, the vector
-is rejected and the key is not indexed for that field. A `FLOAT32`-encoded blob
+is rejected as invalid data (see [Invalid Values](#invalid-values)). A `FLOAT32`-encoded blob
 supplied to a `FLOAT16` index is the common way to hit this: it is twice the
 expected length.
 
@@ -312,6 +314,16 @@ FT.CREATE idx ON HASH SCHEMA vec VECTOR FLAT 6 TYPE FLOAT16 DIM 3 DISTANCE_METRI
 HSET doc:1 vec "\x00\x3c\x00\x00\x00\x00"
 ```
 
+# Invalid Values
+
+A value that is rejected as invalid data (a malformed `NUMERIC` value, a wrong-size
+`VECTOR`, or, with 1.3.0 behavior, a non-UTF-8 `TAG` value) is counted in
+`hash_indexing_failures` when the field was not already indexed for that key; a
+rejected update to an already-indexed field is not counted. With `search.emulate-release` below 1.3.0 (the default),
+only that field is treated as missing; the key is still indexed for its other
+fields. With 1.3.0 or later, the whole key is removed from the index, matching
+RediSearch. See [COMPATIBILITY.md](../../COMPATIBILITY.md) (`invalid_data_drops_key`).
+
 # Text Fields
 
 A text field contains a string of words. On ingestion, the raw string passes through a multi-stage processing pipeline to produce a sequence of searchable tokens.
@@ -368,7 +380,7 @@ After tokenization, each word is converted to lowercase. For ASCII text, this us
 
 Stop words are common words that are excluded from the index. The default stop word list for English is:
 
-> a, an, and, are, as, at, be, but, by, for, if, in, into, is, it, no, not, of, on, or, such, that, their, then, there, these, they, this, to, was, will, with
+> a, an, and, are, as, at, be, but, by, for, if, in, into, is, it, no, not, of, on, or, such, that, the, their, then, there, these, they, this, to, was, will, with
 
 Stop words can be customized at index creation time:
 
@@ -388,7 +400,7 @@ Stemming reduces words to their root form so that morphological variants match e
 Stemming is controlled by these options:
 
 - `LANGUAGE <language>` (schema-level): Specifies the language, which selects the stemmer, the default stop words, and the default punctuation. Supported: `ENGLISH` (default), `ARABIC`, `DUTCH`, `FRENCH`, `GERMAN`, `INDONESIAN`, `ITALIAN`, `PORTUGUESE`, `RUSSIAN`, `SPANISH`, `SWEDISH`, `TURKISH`.
-- `NOSTEM` (per-field): Disables stemming for a specific text field.
+- `NOSTEM` (per-field): Disables stemming for a specific text field. Given before `SCHEMA`, it disables stemming for every text field of the index.
 - `MINSTEMSIZE <size>` (schema-level): Words shorter than this length are not stemmed. The default is 4.
 
 When stemming is enabled, the original word (not the stemmed form) is stored in the index. The stem mapping is recorded separately so that a search on a term expands to match all terms that share the same stem, as well as the stem itself.

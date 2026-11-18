@@ -101,13 +101,18 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
     ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
     const data_model::VectorIndex &vector_index_proto,
     absl::string_view attribute_identifier, SupplementalContentChunkIter &&iter,
-    int db_num, TrackedKeys *key_labels) {
+    int db_num, TrackedKeys *key_labels, bool defer_keyspace_load) {
   try {
     auto index = std::shared_ptr<VectorHNSW<T>>(
         new VectorHNSW<T>(vector_index_proto.dimension_count(),
                           attribute_identifier, attribute_data_type->ToProto(),
                           db_num),
         vmsdk::DestructByMainThread<VectorHNSW<T>>{});
+    if (defer_keyspace_load) {
+      index->registered_in_vector_registry_.store(false,
+                                                  std::memory_order_release);
+      index->has_deferred_rdb_vectors_.store(true, std::memory_order_release);
+    }
     index->Init(vector_index_proto.distance_metric());
 
     index->algo_ = std::make_unique<HNSWIndex>();
@@ -123,7 +128,7 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
     auto generator = [&, allocator = index->GetVectorAllocator()](
                          absl::string_view vector_data, bool is_marked_deleted,
                          hnswlib::labeltype label) {
-      if (key_labels && !is_marked_deleted) {
+      if (!defer_keyspace_load && key_labels && !is_marked_deleted) {
         auto it = key_labels->key_by_internal_id.find(label);
         if (it != key_labels->key_by_internal_id.end()) {
           if (auto shared = index->ShareIfUnchangedSinceSave(
@@ -317,6 +322,37 @@ absl::Status VectorHNSW<T>::ModifyRecordImpl(uint64_t internal_id,
     ++Metrics::GetStats().hnsw_modify_exceptions_cnt;
     return absl::InternalError(
         absl::StrCat("Error while modifying a record: ", e.what()));
+  }
+  return absl::OkStatus();
+}
+
+template <typename T>
+absl::Status VectorHNSW<T>::ReplaceVectorRecordImpl(
+    uint64_t internal_id, VectorRecord &&vector_record) {
+  try {
+    absl::ReaderMutexLock lock(&resize_mutex_);
+    std::unique_lock<std::mutex> lock_label(
+        algo_->getLabelOpMutex(internal_id));
+    typename HNSWIndex::MutationScope mutation_scope(*algo_);
+    std::optional<hnswlib::tableint> hnsw_internal_id;
+    {
+      std::unique_lock<std::mutex> lock_lookup(algo_->label_lookup_lock);
+      auto search = algo_->label_lookup_.find(internal_id);
+      if (search != algo_->label_lookup_.end() &&
+          !algo_->isMarkedDeleted(search->second)) {
+        hnsw_internal_id = search->second;
+      }
+    }
+    if (!hnsw_internal_id.has_value()) {
+      return absl::NotFoundError(
+          absl::StrCat("Internal ID not found for label: ", internal_id));
+    }
+    algo_->SetDataByInternalId(*hnsw_internal_id, std::move(vector_record));
+  } catch (const std::exception &e) {
+    DCHECK(false) << "Unexpected error while replacing a record: " << e.what();
+    ++Metrics::GetStats().hnsw_modify_exceptions_cnt;
+    return absl::InternalError(
+        absl::StrCat("Error while replacing a record: ", e.what()));
   }
   return absl::OkStatus();
 }

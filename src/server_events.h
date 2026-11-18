@@ -10,8 +10,9 @@
 
 namespace valkey_search::server_events {
 
+void SubscribeToLoadingEvents();
 void SubscribeToServerEvents();
 
-}
+}  // namespace valkey_search::server_events
 
 #endif  // THIRD_PARTY_SRC_SERVER_EVENT_SUBSCRIPTION_H_

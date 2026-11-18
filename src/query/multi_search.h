@@ -56,6 +56,10 @@ inline constexpr absl::string_view kSyncLocalUnsupportedMsg{
     "which the per-arm results cannot be revalidated against concurrent "
     "mutations before they are fused."};
 
+inline constexpr absl::string_view kAsyncLoadingUnsupportedMsg{
+    "FT.HYBRID cannot execute locally while replication async RDB loading is "
+    "in progress"};
+
 // Configuration for the COMBINE fusion stage. Populated by the FT.HYBRID
 // parser; consumed by `query::rank_fusion::{RRF,Linear,Function}` in
 // ft_hybrid.cc.

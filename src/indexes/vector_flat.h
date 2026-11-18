@@ -64,7 +64,8 @@ class VectorFlat : public VectorType<T> {
       const data_model::VectorIndex &vector_index_proto,
       absl::string_view attribute_identifier,
       SupplementalContentChunkIter &&iter, int db_num,
-      TrackedKeys *key_labels = nullptr) ABSL_NO_THREAD_SAFETY_ANALYSIS;
+      TrackedKeys *key_labels = nullptr,
+      bool defer_keyspace_load = false) ABSL_NO_THREAD_SAFETY_ANALYSIS;
   ~VectorFlat() override = default;
 
   const hnswlib::SpaceInterface<float> *GetSpace() const {
@@ -106,6 +107,9 @@ class VectorFlat : public VectorType<T> {
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
   absl::Status ModifyRecordImpl(uint64_t internal_id,
                                 VectorRecord &&vector_record) override
+      ABSL_LOCKS_EXCLUDED(resize_mutex_);
+  absl::Status ReplaceVectorRecordImpl(uint64_t internal_id,
+                                       VectorRecord &&vector_record) override
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
   void ToProtoImpl(data_model::VectorIndex *vector_index_proto) const override;
   int RespondWithInfoImpl(ValkeyModuleCtx *ctx) const override;

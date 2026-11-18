@@ -13,12 +13,19 @@
 #include <string>
 #include <utility>
 
+#include "absl/cleanup/cleanup.h"
 #include "absl/status/status.h"
 #include "absl/strings/str_format.h"
+#include "absl/synchronization/notification.h"
+#include "absl/time/clock.h"
+#include "absl/time/time.h"
 #include "gmock/gmock.h"
 #include "google/protobuf/text_format.h"
 #include "gtest/gtest.h"
 #include "src/coordinator/metadata_manager.h"
+#include "src/indexes/vector_base.h"
+#include "src/valkey_search_options.h"
+#include "src/vector_registry.h"
 #include "testing/common.h"
 #include "testing/coordinator/common.h"
 #include "vmsdk/src/testing_infra/module.h"
@@ -678,6 +685,284 @@ TEST_P(OnSwapDBCallbackTest, OnSwapDBCallback) {
   EXPECT_EQ(test_index_schema->db_num_, expected_dbnum != -1
                                             ? expected_dbnum
                                             : test_case.index_schema_db_num);
+}
+
+TEST_F(SchemaManagerTest, TestNonSwapDbReplicationLoadPreservesVectorRegistry) {
+  auto &enable_sharing =
+      const_cast<vmsdk::config::Boolean &>(options::GetEnableVectorSharing());
+  VMSDK_EXPECT_OK(enable_sharing.SetValue(true));
+  VectorRegistry::Construct(&fake_ctx_);
+  absl::Cleanup restore = [&]() {
+    VMSDK_EXPECT_OK(enable_sharing.SetValue(false));
+    VectorRegistry::Construct(&fake_ctx_);
+  };
+
+  ValkeyModuleEvent eid{};
+  ON_CALL(*kMockValkeyModule, GetContextFromIO(testing::_))
+      .WillByDefault(testing::Return(&fake_ctx_));
+
+  // Non-swapdb replication load: LOADING_REPL_START without
+  // REPL_ASYNC_LOAD_STARTED.
+  SchemaManager::Instance().OnLoadingCallback(
+      &fake_ctx_, eid, VALKEYMODULE_SUBEVENT_LOADING_REPL_START, nullptr);
+
+  FakeSafeRDB fake_rdb;
+  auto section = std::make_unique<data_model::RDBSection>();
+  section->set_type(data_model::RDB_SECTION_INDEX_SCHEMA);
+  section->mutable_index_schema_contents()->CopyFrom(test_index_schema_proto_);
+  section->set_supplemental_count(0);
+
+  VMSDK_EXPECT_OK(SchemaManager::Instance().LoadIndex(
+      &fake_ctx_, std::move(section), SupplementalContentIter(&fake_rdb, 0)));
+
+  // Simulate #1589 sharing a vector into VectorRegistry during non-swapdb
+  // aux_load (where FLUSHDB already cleared old entries before aux_load).
+  auto key = StringInternStore::Intern("prefix_1:k1");
+  std::vector<float> vec_data(10, 1.0f);
+  std::string vec_str(reinterpret_cast<const char *>(vec_data.data()),
+                      vec_data.size() * sizeof(float));
+  auto valkey_vec = vmsdk::MakeUniqueValkeyString(vec_str);
+  MockIndex helper_index(10, "test_identifier_1", db_num_);
+  auto rec = VectorRegistry::Instance().DedupOrConstruct(
+      key, valkey_vec.get(),
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, db_num_,
+      &helper_index);
+  ASSERT_EQ(VectorRegistry::Instance().GetStats().entry_cnt, 1u);
+
+  // LOADING_ENDED publishes the staged schema and MUST NOT flush
+  // VectorRegistry on non-swapdb loads.
+  SchemaManager::Instance().OnLoadingCallback(
+      &fake_ctx_, eid, VALKEYMODULE_SUBEVENT_LOADING_ENDED, nullptr);
+
+  auto loaded_or =
+      SchemaManager::Instance().GetIndexSchema(db_num_, index_name_);
+  VMSDK_EXPECT_OK(loaded_or);
+  EXPECT_FALSE(loaded_or.value()->IsSwapDbRecoveryInProgress());
+  EXPECT_EQ(VectorRegistry::Instance().GetStats().entry_cnt, 1u);
+}
+
+TEST_F(SchemaManagerTest, TestSwapDbAbortAndLoadingFailedCleanupStagedSchemas) {
+  auto &enable_sharing =
+      const_cast<vmsdk::config::Boolean &>(options::GetEnableVectorSharing());
+  VMSDK_EXPECT_OK(enable_sharing.SetValue(true));
+  VectorRegistry::Construct(&fake_ctx_);
+  absl::Cleanup restore = [&]() {
+    VMSDK_EXPECT_OK(enable_sharing.SetValue(false));
+    VectorRegistry::Construct(&fake_ctx_);
+  };
+
+  ON_CALL(*kMockValkeyModule, GetContextFromIO(testing::_))
+      .WillByDefault(testing::Return(&fake_ctx_));
+
+  // Create an existing live schema and register a vector for it in
+  // VectorRegistry.
+  auto live_proto = test_index_schema_proto_;
+  live_proto.set_name("live_idx");
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().CreateIndexSchema(&fake_ctx_, live_proto));
+
+  auto key = StringInternStore::Intern("prefix_1:live");
+  std::vector<float> vec_data(10, 2.0f);
+  std::string vec_str(reinterpret_cast<const char *>(vec_data.data()),
+                      vec_data.size() * sizeof(float));
+  auto valkey_vec = vmsdk::MakeUniqueValkeyString(vec_str);
+  MockIndex helper_index(10, "test_identifier_1", db_num_);
+  auto rec = VectorRegistry::Instance().DedupOrConstruct(
+      key, valkey_vec.get(),
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, db_num_,
+      &helper_index);
+  ASSERT_EQ(VectorRegistry::Instance().GetStats().entry_cnt, 1u);
+
+  for (bool use_async_abort : {true, false}) {
+    ValkeyModuleEvent eid{};
+    SchemaManager::Instance().OnReplAsyncLoadCallback(
+        &fake_ctx_, eid, VALKEYMODULE_SUBEVENT_REPL_ASYNC_LOAD_STARTED,
+        nullptr);
+    SchemaManager::Instance().OnLoadingCallback(
+        &fake_ctx_, eid, VALKEYMODULE_SUBEVENT_LOADING_REPL_START, nullptr);
+
+    FakeSafeRDB fake_rdb;
+    auto section = std::make_unique<data_model::RDBSection>();
+    section->set_type(data_model::RDB_SECTION_INDEX_SCHEMA);
+    section->mutable_index_schema_contents()->CopyFrom(
+        test_index_schema_proto_);
+    section->set_supplemental_count(0);
+    VMSDK_EXPECT_OK(SchemaManager::Instance().LoadIndex(
+        &fake_ctx_, std::move(section), SupplementalContentIter(&fake_rdb, 0)));
+
+    // Staged schema is not visible yet.
+    EXPECT_EQ(SchemaManager::Instance()
+                  .GetIndexSchema(db_num_, index_name_)
+                  .status()
+                  .code(),
+              absl::StatusCode::kNotFound);
+
+    if (use_async_abort) {
+      SchemaManager::Instance().OnReplAsyncLoadCallback(
+          &fake_ctx_, eid, VALKEYMODULE_SUBEVENT_REPL_ASYNC_LOAD_ABORTED,
+          nullptr);
+    } else {
+      SchemaManager::Instance().OnLoadingCallback(
+          &fake_ctx_, eid, VALKEYMODULE_SUBEVENT_LOADING_FAILED, nullptr);
+    }
+
+    // Live schema and live DB VectorRegistry entries must be completely
+    // untouched, and staged schema must be discarded.
+    VMSDK_EXPECT_OK(
+        SchemaManager::Instance().GetIndexSchema(db_num_, "live_idx"));
+    EXPECT_EQ(SchemaManager::Instance()
+                  .GetIndexSchema(db_num_, index_name_)
+                  .status()
+                  .code(),
+              absl::StatusCode::kNotFound);
+    EXPECT_EQ(VectorRegistry::Instance().GetStats().entry_cnt, 1u);
+  }
+
+  // Subsequent non-swapdb replication load under a distinct name must see
+  // repl_async_load_in_progress_ == false, publish only the retry schema, and
+  // keep the previously failed/aborted schema name absent.
+  ValkeyModuleEvent eid{};
+  SchemaManager::Instance().OnLoadingCallback(
+      &fake_ctx_, eid, VALKEYMODULE_SUBEVENT_LOADING_REPL_START, nullptr);
+  FakeSafeRDB fake_rdb;
+  auto retry_proto = test_index_schema_proto_;
+  retry_proto.set_name("retry_idx");
+  auto section = std::make_unique<data_model::RDBSection>();
+  section->set_type(data_model::RDB_SECTION_INDEX_SCHEMA);
+  section->mutable_index_schema_contents()->CopyFrom(retry_proto);
+  section->set_supplemental_count(0);
+  VMSDK_EXPECT_OK(SchemaManager::Instance().LoadIndex(
+      &fake_ctx_, std::move(section), SupplementalContentIter(&fake_rdb, 0)));
+  SchemaManager::Instance().OnLoadingCallback(
+      &fake_ctx_, eid, VALKEYMODULE_SUBEVENT_LOADING_ENDED, nullptr);
+  auto loaded = SchemaManager::Instance().GetIndexSchema(db_num_, "retry_idx");
+  VMSDK_EXPECT_OK(loaded);
+  EXPECT_FALSE(loaded.value()->IsSwapDbRecoveryInProgress());
+  EXPECT_EQ(SchemaManager::Instance()
+                .GetIndexSchema(db_num_, index_name_)
+                .status()
+                .code(),
+            absl::StatusCode::kNotFound);
+}
+
+TEST_F(SchemaManagerTest,
+       TestSwapDbReplAsyncLoadCompletedFlushesRegistryAndProtectsNewEntries) {
+  auto &enable_sharing =
+      const_cast<vmsdk::config::Boolean &>(options::GetEnableVectorSharing());
+  VMSDK_EXPECT_OK(enable_sharing.SetValue(true));
+  VectorRegistry::Construct(&fake_ctx_);
+  absl::Cleanup restore = [&]() {
+    VMSDK_EXPECT_OK(enable_sharing.SetValue(false));
+    VectorRegistry::Construct(&fake_ctx_);
+  };
+
+  ON_CALL(*kMockValkeyModule, GetContextFromIO(testing::_))
+      .WillByDefault(testing::Return(&fake_ctx_));
+
+  // Serialize an incoming schema with the same vector attribute identifier so
+  // LoadIndex populates test_attribute_1 via
+  // SUPPLEMENTAL_CONTENT_INDEX_CONTENT.
+  FakeSafeRDB fake_rdb;
+  {
+    auto src_schema = IndexSchema::Create(&fake_ctx_, test_index_schema_proto_,
+                                          /*mutations_thread_pool=*/nullptr,
+                                          /*skip_attributes=*/false,
+                                          /*reload=*/false)
+                          .value();
+    VMSDK_EXPECT_OK(src_schema->RDBSave(&fake_rdb));
+  }
+
+  // Create old live schema and populate a vector tracked in both the vector
+  // index and VectorRegistry.
+  auto old_proto = test_index_schema_proto_;
+  old_proto.set_name("old_idx");
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().CreateIndexSchema(&fake_ctx_, old_proto));
+  auto old_schema =
+      SchemaManager::Instance().GetIndexSchema(db_num_, "old_idx").value();
+  auto old_vec_idx = std::dynamic_pointer_cast<indexes::VectorBase>(
+      old_schema->GetIndex("test_attribute_1").value());
+  ASSERT_NE(old_vec_idx, nullptr);
+  EXPECT_TRUE(old_vec_idx->IsRegisteredInVectorRegistry());
+
+  auto key = StringInternStore::Intern("prefix_1:shared_key");
+  std::vector<float> old_vec_data(10, 3.0f);
+  std::string old_vec_str(reinterpret_cast<const char *>(old_vec_data.data()),
+                          old_vec_data.size() * sizeof(float));
+  auto old_valkey_vec = vmsdk::MakeUniqueValkeyString(old_vec_str);
+  auto old_rec = VectorRegistry::Instance().DedupOrConstruct(
+      key, old_valkey_vec.get(),
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, db_num_,
+      old_vec_idx.get());
+  VMSDK_EXPECT_OK(
+      old_vec_idx->AddRecord(key, AttributeData(std::move(old_rec))));
+  ASSERT_EQ(VectorRegistry::Instance().GetStats().entry_cnt, 1u);
+
+  // Start swapdb async replication load and stage the incoming schema.
+  ValkeyModuleEvent eid{};
+  SchemaManager::Instance().OnReplAsyncLoadCallback(
+      &fake_ctx_, eid, VALKEYMODULE_SUBEVENT_REPL_ASYNC_LOAD_STARTED, nullptr);
+  SchemaManager::Instance().OnLoadingCallback(
+      &fake_ctx_, eid, VALKEYMODULE_SUBEVENT_LOADING_REPL_START, nullptr);
+
+  RDBSectionIter iter(&fake_rdb, 1);
+  auto section = iter.Next();
+  VMSDK_EXPECT_OK(section);
+  VMSDK_EXPECT_OK(SchemaManager::Instance().LoadIndex(
+      &fake_ctx_, std::move(section.value()),
+      iter.IterateSupplementalContent()));
+
+  // Before REPL_ASYNC_LOAD_COMPLETED: old schema & VectorRegistry intact.
+  VMSDK_EXPECT_OK(SchemaManager::Instance().GetIndexSchema(db_num_, "old_idx"));
+  EXPECT_EQ(VectorRegistry::Instance().GetStats().entry_cnt, 1u);
+
+  // REPL_ASYNC_LOAD_COMPLETED flushes VectorRegistry, clears registration on
+  // old schemas, and publishes the staged schema (still in swapdb recovery).
+  SchemaManager::Instance().OnReplAsyncLoadCallback(
+      &fake_ctx_, eid, VALKEYMODULE_SUBEVENT_REPL_ASYNC_LOAD_COMPLETED,
+      nullptr);
+
+  EXPECT_EQ(VectorRegistry::Instance().GetStats().entry_cnt, 0u);
+  EXPECT_FALSE(old_vec_idx->IsRegisteredInVectorRegistry());
+  EXPECT_EQ(SchemaManager::Instance()
+                .GetIndexSchema(db_num_, "old_idx")
+                .status()
+                .code(),
+            absl::StatusCode::kNotFound);
+  auto new_schema_or =
+      SchemaManager::Instance().GetIndexSchema(db_num_, index_name_);
+  VMSDK_EXPECT_OK(new_schema_or);
+  EXPECT_TRUE(new_schema_or.value()->IsSwapDbRecoveryInProgress());
+
+  // Populate the SAME (db, attribute_identifier, key) for the new DB while
+  // old_schema / old_vec_idx are still alive (simulating deferred destruction).
+  auto new_vec_idx = std::dynamic_pointer_cast<indexes::VectorBase>(
+      new_schema_or.value()->GetIndex("test_attribute_1").value());
+  ASSERT_NE(new_vec_idx, nullptr);
+  std::vector<float> new_vec_data(10, 4.0f);
+  std::string new_vec_str(reinterpret_cast<const char *>(new_vec_data.data()),
+                          new_vec_data.size() * sizeof(float));
+  auto new_valkey_vec = vmsdk::MakeUniqueValkeyString(new_vec_str);
+  auto new_rec = VectorRegistry::Instance().DedupOrConstruct(
+      key, new_valkey_vec.get(),
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, db_num_,
+      new_vec_idx.get());
+  ASSERT_EQ(VectorRegistry::Instance().GetStats().entry_cnt, 1u);
+
+  // Destroying old_vec_idx and old_schema (including deferred utility teardown)
+  // must NOT remove the new entry from VectorRegistry.
+  std::weak_ptr<indexes::VectorBase> weak_old_vec = old_vec_idx;
+  old_vec_idx.reset();
+  old_schema.reset();
+  absl::Notification utility_drained;
+  ValkeySearch::Instance().ScheduleUtilityTask(
+      [&utility_drained]() { utility_drained.Notify(); });
+  utility_drained.WaitForNotification();
+  for (int i = 0; i < 100 && !weak_old_vec.expired(); ++i) {
+    absl::SleepFor(absl::Milliseconds(5));
+  }
+  ASSERT_TRUE(weak_old_vec.expired());
+  EXPECT_EQ(VectorRegistry::Instance().GetStats().entry_cnt, 1u);
 }
 
 }  // namespace valkey_search

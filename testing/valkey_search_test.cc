@@ -233,6 +233,20 @@ TEST_P(LoadTest, load) {
       CreateDataType(&fake_ctx_, testing::StrEq(kValkeySearchModuleTypeName),
                      testing::_, testing::_))
       .WillOnce(testing::Return((ValkeyModuleType*)0xBADF00D));
+  if (test_case.expect_thread_pool_started) {
+    EXPECT_CALL(
+        *kMockValkeyModule,
+        SubscribeToServerEvent(
+            testing::_, vmsdk::IsValkeyModuleEvent(ValkeyModuleEvent_Loading),
+            testing::_))
+        .WillOnce(testing::Return(VALKEYMODULE_OK));
+    EXPECT_CALL(*kMockValkeyModule,
+                SubscribeToServerEvent(
+                    testing::_,
+                    vmsdk::IsValkeyModuleEvent(ValkeyModuleEvent_ReplAsyncLoad),
+                    testing::_))
+        .WillOnce(testing::Return(VALKEYMODULE_OK));
+  }
   if (test_case.expected_load_ret == 0) {
     EXPECT_CALL(*kMockValkeyModule,
                 Call(testing::_, testing::StrEq("MODULE"), testing::StrEq("c"),
@@ -571,7 +585,7 @@ TEST_F(ValkeySearchTest, OnForkChildBornCallback) {
   InitThreadPools(std::nullopt, 5, 1);
   auto* writer_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
   VMSDK_EXPECT_OK(writer_thread_pool->SuspendWorkers());
-  ValkeyModuleEvent eid;
+  ValkeyModuleEvent eid{};
   Metrics::GetStats().writer_worker_thread_pool_suspension_expired_cnt = 0;
   Metrics::GetStats().writer_worker_thread_pool_resumed_cnt = 0;
   ValkeySearch::Instance().OnForkChildCallback(&fake_ctx_, eid, 0, nullptr);

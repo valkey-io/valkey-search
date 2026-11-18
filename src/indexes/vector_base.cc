@@ -237,8 +237,11 @@ VectorBase::ComputeDistanceFromRecord(const InternedStringPtr &key,
 
 VectorBase::~VectorBase() {
   vmsdk::VerifyMainThread();
-  VectorRegistry::Instance().RemoveIndexKeys(
-      db_num_, interned_attribute_identifier_, std::move(key_by_internal_id_));
+  if (registered_in_vector_registry_.load(std::memory_order_acquire)) {
+    VectorRegistry::Instance().RemoveIndexKeys(db_num_,
+                                               interned_attribute_identifier_,
+                                               std::move(key_by_internal_id_));
+  }
 }
 
 absl::StatusOr<RecordResult> VectorBase::AddRecord(const InternedStringPtr &key,
@@ -297,9 +300,18 @@ absl::StatusOr<RecordResult> VectorBase::ModifyRecord(
   auto vector_record = data.ConsumeVector();
   float magnitude = 1.0f / vector_record.GetReciprocalMagnitude();
   VMSDK_ASSIGN_OR_RETURN(auto internal_id, GetInternalId(key));
-  VMSDK_ASSIGN_OR_RETURN(bool res,
+  VMSDK_ASSIGN_OR_RETURN(VectorMatch match,
                          IsVectorUnchanged(key, magnitude, vector_record));
-  if (res) {
+  if (match == VectorMatch::kSameRecord) {
+    return RecordResult::kMissing;
+  }
+  if (match == VectorMatch::kSameValueReplaceRecord) {
+    auto replace_result =
+        ReplaceVectorRecordImpl(internal_id, std::move(vector_record));
+    if (!replace_result.ok()) {
+      RemoveRecordDueToError(key, internal_id);
+      return replace_result;
+    }
     return RecordResult::kMissing;
   }
 
@@ -413,7 +425,7 @@ absl::StatusOr<uint64_t> VectorBase::TrackKey(const InternedStringPtr &key,
   return id;
 }
 
-absl::StatusOr<bool> VectorBase::IsVectorUnchanged(
+absl::StatusOr<VectorBase::VectorMatch> VectorBase::IsVectorUnchanged(
     const InternedStringPtr &key, float magnitude,
     const VectorRecord &vector_record) {
   absl::ReaderMutexLock lock(&resize_mutex_);
@@ -428,15 +440,37 @@ absl::StatusOr<bool> VectorBase::IsVectorUnchanged(
     it->second.magnitude = magnitude;
     stored_record = GetVector(it->second.internal_id);
     if (!stored_record) {
-      return false;  // No stored record, so vectors are not matching
+      return VectorMatch::kDifferent;  // No stored record, so vectors are not
+                                       // matching
     }
   }
   if (stored_record == vector_record) {
-    return true;  // Fast path: shared VectorRegistry record, definitely
-                  // matching
+    return VectorMatch::kSameRecord;  // Fast path: shared VectorRegistry
+                                      // record, definitely matching
   }
-  return (std::memcmp(stored_record.GetRawVector(),
-                      vector_record.GetRawVector(), GetVectorDataSize()) == 0);
+  const bool deferred =
+      has_deferred_rdb_vectors_.load(std::memory_order_acquire);
+  if (std::memcmp(stored_record.GetRawVector(), vector_record.GetRawVector(),
+                  GetVectorDataSize()) == 0) {
+    return deferred ? VectorMatch::kSameValueReplaceRecord
+                    : VectorMatch::kSameRecord;
+  }
+  if (normalize_ && deferred) {
+    // A normalized index saves vectors normalized in the RDB. During post-swap
+    // recovery, compare the normalized incoming vector against the saved bytes
+    // so unchanged COSINE vectors adopt the shared VectorRecord without
+    // rebuilding graph edges.
+    absl::string_view incoming(vector_record.GetRawVector(),
+                               GetVectorDataSize());
+    auto normalized =
+        NormalizeVector(incoming, GetVectorDataType(),
+                        CalcReciprocalMagnitude(incoming, GetVectorDataType()));
+    if (std::memcmp(stored_record.GetRawVector(), normalized.data(),
+                    GetVectorDataSize()) == 0) {
+      return VectorMatch::kSameValueReplaceRecord;
+    }
+  }
+  return VectorMatch::kDifferent;
 }
 
 int VectorBase::RespondWithInfo(ValkeyModuleCtx *ctx) const {
@@ -489,8 +523,12 @@ absl::Status VectorBase::SaveTrackedKeys(
 
 absl::Status VectorBase::LoadTrackedKeys(
     ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
-    SupplementalContentChunkIter &&iter) {
+    SupplementalContentChunkIter &&iter, bool defer_keyspace_load) {
   absl::WriterMutexLock lock(&key_to_metadata_mutex_);
+  if (defer_keyspace_load && !vectors_resolved_on_load_) {
+    registered_in_vector_registry_.store(false, std::memory_order_release);
+    has_deferred_rdb_vectors_.store(true, std::memory_order_release);
+  }
   size_t keys_changed_since_save = keys_changed_since_save_;
   while (iter.HasNext()) {
     VMSDK_ASSIGN_OR_RETURN(auto metadata_str, iter.Next(),
@@ -509,6 +547,11 @@ absl::Status VectorBase::LoadTrackedKeys(
           .magnitude = tracked_key_metadata.magnitude()}});
     key_by_internal_id_.insert(
         {tracked_key_metadata.internal_id(), interned_key});
+    if (defer_keyspace_load) {
+      // Keep the saved RDB vector until post-swap recovery replays the key
+      // from the newly swapped DB.
+      continue;
+    }
     auto &saved_vector = GetVectorLockFree(tracked_key_metadata.internal_id());
     auto shared = ShareIfUnchangedSinceSave(
         ctx, attribute_data_type, interned_key,

@@ -1242,6 +1242,7 @@ absl::Status ValkeySearch::Startup(ValkeyModuleCtx *ctx) {
   SchemaManager::InitInstance(std::make_unique<SchemaManager>(
       ctx, server_events::SubscribeToServerEvents, writer_thread_pool_.get(),
       options::GetUseCoordinator().GetValue() && IsCluster()));
+  server_events::SubscribeToLoadingEvents();
   if (options::GetUseCoordinator().GetValue()) {
     coordinator_thread_monitor_ =
         std::make_unique<vmsdk::ThreadGroupCPUMonitor>(kEventEngine);

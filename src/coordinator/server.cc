@@ -253,6 +253,10 @@ void Service::SearchOneArm(grpc::CallbackServerContext *context,
                       .value();
     VMSDK_RETURN_IF_ERROR(ToAbslStatus(PerformIndexConsistencyCheck(
         request.index_fingerprint_version(), schema)));
+    if (schema->IsSwapDbRecoveryInProgress()) {
+      return absl::FailedPreconditionError(
+          IndexSchema::kSwapDbRecoveryInProgressMsg);
+    }
 
     if (request.enable_consistency()) {
       // Perform slot consistency check

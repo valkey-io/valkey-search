@@ -21,6 +21,7 @@
 #include "absl/base/optimization.h"
 #include "absl/cleanup/cleanup.h"
 #include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -169,7 +170,7 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> CreateVectorIndex(
     const data_model::Attribute &attribute,
     const data_model::VectorIndex &vector_index_proto,
     std::optional<SupplementalContentChunkIter> &iter,
-    indexes::TrackedKeys *key_labels) {
+    indexes::TrackedKeys *key_labels, bool defer_keyspace_load) {
   if (!iter.has_value()) {
     return AlgoT<T>::Create(vector_index_proto, attribute.identifier(),
                             index_schema->GetAttributeDataType().ToProto(),
@@ -178,7 +179,7 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> CreateVectorIndex(
   return AlgoT<T>::LoadFromRDB(ctx, &index_schema->GetAttributeDataType(),
                                vector_index_proto, attribute.identifier(),
                                std::move(*iter), index_schema->GetDBNum(),
-                               key_labels);
+                               key_labels, defer_keyspace_load);
 }
 
 // Selects the storage type for `AlgoT` from the schema's declared data type.
@@ -190,18 +191,21 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> CreateVectorIndexForType(
     const data_model::Attribute &attribute,
     const data_model::VectorIndex &vector_index_proto,
     std::optional<SupplementalContentChunkIter> &iter,
-    indexes::TrackedKeys *key_labels) {
+    indexes::TrackedKeys *key_labels, bool defer_keyspace_load) {
   switch (vector_index_proto.vector_data_type()) {
     case data_model::VECTOR_DATA_TYPE_FLOAT32:
-      return CreateVectorIndex<AlgoT, float>(
-          ctx, index_schema, attribute, vector_index_proto, iter, key_labels);
+      return CreateVectorIndex<AlgoT, float>(ctx, index_schema, attribute,
+                                             vector_index_proto, iter,
+                                             key_labels, defer_keyspace_load);
     case data_model::VECTOR_DATA_TYPE_FLOAT16:
-      return CreateVectorIndex<AlgoT, float16>(
-          ctx, index_schema, attribute, vector_index_proto, iter, key_labels);
+      return CreateVectorIndex<AlgoT, float16>(ctx, index_schema, attribute,
+                                               vector_index_proto, iter,
+                                               key_labels, defer_keyspace_load);
     case data_model::VECTOR_DATA_TYPE_BFLOAT16:
       VMSDK_RETURN_IF_ERROR(indexes::CheckSimsimdBf16Capability());
       return CreateVectorIndex<AlgoT, bfloat16>(
-          ctx, index_schema, attribute, vector_index_proto, iter, key_labels);
+          ctx, index_schema, attribute, vector_index_proto, iter, key_labels,
+          defer_keyspace_load);
     default:
       return absl::InvalidArgumentError("Unsupported vector data type.");
   }
@@ -213,7 +217,8 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
     ValkeyModuleCtx *ctx, IndexSchema *index_schema,
     const data_model::Attribute &attribute,
     std::optional<SupplementalContentChunkIter> iter,
-    indexes::TrackedKeys *key_labels = nullptr) {
+    indexes::TrackedKeys *key_labels = nullptr,
+    bool defer_keyspace_load = false) {
   const auto &index = attribute.index();
   switch (index.index_type_case()) {
     case data_model::Index::IndexTypeCase::kTagIndex: {
@@ -238,11 +243,11 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
         case data_model::VectorIndex::kHnswAlgorithm:
           return CreateVectorIndexForType<indexes::VectorHNSW>(
               ctx, index_schema, attribute, vector_index_proto, iter,
-              key_labels);
+              key_labels, defer_keyspace_load);
         case data_model::VectorIndex::kFlatAlgorithm:
           return CreateVectorIndexForType<indexes::VectorFlat>(
               ctx, index_schema, attribute, vector_index_proto, iter,
-              key_labels);
+              key_labels, defer_keyspace_load);
         default:
           return absl::InvalidArgumentError("Unsupported algorithm.");
       }
@@ -255,8 +260,8 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
 
 absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
     ValkeyModuleCtx *ctx, const data_model::IndexSchema &index_schema_proto,
-    vmsdk::ThreadPool *mutations_thread_pool, bool skip_attributes,
-    bool reload) {
+    vmsdk::ThreadPool *mutations_thread_pool, bool skip_attributes, bool reload,
+    bool defer_keyspace_load) {
   std::unique_ptr<AttributeDataType> attribute_data_type;
   switch (index_schema_proto.attribute_data_type()) {
     case data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH:
@@ -287,7 +292,7 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
       new IndexSchema(ctx, index_schema_proto, std::move(attribute_data_type),
                       mutations_thread_pool, reload),
       vmsdk::DestructByMainThread<IndexSchema>{});
-  VMSDK_RETURN_IF_ERROR(res->Init(ctx));
+  VMSDK_RETURN_IF_ERROR(res->Init(ctx, defer_keyspace_load));
   if (!skip_attributes) {
     for (const auto &attribute : index_schema_proto.attributes()) {
       VMSDK_ASSIGN_OR_RETURN(
@@ -296,6 +301,9 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
       VMSDK_RETURN_IF_ERROR(res->AddIndex(
           attribute.alias(), attribute.identifier(), index,
           {.sortable = attribute.sortable(), .unf = attribute.unf()}));
+    }
+    if (defer_keyspace_load) {
+      res->ClearVectorRegistryRegistration();
     }
   }
   // Compiling the FILTER resolves every @reference against the attributes, so
@@ -384,8 +392,12 @@ IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
   }
 }
 
-absl::Status IndexSchema::Init(ValkeyModuleCtx *ctx) {
-  VMSDK_RETURN_IF_ERROR(keyspace_event_manager_->InsertSubscription(ctx, this));
+absl::Status IndexSchema::Init(ValkeyModuleCtx *ctx, bool defer_keyspace_load) {
+  if (!defer_keyspace_load) {
+    VMSDK_RETURN_IF_ERROR(
+        keyspace_event_manager_->InsertSubscription(ctx, this));
+    subscribed_to_keyspace_events_ = true;
+  }
   backfill_job_ = std::make_optional<BackfillJob>(ctx, name_, db_num_);
   return absl::OkStatus();
 }
@@ -616,6 +628,16 @@ std::vector<const indexes::VectorBase *> IndexSchema::GetVectorIndexes() const {
   return result;
 }
 
+void IndexSchema::ClearVectorRegistryRegistration() {
+  for (const auto &[_, attr] : attributes_) {
+    auto index = attr.GetIndex();
+    if (index && indexes::IsVectorIndex(index)) {
+      static_cast<indexes::VectorBase *>(index.get())
+          ->ClearVectorRegistryRegistration();
+    }
+  }
+}
+
 namespace {
 
 void AppendMutatedAttribute(
@@ -652,14 +674,15 @@ void AppendMutatedAttribute(
 
 void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
                                               ValkeyModuleString *key,
-                                              bool from_backfill) {
+                                              bool from_backfill,
+                                              bool allow_delete_on_backfill) {
   if (ABSL_PREDICT_FALSE(key == nullptr) || is_destructing_) {
     return;
   }
   auto key_cstr = vmsdk::ToStringView(key);
   auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
       ctx, key, VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
-  if (!key_obj && from_backfill) {
+  if (!key_obj && from_backfill && !allow_delete_on_backfill) {
     return;
   }
 
@@ -1096,6 +1119,11 @@ void IndexSchema::ProcessMutation(ValkeyModuleCtx *ctx,
           ctx, interned_key, std::move(mutated_attributes), this_mutation,
           from_backfill, block_client, inside_multi_exec, document_score)) ||
       inside_multi_exec) {
+    if (ABSL_PREDICT_FALSE(from_backfill &&
+                           swapdb_recovery_.Get().has_value())) {
+      swapdb_recovery_.Get()->coalesced_keys.emplace_back(interned_key,
+                                                          this_mutation);
+    }
     // Skip scheduling if the mutation key has already been tracked or is part
     // of a multi exec command.
     return;
@@ -1123,14 +1151,99 @@ void IndexSchema::ProcessSingleMutationAsync(ValkeyModuleCtx *ctx,
     } while (true);
   }
 
-  absl::MutexLock lock(&stats_.mutex_);
-  --stats_.mutation_queue_size_;
-  if (ABSL_PREDICT_FALSE(from_backfill)) {
-    --stats_.backfill_inqueue_tasks;
+  bool schedule_try_finish = false;
+  {
+    absl::MutexLock lock(&stats_.mutex_);
+    --stats_.mutation_queue_size_;
+    if (ABSL_PREDICT_FALSE(from_backfill)) {
+      --stats_.backfill_inqueue_tasks;
+    }
+    if (ABSL_PREDICT_FALSE(delay_capturer)) {
+      stats_.mutations_queue_delay_ = delay_capturer->Duration();
+    }
+    if (ABSL_PREDICT_FALSE(
+            swapdb_recovery_enqueue_done_.load(std::memory_order_acquire) &&
+            stats_.backfill_inqueue_tasks == 0)) {
+      schedule_try_finish = !try_finish_recovery_scheduled_.exchange(
+          true, std::memory_order_acq_rel);
+    }
   }
-  if (ABSL_PREDICT_FALSE(delay_capturer)) {
-    stats_.mutations_queue_delay_ = delay_capturer->Duration();
+  if (ABSL_PREDICT_FALSE(schedule_try_finish)) {
+    vmsdk::RunByMain(
+        [weak = GetWeakPtr()]() {
+          if (auto self = weak.lock()) {
+            self->TryFinishSwapDbRecovery();
+          }
+        },
+        /*force_async=*/true);
   }
+}
+
+void IndexSchema::TryFinishSwapDbRecovery() {
+  if (is_destructing_.load(std::memory_order_acquire) ||
+      !swapdb_recovery_.Get().has_value()) {
+    return;
+  }
+  try_finish_recovery_scheduled_.store(false, std::memory_order_release);
+  if (!swapdb_recovery_enqueue_done_.load(std::memory_order_acquire)) {
+    return;
+  }
+  if (!multi_mutations_keys_.Get().empty()) {
+    ProcessMultiQueue();
+    if (is_destructing_.load(std::memory_order_acquire) ||
+        !swapdb_recovery_.Get().has_value()) {
+      return;
+    }
+  }
+  {
+    absl::MutexLock lock(&stats_.mutex_);
+    if (stats_.backfill_inqueue_tasks > 0) {
+      return;
+    }
+  }
+  auto &recovery = swapdb_recovery_.Get();
+  if (!recovery->coalesced_keys.empty()) {
+    absl::MutexLock lock(&mutated_records_mutex_);
+    size_t keep_idx = 0;
+    for (auto &entry : recovery->coalesced_keys) {
+      const auto &[key, seq] = entry;
+      auto itr = tracked_mutated_records_.find(key);
+      bool done = false;
+      if (itr == tracked_mutated_records_.end()) {
+        done = true;
+      } else if (!itr->second.consume_in_progress) {
+        auto key_info_itr = index_key_info_.find(key);
+        done = key_info_itr != index_key_info_.end() &&
+               key_info_itr->second.mutation_sequence_number_ >= seq;
+      }
+      if (!done) {
+        if (keep_idx !=
+            static_cast<size_t>(&entry - recovery->coalesced_keys.data())) {
+          recovery->coalesced_keys[keep_idx] = std::move(entry);
+        }
+        ++keep_idx;
+      }
+    }
+    recovery->coalesced_keys.resize(keep_idx);
+    if (!recovery->coalesced_keys.empty()) {
+      return;
+    }
+  }
+  for (const auto &[_, attr] : attributes_) {
+    auto index = attr.GetIndex();
+    if (index && indexes::IsVectorIndex(index)) {
+      static_cast<indexes::VectorBase *>(index.get())
+          ->ClearDeferredRdbVectors();
+    }
+  }
+  VMSDK_LOG(NOTICE, detached_ctx_.get())
+      << "Index schema " << vmsdk::config::RedactIfNeeded(name_)
+      << " finished post-swapdb recovery. Processed "
+      << recovery->processed_items << " items in "
+      << absl::FormatDuration(recovery->stopwatch.Duration());
+  recovery.reset();
+  swapdb_recovery_enqueue_done_.store(false, std::memory_order_release);
+  swapdb_recovery_in_progress_.store(false, std::memory_order_release);
 }
 
 void IndexSchema::BackfillScanCallback(ValkeyModuleCtx *ctx,
@@ -1152,6 +1265,136 @@ CONTROLLED_BOOLEAN(ForceRDBLoadFailure, false);
 
 uint32_t IndexSchema::PerformBackfill(ValkeyModuleCtx *ctx,
                                       uint32_t batch_size) {
+  auto &recovery = swapdb_recovery_.Get();
+  if (recovery.has_value()) {
+    if (StopBackfill.GetValue()) {
+      VMSDK_LOG_EVERY_N_SEC(NOTICE, ctx, 1) << "Backfill stopped by request";
+      return 0;
+    }
+    if (batch_size == 0) {
+      TryFinishSwapDbRecovery();
+      return 0;
+    }
+    recovery->paused_by_oom = false;
+    uint32_t processed = 0;
+    if (!recovery->IsQueueDrainDone()) {
+      vmsdk::ValkeySelectDbGuard select_db_guard(ctx, db_num_);
+      const size_t max_queue_size =
+          options::GetMaxMutationQueueSizeOnRestore().GetValue();
+      constexpr size_t kQueueCheckBatchSize = 100;
+      size_t keys_since_last_check = kQueueCheckBatchSize;
+      while (processed < batch_size && !recovery->IsQueueDrainDone()) {
+        auto ctx_flags = ValkeyModule_GetContextFlags(ctx);
+        if (ctx_flags & VALKEYMODULE_CTX_FLAGS_OOM) {
+          recovery->paused_by_oom = true;
+          return processed;
+        }
+        if (keys_since_last_check >= kQueueCheckBatchSize) {
+          keys_since_last_check = 0;
+          if (GetMutatedRecordsSize() >= max_queue_size) {
+            if (!multi_mutations_keys_.Get().empty()) {
+              ProcessMultiQueue();
+              if (is_destructing_.load(std::memory_order_acquire) ||
+                  !recovery.has_value()) {
+                return processed;
+              }
+            }
+            if (GetMutatedRecordsSize() >= max_queue_size) {
+              Metrics::GetStats().rdb_restore_backpressure_wait_cycles++;
+              break;
+            }
+          }
+        }
+        if (!recovery->extension_keys.empty()) {
+          Key key = std::move(recovery->extension_keys.front());
+          recovery->extension_keys.pop_front();
+          auto key_str = vmsdk::MakeUniqueValkeyString(*key);
+          ProcessKeyspaceNotification(ctx, key_str.get(),
+                                      /*from_backfill=*/true,
+                                      /*allow_delete_on_backfill=*/true);
+          Metrics::GetStats().rdb_restore_current_index_keys_loaded++;
+        } else if (!recovery->mutation_entries.empty()) {
+          Key key = std::move(recovery->mutation_entries.front());
+          recovery->mutation_entries.pop_front();
+          auto key_str = vmsdk::MakeUniqueValkeyString(*key);
+          ProcessKeyspaceNotification(ctx, key_str.get(),
+                                      /*from_backfill=*/true,
+                                      /*allow_delete_on_backfill=*/true);
+        } else if (!recovery->stale_check_keys.empty()) {
+          Key key = std::move(recovery->stale_check_keys.front());
+          recovery->stale_check_keys.pop_front();
+          auto key_str = vmsdk::MakeUniqueValkeyString(*key);
+          if (!ValkeyModule_KeyExists(ctx, key_str.get())) {
+            ProcessKeyspaceNotification(ctx, key_str.get(),
+                                        /*from_backfill=*/true,
+                                        /*allow_delete_on_backfill=*/true);
+          }
+        }
+        ++recovery->processed_items;
+        ++processed;
+        ++keys_since_last_check;
+      }
+    }
+    auto &backfill_job = backfill_job_.Get();
+    if (recovery->IsQueueDrainDone() && backfill_job.has_value() &&
+        !backfill_job->IsScanDone() && processed < batch_size) {
+      backfill_job->paused_by_oom = false;
+      backfill_job->db_size =
+          std::max(backfill_job->db_size,
+                   (uint64_t)ValkeyModule_DbSize(backfill_job->scan_ctx.get()));
+      uint64_t start_scan_count = backfill_job->scanned_key_count;
+      uint64_t &current_scan_count = backfill_job->scanned_key_count;
+      const uint32_t scan_budget = batch_size - processed;
+      const size_t max_queue_size =
+          options::GetMaxMutationQueueSizeOnRestore().GetValue();
+      while (current_scan_count - start_scan_count < scan_budget) {
+        auto ctx_flags = ValkeyModule_GetContextFlags(ctx);
+        if (ctx_flags & VALKEYMODULE_CTX_FLAGS_OOM) {
+          backfill_job->paused_by_oom = true;
+          recovery->paused_by_oom = true;
+          return processed +
+                 static_cast<uint32_t>(current_scan_count - start_scan_count);
+        }
+        if (GetMutatedRecordsSize() >= max_queue_size) {
+          if (!multi_mutations_keys_.Get().empty()) {
+            ProcessMultiQueue();
+            if (is_destructing_.load(std::memory_order_acquire) ||
+                !recovery.has_value()) {
+              return processed + static_cast<uint32_t>(current_scan_count -
+                                                       start_scan_count);
+            }
+          }
+          if (GetMutatedRecordsSize() >= max_queue_size) {
+            Metrics::GetStats().rdb_restore_backpressure_wait_cycles++;
+            break;
+          }
+        }
+        if (!ValkeyModule_Scan(backfill_job->scan_ctx.get(),
+                               backfill_job->cursor.get(), BackfillScanCallback,
+                               reinterpret_cast<void *>(this))) {
+          VMSDK_LOG_EVERY_N_SEC(NOTICE, ctx, 1)
+              << "Index schema " << vmsdk::config::RedactIfNeeded(name_)
+              << " finished backfill. Scanned "
+              << backfill_job->scanned_key_count << " keys in "
+              << absl::FormatDuration(backfill_job->stopwatch.Duration());
+          backfill_job->MarkScanAsDone();
+          break;
+        }
+      }
+      processed += static_cast<uint32_t>(current_scan_count - start_scan_count);
+    }
+    if (recovery->IsQueueDrainDone() &&
+        (!backfill_job.has_value() || backfill_job->IsScanDone())) {
+      swapdb_recovery_enqueue_done_.store(true, std::memory_order_release);
+      TryFinishSwapDbRecovery();
+    }
+    return processed;
+  }
+
+  if (batch_size == 0) {
+    return 0;
+  }
+
   auto &backfill_job = backfill_job_.Get();
   if (!backfill_job.has_value() || backfill_job->IsScanDone()) {
     return 0;
@@ -1201,8 +1444,34 @@ uint32_t IndexSchema::PerformBackfill(ValkeyModuleCtx *ctx,
 }
 
 float IndexSchema::GetBackfillPercent() const {
+  if (!IsBackfillInProgress()) {
+    return 1;
+  }
+  if (const auto &recovery = swapdb_recovery_.Get(); recovery.has_value()) {
+    uint64_t total = recovery->total_items;
+    uint64_t scanned = recovery->processed_items;
+    if (recovery->scan_required && backfill_job_.Get().has_value()) {
+      total += backfill_job_.Get()->db_size;
+      scanned += backfill_job_.Get()->scanned_key_count;
+    }
+    if (total == 0) {
+      return 0.99f;
+    }
+    uint64_t inqueue = stats_.backfill_inqueue_tasks;
+    if (scanned < inqueue) {
+      return 0.0f;
+    }
+    uint64_t completed = scanned - inqueue;
+    if (completed >= total) {
+      return 0.99f;
+    }
+    return static_cast<float>(completed) / static_cast<float>(total);
+  }
+  if (IsSwapDbRecoveryInProgress()) {
+    return 0.0f;
+  }
   const auto &backfill_job = backfill_job_.Get();
-  if (!IsBackfillInProgress() || (backfill_job->db_size == 0)) {
+  if (!backfill_job.has_value() || backfill_job->db_size == 0) {
     return 1;
   }
   DCHECK(backfill_job->scanned_key_count >= stats_.backfill_inqueue_tasks);
@@ -1225,7 +1494,17 @@ absl::string_view IndexSchema::GetStateForInfo() const {
   if (!IsBackfillInProgress()) {
     return "ready";
   }
-  if (backfill_job_.Get()->paused_by_oom) {
+  if (const auto &recovery = swapdb_recovery_.Get(); recovery.has_value()) {
+    if (recovery->paused_by_oom) {
+      return "backfill_paused_by_oom";
+    }
+    if (recovery->scan_required && backfill_job_.Get().has_value() &&
+        backfill_job_.Get()->paused_by_oom) {
+      return "backfill_paused_by_oom";
+    }
+    return "backfill_in_progress";
+  }
+  if (backfill_job_.Get().has_value() && backfill_job_.Get()->paused_by_oom) {
     return "backfill_paused_by_oom";
   }
   return "backfill_in_progress";
@@ -1574,12 +1853,17 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
   }
 
   if (RDBWriteV2()) {
+    const auto &recovery = swapdb_recovery_.Get();
+    const bool backfilling =
+        recovery.has_value()
+            ? (recovery->scan_required || (backfill_job_.Get().has_value() &&
+                                           !backfill_job_.Get()->IsScanDone()))
+            : IsBackfillInProgress();
     VMSDK_RETURN_IF_ERROR(SaveSupplementalSection(
         rdb, data_model::SUPPLEMENTAL_CONTENT_INDEX_EXTENSION,
         [&](auto &header) {
-          rdb_save_backfilling_indexes.Increment(int(IsBackfillInProgress()));
-          header.mutable_mutation_queue_header()->set_backfilling(
-              IsBackfillInProgress());
+          rdb_save_backfilling_indexes.Increment(int(backfilling));
+          header.mutable_mutation_queue_header()->set_backfilling(backfilling);
           VMSDK_LOG(DEBUG, nullptr)
               << "RDB: Saving Index Extension Backfill = "
               << header.mutation_queue_header().backfilling();
@@ -1661,7 +1945,8 @@ absl::Status IndexSchema::ValidateIndex() const {
 }
 
 absl::Status IndexSchema::SaveIndexExtension(RDBChunkOutputStream out) const {
-  if (RDBValidateOnWrite()) {
+  const auto &recovery = swapdb_recovery_.Get();
+  if (RDBValidateOnWrite() && !recovery.has_value()) {
     VMSDK_RETURN_IF_ERROR(ValidateIndex());
   }
   //
@@ -1677,11 +1962,27 @@ absl::Status IndexSchema::SaveIndexExtension(RDBChunkOutputStream out) const {
   // option.
   //
   size_t key_count = db_key_info_.Get().size();
+  if (recovery.has_value()) {
+    key_count += recovery->extension_keys.size();
+    key_count += recovery->mutation_entries.size();
+    key_count += recovery->stale_check_keys.size();
+  }
   VMSDK_RETURN_IF_ERROR(out.SaveObject(key_count));
   rdb_save_keys.Increment(key_count);
   VMSDK_LOG(NOTICE, nullptr) << "Writing Index Extension, keys = " << key_count;
   for (const auto &[key, _] : db_key_info_.Get()) {
     VMSDK_RETURN_IF_ERROR(out.SaveString(key->Str()));
+  }
+  if (recovery.has_value()) {
+    for (const auto &key : recovery->extension_keys) {
+      VMSDK_RETURN_IF_ERROR(out.SaveString(key->Str()));
+    }
+    for (const auto &key : recovery->mutation_entries) {
+      VMSDK_RETURN_IF_ERROR(out.SaveString(key->Str()));
+    }
+    for (const auto &key : recovery->stale_check_keys) {
+      VMSDK_RETURN_IF_ERROR(out.SaveString(key->Str()));
+    }
   }
   // acquire lock for tracked_mutated_records_
   absl::MutexLock lock(&mutated_records_mutex_);
@@ -1690,8 +1991,14 @@ absl::Status IndexSchema::SaveIndexExtension(RDBChunkOutputStream out) const {
   // out non-backfill entries. But this requires that the index itself be
   // marked as not backfilling, in other words if the index thinks it's done
   // then we need to save restore even the entries marked as backfilling.
+  // During swapdb recovery, always save all tracked mutation records (including
+  // from_backfill recovery deletions/updates) and emit from_backfill=false so a
+  // sub-replica loading a V2 mid-recovery RDB with backfilling=false never
+  // inflates backfill_inqueue_tasks while scanned_key_count == 0.
   //
-  auto count = !IsBackfillInProgress()
+  const bool skip_backfill_entries =
+      IsBackfillInProgress() && !recovery.has_value();
+  auto count = !skip_backfill_entries
                    ? tracked_mutated_records_.size()
                    : std::ranges::count_if(tracked_mutated_records_,
                                            [](const auto &entry) {
@@ -1703,11 +2010,13 @@ absl::Status IndexSchema::SaveIndexExtension(RDBChunkOutputStream out) const {
   VMSDK_RETURN_IF_ERROR(out.SaveObject(count));
   rdb_save_mutation_entries.Increment(count);
   for (const auto &[key, value] : tracked_mutated_records_) {
-    if (IsBackfillInProgress() && value.from_backfill) {
+    if (skip_backfill_entries && value.from_backfill) {
       continue;
     }
     VMSDK_RETURN_IF_ERROR(out.SaveString(key->Str()));
-    VMSDK_RETURN_IF_ERROR(out.SaveObject(value.from_backfill));
+    bool saved_from_backfill =
+        recovery.has_value() ? false : value.from_backfill;
+    VMSDK_RETURN_IF_ERROR(out.SaveObject(saved_from_backfill));
     VMSDK_RETURN_IF_ERROR(out.SaveObject(value.from_multi));
     count--;
   }
@@ -1744,7 +2053,8 @@ absl::Status IndexSchema::SaveIndexExtension(RDBChunkOutputStream out) const {
 }
 
 absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
-                                             RDBChunkInputStream input) {
+                                             RDBChunkInputStream input,
+                                             bool defer_keyspace_load) {
   CHECK(RDBReadV2());
   VMSDK_ASSIGN_OR_RETURN(size_t key_count, input.LoadObject<size_t>());
   rdb_load_keys.Increment(key_count);
@@ -1752,6 +2062,53 @@ absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
   // Track current index restore progress
   Metrics::GetStats().rdb_restore_current_index_keys_total = key_count;
   Metrics::GetStats().rdb_restore_current_index_keys_loaded = 0;
+
+  if (defer_keyspace_load) {
+    VMSDK_LOG(NOTICE, ctx)
+        << "Deferring Index Extension load for swapdb, keys = " << key_count;
+    // Store interned 8-byte Key handles in std::deque chunks: avoids
+    // duplicating key strings already interned by tracked metadata, avoids
+    // pre-allocating from untrusted stream counts before LoadString() validates
+    // each entry, and releases chunks incrementally via pop_front() as
+    // PerformBackfill drains.
+    SwapDbRecoveryState recovery;
+    for (size_t i = 0; i < key_count; ++i) {
+      VMSDK_ASSIGN_OR_RETURN(auto keyname_str, input.LoadString());
+      recovery.extension_keys.push_back(StringInternStore::Intern(keyname_str));
+    }
+    if (ForceRDBLoadFailure.GetValue()) {
+      return absl::InternalError(
+          "Simulated IO error during RDB load (ForceRDBLoadFailure)");
+    }
+    VMSDK_ASSIGN_OR_RETURN(size_t count, input.LoadObject<size_t>());
+    VMSDK_LOG(NOTICE, ctx)
+        << "Deferring Mutation Entries load for swapdb, entries = " << count;
+    rdb_load_mutation_entries.Increment(count);
+    for (size_t i = 0; i < count; ++i) {
+      VMSDK_ASSIGN_OR_RETURN(auto keyname_str, input.LoadString());
+      VMSDK_ASSIGN_OR_RETURN([[maybe_unused]] auto from_backfill,
+                             input.LoadObject<bool>());
+      VMSDK_ASSIGN_OR_RETURN([[maybe_unused]] auto from_multi,
+                             input.LoadObject<bool>());
+      recovery.mutation_entries.push_back(
+          StringInternStore::Intern(keyname_str));
+    }
+    VMSDK_ASSIGN_OR_RETURN(size_t multi_count, input.LoadObject<size_t>());
+    rdb_load_multi_exec_entries.Increment(multi_count);
+    VMSDK_LOG(NOTICE, ctx)
+        << "Deferring Multi/Exec Entries load for swapdb, entries = "
+        << multi_count;
+    for (size_t i = 0; i < multi_count; ++i) {
+      VMSDK_ASSIGN_OR_RETURN(auto keyname_str, input.LoadString());
+      recovery.mutation_entries.push_back(
+          StringInternStore::Intern(keyname_str));
+    }
+    recovery.total_items =
+        recovery.extension_keys.size() + recovery.mutation_entries.size();
+    swapdb_recovery_.Get() = std::move(recovery);
+    loaded_v2_ = true;
+    return absl::OkStatus();
+  }
 
   VMSDK_LOG(NOTICE, ctx) << "Loading Index Extension, keys = " << key_count;
 
@@ -1860,7 +2217,7 @@ static absl::Status SkipSupplementalContent(
 absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
     ValkeyModuleCtx *ctx, vmsdk::ThreadPool *mutations_thread_pool,
     std::unique_ptr<data_model::IndexSchema> index_schema_proto,
-    SupplementalContentIter &&supplemental_iter) {
+    SupplementalContentIter &&supplemental_iter, bool defer_keyspace_load) {
   // Select the DB number in the context for subsequent usage.
   int db_num = static_cast<int>(index_schema_proto->db_num());
   if (ValkeyModule_SelectDb(ctx, db_num) != VALKEYMODULE_OK) {
@@ -1879,7 +2236,8 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
   VMSDK_ASSIGN_OR_RETURN(
       auto index_schema,
       IndexSchema::Create(ctx, *index_schema_proto, mutations_thread_pool,
-                          !load_attributes_on_create, true));
+                          !load_attributes_on_create, true,
+                          defer_keyspace_load));
 
   // If we exit early after creating a new schema, workers may already hold
   // strong references via ValkeyModule_Yield. Ensure MarkAsDestructing is
@@ -1911,7 +2269,8 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
               std::shared_ptr<indexes::IndexBase> index,
               IndexFactory(ctx, index_schema.get(), attribute,
                            supplemental_iter.IterateChunks(),
-                           key_labels ? &key_labels.mapped() : nullptr));
+                           key_labels ? &key_labels.mapped() : nullptr,
+                           defer_keyspace_load));
           VMSDK_RETURN_IF_ERROR(index_schema->AddIndex(
               attribute.alias(), attribute.identifier(), index,
               {.sortable = attribute.sortable(), .unf = attribute.unf()}));
@@ -1943,7 +2302,7 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
           auto *vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
           VMSDK_RETURN_IF_ERROR(vector_index->LoadTrackedKeys(
               ctx, &index_schema->GetAttributeDataType(),
-              supplemental_iter.IterateChunks()));
+              supplemental_iter.IterateChunks(), defer_keyspace_load));
           break;
         }
         case data_model::SupplementalContentType::
@@ -1960,7 +2319,8 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
               // ProcessKeyspaceNotification, which evaluates it.
               VMSDK_RETURN_IF_ERROR(index_schema->CompileFilter());
               VMSDK_RETURN_IF_ERROR(index_schema->LoadIndexExtension(
-                  ctx, RDBChunkInputStream(supplemental_iter.IterateChunks())));
+                  ctx, RDBChunkInputStream(supplemental_iter.IterateChunks()),
+                  defer_keyspace_load));
               if (!supplemental_content->mutation_queue_header()
                        .backfilling()) {
                 VMSDK_LOG(DEBUG, ctx) << "Backfill suppressed.";
@@ -1991,6 +2351,18 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
   // Idempotent: covers a stream that carried no INDEX_EXTENSION section, so
   // the index still has its filter for everything ingested after the load.
   VMSDK_RETURN_IF_ERROR(index_schema->CompileFilter());
+  if (defer_keyspace_load) {
+    if (!index_schema->swapdb_recovery_.Get().has_value()) {
+      SwapDbRecoveryState recovery;
+      recovery.is_v1 = true;
+      index_schema->swapdb_recovery_.Get() = std::move(recovery);
+    }
+    index_schema->swapdb_recovery_.Get()->scan_required =
+        index_schema->backfill_job_.Get().has_value() &&
+        !index_schema->backfill_job_.Get()->IsScanDone();
+    index_schema->swapdb_recovery_in_progress_.store(true,
+                                                     std::memory_order_release);
+  }
   VMSDK_LOG(NOTICE, ctx) << "Loaded index schema with "
                          << index_schema->GetAttributeCount() << " attributes";
   std::move(mark_destructing_on_error)
@@ -2019,7 +2391,7 @@ void IndexSchema::OnSwapDB(ValkeyModuleSwapDbInfo *swap_db_info) {
     }
   }
   auto &backfill_job = backfill_job_.Get();
-  if (IsBackfillInProgress() && !backfill_job->IsScanDone()) {
+  if (backfill_job.has_value() && !backfill_job->IsScanDone()) {
     ValkeyModule_SelectDb(backfill_job->scan_ctx.get(), db_to_swap_to);
   }
 }
@@ -2051,6 +2423,103 @@ void IndexSchema::DrainMutationQueue(ValkeyModuleCtx *ctx) const {
 }
 
 void IndexSchema::OnLoadingEnded(ValkeyModuleCtx *ctx) {
+  auto &recovery = swapdb_recovery_.Get();
+  if (recovery.has_value()) {
+    if (is_destructing_.load(std::memory_order_acquire)) {
+      return;
+    }
+    recovery->stopwatch = vmsdk::StopWatch();
+    if (!subscribed_to_keyspace_events_) {
+      auto status = keyspace_event_manager_->InsertSubscription(ctx, this);
+      if (!status.ok()) {
+        VMSDK_LOG(WARNING, ctx)
+            << "Failed to subscribe to keyspace events for index schema "
+            << vmsdk::config::RedactIfNeeded(name_)
+            << " after swapdb: " << status.message();
+      } else {
+        subscribed_to_keyspace_events_ = true;
+      }
+    }
+    for (const auto &[_, attr] : attributes_) {
+      auto index = attr.GetIndex();
+      if (index && indexes::IsVectorIndex(index)) {
+        static_cast<indexes::VectorBase *>(index.get())->OnSwapDbPublished();
+      }
+    }
+    auto &backfill_job = backfill_job_.Get();
+    if (backfill_job.has_value() && !backfill_job->IsScanDone()) {
+      ValkeyModule_SelectDb(backfill_job->scan_ctx.get(), db_num_);
+      backfill_job->db_size = ValkeyModule_DbSize(backfill_job->scan_ctx.get());
+    }
+    if (!loaded_v2_) {
+      size_t attrs_with_keys = 0;
+      size_t total_tracked = 0;
+      for (const auto &[_, attribute] : attributes_) {
+        if (const auto &index = attribute.GetIndex(); index) {
+          size_t cnt = index->GetTrackedKeyCount();
+          if (cnt > 0) {
+            ++attrs_with_keys;
+            total_tracked += cnt;
+          }
+        }
+      }
+      if (attrs_with_keys == 1) {
+        for (const auto &[_, attribute] : attributes_) {
+          if (const auto &index = attribute.GetIndex();
+              index && index->GetTrackedKeyCount() > 0) {
+            auto status = index->ForEachTrackedKey([&](const Key &key) {
+              recovery->stale_check_keys.push_back(key);
+              return absl::OkStatus();
+            });
+            if (!status.ok()) {
+              VMSDK_LOG(WARNING, ctx)
+                  << "Failed to collect tracked keys for swapdb recovery: "
+                  << status.message();
+            }
+          }
+        }
+      } else if (attrs_with_keys > 1) {
+        absl::flat_hash_set<Key, InternedStringPtrHash, InternedStringPtrEq>
+            seen;
+        seen.reserve(total_tracked);
+        for (const auto &[_, attribute] : attributes_) {
+          if (const auto &index = attribute.GetIndex();
+              index && index->GetTrackedKeyCount() > 0) {
+            auto status = index->ForEachTrackedKey([&](const Key &key) {
+              if (seen.insert(key).second) {
+                recovery->stale_check_keys.push_back(key);
+              }
+              return absl::OkStatus();
+            });
+            if (!status.ok()) {
+              VMSDK_LOG(WARNING, ctx)
+                  << "Failed to collect tracked keys for swapdb recovery: "
+                  << status.message();
+            }
+          }
+        }
+      }
+      recovery->total_items += recovery->stale_check_keys.size();
+      recovery->is_v1 = true;
+    } else {
+      loaded_v2_ = false;
+      recovery->is_v1 = false;
+    }
+    recovery->scan_required =
+        backfill_job.has_value() && !backfill_job->IsScanDone();
+    VMSDK_LOG(NOTICE, ctx)
+        << "Post-swapdb recovery scheduled for index schema "
+        << vmsdk::config::RedactIfNeeded(name_) << " (v1=" << recovery->is_v1
+        << ", scan_required=" << recovery->scan_required
+        << ", extension_keys=" << recovery->extension_keys.size()
+        << ", mutation_entries=" << recovery->mutation_entries.size()
+        << ", stale_check_keys=" << recovery->stale_check_keys.size() << ")";
+    if (recovery->IsQueueDrainDone() && !recovery->scan_required) {
+      swapdb_recovery_enqueue_done_.store(true, std::memory_order_release);
+    }
+    TryFinishSwapDbRecovery();
+    return;
+  }
   if (loaded_v2_) {
     loaded_v2_ = false;
     VMSDK_LOG(NOTICE, ctx) << "RDB load completed, "
@@ -2317,12 +2786,15 @@ bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx, const Key &key,
 
 void IndexSchema::MarkAsDestructing() {
   absl::MutexLock lock(&mutated_records_mutex_);
-  auto status = keyspace_event_manager_->RemoveSubscription(this);
-  if (!status.ok()) {
-    VMSDK_LOG(WARNING, detached_ctx_.get())
-        << "Failed to remove keyspace event subscription for index "
-           "schema "
-        << vmsdk::config::RedactIfNeeded(name_) << ": " << status.message();
+  if (subscribed_to_keyspace_events_) {
+    auto status = keyspace_event_manager_->RemoveSubscription(this);
+    if (!status.ok()) {
+      VMSDK_LOG(WARNING, detached_ctx_.get())
+          << "Failed to remove keyspace event subscription for index "
+             "schema "
+          << vmsdk::config::RedactIfNeeded(name_) << ": " << status.message();
+    }
+    subscribed_to_keyspace_events_ = false;
   }
 
   // Send error response to any waiting queries
@@ -2336,7 +2808,15 @@ void IndexSchema::MarkAsDestructing() {
     }
   }
 
-  backfill_job_.Get()->MarkScanAsDone();
+  if (backfill_job_.Get().has_value()) {
+    backfill_job_.Get()->MarkScanAsDone();
+  }
+  // Drop pending swapdb recovery state, but intentionally leave
+  // `swapdb_recovery_in_progress_` set so any query already holding a
+  // shared_ptr to this schema still fails closed instead of reading
+  // half-populated RDB state.
+  swapdb_recovery_.Get().reset();
+  swapdb_recovery_enqueue_done_.store(false, std::memory_order_release);
 
   absl::flat_hash_map<indexes::VectorBase *, std::vector<InternedStringPtr>>
       pending_keys_by_index;
@@ -2348,7 +2828,7 @@ void IndexSchema::MarkAsDestructing() {
           if (it != attributes_.end()) {
             auto *vb = dynamic_cast<indexes::VectorBase *>(
                 it->second.GetIndex().get());
-            if (vb) {
+            if (vb && vb->IsRegisteredInVectorRegistry()) {
               pending_keys_by_index[vb].push_back(key);
             }
           }
@@ -2425,12 +2905,26 @@ IndexSchema::InfoIndexPartitionData IndexSchema::Stats::GetStats() const {
 
 // backfill scanned key count
 uint64_t IndexSchema::GetBackfillScannedKeyCount() const {
+  if (const auto &recovery = swapdb_recovery_.Get(); recovery.has_value()) {
+    uint64_t scanned = recovery->processed_items;
+    if (recovery->scan_required && backfill_job_.Get().has_value()) {
+      scanned += backfill_job_.Get()->scanned_key_count;
+    }
+    return scanned;
+  }
   const auto &backfill_job = backfill_job_.Get();
   return backfill_job.has_value() ? backfill_job->scanned_key_count : 0;
 }
 
 // backfill database size
 uint64_t IndexSchema::GetBackfillDbSize() const {
+  if (const auto &recovery = swapdb_recovery_.Get(); recovery.has_value()) {
+    uint64_t total = recovery->total_items;
+    if (recovery->scan_required && backfill_job_.Get().has_value()) {
+      total += backfill_job_.Get()->db_size;
+    }
+    return total;
+  }
   const auto &backfill_job = backfill_job_.Get();
   return backfill_job.has_value() ? backfill_job->db_size : 0;
 }

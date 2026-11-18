@@ -16,6 +16,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <random>
 #include <set>
 #include <string>
 #include <thread>
@@ -4499,6 +4500,65 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   // add one per key.
   EXPECT_LE(polls, std::size(kKeys) + 1)
       << "the walk entered the bounded exact fallback";
+}
+
+// Deletes racing with inserts that rehash label_lookup_.
+TEST_F(VectorIndexTest, HNSWConcurrentAddAndRemove)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  constexpr int kThreads = 16;
+  constexpr int kKeysPerThread = 2000;
+  constexpr int kDeleteLag = 64;
+  constexpr int kDeleteEvery = 4;
+  constexpr int kDim = 4;
+  constexpr int kTotal = kThreads * kKeysPerThread;
+  auto index = VectorHNSW<float>::Create(
+      CreateHNSWVectorIndexProto(kDim, data_model::DISTANCE_METRIC_L2,
+                                 /*initial_cap=*/kTotal, /*m=*/4,
+                                 /*ef_construction=*/16, /*ef_runtime=*/16),
+      attribute_identifier, attribute_data_type, 0);
+  ASSERT_TRUE(index.ok());
+  // DeterministicallyGenerateVectors is collinear, which makes inserts slow.
+  std::mt19937 rng(42);
+  std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+  std::vector<std::vector<float>> vectors(kTotal, std::vector<float>(kDim));
+  for (auto &v : vectors) {
+    for (auto &x : v) x = dist(rng);
+  }
+  std::vector<InternedStringPtr> keys;
+  keys.reserve(kTotal);
+  for (int i = 0; i < kTotal; ++i) {
+    keys.push_back(IndexToKey(i));
+  }
+  auto attr = StringInternStore::Intern(attribute_identifier);
+
+  std::vector<std::thread> threads;
+  std::atomic<int> failures{0};
+  for (int t = 0; t < kThreads; ++t) {
+    threads.emplace_back([&, t]() {
+      for (int j = 0; j < kKeysPerThread; ++j) {
+        int i = j * kThreads + t;
+        auto added = (*index)->AddRecord(
+            keys[i], testing_infra::MakeVectorAttributeData(
+                         keys[i], attr, VectorToStr(vectors[i])));
+        if (!added.ok()) ++failures;
+        // Inserts get slow if most of the graph is deleted.
+        if (j >= kDeleteLag && (j - kDeleteLag) % kDeleteEvery == 0) {
+          int old = (j - kDeleteLag) * kThreads + t;
+          if (!(*index)->RemoveRecord(keys[old], DeletionType::kRecord).ok()) {
+            ++failures;
+          }
+        }
+      }
+    });
+  }
+  for (auto &th : threads) {
+    th.join();
+  }
+  EXPECT_EQ(failures.load(), 0);
+  constexpr int kDeletedPerThread =
+      (kKeysPerThread - kDeleteLag + kDeleteEvery - 1) / kDeleteEvery;
+  EXPECT_EQ((*index)->GetTrackedKeyCount(),
+            static_cast<size_t>(kTotal - kThreads * kDeletedPerThread));
 }
 
 }  // namespace

@@ -26,7 +26,7 @@ INDEX = "idx"
 DOCS = 8
 # The origin, so the KNN arm ranks by the first coordinate.
 Q = struct.pack("4f", 0.0, 0.0, 0.0, 0.0)
-# Indexed under no attribute, so nothing but `LOAD *` has a reason to return it.
+# Indexed under no attribute, so only `LOAD *` or a LOAD naming it returns it.
 UNASKED = b"junk"
 
 
@@ -129,6 +129,19 @@ class _LoadProjectionTests:
         rows = self._rows(client, *load, "GROUPBY", "1", "@colour",
                           "REDUCE", "SUM", "1", "@price", "AS", "s")
         assert rows == [{b"colour": b"red", b"s": b"36"}], rows
+
+    @pytest.mark.parametrize("key_type", ["HASH", "JSON"])
+    def test_named_load_of_an_undeclared_field(self, key_type):
+        """The shard reads a field the index does not declare from the key,
+        renamed or not, and a stage sees it."""
+        client = self._setup(key_type)
+        junk = "@junk" if key_type == "HASH" else "$.junk"
+        name = junk.lstrip("@").encode()
+        value = b"SHOULD_NOT_APPEAR"
+        assert self._rows(client, "LOAD", "1", junk) == [{name: value}] * DOCS
+        assert self._rows(client, "LOAD", "3", junk, "AS", "j", "APPLY",
+                          "lower(@j)", "AS", "l") == [
+            {b"j": value, b"l": value.lower()}] * DOCS
 
     @pytest.mark.parametrize("key_type", ["HASH", "JSON"])
     def test_load_all_with_a_stage_keeps_the_whole_record(self, key_type):

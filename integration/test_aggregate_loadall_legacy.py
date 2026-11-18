@@ -81,23 +81,25 @@ class TestAggregateLoadAllLegacy(ValkeySearchTestCaseBase):
         _seed(client, client, key_type)
         return client
 
-    @pytest.mark.parametrize("named", [
-        ("LOAD", "1", "@__key"),
+    @pytest.mark.parametrize("named, counted", [
+        (("LOAD", "1", "@__key"), 1),
         # NUMERIC: fetched by name it would print as 10.5.
-        ("LOAD", "1", "@price"),
-        # Outside the schema, a vector, and `AS` read as a field name: each an
-        # error once fetched.
-        ("LOAD", "1", "@extra"),
-        ("LOAD", "1", "@v"),
-        ("LOAD", "3", "@price", "AS", "p"),
+        (("LOAD", "1", "@price"), 1),
+        # From 1.3.0 the field also shows under its declared name `t`.
+        (("LOAD", "1", "@t"), 1),
+        # From 1.3.0 these add nothing on HASH either: the record holds them.
+        (("LOAD", "1", "@extra"), 0),
+        (("LOAD", "1", "@v"), 0),
+        # `AS` is a field name below 1.3.0; the LOAD AS counter counts it.
+        (("LOAD", "3", "@price", "AS", "p"), 1),
     ])
-    def test_named_load_adds_nothing_on_hash(self, named):
+    def test_named_load_adds_nothing_on_hash(self, named, counted):
         client = self._client("HASH")
         whole, ticks = _ticks(client, LEGACY, "LOAD", "*")
         assert ticks == 0
         assert {r[b"price"] for r in whole} == {b"10.50", b"20"}
         rows, ticks = _ticks(client, LEGACY, "LOAD", "*", *named)
-        assert (rows, ticks) == (whole, 1)
+        assert (rows, ticks) == (whole, counted)
         _, ticks = _ticks(client, FIXED, "LOAD", "*", *named)
         assert ticks == 0
 
@@ -137,7 +139,6 @@ class TestAggregateLoadAllLegacy(ValkeySearchTestCaseBase):
 
     @pytest.mark.parametrize("key_type, tail", [
         ("HASH", ("LOAD", "*")),
-        ("HASH", ("LOAD", "*", "LOAD", "1", "@t")),
         ("HASH", ("LOAD", "*", "APPLY", "@price+1", "AS", "m")),
         ("HASH", ("LOAD", "*", "SORTBY", "2", "@price", "DESC")),
         ("HASH", ("LOAD", "*", "LOAD", "1", "@__key",

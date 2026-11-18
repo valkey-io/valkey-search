@@ -65,6 +65,10 @@ struct LoadField {
   // from `alias != identifier`, which no longer implies a rename now that a
   // resolved JSON path leaves the two legitimately different.
   bool renamed{false};
+  bool after_groupby{false};
+  // A field outside the schema. Ambiguous names are rejected only in a
+  // command that loads one; elsewhere they keep their earlier replies.
+  bool newly_loadable{false};
 };
 
 struct IndexInterface {
@@ -85,6 +89,14 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   // Replies [count, row...] with the first `count` records, removing them.
   void ReplyRecords(ValkeyModuleCtx* ctx, RecordSet& records, size_t count);
   bool loadall_{false};
+  bool loadall_after_groupby_{false};
+  // How many LOAD entries precede the last `LOAD *`.
+  size_t loads_before_loadall_{0};
+  // The 1.3.0 rule for named loads under `LOAD *`.
+  bool loadall_named_loads_{false};
+  // The first ambiguous LOAD name, returned once the command also loads a
+  // field outside the schema.
+  absl::Status ambiguous_load_name_;
   // A record column the pipeline needs but the reply must not carry.
   // FT.HYBRID registers its fused score as a column so SORTBY/APPLY/FILTER
   // can reference it, and hides it from the caller when a LOAD clause has
@@ -202,6 +214,9 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   // Reducers read the input rows, so in `AS n ... @n` the `@n` is the stored
   // field. A GROUPBY's output names wait here until the stage ends.
   std::optional<std::vector<std::string>> groupby_writes_;
+  // Set while LOAD makes a column for a field outside the schema, so the
+  // counter does not mistake it for a stage overwriting that name.
+  bool making_load_column_{false};
   //
   // Maps indexes in a record into metadata for that index
   //
@@ -242,6 +257,29 @@ struct AggregateParameters : public expr::Expression::CompileContext,
                             .output_name_ = std::string(output_name),
                             .data_type_ = data_type,
                             .result_type_ = result_type});
+    return new_index;
+  }
+
+  // Adds a column for a field outside the schema that only `output_name`
+  // resolves to, even when that name is already taken. The same field under
+  // the same name again reuses its column.
+  size_t AddRenamedRecordAttribute(absl::string_view identifier,
+                                   absl::string_view output_name) {
+    if (auto itr = record_indexes_by_alias_.find(output_name);
+        itr != record_indexes_by_alias_.end() &&
+        record_info_by_index_[itr->second].identifier_ == identifier &&
+        record_info_by_index_[itr->second].output_name_ == output_name) {
+      return itr->second;
+    }
+    size_t new_index = record_info_by_index_.size();
+    record_indexes_by_alias_[std::string(output_name)] = new_index;
+    record_identifiers_.emplace(std::string(identifier));
+    record_info_by_index_.push_back(
+        AttributeRecordInfo{.identifier_ = std::string(identifier),
+                            .alias_ = std::string(identifier),
+                            .output_name_ = std::string(output_name),
+                            .data_type_ = indexes::IndexerType::kNone,
+                            .result_type_ = expr::Expression::Type::kString});
     return new_index;
   }
 

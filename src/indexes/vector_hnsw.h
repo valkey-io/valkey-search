@@ -190,9 +190,10 @@ class VectorHNSW : public VectorType<T> {
                           << internal_id;
     return *ptr;
   }
-  VectorRecord &GetVector(uint64_t internal_id) const override
+  VectorRecord GetVector(uint64_t internal_id) const override
       ABSL_NO_THREAD_SAFETY_ANALYSIS {
-    auto *ptr = algo_->GetPoint(internal_id);
+    std::unique_lock<std::mutex> lock(algo_->label_lookup_lock);
+    auto *ptr = algo_->GetPointLockFree(internal_id);
     CHECK(ptr != nullptr) << "Internal ID not found in label_lookup: "
                           << internal_id;
     return *ptr;

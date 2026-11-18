@@ -18,6 +18,9 @@
 #include "absl/types/optional.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
+#include "src/utils/string_interning.h"
+#include "src/valkey_search_options.h"
+#include "src/vector_registry.h"
 #include "testing/common.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -912,6 +915,127 @@ TEST_F(KeyspaceEventManagerTest, RenameToKeyWithIncompatibleType) {
       keyspace_event_manager->RemoveSubscription(mock_sub_src.get()));
   VMSDK_EXPECT_OK(
       keyspace_event_manager->RemoveSubscription(mock_sub_dst.get()));
+}
+
+TEST_F(KeyspaceEventManagerTest,
+       RenameWhileAwaitingUnshareWithNoSourceSubscriptionUnsharesDestination) {
+  auto keyspace_event_manager =
+      std::make_unique<TestableKeyspaceEventManager>();
+  auto &registry = VectorRegistry::Instance();
+  VMSDK_EXPECT_OK(options::GetVectorUnshareBatchSize().SetValue(1));
+
+  auto attr = StringInternStore::Intern("vec");
+  MockIndex index(2, attr->Str(), 0);
+
+  std::vector<float> vec_data = {1.0f, 2.0f};
+  std::string vec_str(reinterpret_cast<const char *>(vec_data.data()),
+                      vec_data.size() * sizeof(float));
+  auto valkey_vec = vmsdk::MakeUniqueValkeyString(vec_str);
+
+  auto k1 = StringInternStore::Intern("doc:1");
+  auto k2 = StringInternStore::Intern("doc:2");
+  registry.DedupOrConstruct(
+      k1, valkey_vec.get(),
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &index);
+  registry.DedupOrConstruct(
+      k2, valkey_vec.get(),
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &index);
+
+  std::vector<InternedStringPtr> keys = {k1, k2};
+  registry.RemoveIndexKeys(0, attr, keys);
+  EXPECT_EQ(registry.GetPendingUnsharesCount(), 1);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 1);
+
+  InternedStringPtr pending_key =
+      !registry.GetTrackedAttributes(0, k1->Str()).empty() ? k1 : k2;
+
+  // With no active subscriptions in keyspace_event_manager, simulate
+  // rename_from + rename_to on pending_key.
+  ValkeyModuleString *src_key = TestValkeyModule_CreateStringPrintf(
+      &fake_ctx_, "%s", std::string(pending_key->Str()).c_str());
+  ValkeyModuleString *dst_key =
+      TestValkeyModule_CreateStringPrintf(&fake_ctx_, "moved:1");
+
+  EXPECT_CALL(*kMockValkeyModule, GetSelectedDb(_)).WillRepeatedly(Return(0));
+  keyspace_event_manager->NotifySubscribers(
+      &fake_ctx_, VALKEYMODULE_NOTIFY_GENERIC, "rename_from", src_key);
+  keyspace_event_manager->NotifySubscribers(
+      &fake_ctx_, VALKEYMODULE_NOTIFY_GENERIC, "rename_to", dst_key);
+
+  EXPECT_EQ(registry.GetPendingUnsharesCount(), 0);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 0);
+  EXPECT_TRUE(registry.GetTrackedAttributes(0, pending_key->Str()).empty());
+
+  TestValkeyModule_FreeString(nullptr, src_key);
+  TestValkeyModule_FreeString(nullptr, dst_key);
+  VMSDK_EXPECT_OK(options::GetVectorUnshareBatchSize().SetValue(1024));
+}
+
+TEST_F(KeyspaceEventManagerTest,
+       RenameUntrackedSourceDoesNotInternKeysAndPurgesTrackedDestination) {
+  auto keyspace_event_manager =
+      std::make_unique<TestableKeyspaceEventManager>();
+  auto &registry = VectorRegistry::Instance();
+  VMSDK_EXPECT_OK(options::GetVectorUnshareBatchSize().SetValue(1));
+
+  EXPECT_CALL(*kMockValkeyModule, GetSelectedDb(_)).WillRepeatedly(Return(0));
+
+  // Case 1: Renaming between two untracked/unindexed keys interns neither key.
+  const size_t interned_before = StringInternStore::Instance().UniqueStrings();
+  ValkeyModuleString *untracked_src =
+      TestValkeyModule_CreateStringPrintf(&fake_ctx_, "unindexed:src:1");
+  ValkeyModuleString *untracked_dst =
+      TestValkeyModule_CreateStringPrintf(&fake_ctx_, "unindexed:dst:1");
+  keyspace_event_manager->NotifySubscribers(
+      &fake_ctx_, VALKEYMODULE_NOTIFY_GENERIC, "rename_from", untracked_src);
+  keyspace_event_manager->NotifySubscribers(
+      &fake_ctx_, VALKEYMODULE_NOTIFY_GENERIC, "rename_to", untracked_dst);
+  EXPECT_EQ(StringInternStore::Instance().UniqueStrings(), interned_before);
+
+  // Case 2: Renaming an untracked key over a pending-unshare key purges the
+  // overwritten destination record without interning the source key.
+  auto attr = StringInternStore::Intern("vec");
+  MockIndex index(2, attr->Str(), 0);
+  std::vector<float> vec_data = {1.0f, 2.0f};
+  std::string vec_str(reinterpret_cast<const char *>(vec_data.data()),
+                      vec_data.size() * sizeof(float));
+  auto valkey_vec = vmsdk::MakeUniqueValkeyString(vec_str);
+  auto k1 = StringInternStore::Intern("doc:overwrite:1");
+  auto k2 = StringInternStore::Intern("doc:overwrite:2");
+  registry.DedupOrConstruct(
+      k1, valkey_vec.get(),
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &index);
+  registry.DedupOrConstruct(
+      k2, valkey_vec.get(),
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &index);
+  std::vector<InternedStringPtr> keys = {k1, k2};
+  registry.RemoveIndexKeys(0, attr, keys);
+  ASSERT_EQ(registry.GetPendingUnsharesCount(), 1);
+  InternedStringPtr pending_dst =
+      !registry.GetTrackedAttributes(0, k1->Str()).empty() ? k1 : k2;
+
+  const size_t interned_before_overwrite =
+      StringInternStore::Instance().UniqueStrings();
+  ValkeyModuleString *src_overwrite =
+      TestValkeyModule_CreateStringPrintf(&fake_ctx_, "unindexed:src:2");
+  ValkeyModuleString *dst_overwrite = TestValkeyModule_CreateStringPrintf(
+      &fake_ctx_, "%s", std::string(pending_dst->Str()).c_str());
+  keyspace_event_manager->NotifySubscribers(
+      &fake_ctx_, VALKEYMODULE_NOTIFY_GENERIC, "rename_from", src_overwrite);
+  keyspace_event_manager->NotifySubscribers(
+      &fake_ctx_, VALKEYMODULE_NOTIFY_GENERIC, "rename_to", dst_overwrite);
+
+  EXPECT_EQ(StringInternStore::Instance().UniqueStrings(),
+            interned_before_overwrite);
+  EXPECT_EQ(registry.GetPendingUnsharesCount(), 0);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 0);
+  EXPECT_TRUE(registry.GetTrackedAttributes(0, pending_dst->Str()).empty());
+
+  TestValkeyModule_FreeString(nullptr, untracked_src);
+  TestValkeyModule_FreeString(nullptr, untracked_dst);
+  TestValkeyModule_FreeString(nullptr, src_overwrite);
+  TestValkeyModule_FreeString(nullptr, dst_overwrite);
+  VMSDK_EXPECT_OK(options::GetVectorUnshareBatchSize().SetValue(1024));
 }
 }  // namespace
 

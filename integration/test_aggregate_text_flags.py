@@ -10,7 +10,7 @@ from valkey_search_test_case import (
     ValkeySearchTestCaseDebugMode,
 )
 from valkeytestframework.conftest import resource_port_tracker
-from utils import IndexingTestHelper
+from utils import IndexingTestHelper, compatibility_usage
 
 FIX_RELEASE = "1.3.0"
 LEGACY_RELEASE = "1.0.0"
@@ -95,14 +95,14 @@ class TestAggregateTextFlags(ValkeySearchTestCaseBase):
     def test_reparse_counts_compatibility_once(self):
         client = self._client(LEGACY_RELEASE)
         self._populate(client)
-        counters = ("search_compatibility-filter_parser_invalid_utf8_expression",
-                    "search_compatibility-ft_search_apostrophe_phrase")
+        counters = ("filter_parser_invalid_utf8_expression",
+                    "ft_search_apostrophe_phrase")
         query = b"@s:(hello\xff world's)"
         for flags in ((), ("VERBATIM",), ("INORDER",), ("SLOP", "1")):
-            before = client.info("SEARCH")
+            before = compatibility_usage(client)
             client.execute_command(
                 "FT.AGGREGATE", "idx", query, *flags, "LOAD", "1", "@__key")
-            after = client.info("SEARCH")
+            after = compatibility_usage(client)
             deltas = [after.get(c, 0) - before.get(c, 0) for c in counters]
             if not flags:
                 expected = deltas

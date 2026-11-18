@@ -9,9 +9,12 @@
 #include <string_view>
 #include <vector>
 
+#include "absl/strings/str_cat.h"
+#include "absl/synchronization/mutex.h"
 #include "valkey_search.h"
 #include "version.h"
 #include "vmsdk/src/concurrency.h"
+#include "vmsdk/src/huge_page_allocation.h"
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/thread_pool.h"
 
@@ -185,6 +188,20 @@ constexpr absl::string_view kHNSWValidationEnable{"hnsw-validation-enable"};
 static auto hnsw_validation_enable =
     config::BooleanBuilder(kHNSWValidationEnable, true)  // default true
         .Dev()
+        .Build();
+
+/// Allocate HNSW / FLAT vector index memory (graph and vector storage) in
+/// units of transparent huge pages.
+/// Takes effect only when the server provides the external memory accounting
+/// APIs (Valkey 9.2+), and only for memory allocated after the change. Huge
+/// pages are best effort: with the host THP mode set to "always", Valkey
+/// disables THP for the process unless "disable-thp no" is set.
+constexpr absl::string_view kVectorChunkHugePages{"vector-chunk-huge-pages"};
+static auto vector_chunk_huge_pages =
+    config::BooleanBuilder(kVectorChunkHugePages, true)  // default true
+        .WithModifyCallback([](auto new_value) {
+          vmsdk::SetHugePageAllocationEnabled(new_value);
+        })
         .Build();
 
 // Register an enumerator for the log level
@@ -910,6 +927,34 @@ bool EnabledInVersion(vmsdk::ValkeyVersion version) {
   return version <= ScopedMinimumRelease::Minimum() ||
          GetEmulateRelease().GetValue() >= version;
 }
+
+std::map<std::string, std::atomic<long long>> CompatibilityUsageMap;
+
+// Serializes inserts into CompatibilityUsageMap against each other and against
+// the INFO walk below. Increments of an existing entry do not take it.
+static absl::Mutex compatibility_usage_mutex;
+
+std::map<std::string, std::atomic<long long>>::iterator
+RegisterCompatibilityUsage(absl::string_view label) {
+  absl::MutexLock lock(&compatibility_usage_mutex);
+  return CompatibilityUsageMap.try_emplace(std::string(label), 0).first;
+}
+
+static vmsdk::info_field::String compatibility_usage(
+    "compatibility", "compatibility_usage",
+    vmsdk::info_field::StringBuilder().App().ComputedString(
+        []() -> std::string {
+          absl::MutexLock lock(&compatibility_usage_mutex);
+          std::string result;
+          for (const auto &[label, count] : CompatibilityUsageMap) {
+            if (!result.empty()) {
+              result += ',';
+            }
+            absl::StrAppend(&result, label, "=",
+                            count.load(std::memory_order_relaxed));
+          }
+          return result;
+        }));
 
 }  // namespace options
 }  // namespace valkey_search

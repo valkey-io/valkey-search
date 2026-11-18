@@ -13,8 +13,8 @@
 #include <sstream>
 #include <system_error>
 
+#include "absl/strings/ascii.h"
 #include "absl/strings/str_cat.h"
-#include "src/utils/scanner.h"
 #include "src/valkey_search_options.h"  // VALKEY_SEARCH_COMPATIBILITY_FIX
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -24,11 +24,30 @@ namespace valkey_search {
 namespace expr {
 
 static const uint64_t kSignBitMask = 0x8000000000000000ull;
+static const uint64_t kExponentMask = 0x7FF0000000000000ull;
+
+// Canonicalizes a double's bit pattern for unambiguous, lossless
+// serialization and hashing: every NaN collapses to one bit pattern and
+// -0.0 maps to +0.0, matching the equivalences CompareDoubles() already
+// treats as equal.
+uint64_t CanonicalDoubleBits(double d) {
+  uint64_t v = *(uint64_t*)&d;
+  if (std::isnan(d)) {
+    return kExponentMask | 1;
+  }
+  if (v == kSignBitMask) {
+    return 0;
+  }
+  return v;
+}
 
 // Redisearch has no string form for an array and compares it as the empty
 // string -- `@array == ""` is true there, for an empty and a populated array
 // alike. Matching that keeps string comparisons against an array compatible.
 static constexpr absl::string_view kArrayAsString{""};
+
+// Unused by any other element encoding's first byte.
+static constexpr char kDoubleTag = '\0';
 
 Value::Value(double d) { value_ = d; }
 
@@ -239,6 +258,56 @@ std::optional<Value::Array> Value::AsArray() const {
     return *result;
   }
   return std::nullopt;
+}
+
+std::string Value::Serialize() const {
+  if (IsNil()) {
+    return "";
+  }
+  if (IsArray()) {
+    auto arr = GetArray();
+    std::string result = "[";
+    for (size_t i = 0; i < arr->size(); ++i) {
+      if (i > 0) {
+        absl::StrAppend(&result, ",");
+      }
+      const auto& elem = (*arr)[i];
+      if (elem.IsString()) {
+        auto sv = elem.GetStringView();
+        absl::StrAppend(&result, "\"");
+        for (char c : sv) {
+          if (c == '"' || c == '\\') {
+            result += '\\';
+          }
+          result += c;
+        }
+        absl::StrAppend(&result, "\"");
+      } else if (elem.IsArray()) {
+        absl::StrAppend(&result, elem.Serialize());
+      } else if (elem.IsNil()) {
+        absl::StrAppend(&result, "null");
+      } else if (elem.IsBool()) {
+        absl::StrAppend(&result, elem.GetBool() ? "true" : "false");
+      } else if (elem.IsDouble()) {
+        // %.12g (used by AsStringView()) loses precision and collapses -0.0
+        // with 0.0 and all NaNs together; append the canonicalized 8-byte bit
+        // pattern instead so nested doubles hash unambiguously and losslessly.
+        result += kDoubleTag;
+        uint64_t bits = CanonicalDoubleBits(elem.GetDouble());
+        result.append(reinterpret_cast<const char*>(&bits), sizeof(bits));
+      } else {
+        absl::StrAppend(&result, *elem.AsStringView());
+      }
+    }
+    absl::StrAppend(&result, "]");
+    return result;
+  }
+  // Scalar: bool/double/string
+  auto sv = AsStringView();
+  if (sv.has_value()) {
+    return std::string(*sv);
+  }
+  return "";
 }
 
 Value::Array Value::GetArray() const { return std::get<Array>(value_); }
@@ -1125,17 +1194,8 @@ Value FuncLower(const Value& o) {
   if (!os) {
     return Value(Value::Nil("lower: operand has no string representation"));
   }
-  std::string result;
-  result.reserve(os->size());
-  utils::Scanner in(*os);
-  for (auto utf8 = in.NextUtf8(); utf8 != utils::Scanner::kEOF;
-       utf8 = in.NextUtf8()) {
-    if (utf8 < 0x80) {
-      utf8 = std::tolower(utf8);
-    }
-    utils::Scanner::PushBackUtf8(result, utf8);
-  }
-  return Value(std::move(result));
+  // Maps ASCII bytes only. Other bytes, valid UTF-8 or not, are copied as-is.
+  return Value(absl::AsciiStrToLower(*os));
 }
 
 Value FuncUpper(const Value& o) {
@@ -1149,17 +1209,7 @@ Value FuncUpper(const Value& o) {
   if (!os) {
     return Value(Value::Nil("upper: operand has no string representation"));
   }
-  std::string result;
-  result.reserve(os->size());
-  utils::Scanner in(*os);
-  for (auto utf8 = in.NextUtf8(); utf8 != utils::Scanner::kEOF;
-       utf8 = in.NextUtf8()) {
-    if (utf8 < 0x80) {
-      utf8 = std::toupper(utf8);
-    }
-    utils::Scanner::PushBackUtf8(result, utf8);
-  }
-  return Value(std::move(result));
+  return Value(absl::AsciiStrToUpper(*os));
 }
 
 // 1.2.1 fix shared by all date functions: pre-epoch (negative) timestamps

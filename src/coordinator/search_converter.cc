@@ -412,6 +412,7 @@ absl::Status GRPCSearchRequestToParameters(
   parameters->all_content =
       request.all_content() ||
       (!request.no_content() && parameters->return_attributes.empty());
+  parameters->sortby_by_lookup_key = request.accepts_sortby_lookup_key();
   return absl::OkStatus();
 }
 
@@ -590,6 +591,7 @@ std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
   request->set_no_content(parameters.no_content);
   request->set_force_content_processing(!parameters.NoProcessingRequired());
   request->set_all_content(parameters.all_content);
+  request->set_accepts_sortby_lookup_key(true);
   request->set_enable_partial_results(parameters.enable_partial_results);
   request->set_enable_consistency(parameters.enable_consistency);
   if (parameters.filter_parse_results.root_predicate != nullptr) {

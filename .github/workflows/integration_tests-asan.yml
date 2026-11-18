@@ -60,7 +60,7 @@ jobs:
           -e CCACHE_MAXSIZE=1G \
           --user "ubuntu:ubuntu" \
           presubmit-image \
-          sudo -E ci/build_ubuntu.sh --run-integration-tests --asan --integration-output=/workspace/test-results
+          sudo -E ci/build_ubuntu.sh --run-integration-tests --asan --jobs=4 --integration-output=/workspace/test-results
 
     - name: Save ccache
       if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'

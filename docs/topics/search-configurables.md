@@ -5,7 +5,7 @@ description: Valkey Search Module Configurable Settings
 
 # Configurables
 
-The search module uses the Valkey configuration mechanism. Each configuration below can be set as a module load argument or with the `CONFIG SET` command.
+The search module uses the Valkey configuration mechanism. Each configuration below can be set as a module load argument or with the `CONFIG SET` command, except `search.use-coordinator`, which can be set only as a module load argument.
 
 The module also has developer-only configurations, intended for testing and diagnosing the module. They are not listed on this page. Enabling developer-only configurations is not a supported operating mode. They can be changed with `CONFIG SET` or as module load arguments only while `search.debug-mode` is `yes` (default `no`); values set in the Valkey configuration file are accepted regardless of `search.debug-mode`.
 
@@ -61,7 +61,7 @@ The module also has developer-only configurations, intended for testing and diag
 | search.skip-rdb-load                          | Boolean | no | Skip loading vector index data from RDB file |
 | search.tag-min-prefix-length                  | Number | 2 | Minimum number of characters required before trailing `*` in TAG wildcard queries (length excludes `*`). Range: 0 to 4294967295. |
 | search.thread-pool-wait-time-samples          | Number | 100 | Sample queue size for thread pool wait time tracking. Range: 10 to 10000. |
-| search.use-coordinator                        | Boolean | no | Controls whether this instance uses coordinator; can only be set at startup |
+| search.use-coordinator                        | Boolean | no | Controls whether this instance uses the coordinator. Can be set only as a module load argument; it is not visible to `CONFIG GET` or `CONFIG SET`. |
 | search.utility-threads                        | Number | 1 | Controls the utility thread pool size; dynamically resizes pool on modification. Range: 1 to 1024. |
 | search.vector-chunk-huge-pages                | Boolean | yes | Allocate vector index memory in 2 MB transparent huge pages (needs Valkey 9.2+ and THP not disabled); applies to new allocations |
 | search.vector-unshare-batch-size              | Number | 10240 | Number of vector records unshared per server cron tick. Range: 1 to 4294967295. |

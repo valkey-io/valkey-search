@@ -1791,6 +1791,10 @@ inline void TestValkeyModule_Init() {
       .WillByDefault(TestValkeyModule_KeyTypeDefaultImpl);
   ON_CALL(*kMockValkeyModule, DeleteKey(testing::_))
       .WillByDefault(TestValkeyModule_DeleteKeyDefaultImpl);
+  // Like VM_HashSet replacing one existing field: the count of fields updated.
+  ON_CALL(*kMockValkeyModule,
+          HashSet(testing::_, testing::_, testing::_, testing::_, testing::_))
+      .WillByDefault(testing::Return(1));
   ON_CALL(*kMockValkeyModule, KeyExists(testing::_, testing::_))
       .WillByDefault(TestValkeyModule_KeyExistsDefaultImpl);
   ON_CALL(*kMockValkeyModule,

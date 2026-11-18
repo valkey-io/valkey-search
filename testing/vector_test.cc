@@ -16,6 +16,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <random>
 #include <set>
 #include <string>
 #include <thread>
@@ -4499,6 +4500,142 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   // add one per key.
   EXPECT_LE(polls, std::size(kKeys) + 1)
       << "the walk entered the bounded exact fallback";
+}
+
+// Deletes racing with inserts that rehash label_lookup_.
+TEST_F(VectorIndexTest, HNSWConcurrentAddAndRemove)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  constexpr int kThreads = 16;
+  constexpr int kKeysPerThread = 2000;
+  constexpr int kDeleteLag = 64;
+  constexpr int kDeleteEvery = 4;
+  constexpr int kDim = 4;
+  constexpr int kTotal = kThreads * kKeysPerThread;
+  auto index = VectorHNSW<float>::Create(
+      CreateHNSWVectorIndexProto(kDim, data_model::DISTANCE_METRIC_L2,
+                                 /*initial_cap=*/kTotal, /*m=*/4,
+                                 /*ef_construction=*/16, /*ef_runtime=*/16),
+      attribute_identifier, attribute_data_type, 0);
+  ASSERT_TRUE(index.ok());
+  // DeterministicallyGenerateVectors is collinear, which makes inserts slow.
+  std::mt19937 rng(42);
+  std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+  std::vector<std::vector<float>> vectors(kTotal, std::vector<float>(kDim));
+  for (auto &v : vectors) {
+    for (auto &x : v) x = dist(rng);
+  }
+  std::vector<InternedStringPtr> keys;
+  keys.reserve(kTotal);
+  for (int i = 0; i < kTotal; ++i) {
+    keys.push_back(IndexToKey(i));
+  }
+  auto attr = StringInternStore::Intern(attribute_identifier);
+
+  std::vector<std::thread> threads;
+  std::atomic<int> failures{0};
+  for (int t = 0; t < kThreads; ++t) {
+    threads.emplace_back([&, t]() {
+      for (int j = 0; j < kKeysPerThread; ++j) {
+        int i = j * kThreads + t;
+        auto added = (*index)->AddRecord(
+            keys[i], testing_infra::MakeVectorAttributeData(
+                         keys[i], attr, VectorToStr(vectors[i])));
+        if (!added.ok()) ++failures;
+        // Inserts get slow if most of the graph is deleted.
+        if (j >= kDeleteLag && (j - kDeleteLag) % kDeleteEvery == 0) {
+          int old = (j - kDeleteLag) * kThreads + t;
+          if (!(*index)->RemoveRecord(keys[old], DeletionType::kRecord).ok()) {
+            ++failures;
+          }
+        }
+      }
+    });
+  }
+  for (auto &th : threads) {
+    th.join();
+  }
+  EXPECT_EQ(failures.load(), 0);
+  constexpr int kDeletedPerThread =
+      (kKeysPerThread - kDeleteLag + kDeleteEvery - 1) / kDeleteEvery;
+  EXPECT_EQ((*index)->GetTrackedKeyCount(),
+            static_cast<size_t>(kTotal - kThreads * kDeletedPerThread));
+}
+
+// Modifies racing with removes that compact FLAT slots.
+TEST_F(VectorIndexTest, FlatConcurrentModifyAndRemove)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  constexpr int kThreads = 16;
+  constexpr int kRounds = 32000;
+  constexpr int kDim = 4;
+  auto index = VectorFlat<float>::Create(
+      CreateFlatVectorIndexProto(kDim, data_model::DISTANCE_METRIC_L2,
+                                 /*initial_cap=*/2 * kRounds, kBlockSize),
+      attribute_identifier, attribute_data_type, 0);
+  ASSERT_TRUE(index.ok());
+  std::mt19937 rng(42);
+  std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+  auto random_vectors = [&](int n) {
+    std::vector<std::vector<float>> vs(n, std::vector<float>(kDim));
+    for (auto &v : vs) {
+      for (auto &x : v) x = dist(rng);
+    }
+    return vs;
+  };
+  auto initial = random_vectors(kRounds);
+  auto modified = random_vectors(kRounds);
+  auto fillers = random_vectors(kRounds);
+  std::vector<InternedStringPtr> keys;
+  std::vector<InternedStringPtr> filler_keys;
+  for (int i = 0; i < kRounds; ++i) {
+    keys.push_back(IndexToKey(i));
+    filler_keys.push_back(IndexToKey(kRounds + i));
+  }
+  auto attr = StringInternStore::Intern(attribute_identifier);
+  auto add = [&](const InternedStringPtr &key, const std::vector<float> &v) {
+    return (*index)
+        ->AddRecord(key, testing_infra::MakeVectorAttributeData(key, attr,
+                                                                VectorToStr(v)))
+        .ok();
+  };
+  for (int i = 0; i < kRounds; ++i) {
+    ASSERT_TRUE(add(filler_keys[i], fillers[i]));
+  }
+
+  // A new key lands in the last slot, where a concurrent remove of a filler
+  // can move it while it is being modified.
+  std::vector<std::thread> threads;
+  std::atomic<int> failures{0};
+  for (int t = 0; t < kThreads; ++t) {
+    threads.emplace_back([&, t]() {
+      for (int i = t; i < kRounds; i += kThreads) {
+        if (!add(keys[i], initial[i]) ||
+            !(*index)
+                 ->ModifyRecord(keys[i],
+                                testing_infra::MakeVectorAttributeData(
+                                    keys[i], attr, VectorToStr(modified[i])))
+                 .ok() ||
+            !(*index)
+                 ->RemoveRecord(filler_keys[i], DeletionType::kRecord)
+                 .value_or(false)) {
+          ++failures;
+        }
+      }
+    });
+  }
+  for (auto &th : threads) {
+    th.join();
+  }
+  EXPECT_EQ(failures.load(), 0);
+  int stale = 0;
+  for (int i = 0; i < kRounds; ++i) {
+    auto stored = (*index)->GetVectorDuringSearch(keys[i]);
+    ASSERT_TRUE(stored.ok());
+    if (std::memcmp(stored->data(), modified[i].data(), kDim * sizeof(float)) !=
+        0) {
+      ++stale;
+    }
+  }
+  EXPECT_EQ(stale, 0);
 }
 
 }  // namespace

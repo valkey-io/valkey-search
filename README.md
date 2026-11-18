@@ -6,8 +6,10 @@ latency and high QPS, capable of handling billions of vectors with over 99% reca
 support for hybrid / pure non vector workloads including Numeric, Tag, and Full-text searches.
 
 Valkey-Search allows users to create indexes and perform searches, incorporating complex filters.
-Users can index data using either **[Valkey Hash](hashes.md)** or **[Valkey-JSON](valkey-json.md)** data types.
+Users can index data using either **[Valkey Hash](https://valkey.io/topics/hashes/)** or **[Valkey-JSON](https://valkey.io/topics/valkey-json/)** data types.
 The vector queries support Approximate Nearest Neighbor (ANN) search with HNSW and exact matching using K-Nearest Neighbors (KNN).
+
+valkey-search requires Valkey 9.1.0 or later.
 
 ## Supported Commands
 
@@ -18,6 +20,8 @@ FT.INFO
 FT._LIST
 FT.SEARCH
 FT.AGGREGATE
+FT.HYBRID
+FT.CURSOR
 ```
 
 For a detailed description of the supported commands and configuration options, see the [Command Reference](https://valkey.io/commands/#search).
@@ -42,6 +46,8 @@ valkey-search achieves high performance by storing vectors in-memory and applyin
 
 valkey-search supports hybrid queries, combining Vector Similarity Search with filtering on indexed fields, such as **Numeric**, **Tag**, and **Text indexes**.
 
+This section describes filtered vector search with `FT.SEARCH`. To fuse the results of a text search and a vector search into one ranked list, see [`FT.HYBRID`](docs/commands/ft.hybrid.md).
+
 There are two primary approaches to hybrid queries:
 
 - **Pre-filtering:** Begin by filtering the dataset and then perform an exact similarity search. This works well when the filtered result set is small but can be costly with larger datasets.
@@ -58,7 +64,7 @@ valkey-search includes an operational feature to mitigate issues in indexes. If 
 
 ### Configuration
 
-The config is non-modifiable and should be provided to search module on load.
+Set the config when the search module is loaded. It takes effect the next time an RDB is loaded.
 ```sh
 valkey-server --loadmodule /path/to/libsearch.so --skip-rdb-load yes
 ```

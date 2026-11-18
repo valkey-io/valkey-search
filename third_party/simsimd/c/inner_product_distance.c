@@ -136,9 +136,8 @@ DEFINE_FUSED_HALF_INNER_PRODUCT(
 // datatype. The FP16 selector skips SVE because the bundled SVE dot kernel
 // accumulates in f16 and can overflow at normal vector dimensions. The x86
 // sapphire f16 kernel accumulates in f16 as well; it is kept because it
-// matches simsimd's ordering and the pre-fusion dispatch already selected it,
-// so this PR adds no new exposure. Only the haswell and serial f16 paths
-// widen to f32.
+// matches simsimd's ordering and the dispatch selected it before the fused
+// kernels. Only the haswell and serial f16 paths widen to f32.
 static InnerProductDistanceFn SelectF32InnerProductDistance(void) {
 #if SIMSIMD_TARGET_ARM
 #if SIMSIMD_TARGET_SVE

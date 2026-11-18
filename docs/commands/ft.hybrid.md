@@ -159,7 +159,7 @@ The reply has the same structure as the [`FT.AGGREGATE` reply](ft.aggregate.md#r
 
 Without a `LOAD` clause every record carries `__key` and the fused score, under `__score` or under the alias given by `COMBINE ... YIELD_SCORE_AS`. A `LOAD` clause replaces those two implicit columns with the fields it names: load `@__key` to keep the key, and either name the fused score with `COMBINE ... YIELD_SCORE_AS` or list `@__score` in the `LOAD` clause to keep it. Per-arm scores appear under their own `YIELD_SCORE_AS` aliases either way.
 
-Unless a `SORTBY` stage orders them otherwise, records are returned by fused score, highest first, with ties broken by key name in ascending order. The fused score is stored as a 32-bit float.
+Unless a `SORTBY` stage orders them otherwise, records are returned by fused score, highest first. The fused score is stored as a 32-bit float.
 
 ## Example
 

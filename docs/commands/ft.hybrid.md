@@ -175,10 +175,7 @@ HSET doc:3 title "running shorts"    vec "\x00\x00\xa0\x40\x00\x00\xa0\x40"
 The vectors are `[0, 0]`, `[1, 0]` and `[5, 5]`. The query matches `shoes` in the text arm and asks for the two nearest neighbors of `[0, 0]` in the vector arm, fusing with the default `RRF`:
 
 ```
-FT.HYBRID idx
-  SEARCH "@title:shoes" YIELD_SCORE_AS ts
-  VSIM @vec $q KNN 2 K 2 YIELD_SCORE_AS vs
-  PARAMS 2 q "\x00\x00\x00\x00\x00\x00\x00\x00"
+FT.HYBRID idx SEARCH "@title:shoes" YIELD_SCORE_AS ts VSIM @vec $q KNN 2 K 2 YIELD_SCORE_AS vs PARAMS 2 q "\x00\x00\x00\x00\x00\x00\x00\x00"
 ```
 
 ```

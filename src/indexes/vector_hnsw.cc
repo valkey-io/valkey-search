@@ -266,7 +266,12 @@ absl::Status VectorHNSW<T>::ResizeIfFull() {
 template <typename T>
 absl::Status VectorHNSW<T>::AlgoDeleteRecord(uint64_t label) {
   std::unique_lock<std::mutex> lock_label(algo_->getLabelOpMutex(label));
-  auto hnsw_internal_id = GetAlgoIdLockFree(label);
+  std::optional<hnswlib::tableint> hnsw_internal_id;
+  {
+    // Concurrent addPoint() calls for other labels can rehash label_lookup_.
+    std::unique_lock<std::mutex> lock_table(algo_->label_lookup_lock);
+    hnsw_internal_id = GetAlgoIdLockFree(label);
+  }
   if (!hnsw_internal_id.has_value()) {
     return absl::NotFoundError(
         absl::StrCat("Internal ID not found for label: ", label));
@@ -630,7 +635,8 @@ float VectorHNSW<T>::ComputeDistance(absl::string_view query,
 // which are absent from label_lookup_). Used to seed inc_id_ on load.
 template <typename T>
 uint64_t VectorHNSW<T>::GetMaxLoadedLabel() const {
-  return static_cast<uint64_t>(algo_->max_loaded_label_);
+  return static_cast<uint64_t>(
+      algo_->max_loaded_label_.load(std::memory_order_relaxed));
 }
 
 template <typename T>

@@ -54,7 +54,7 @@ An array of key value pairs.
 - `num_records` (integer) Total number of fields indexed.
 - `total_term_occurrences` (integer) Total number of terms in all text fields in this index.
 - `num_terms` (integer) Total number of unique terms in all text fields in this index.
-- `hash_indexing_failures` (string) INTEGER. Number of field values that produced nothing to index when a key was first added: malformed values (for example a non-numeric `NUMERIC` value, a wrong-size `VECTOR`, or invalid UTF-8) and values that yield no tags or tokens.
+- `hash_indexing_failures` (string) INTEGER. Number of field values that produced nothing to index when a key was first added: malformed values (for example a non-numeric `NUMERIC` value, a wrong-size `VECTOR`, or invalid UTF-8) and values that yield no tags.
 - `filter_rejected_keys` (string) INTEGER. Number of filter-rejection events: each time a key is evaluated against the index `FILTER` expression and does not satisfy it, the count increases by one. A key can be rejected more than once (for example, when it is rewritten, or when it is written while the initial backfill is in progress), so this is not a count of distinct keys. For a `HASH` index a `FILTER` may reference a field that is not declared in the schema, so a misspelled field name behaves as a missing field rather than failing the command. A large value can mean that a field name in the `FILTER` is misspelled.
 - `backfill_in_progress` (string). "1" if a backfill is currently running. "0" if not.
 - `backfill_complete_percent` (string) Estimated progress of background indexing. Percentage is expressed as a fractional value from 0 to 1.0.
@@ -123,7 +123,7 @@ Inside `MULTI`/`EXEC` or a Lua script, no other nodes are queried and the LOCAL 
 - `index_name` (string) The index name
 - `num_docs` (string) INTEGER. Total keys in the index
 - `num_records` (string) INTEGER. Total records in the index
-- `hash_indexing_failures` (string) INTEGER. Number of field values that produced nothing to index when a key was first added: malformed values (for example a non-numeric `NUMERIC` value, a wrong-size `VECTOR`, or invalid UTF-8) and values that yield no tags or tokens.
+- `hash_indexing_failures` (string) INTEGER. Number of field values that produced nothing to index when a key was first added: malformed values (for example a non-numeric `NUMERIC` value, a wrong-size `VECTOR`, or invalid UTF-8) and values that yield no tags.
 - `attributes` (array of arrays) One entry per declared attribute of the index.
   - `identifier` (string) identifier for this attribute
   - `attribute` (string) The name used to refer to this index in query and aggregation expressions.

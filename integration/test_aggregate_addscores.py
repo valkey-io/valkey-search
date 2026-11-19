@@ -98,3 +98,4 @@ class TestAggregateAddScores(ValkeySearchTestCaseBase):
         rows = _rows(res)
         assert all(set(r) == {"__score"} for r in rows)
         assert all(float(r["__score"]) > 0.0 for r in rows)
+

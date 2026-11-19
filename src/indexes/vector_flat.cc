@@ -100,7 +100,7 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::LoadFromRDB(
     ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
     const data_model::VectorIndex &vector_index_proto,
     absl::string_view attribute_identifier, SupplementalContentChunkIter &&iter,
-    int db_num, TrackedKeys *key_labels) {
+    int db_num, TrackedKeys *key_labels, bool defer_keyspace_load) {
   try {
     auto index = std::shared_ptr<VectorFlat<T>>(
         new VectorFlat<T>(vector_index_proto.dimension_count(),
@@ -109,6 +109,11 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::LoadFromRDB(
                           attribute_identifier, attribute_data_type->ToProto(),
                           db_num),
         vmsdk::DestructByMainThread<VectorFlat<T>>{});
+    if (defer_keyspace_load) {
+      index->registered_in_vector_registry_.store(false,
+                                                  std::memory_order_release);
+      index->has_deferred_rdb_vectors_.store(true, std::memory_order_release);
+    }
     index->Init(vector_index_proto.distance_metric());
     index->algo_ =
         std::make_unique<FlatIndex>(index->space_.get(), index->normalize_);
@@ -118,7 +123,7 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::LoadFromRDB(
     auto generator = [&, allocator = index->GetVectorAllocator()](
                          absl::string_view vector_data,
                          hnswlib::labeltype label) {
-      if (key_labels) {
+      if (!defer_keyspace_load && key_labels) {
         auto it = key_labels->key_by_internal_id.find(label);
         if (it != key_labels->key_by_internal_id.end()) {
           if (auto shared = index->ShareIfUnchangedSinceSave(
@@ -217,6 +222,20 @@ absl::Status VectorFlat<T>::ModifyRecordImpl(uint64_t internal_id,
 
   *stored_record = std::move(vector_record);
 
+  return absl::OkStatus();
+}
+
+template <typename T>
+absl::Status VectorFlat<T>::ReplaceVectorRecordImpl(
+    uint64_t internal_id, VectorRecord &&vector_record) {
+  absl::ReaderMutexLock lock(&resize_mutex_);
+  std::unique_lock<std::mutex> index_lock(algo_->index_lock);
+  VectorRecord *stored_record = algo_->GetPointLockFree(internal_id);
+  if (!stored_record) {
+    return absl::InternalError(
+        absl::StrCat("Couldn't find internal id: ", internal_id));
+  }
+  *stored_record = std::move(vector_record);
   return absl::OkStatus();
 }
 

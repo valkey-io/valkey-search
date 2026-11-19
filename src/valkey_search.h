@@ -32,8 +32,9 @@ namespace valkey_search {
 constexpr char kEventEngine[] = "event_engine";
 
 namespace server_events {
+extern void SubscribeToLoadingEvents();
 extern void SubscribeToServerEvents();
-}
+}  // namespace server_events
 
 class ValkeySearch {
  public:

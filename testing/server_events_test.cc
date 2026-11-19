@@ -60,7 +60,13 @@ TEST_F(ServerEventsTest, SubscribesToServerEvents) {
       SubscribeToServerEvent(
           testing::_, vmsdk::IsValkeyModuleEvent(ValkeyModuleEvent_Loading),
           testing::_))
-      .WillOnce(testing::Return(1));
+      .Times(0);
+  EXPECT_CALL(*kMockValkeyModule,
+              SubscribeToServerEvent(
+                  testing::_,
+                  vmsdk::IsValkeyModuleEvent(ValkeyModuleEvent_ReplAsyncLoad),
+                  testing::_))
+      .Times(0);
   EXPECT_CALL(
       *kMockValkeyModule,
       SubscribeToServerEvent(
@@ -74,6 +80,22 @@ TEST_F(ServerEventsTest, SubscribesToServerEvents) {
           testing::_))
       .WillOnce(testing::Return(1));
   SubscribeToServerEvents();
+}
+
+TEST_F(ServerEventsTest, SubscribesToLoadingEvents) {
+  EXPECT_CALL(
+      *kMockValkeyModule,
+      SubscribeToServerEvent(
+          testing::_, vmsdk::IsValkeyModuleEvent(ValkeyModuleEvent_Loading),
+          testing::_))
+      .WillOnce(testing::Return(1));
+  EXPECT_CALL(*kMockValkeyModule,
+              SubscribeToServerEvent(
+                  testing::_,
+                  vmsdk::IsValkeyModuleEvent(ValkeyModuleEvent_ReplAsyncLoad),
+                  testing::_))
+      .WillOnce(testing::Return(1));
+  SubscribeToLoadingEvents();
 }
 
 }  // namespace valkey_search::server_events

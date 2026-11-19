@@ -305,12 +305,22 @@ class LocalResponderSearch : public query::SearchParameters {
       tracker->AddResults(search_result.neighbors);
       tracker->AddTotalCount(search_result.total_count);
     } else {
-      // Store first error for partial results disabled case
+      // Store first error for partial results disabled case and mirror
+      // HandleResponse consistency/cancellation semantics for local failures.
       {
         absl::MutexLock lock(&tracker->mutex);
         if (!tracker->has_node_error.load()) {
           tracker->has_node_error.store(true);
           tracker->first_node_error = search_result.status;
+        }
+        if (tracker->parameters->enable_consistency &&
+            search_result.status.code() ==
+                absl::StatusCode::kFailedPrecondition) {
+          tracker->consistency_failed.store(true);
+        }
+        if (tracker->consistency_failed.load() ||
+            !tracker->parameters->enable_partial_results) {
+          tracker->parameters->cancellation_token->Cancel();
         }
       }
       // Only add results if partial results are enabled

@@ -736,11 +736,21 @@ absl::Status MultiSearchParameters::ParseAfterIndex(MultiSearchParameters &cmd,
 // on the main thread skips the machinery that makes a multi-arm reply
 // trustworthy: the per-arm revalidation and rescore against queued mutations
 // (ArmGate + RevalidateArmsBeforeFusion), which the async path performs
-// between fusion and the reply. Rather than carry a second, weaker
-// implementation, the two situations that would take this path are refused.
+// between fusion and the reply. During swapdb async RDB loading, multi-shard
+// fan-out is rejected in ExecuteCommand while local or single-slot queries
+// routed here return a retryable loading error (kAsyncLoadingUnsupportedMsg);
+// MULTI/EXEC, Lua, and disabled reader pools return kSyncLocalUnsupportedMsg.
 absl::Status MultiSearchParameters::ExecuteSyncLocal(
-    [[maybe_unused]] ValkeyModuleCtx *ctx,
+    ValkeyModuleCtx *ctx,
     [[maybe_unused]] std::unique_ptr<MultiSearchParameters> cmd) {
+  const int ctx_flags = ValkeyModule_GetContextFlags(ctx);
+  const bool inside_multi_exec =
+      (ctx_flags &
+       (VALKEYMODULE_CTX_FLAGS_MULTI | VALKEYMODULE_CTX_FLAGS_LUA)) != 0;
+  if (!inside_multi_exec && ValkeySearch::Instance().SupportParallelQueries() &&
+      (ctx_flags & VALKEYMODULE_CTX_FLAGS_ASYNC_LOADING) != 0) {
+    return absl::FailedPreconditionError(kAsyncLoadingUnsupportedMsg);
+  }
   return absl::InvalidArgumentError(kSyncLocalUnsupportedMsg);
 }
 

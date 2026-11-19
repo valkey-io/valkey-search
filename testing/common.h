@@ -235,6 +235,10 @@ class MockIndex : public indexes::VectorBase {
   absl::Status ModifyRecordImpl(uint64_t, indexes::VectorRecord &&) override {
     return absl::OkStatus();
   }
+  absl::Status ReplaceVectorRecordImpl(uint64_t,
+                                       indexes::VectorRecord &&) override {
+    return absl::OkStatus();
+  }
   absl::Status AddRecordImpl(uint64_t, indexes::VectorRecord &&) override {
     return absl::OkStatus();
   }

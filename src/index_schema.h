@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -93,6 +94,8 @@ class IndexSchema : public KeyspaceEventSubscription,
                     public std::enable_shared_from_this<IndexSchema> {
  public:
   static constexpr float kDefaultDocumentScore = 1.0f;
+  static constexpr absl::string_view kSwapDbRecoveryInProgressMsg =
+      "Index is recovering after replication DB swap";
 
   struct IndexKeyInfo {
     MutationSequenceNumber mutation_sequence_number_{0};
@@ -148,7 +151,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   static absl::StatusOr<std::shared_ptr<IndexSchema>> Create(
       ValkeyModuleCtx *ctx, const data_model::IndexSchema &index_schema_proto,
       vmsdk::ThreadPool *mutations_thread_pool, bool skip_attributes,
-      bool reload);
+      bool reload, bool defer_keyspace_load = false);
   ~IndexSchema() override;
   absl::StatusOr<std::shared_ptr<indexes::IndexBase>> GetIndex(
       absl::string_view attribute_alias) const;
@@ -237,20 +240,35 @@ class IndexSchema : public KeyspaceEventSubscription,
   std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const {
     return text_index_schema_;
   }
-  inline uint64_t GetFingerprint() const { return fingerprint_; }
-  inline uint32_t GetVersion() const { return version_; }
+  inline uint64_t GetFingerprint() const {
+    return fingerprint_.load(std::memory_order_acquire);
+  }
+  inline uint32_t GetVersion() const {
+    return version_.load(std::memory_order_acquire);
+  }
 
   inline void SetFingerprint(uint64_t fingerprint) {
-    fingerprint_ = fingerprint;
+    fingerprint_.store(fingerprint, std::memory_order_release);
   }
-  inline void SetVersion(uint32_t version) { version_ = version; }
+  inline void SetVersion(uint32_t version) {
+    version_.store(version, std::memory_order_release);
+  }
 
   void OnKeyspaceNotification(ValkeyModuleCtx *ctx, int type, const char *event,
                               ValkeyModuleString *key) override;
 
   uint32_t PerformBackfill(ValkeyModuleCtx *ctx, uint32_t batch_size);
 
+  bool IsSwapDbRecoveryInProgress() const {
+    return swapdb_recovery_in_progress_.load(std::memory_order_acquire);
+  }
+
+  void ClearVectorRegistryRegistration();
+
   bool IsBackfillInProgress() const {
+    if (IsSwapDbRecoveryInProgress()) {
+      return true;
+    }
     auto &backfill_job = backfill_job_.Get();
     return backfill_job.has_value() &&
            (!backfill_job->IsScanDone() || stats_.backfill_inqueue_tasks > 0);
@@ -270,7 +288,8 @@ class IndexSchema : public KeyspaceEventSubscription,
   virtual absl::Status RDBSave(SafeRDB *rdb) const;
   absl::Status SaveIndexExtension(RDBChunkOutputStream output) const;
   absl::Status LoadIndexExtension(ValkeyModuleCtx *ctx,
-                                  RDBChunkInputStream input);
+                                  RDBChunkInputStream input,
+                                  bool defer_keyspace_load = false);
   static absl::StatusOr<vmsdk::ValkeyVersion> GetMinVersion(
       const google::protobuf::Any &metadata);
   absl::Status ValidateIndex() const;
@@ -278,7 +297,8 @@ class IndexSchema : public KeyspaceEventSubscription,
   static absl::StatusOr<std::shared_ptr<IndexSchema>> LoadFromRDB(
       ValkeyModuleCtx *ctx, vmsdk::ThreadPool *mutations_thread_pool,
       std::unique_ptr<data_model::IndexSchema> index_schema_proto,
-      SupplementalContentIter &&supplemental_iter);
+      SupplementalContentIter &&supplemental_iter,
+      bool defer_keyspace_load = false);
 
   bool IsInDB(int db_num) const override { return db_num_ == db_num; }
   bool IsInCurrentDB(ValkeyModuleCtx *ctx) const override;
@@ -289,7 +309,8 @@ class IndexSchema : public KeyspaceEventSubscription,
   inline const Stats &GetStats() const { return stats_; }
   void ProcessSingleMutationAsync(ValkeyModuleCtx *ctx, bool from_backfill,
                                   const Key &key,
-                                  vmsdk::StopWatch *delay_capturer);
+                                  vmsdk::StopWatch *delay_capturer)
+      ABSL_LOCKS_EXCLUDED(stats_.mutex_);
   std::unique_ptr<data_model::IndexSchema> ToProto() const;
   using MutatedAttributes = absl::flat_hash_map<std::string, AttributeData>;
   struct DocumentMutation {
@@ -488,7 +509,7 @@ class IndexSchema : public KeyspaceEventSubscription,
               const data_model::IndexSchema &index_schema_proto,
               std::unique_ptr<AttributeDataType> attribute_data_type,
               vmsdk::ThreadPool *mutations_thread_pool, bool reload);
-  absl::Status Init(ValkeyModuleCtx *ctx);
+  absl::Status Init(ValkeyModuleCtx *ctx, bool defer_keyspace_load = false);
 
  private:
   vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx_;
@@ -515,8 +536,9 @@ class IndexSchema : public KeyspaceEventSubscription,
   absl::flat_hash_set<std::string> all_text_identifiers_;
   absl::flat_hash_set<std::string> suffix_text_identifiers_;
   bool loaded_v2_{false};
-  uint64_t fingerprint_{0};
-  uint32_t version_{0};
+  bool subscribed_to_keyspace_events_{false};
+  std::atomic<uint64_t> fingerprint_{0};
+  std::atomic<uint32_t> version_{0};
   bool skip_initial_scan_{false};
 
   std::string filter_expression_str_;
@@ -555,12 +577,39 @@ class IndexSchema : public KeyspaceEventSubscription,
     bool paused_by_oom{false};
   };
 
+  struct SwapDbRecoveryState {
+    std::deque<Key> extension_keys;
+    std::deque<Key> mutation_entries;
+    std::deque<Key> stale_check_keys;
+    std::vector<std::pair<Key, MutationSequenceNumber>> coalesced_keys;
+    uint64_t total_items{0};
+    uint64_t processed_items{0};
+    bool is_v1{false};
+    bool scan_required{false};
+    bool paused_by_oom{false};
+    vmsdk::StopWatch stopwatch;
+
+    bool IsQueueDrainDone() const {
+      return extension_keys.empty() && mutation_entries.empty() &&
+             stale_check_keys.empty();
+    }
+  };
+
   vmsdk::MainThreadAccessGuard<std::optional<BackfillJob>> backfill_job_;
+  vmsdk::MainThreadAccessGuard<std::optional<SwapDbRecoveryState>>
+      swapdb_recovery_;
+  std::atomic<bool> swapdb_recovery_in_progress_{false};
+  std::atomic<bool> swapdb_recovery_enqueue_done_{false};
+  std::atomic<bool> try_finish_recovery_scheduled_{false};
 
   mutable Stats stats_;
 
+  void TryFinishSwapDbRecovery()
+      ABSL_LOCKS_EXCLUDED(stats_.mutex_, mutated_records_mutex_);
+
   void ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
-                                   ValkeyModuleString *key, bool from_backfill);
+                                   ValkeyModuleString *key, bool from_backfill,
+                                   bool allow_delete_on_backfill = false);
 
   void ProcessMutation(ValkeyModuleCtx *ctx,
                        MutatedAttributes &mutated_attributes,
@@ -666,6 +715,8 @@ class IndexSchema : public KeyspaceEventSubscription,
   FRIEND_TEST(IndexSchemaRDBTest, SaveAndLoad);
   FRIEND_TEST(IndexSchemaRDBTest, SaveAndLoadWithVectorSharing);
   FRIEND_TEST(IndexSchemaRDBTest, ComprehensiveSkipLoadTest);
+  FRIEND_TEST(IndexSchemaRDBTest,
+              SwapDbDeferredV1CleansUpStalePendingDelViaPerformBackfill);
   friend class IndexSchemaFriendTest;
   FRIEND_TEST(IndexSchemaFriendTest, ConsistencyTest);
   FRIEND_TEST(IndexSchemaFriendTest, FlatConsistencyTest);
@@ -680,6 +731,12 @@ class IndexSchema : public KeyspaceEventSubscription,
               InTrackedMutationRecordsAfterConsumeNoCrash);
   // Orphan multi/exec key is skipped on save (test-only access).
   FRIEND_TEST(IndexSchemaFriendTest, OrphanMultiKeySkippedOnSave);
+  FRIEND_TEST(IndexSchemaFriendTest,
+              SwapDbCoalescedLiveMutationDelaysRecoveryFinish);
+  FRIEND_TEST(IndexSchemaFriendTest,
+              SwapDbRecoveryBackpressureDrainsQueuedMultiExecMutations);
+  FRIEND_TEST(IndexSchemaFriendTest,
+              SwapDbRecoveryScanAppliesRestoreQueueBackpressure);
   FRIEND_TEST(ValkeySearchTest, Info);
   FRIEND_TEST(OnSwapDBCallbackTest, OnSwapDBCallback);
 };

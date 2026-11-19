@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -39,6 +40,7 @@
 #include "src/rdb_section.pb.h"
 #include "src/rdb_serialization.h"
 #include "src/valkey_search.h"
+#include "src/vector_registry.h"
 #include "vmsdk/src/info.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -758,42 +760,142 @@ void SchemaManager::OnReplicationLoadStart(ValkeyModuleCtx *ctx) {
   staging_indices_due_to_repl_load_ = true;
 }
 
-void SchemaManager::OnLoadingEnded(ValkeyModuleCtx *ctx) {
-  absl::MutexLock lock(&db_to_index_schemas_mutex_);
-  if (staging_indices_due_to_repl_load_.Get()) {
+void SchemaManager::CleanupStagedSchemasOnLoadFailure(ValkeyModuleCtx *ctx) {
+  const bool offload_destruction = repl_async_load_in_progress_.Get();
+  std::vector<std::shared_ptr<IndexSchema>> staged_schemas;
+  if (!staged_db_to_index_schemas_.Get().empty()) {
+    VMSDK_LOG(NOTICE, ctx)
+        << "Discarding staged index schemas due to failed/aborted RDB load";
+    for (auto &[db_num, inner_map] : staged_db_to_index_schemas_.Get()) {
+      for (auto &[name, schema] : inner_map) {
+        if (schema) {
+          schema->MarkAsDestructing();
+          staged_schemas.push_back(std::move(schema));
+        }
+      }
+    }
+    staged_db_to_index_schemas_.Get().clear();
+  }
+  staging_indices_due_to_repl_load_ = false;
+  repl_async_load_in_progress_ = false;
+  if (offload_destruction && !staged_schemas.empty()) {
+    ValkeySearch::Instance().ScheduleUtilityTask(
+        [staged = std::move(staged_schemas)]() mutable { staged.clear(); });
+  }
+}
+
+void SchemaManager::ApplyStagedSchemasIfNeeded(ValkeyModuleCtx *ctx) {
+  std::vector<std::shared_ptr<IndexSchema>> removed_schemas;
+  bool offload_destruction = false;
+  {
+    absl::MutexLock lock(&db_to_index_schemas_mutex_);
+    if (!staging_indices_due_to_repl_load_.Get()) {
+      repl_async_load_in_progress_ = false;
+      return;
+    }
+    const bool is_swapdb = repl_async_load_in_progress_.Get();
     // Perform swap of staged schemas to main schemas. Note that no merge
     // occurs here, since for RDB load we are guaranteed that the new state
     // is not applied incrementally.
     VMSDK_LOG(NOTICE, ctx)
         << "Applying staged indices at the end of RDB loading";
-    auto status = RemoveAll();
-    if (!status.ok()) {
+    if (is_swapdb) {
+      // Under repl-diskless-load=swapdb, Valkey just discarded the old DB and
+      // installed the loaded DB without firing FLUSHDB. Clear the old DB's
+      // VectorRegistry state before dropping old schemas, and mark old schemas'
+      // vector indexes as unregistered so deferred ~VectorBase() teardown
+      // cannot remove keys newly registered by the incoming schemas.
+      VectorRegistry::Instance().OnFlushDB(nullptr);
+      for (const auto &[db_num, inner_map] : db_to_index_schemas_) {
+        for (const auto &[name, schema] : inner_map) {
+          schema->ClearVectorRegistryRegistration();
+        }
+      }
+      offload_destruction = true;
+    }
+    auto removed = RemoveAll();
+    if (!removed.ok()) {
       VMSDK_LOG(WARNING, ctx) << "Failed to remove contents of existing "
                                  "schemas on loading end.";
+    } else {
+      removed_schemas = std::move(*removed);
     }
-    db_to_index_schemas_ = staged_db_to_index_schemas_.Get();
-    staged_db_to_index_schemas_ = absl::flat_hash_map<
-        uint32_t,
-        absl::flat_hash_map<std::string, std::shared_ptr<IndexSchema>>>();
+    db_to_index_schemas_ = std::move(staged_db_to_index_schemas_.Get());
+    staged_db_to_index_schemas_.Get().clear();
     staging_indices_due_to_repl_load_ = false;
+    repl_async_load_in_progress_ = false;
   }
+  if (offload_destruction && !removed_schemas.empty()) {
+    ValkeySearch::Instance().ScheduleUtilityTask(
+        [removed = std::move(removed_schemas)]() mutable { removed.clear(); });
+  }
+}
 
-  for (const auto &[db_num, inner_map] : db_to_index_schemas_) {
-    for (const auto &[name, schema] : inner_map) {
-      schema->OnLoadingEnded(ctx);
+void SchemaManager::OnReplAsyncLoadCallback(
+    ValkeyModuleCtx *ctx, [[maybe_unused]] ValkeyModuleEvent eid,
+    uint64_t subevent, [[maybe_unused]] void *data) {
+  switch (subevent) {
+    case VALKEYMODULE_SUBEVENT_REPL_ASYNC_LOAD_STARTED:
+      VMSDK_LOG(NOTICE, ctx)
+          << "Replication async load (swapdb) started; deferring keyspace "
+             "reads during RDB load";
+      repl_async_load_in_progress_ = true;
+      break;
+    case VALKEYMODULE_SUBEVENT_REPL_ASYNC_LOAD_ABORTED:
+      VMSDK_LOG(NOTICE, ctx)
+          << "Replication async load (swapdb) aborted; discarding staged "
+             "schemas";
+      CleanupStagedSchemasOnLoadFailure(ctx);
+      break;
+    case VALKEYMODULE_SUBEVENT_REPL_ASYNC_LOAD_COMPLETED:
+      VMSDK_LOG(NOTICE, ctx)
+          << "Replication async load (swapdb) completed; applying staged "
+             "schemas";
+      ApplyStagedSchemasIfNeeded(ctx);
+      break;
+    default:
+      break;
+  }
+}
+
+void SchemaManager::OnLoadingEnded(ValkeyModuleCtx *ctx) {
+  ApplyStagedSchemasIfNeeded(ctx);
+  std::vector<std::shared_ptr<IndexSchema>> schemas;
+  {
+    absl::MutexLock lock(&db_to_index_schemas_mutex_);
+    for (const auto &[db_num, inner_map] : db_to_index_schemas_) {
+      for (const auto &[name, schema] : inner_map) {
+        schemas.push_back(schema);
+      }
     }
+  }
+  for (const auto &schema : schemas) {
+    schema->OnLoadingEnded(ctx);
   }
 }
 
 void SchemaManager::PerformBackfill(ValkeyModuleCtx *ctx, uint32_t batch_size) {
-  // TODO: Address fairness of index backfill/mutation
-  // processing.
-  absl::MutexLock lock(&db_to_index_schemas_mutex_);
-  uint32_t remaining_count = batch_size;
-  for (const auto &[db_num, inner_map] : db_to_index_schemas_) {
-    for (const auto &[name, schema] : inner_map) {
-      remaining_count -= schema->PerformBackfill(ctx, remaining_count);
+  std::vector<std::shared_ptr<IndexSchema>> schemas;
+  {
+    absl::MutexLock lock(&db_to_index_schemas_mutex_);
+    for (const auto &[db_num, inner_map] : db_to_index_schemas_) {
+      for (const auto &[name, schema] : inner_map) {
+        schemas.push_back(schema);
+      }
     }
+  }
+  if (schemas.empty()) {
+    return;
+  }
+  const size_t n = schemas.size();
+  const size_t start = backfill_rotation_idx_.Get() % n;
+  backfill_rotation_idx_.Get() = (start + 1) % n;
+
+  uint32_t remaining_count = batch_size;
+  for (size_t i = 0; i < n; ++i) {
+    const auto &schema = schemas[(start + i) % n];
+    uint32_t done = schema->PerformBackfill(ctx, remaining_count);
+    remaining_count = (done >= remaining_count) ? 0 : (remaining_count - done);
   }
 }
 
@@ -822,20 +924,24 @@ absl::Status SchemaManager::SaveIndexes(ValkeyModuleCtx *ctx, SafeRDB *rdb,
   return absl::OkStatus();
 }
 
-absl::Status SchemaManager::RemoveAll() {
+absl::StatusOr<std::vector<std::shared_ptr<IndexSchema>>>
+SchemaManager::RemoveAll() {
   std::vector<std::pair<int, std::string>> to_delete;
   for (const auto &[db_num, inner_map] : db_to_index_schemas_) {
     for (const auto &[name, _] : inner_map) {
       to_delete.push_back(std::make_pair(db_num, name));
     }
   }
+  std::vector<std::shared_ptr<IndexSchema>> removed;
+  removed.reserve(to_delete.size());
   for (const auto &[db_num, name] : to_delete) {
-    auto status = RemoveIndexSchemaInternal(db_num, name);
-    if (!status.ok()) {
-      return status.status();
+    auto old_schema = RemoveIndexSchemaInternal(db_num, name);
+    if (!old_schema.ok()) {
+      return old_schema.status();
     }
+    removed.push_back(std::move(*old_schema));
   }
-  return absl::OkStatus();
+  return removed;
 }
 
 absl::Status SchemaManager::LoadIndex(
@@ -853,11 +959,14 @@ absl::Status SchemaManager::LoadIndex(
   // Load the index schema into memory
   auto index_schema_pb = std::unique_ptr<data_model::IndexSchema>(
       section->release_index_schema_contents());
-  VMSDK_ASSIGN_OR_RETURN(auto index_schema,
-                         IndexSchema::LoadFromRDB(ctx, mutations_thread_pool_,
-                                                  std::move(index_schema_pb),
-                                                  std::move(supplemental_iter)),
-                         _ << "Failed to load index schema from RDB!");
+  VMSDK_ASSIGN_OR_RETURN(
+      auto index_schema,
+      IndexSchema::LoadFromRDB(ctx, mutations_thread_pool_,
+                               std::move(index_schema_pb),
+                               std::move(supplemental_iter),
+                               /*defer_keyspace_load=*/
+                               repl_async_load_in_progress_.Get()),
+      _ << "Failed to load index schema from RDB!");
   int db_num = index_schema->GetDBNum();
   const std::string &name = index_schema->GetName();
 
@@ -931,6 +1040,9 @@ void SchemaManager::OnLoadingCallback(ValkeyModuleCtx *ctx,
   if (subevent == VALKEYMODULE_SUBEVENT_LOADING_REPL_START) {
     SchemaManager::Instance().OnReplicationLoadStart(ctx);
   }
+  if (subevent == VALKEYMODULE_SUBEVENT_LOADING_FAILED) {
+    SchemaManager::Instance().CleanupStagedSchemasOnLoadFailure(ctx);
+  }
 }
 
 void SchemaManager::OnServerCronCallback(ValkeyModuleCtx *ctx,
@@ -973,11 +1085,11 @@ void SchemaManager::OnShutdownCallback(ValkeyModuleCtx *ctx,
     return;
   }
   VMSDK_LOG(NOTICE, ctx) << "Deleting all index schemas on SHUTDOWN event";
-  auto status = RemoveAll();
-  if (!status.ok()) {
+  auto removed = RemoveAll();
+  if (!removed.ok()) {
     VMSDK_LOG(WARNING, ctx)
         << "Failed to delete all index schemas on SHUTDOWN event: "
-        << status.message();
+        << removed.status().message();
   }
 }
 

@@ -168,7 +168,21 @@ absl::Status ExecuteCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
 
     parameters->index_schema->ProcessMultiQueue();
 
-    const bool inside_multi_exec = vmsdk::MultiOrLua(ctx);
+    const int ctx_flags = ValkeyModule_GetContextFlags(ctx);
+    const bool inside_multi_exec =
+        (ctx_flags &
+         (VALKEYMODULE_CTX_FLAGS_MULTI | VALKEYMODULE_CTX_FLAGS_LUA)) != 0;
+    // During swapdb async RDB loading (processEventsWhileBlocked), Valkey's
+    // beforeSleep returns early before blockedBeforeSleep ->
+    // moduleHandleBlockedClients, so ValkeyModule_BlockClient replies would
+    // stall until after swapMainDbWithTempDb swaps in the new DB. Reject
+    // multi-shard cluster fan-out queries with a retryable loading error, and
+    // route local queries (including single-slot queries owned by the local
+    // node) to ExecuteSyncLocal: FT.SEARCH and FT.AGGREGATE execute
+    // synchronously against the active pre-swap schema and DB, while FT.HYBRID
+    // returns kAsyncLoadingUnsupportedMsg.
+    const bool async_loading =
+        (ctx_flags & VALKEYMODULE_CTX_FLAGS_ASYNC_LOADING) != 0;
     const bool do_fanout = ValkeySearch::Instance().UsingCoordinator() &&
                            ValkeySearch::Instance().IsCluster() &&
                            !parameters->local_only;
@@ -180,8 +194,15 @@ absl::Status ExecuteCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
           "query targets a single-slot index on the local node.");
     }
 
+    if (ABSL_PREDICT_FALSE(async_loading && do_fanout) &&
+        !IsSingleSlotQueryRoutedToLocalNode(ctx, *parameters)) {
+      return absl::FailedPreconditionError(
+          "Cluster fan-out queries are temporarily unavailable while async "
+          "replication RDB loading is in progress.");
+    }
+
     if (ABSL_PREDICT_FALSE(!ValkeySearch::Instance().SupportParallelQueries() ||
-                           inside_multi_exec)) {
+                           inside_multi_exec || async_loading)) {
       return Cmd::ExecuteSyncLocal(ctx, std::move(parameters));
     }
 

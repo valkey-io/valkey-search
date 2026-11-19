@@ -8,6 +8,7 @@
 #include "src/vector_registry.h"
 
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <vector>
 
@@ -342,6 +343,7 @@ void VectorRegistry::OnFlushDB(const ValkeyModuleFlushInfo *flush_info) {
     tracked_keys_by_db_.clear();
     tracked_vectors_.clear();
     pending_unshares_.clear();
+    next_unshare_db_ = 0;
     return;
   }
   tracked_keys_by_db_.erase(flush_info->dbnum);
@@ -520,7 +522,8 @@ void VectorRegistry::MoveKey(
 bool VectorRegistry::HasMatchingVectorIndex(
     int db_num, absl::string_view key,
     const InternedStringPtr &attribute_identifier, ValkeyModuleKey *key_obj,
-    size_t vector_size, bool require_tracked) const {
+    size_t vector_size, bool require_tracked,
+    absl::flat_hash_set<const indexes::VectorBase *> *reclaimed_indexes) const {
   vmsdk::VerifyMainThread();
   const auto subscriptions =
       KeyspaceEventManager::Instance().GetMatchingSubscriptions(
@@ -542,6 +545,9 @@ bool VectorRegistry::HasMatchingVectorIndex(
           continue;
         }
         if (require_tracked && !index->IsTracked(interned_key)) {
+          if (!reclaimed_indexes || reclaimed_indexes->insert(index).second) {
+            index->ReclaimRetired();
+          }
           continue;
         }
         return true;
@@ -630,9 +636,19 @@ size_t VectorRegistry::ProcessPendingUnshares(uint32_t batch_size) {
   };
   std::vector<ExtractedPendingItem> batch;
   batch.reserve(batch_size);
-  for (auto db_it = pending_unshares_.begin();
-       db_it != pending_unshares_.end() && batch.size() < batch_size;) {
+  auto db_it = pending_unshares_.lower_bound(next_unshare_db_);
+  if (db_it == pending_unshares_.end()) {
+    db_it = pending_unshares_.begin();
+  }
+  const int start_db = db_it->first;
+  int last_examined_db = start_db;
+  bool wrapped = false;
+  while (!pending_unshares_.empty() && batch.size() < batch_size) {
+    if (wrapped && db_it->first >= start_db) {
+      break;
+    }
     int db_num = db_it->first;
+    last_examined_db = db_num;
     auto &pending_keys = db_it->second;
     while (!pending_keys.empty() && batch.size() < batch_size) {
       batch.push_back(ExtractedPendingItem{
@@ -641,14 +657,24 @@ size_t VectorRegistry::ProcessPendingUnshares(uint32_t batch_size) {
       });
     }
     if (pending_keys.empty()) {
-      pending_unshares_.erase(db_it++);
+      db_it = pending_unshares_.erase(db_it);
     } else {
       ++db_it;
     }
+    if (db_it == pending_unshares_.end() && !pending_unshares_.empty()) {
+      db_it = pending_unshares_.begin();
+      wrapped = true;
+    }
+  }
+  if (!batch.empty()) {
+    next_unshare_db_ = last_examined_db < std::numeric_limits<int>::max()
+                           ? last_examined_db + 1
+                           : 0;
   }
 
   size_t processed = 0;
   std::vector<ExtractedPendingItem> deferred_nodes;
+  absl::flat_hash_set<const indexes::VectorBase *> reclaimed_indexes;
   for (auto &item : batch) {
     int db_num = item.db_num;
     const auto &rk = item.node.value();
@@ -669,7 +695,7 @@ size_t VectorRegistry::ProcessPendingUnshares(uint32_t batch_size) {
         VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_WRITE);
     if (HasMatchingVectorIndex(db_num, rk.key->Str(), rk.attribute_identifier,
                                key_obj.get(), tracked_it->second.size,
-                               /*require_tracked=*/true)) {
+                               /*require_tracked=*/true, &reclaimed_indexes)) {
       continue;
     }
     if (tracked_it->second.vector_record.RefCount() > 1) {

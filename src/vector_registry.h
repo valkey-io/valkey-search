@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <utility>
 
@@ -65,7 +66,9 @@ class VectorRegistry {
   bool HasMatchingVectorIndex(int db_num, absl::string_view key,
                               const InternedStringPtr &attribute_identifier,
                               ValkeyModuleKey *key_obj, size_t vector_size,
-                              bool require_tracked = false) const;
+                              bool require_tracked = false,
+                              absl::flat_hash_set<const indexes::VectorBase *>
+                                  *reclaimed_indexes = nullptr) const;
 
   // Removes entries from VectorRegistry for a dropped vector index.
   void RemoveIndexKeys(int db_num,
@@ -209,8 +212,10 @@ class VectorRegistry {
   absl::flat_hash_map<int, PerDbTrackedKeysMap> tracked_keys_by_db_;
 
   // Maps db_num -> pending unshare keys queued for rate-limited processing.
-  absl::flat_hash_map<int, vmsdk::HugeFlatHashSet<RegistryKey>>
-      pending_unshares_;
+  // Ordered so `next_unshare_db_` round-robins across databases when deferred
+  // records remain queued.
+  std::map<int, vmsdk::HugeFlatHashSet<RegistryKey>> pending_unshares_;
+  int next_unshare_db_{0};
 
   void CancelPendingUnshare(int db_num, const RegistryKey &key);
   void AddToTrackedKeysIndex(int db_num, const RegistryKey &key);

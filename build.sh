@@ -367,10 +367,21 @@ function build_icu_if_needed() {
         exit 1
     fi
     
+    # TSAN cannot see synchronization inside uninstrumented code (e.g. ICU's
+    # once-init of its singletons), so instrument ICU in TSAN builds.
+    local icu_san_flags=""
+    if [[ "${SAN_BUILD}" == "thread" ]]; then
+        icu_san_flags=" -fsanitize=thread"
+    fi
+    # Records the sanitizer flags ICU was built with, so a build made with
+    # other flags is rebuilt instead of reused.
+    local ICU_STAMP="${ICU_BUILD_DIR}/install/sanitizer-flags"
+
     # Check if ICU static libraries exist in build directory (clean approach)
     if [ -f "${ICU_BUILD_DIR}/install/lib/libicudata.a" ] && \
        [ -f "${ICU_BUILD_DIR}/install/lib/libicui18n.a" ] && \
-       [ -f "${ICU_BUILD_DIR}/install/lib/libicuuc.a" ]; then
+       [ -f "${ICU_BUILD_DIR}/install/lib/libicuuc.a" ] && \
+       [ "$(cat "${ICU_STAMP}" 2>/dev/null)" == "${icu_san_flags}" ]; then
         printf "${GREEN}ICU static libraries found in build directory${RESET}\n"
         return 0
     fi
@@ -383,13 +394,6 @@ function build_icu_if_needed() {
     cd "${ICU_BUILD_DIR}"
     
     printf "Configuring ICU for static linking with embedded data...\n"
-
-    # TSAN cannot see synchronization inside uninstrumented code (e.g. ICU's
-    # once-init of its singletons), so instrument ICU in TSAN builds.
-    local icu_san_flags=""
-    if [[ "${SAN_BUILD}" == "thread" ]]; then
-        icu_san_flags=" -fsanitize=thread"
-    fi
     
     local ICU_LOG="${ICU_BUILD_DIR}/icu-build.log"
 
@@ -430,6 +434,7 @@ function build_icu_if_needed() {
         tail -30 "${ICU_LOG}"
         exit 1
     fi
+    printf '%s' "${icu_san_flags}" > "${ICU_STAMP}"
     
     cd "${ROOT_DIR}"
     

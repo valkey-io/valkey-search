@@ -8,7 +8,17 @@
 #include <absl/base/no_destructor.h>
 #include <absl/strings/ascii.h>
 
+// GCC predefines __SANITIZE_THREAD__; Clang reports TSAN through
+// __has_feature, which must be tested in its own #if for GCC 13.
 #if defined(__SANITIZE_THREAD__)
+#define VALKEY_SEARCH_TSAN 1
+#elif defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+#define VALKEY_SEARCH_TSAN 1
+#endif
+#endif
+
+#if defined(VALKEY_SEARCH_TSAN)
 #include <sanitizer/common_interface_defs.h>
 #include <unistd.h>
 
@@ -342,7 +352,7 @@ absl::Status VectorSharingStatsCmd(ValkeyModuleCtx *ctx,
   return absl::OkStatus();
 }
 
-#if defined(__SANITIZE_THREAD__)
+#if defined(VALKEY_SEARCH_TSAN)
 // Deliberately racy writes, used to prove the TSAN pipeline detects races.
 int tsan_race_target = 0;
 
@@ -355,7 +365,7 @@ __attribute__((noinline)) void TsanRaceWrite() { tsan_race_target++; }
 // returned.
 absl::Status TsanRaceCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
   VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
-#if defined(__SANITIZE_THREAD__)
+#if defined(VALKEY_SEARCH_TSAN)
   constexpr const char *kReportPrefix = "tsan-debug-race";
   __sanitizer_set_report_path(kReportPrefix);
   // Sibling threads have no happens-before relation between their writes.

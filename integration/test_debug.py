@@ -118,6 +118,10 @@ class TestFtDebugCommand(ValkeySearchTestCaseDebugMode):
         report_file = self.client.execute_command("FT._DEBUG", "TSAN_RACE").decode()
         with open(report_file) as f:
             report = f.read()
-        os.remove(report_file)
+        # The redirect is process-wide, so a race elsewhere in the server during
+        # TSAN_RACE would land in this file too. Keep the file unless the only
+        # report is the intentional one.
+        assert report.count("WARNING: ThreadSanitizer:") == 1, report
         assert "WARNING: ThreadSanitizer: data race" in report, report
         assert "TsanRaceWrite" in report, report
+        os.remove(report_file)

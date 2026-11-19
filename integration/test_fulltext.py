@@ -927,6 +927,25 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         result = client.execute_command("FT.SEARCH", "idx", '@content:"run"')
         assert result[0] == 0
 
+    def test_stem_positions_do_not_leak_from_nostem_field(self):
+        """
+        SLOP/INORDER on a stemmed term must ignore positions in NOSTEM fields
+        """
+        client: Valkey = self.server.get_new_client()
+        client.execute_command("FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:",
+                               "SCHEMA", "title", "TEXT", "body", "TEXT", "NOSTEM", "rating", "NUMERIC")
+        # doc:1 and doc:3 match only through the NOSTEM body. doc:2's NOSTEM body
+        # makes a dropped prefilter mask fail cleanly.
+        client.execute_command("HSET", "doc:1", "title", "he runs", "body", "runs fast", "rating", "1")
+        client.execute_command("HSET", "doc:2", "title", "he runs fast", "body", "runs", "rating", "1")
+        client.execute_command("HSET", "doc:3", "title", "runs slow", "body", "runs fast", "rating", "1")
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+        # The negated range routes the text through the per-key prefilter path.
+        for query in ["run fast", "-@rating:[500 600] run fast"]:
+            for options in [("SLOP", "0"), ("INORDER",)]:
+                result = client.execute_command("FT.SEARCH", "idx", query, "NOCONTENT", *options)
+                assert result == [1, b"doc:2"], f"{query} {options}: {result}"
+
     def test_custom_punctuation(self):
         """
         Test FT.CREATE PUNCTUATION directive configures custom tokenization separators

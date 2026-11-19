@@ -806,8 +806,8 @@ class PrefilterEvaluator : public query::Evaluator {
   // Built once per query and reused across candidates.
   PrefilterEvaluator(query::QueryContext &query_ctx,
                      QueryOperations query_operations,
-                     const IndexSchema &index_schema,
-                     bool source_resolves_text);
+                     const IndexSchema &index_schema, bool source_resolves_text,
+                     bool scoring = false);
   bool Evaluate(const query::Predicate &predicate,
                 const InternedStringPtr &key);
   // Like Evaluate(), but returns the full EvaluationResult so that callers
@@ -820,6 +820,10 @@ class PrefilterEvaluator : public query::Evaluator {
     return *key_;
   }
   bool SourceResolvesText() const override { return source_resolves_text_; }
+  // The next EvaluateFull reuses this range verdict; nullopt is out of range.
+  void SetVectorRange(std::optional<float> distance) {
+    known_vector_range_ = distance;
+  }
 
  private:
   query::EvaluationResult EvaluateTags(
@@ -840,6 +844,8 @@ class PrefilterEvaluator : public query::Evaluator {
   const InternedStringPtr *key_{nullptr};
   const text::TextIndex *per_key_index_{nullptr};
   bool per_key_index_fetched_{false};
+  // Set by SetVectorRange; the inner nullopt means out of range.
+  std::optional<std::optional<float>> known_vector_range_;
 };
 
 }  // namespace valkey_search::indexes

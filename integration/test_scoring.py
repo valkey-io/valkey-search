@@ -117,7 +117,7 @@ STEM_RUNNING_SCORES = {
 # avg_doc_len, and every stem-leaf dt are identical, and the stem scores match
 # STEM_RUNNING_SCORES) PLUS a numeric `rank` and tag `cat` field. A query that
 # adds a numeric or tag clause has a non-text predicate, so its scoring takes the
-# EXTRA-STEP path (ResolveLeaves/ScoreNode) rather than the pure-text in-iterator
+# EXTRA-STEP path (scoring-mode evaluator) rather than the pure-text in-iterator
 # path -- Group 15 pins the stem split on that path against idxStem.
 _STEMMIX_RANK = {"s:1": 1, "s:2": 2, "s:3": 3, "s:4": 4,
                  "s:5": 5, "s:6": 6, "s:7": 7}
@@ -610,6 +610,27 @@ class TestScoring(ValkeySearchTestCaseBase):
         _, scores = search(client, IDX_MAIN, "@rank:[0 100]")
         assert scores == pytest.approx({f"doc:{i}": 0.0 for i in range(1, 11)},
                                        abs=SCORE_ABS_TOL)
+
+    # An AND under an OR that fails only on a filter clause adds no score.
+    def test_or_skips_and_failing_on_filter(self):
+        client = self.server.get_new_client()
+        index = [
+            "FT.CREATE", "idxOrFilter", "ON", "HASH", "PREFIX", "1", "k:",
+            "SCHEMA", "t", "TEXT", "NOSTEM", "c", "TAG", "n", "NUMERIC",
+        ]
+        load(client, index, {
+            "k:1": {"t": "apple banana", "c": "red", "n": 50},
+            "k:2": {"t": "apple", "c": "blue", "n": 5},
+        })
+        keys, apple = search(client, index, "apple")
+        assert keys == ["k:2", "k:1"]
+        for query in ["(banana @c:{blue}) | apple",
+                      "apple | (banana @c:{blue})",
+                      "(banana @n:[0 10]) | apple",
+                      "(banana -apple) | apple"]:
+            got_keys, got = search(client, index, query)
+            assert got_keys == keys, query
+            assert got == pytest.approx(apple, abs=SCORE_ABS_TOL), query
 
     # Group 11: tag values score as BM25 terms with per-value IDF.
     # With a TEXT field in the schema: tags score exactly like text, except TF=1.

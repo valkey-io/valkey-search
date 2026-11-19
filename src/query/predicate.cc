@@ -40,15 +40,6 @@ EvaluationResult NegatePredicate::Evaluate(Evaluator &evaluator) const {
   return EvaluationResult(!result.matches);
 }
 
-// Helper function to build EvaluationResult for text predicates.
-EvaluationResult BuildTextEvaluationResult(
-    std::unique_ptr<indexes::text::TextIterator> iterator) {
-  if (!iterator->IsIteratorValid()) {
-    return EvaluationResult(false);
-  }
-  return {true, std::move(iterator)};
-}
-
 TermPredicate::TermPredicate(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
     FieldMaskPredicate field_mask, std::string term, bool exact)
@@ -59,90 +50,6 @@ TermPredicate::TermPredicate(
 
 EvaluationResult TermPredicate::Evaluate(Evaluator &evaluator) const {
   return evaluator.EvaluateText(*this, false);
-}
-
-namespace {
-
-using PositionMaps = indexes::text::SingleKeyTermIterator::PositionMaps;
-
-// Probes `postings` for `target_key` in `field_mask`; the key's position map
-// is read under `lock_word`'s bucket when given (main thread) and retained for
-// `require_positions`. It stays valid after the bucket is released: only
-// removing the key frees it, which cannot be in flight for a key under
-// evaluation.
-bool ProbePostings(const indexes::text::TextIndexSchema &schema,
-                   const indexes::text::Postings &postings,
-                   std::optional<absl::string_view> lock_word,
-                   const InternedStringPtr &target_key, uint64_t field_mask,
-                   bool require_positions, PositionMaps &maps) {
-  auto get = [&] {
-    return postings.GetPostingValue(BorrowedInternedStringPtr(target_key),
-                                    field_mask);
-  };
-  auto value = lock_word ? schema.WithWordLock(*lock_word, get) : get();
-  if (!value) return false;
-  if (require_positions) maps.push_back(value->map);
-  return true;
-}
-
-}  // namespace
-
-// ExpansionPredicate: the key's own tree is walked for the matching words it
-// carries, and each is probed for the key.
-EvaluationResult ExpansionPredicate::Evaluate(
-    const valkey_search::indexes::text::TextIndex &text_index,
-    const InternedStringPtr &target_key, bool require_positions,
-    bool lock) const {
-  const uint64_t field_mask = GetFieldMask();
-  PositionMaps maps;
-  bool matched = false;
-  ForEachMatch(
-      text_index,
-      [&](absl::string_view word,
-          const indexes::text::InvasivePtr<indexes::text::Postings> &postings) {
-        matched |=
-            ProbePostings(*GetTextIndexSchema(), *postings,
-                          lock ? std::optional(word) : std::nullopt, target_key,
-                          field_mask, require_positions, maps);
-        // A bare verdict is settled by the first hit; positions need every
-        // word.
-        return !matched || require_positions;
-      });
-  if (!matched) {
-    return EvaluationResult(false);
-  }
-  if (!require_positions) {
-    return EvaluationResult(true);
-  }
-  auto iterator = std::make_unique<indexes::text::SingleKeyTermIterator>(
-      target_key, maps, field_mask);
-  return BuildTextEvaluationResult(std::move(iterator));
-}
-
-// TermPredicate: the leaf already names every word (exact, stem root,
-// inflections) with its shared postings; one probe per word answers the key.
-EvaluationResult TermPredicate::Evaluate(const TermLeaf &leaf,
-                                         const InternedStringPtr &target_key,
-                                         bool require_positions) const {
-  PositionMaps maps;
-  for (const TermGroup &group : leaf.groups) {
-    for (const WordPostings &word : group.words) {
-      if (ProbePostings(*text_index_schema_, *word.postings, word.word,
-                        target_key, group.field_mask, require_positions,
-                        maps) &&
-          !require_positions) {
-        return EvaluationResult(true);
-      }
-    }
-  }
-  if (maps.empty()) {
-    return EvaluationResult(false);
-  }
-  // The raw predicate mask, not a group's collapsed one: TermIterator
-  // intersects QueryFieldMask() across AND children.
-  auto iterator = std::make_unique<indexes::text::SingleKeyTermIterator>(
-      target_key, maps, field_mask_);
-  return BuildTextEvaluationResult(std::move(iterator));
 }
 
 PrefixPredicate::PrefixPredicate(
@@ -365,22 +272,6 @@ EvaluationResult TagPredicate::Evaluate(
   return EvaluationResult(false);
 }
 
-EvaluationResult TagPredicate::Evaluate(
-    const TagLeaf &leaf, const InternedStringPtr &target_key) const {
-  for (const TagLeaf::Value &value : leaf.tag_values) {
-    CHECK(value.bag.has_value()) << "tag bags are background-only";
-    if (value.bag->contains(BorrowedInternedStringPtr(target_key))) {
-      return EvaluationResult(true);
-    }
-  }
-  if (leaf.tag_prefixes.empty()) {
-    return EvaluationResult(false);
-  }
-  bool case_sensitive = true;
-  auto tags = index_->GetValue(target_key, case_sensitive);
-  return Evaluate(tags ? &*tags : nullptr, case_sensitive);
-}
-
 ComposedPredicate::ComposedPredicate(
     LogicalOperator logical_op,
     std::vector<std::unique_ptr<Predicate>> children,
@@ -423,6 +314,8 @@ EvaluationResult ComposedPredicate::EvaluateWithContext(Evaluator &evaluator,
                                                         bool from_or) const {
   // Determine if children need to return positions for proximity checks.
   bool require_positions = slop_.has_value() || inorder_;
+  // Scoring mode: the sum of the matched children's scores.
+  float sum = 0.0f;
   // Single-VR model: carry the matched VectorRange distance up the tree so the
   // top-level EvaluationResult exposes it (via HasVrScore()/vr_distance) for
   // the caller to write into Neighbor::distance. Only one VR predicate can be
@@ -435,11 +328,12 @@ EvaluationResult ComposedPredicate::EvaluateWithContext(Evaluator &evaluator,
       vr_distance = r.vr_distance;
     }
   };
-  auto with_vr = [&](EvaluationResult &&r) -> EvaluationResult {
+  auto matched = [&](EvaluationResult &&r) -> EvaluationResult {
     if (has_vr_distance) {
       r.has_vr_distance = true;
       r.vr_distance = vr_distance;
     }
+    r.score = GetWeight() * sum;
     return std::move(r);
   };
   // Handle AND logic
@@ -470,6 +364,7 @@ EvaluationResult ComposedPredicate::EvaluateWithContext(Evaluator &evaluator,
       if (!result.matches) {
         return EvaluationResult(false);
       }
+      sum += result.score;
       carry_vr(result);
       if (result.filter_iterator) {
         childrenWithPositions++;
@@ -501,36 +396,40 @@ EvaluationResult ComposedPredicate::EvaluateWithContext(Evaluator &evaluator,
         return EvaluationResult(false);
       }
       // Return the proximity iterator for potential nested use.
-      return with_vr({true, std::move(proximity_iterator)});
+      return matched({true, std::move(proximity_iterator)});
     }
     // Propagate the filter iterator from the one child exists
     else if (childrenWithPositions == 1) {
-      return with_vr({true, std::move(iterators[0])});
+      return matched({true, std::move(iterators[0])});
     }
     // All matched, but none have position. non-proximity case
-    return with_vr(EvaluationResult(true));
+    return matched(EvaluationResult(true));
   }
   // Handle OR logic
   auto filter_iterators =
       absl::InlinedVector<std::unique_ptr<indexes::text::TextIterator>,
                           indexes::text::kProximityTermsInlineCapacity>();
+  // A match with no positions to pass up settles the OR.
+  bool settled = false;
   for (const auto &child : children_) {
     EvaluationResult result =
         EvaluatePredicate(child.get(), evaluator, require_positions, true);
-    // Short-circuit if any matches and positions not required.
-    if (result.matches && !require_positions) {
-      carry_vr(result);
-      return with_vr(EvaluationResult(true));
-    } else if (result.matches) {
-      carry_vr(result);
-      if (result.filter_iterator == nullptr) {
-        return with_vr(EvaluationResult(true));
-      }
+    if (!result.matches) continue;
+    sum += result.score;
+    carry_vr(result);
+    if (require_positions && result.filter_iterator) {
       filter_iterators.push_back(std::move(result.filter_iterator));
+    } else {
+      settled = true;
     }
+    // Scoring visits every child to sum their scores.
+    if (settled && !evaluator.Scoring()) break;
+  }
+  if (settled) {
+    return matched(EvaluationResult(true));
   }
   // No matches found.
-  if (!require_positions || filter_iterators.empty()) {
+  if (filter_iterators.empty()) {
     return EvaluationResult(false);
   }
   // In case positional awareness is required, use a OrProximityIterator.
@@ -547,7 +446,7 @@ EvaluationResult ComposedPredicate::EvaluateWithContext(Evaluator &evaluator,
     return EvaluationResult(false);
   }
   // Return the OR proximity iterator for potential nested scenarios.
-  return with_vr({true, std::move(or_proximity_iterator)});
+  return matched({true, std::move(or_proximity_iterator)});
 }
 
 }  // namespace valkey_search::query

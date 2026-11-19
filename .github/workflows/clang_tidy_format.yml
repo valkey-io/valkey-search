@@ -61,7 +61,7 @@ jobs:
         id: build-comp-db
         run: |
           echo "Building CompDB"
-          docker run --rm --privileged -v "$(pwd):/workspace" --user "ubuntu:ubuntu" presubmit-image bash -c "sudo su ubuntu && export USERNAME='ubuntu' && sudo chown -R ubuntu:ubuntu /workspace && export HOME='/home/ubuntu'  && export USERNAME='ubuntu' && ci/refresh_comp_db.sh "
+          docker run --rm --privileged -v "$(pwd):/workspace" --user "ubuntu:ubuntu" -e COMPDB_NO_HOST_REMAP=1 presubmit-image bash -c "sudo su ubuntu && export USERNAME='ubuntu' && sudo chown -R ubuntu:ubuntu /workspace && export HOME='/home/ubuntu'  && export USERNAME='ubuntu' && ci/refresh_comp_db.sh "
 
       - name: Find and process modified files
         run: |
@@ -82,8 +82,10 @@ jobs:
           # readability check is added because clang-tidy refuses to run with
           # no real checks selected (clang-diagnostic-* checks alone don't
           # count). ExtraArgs ensures -Wthread-safety is passed even when
-          # compile_commands.json was produced by a non-Clang build.
-          TS_CONFIG="{Checks: '-*,readability-redundant-control-flow,clang-diagnostic-thread-safety*', WarningsAsErrors: 'clang-diagnostic-thread-safety*', ExtraArgs: ['-Wthread-safety'], HeaderFilterRegex: '^./(src|testing)\/.*\.(cc|h)$|^./vmsdk/src/[a-zA-Z0-9_]+(\.cc|\.h)$|^./vmsdk/testing/.*'}"
+          # compile_commands.json was produced by a non-Clang build, and
+          # -fno-openmp works around clang 18 rejecting lambda captures of
+          # structured bindings when OpenMP is on (no first-party code uses it).
+          TS_CONFIG="{Checks: '-*,readability-redundant-control-flow,clang-diagnostic-thread-safety*', WarningsAsErrors: 'clang-diagnostic-thread-safety*', ExtraArgs: ['-Wthread-safety', '-fno-openmp'], HeaderFilterRegex: '^./(src|testing)\/.*\.(cc|h)$|^./vmsdk/src/[a-zA-Z0-9_]+(\.cc|\.h)$|^./vmsdk/testing/.*'}"
 
           for FILE in $MODIFIED_FILES; do
             echo "Running clang-format check on $FILE"
@@ -112,7 +114,7 @@ jobs:
 
             docker run --rm -v "$(pwd):/workspace" --user "ubuntu:ubuntu" \
               -e TS_FILE="$TS_FILE" -e TS_CONFIG="$TS_CONFIG" presubmit-image \
-              bash -c 'clang-tidy --quiet -p compile_commands.json --config="$TS_CONFIG" "$TS_FILE" 2>&1 | tail -n +3'
+              bash -c 'clang-tidy --quiet -p compile_commands.json --config="$TS_CONFIG" "$TS_FILE" 2>&1'
 
             # TODO: Enable full clang-tidy after the existing code is tidied
             # docker run --rm  -v "$(pwd):/workspace" --user "ubuntu:ubuntu" presubmit-image \

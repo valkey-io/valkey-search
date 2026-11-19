@@ -125,10 +125,12 @@ class ValkeySearch {
   friend absl::NoDestructor<ValkeySearch>;
 
   bool UsingCoordinator() const { return coordinator_ != nullptr; }
-  bool IsCluster() const {
-    return ValkeyModule_GetContextFlags(GetBackgroundCtx()) &
-           VALKEYMODULE_CTX_FLAGS_CLUSTER;
-  }
+  // Cluster mode can't change after startup, so it is read once in OnLoad.
+  // Worker threads must not call ValkeyModule_GetContextFlags, which reads
+  // server state the main thread modifies.
+  bool IsCluster() const { return is_cluster_; }
+  // OOM state as of the last server cron, for use off the main thread.
+  bool IsOOM() const { return is_oom_.load(std::memory_order_relaxed); }
 
   coordinator::ClientPool *GetCoordinatorClientPool() const {
     return client_pool_.get();
@@ -180,6 +182,8 @@ class ValkeySearch {
 
   uint64_t inc_id_{0};
   ValkeyModuleCtx *ctx_{nullptr};
+  bool is_cluster_{false};
+  std::atomic<bool> is_oom_{false};
   std::optional<vmsdk::StopWatch> writer_thread_pool_suspend_watch_;
 
   std::unique_ptr<coordinator::Server> coordinator_;

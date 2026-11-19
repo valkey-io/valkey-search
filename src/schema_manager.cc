@@ -39,6 +39,7 @@
 #include "src/rdb_section.pb.h"
 #include "src/rdb_serialization.h"
 #include "src/valkey_search.h"
+#include "vmsdk/src/huge/flat_hash_map.h"
 #include "vmsdk/src/info.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -939,6 +940,10 @@ void SchemaManager::OnServerCronCallback(ValkeyModuleCtx *ctx,
                                          [[maybe_unused]] void *data) {
   SchemaManager::Instance().PerformBackfill(
       ctx, options::GetBackfillBatchSize().GetValue());
+  // Drain the schemas' hash-table backgrounds without any traffic.
+  if (vmsdk::HugeMapAdvisoryMigrationEnabled()) {
+    IndexSchema::MigrateRequestedHugeMaps(vmsdk::HugeMapCronMigrateBatch());
+  }
 }
 
 void SchemaManager::AtFork() {

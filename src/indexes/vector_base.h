@@ -480,6 +480,13 @@ class VectorBase : public IndexBase {
 
   uint32_t GetMutationWeight() const override;
 
+  bool NeedsMigration() const override ABSL_NO_THREAD_SAFETY_ANALYSIS {
+    return tracked_metadata_by_key_.NeedsMigration() ||
+           key_by_internal_id_.NeedsMigration();
+  }
+  void MigrateSome(size_t n) override
+      ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
+
   size_t GetTrackedKeyCount() const override
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   size_t GetUnTrackedKeyCount() const override

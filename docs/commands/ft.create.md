@@ -63,7 +63,7 @@ FT.CREATE <index-name>
 
 - `NOSTEM` (optional): Before `SCHEMA`, disables stemming for every `TEXT` field of the index.
 
-- `WITHOFFSETS | NOOFFSETS` (optional): Enables/Disables the retention of per-word offsets within a text field. Offsets are required to perform exact phrase matching and slop-based proximity matching. Thus if offsets are disabled, those query operations will be rejected with an error. The default is `WITHOFFSETS`.
+- `WITHOFFSETS | NOOFFSETS` (optional): Enables/Disables the retention of per-word offsets within a text field. Offsets are required to perform exact phrase matching and slop-based proximity matching. If offsets are disabled, a quoted phrase matches documents that contain all its words in any order and at any distance, and `INORDER` and `SLOP` are ignored. The default is `WITHOFFSETS`.
 
 - `NOHL` (optional): This parameter is accepted for compatibility, but has no effect.
 

@@ -44,6 +44,7 @@ class TestVSSBasic(ValkeySearchTestCaseBase):
             "search_vector_registry_shared_externally_cnt",
             "search_vector_registry_shared_externally_errors",
             "search_vector_registry_sharing_active",
+            "search_vector_registry_unshare_errors",
             "search_vector_registry_dedup_cnt",
             "search_number_of_attributes",
             "search_number_of_indexes",
@@ -173,6 +174,7 @@ class TestAppMetrics(ValkeySearchTestCaseDebugMode):
             "vector_registry_shared_externally_cnt",
             "vector_registry_shared_externally_errors",
             "vector_registry_sharing_active",
+            "vector_registry_unshare_errors",
         }
         # Verify no metrics are missing
         missing = expected_metrics - actual_metrics_set

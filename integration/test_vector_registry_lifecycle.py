@@ -21,7 +21,11 @@ import valkey
 from valkey import Valkey
 from indexes import Index, KeyDataType, Numeric, Tag, Vector, float_to_bytes
 from utils import run_in_thread
-from valkey_search_test_case import LOGS_DIR, ValkeySearchTestCaseDebugMode
+from valkey_search_test_case import (
+    LOGS_DIR,
+    ValkeySearchClusterTestCaseDebugMode,
+    ValkeySearchTestCaseDebugMode,
+)
 from valkeytestframework.util import waiters
 from valkeytestframework.conftest import resource_port_tracker  # noqa: F401
 
@@ -2303,6 +2307,48 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         for k in range(self.GAP_KEYS):
             assert self.client.hget(f"doc:{k}", "vec") == vector(k), f"doc:{k} lost its vector"
 
+    def test_unshare_keeps_field_ttl(self):
+        """Unsharing a vector field must preserve its HEXPIRE TTL.
+
+        Stimulus: index a hash key, set a field TTL on the vector with HEXPIRE,
+        then drop the index. UnshareWithValkey rewrites the field with
+        ValkeyModule_HashSet(..., VALKEYMODULE_HASH_NONE, ...), which passes
+        EXPIRY_NONE to hashTypeSet and overwrites the entry's expiry metadata.
+
+        Expected: the field's value and its TTL both survive the unshare.
+        """
+        index = self.build_index()
+        index.create(self.client, wait_for_backfill=True)
+        self.client.hset("doc:0", mapping={"vec": vector(0)})
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 1)
+        self.client.execute_command("HEXPIRE", "doc:0", 3600, "FIELDS", 1, "vec")
+        assert 3590 <= self.client.execute_command("HTTL", "doc:0", "FIELDS", 1, "vec")[0] <= 3600
+
+        index.drop(self.client)
+        self.wait_for_unshare_drain()
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0)
+
+        assert self.client.hget("doc:0", "vec") == vector(0)
+        ttl = self.client.execute_command("HTTL", "doc:0", "FIELDS", 1, "vec")[0]
+        assert ttl > 0, f"unshare cleared the field TTL (HTTL={ttl})"
+
+    def test_rename_out_of_prefix_keeps_field_ttl(self):
+        """RENAME of an indexed key out of the index prefix unshares the field
+        without dropping its per-field TTL."""
+        index = self.build_index()
+        index.create(self.client, wait_for_backfill=True)
+        self.client.hset("doc:0", mapping={"vec": vector(0)})
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 1)
+        self.client.execute_command("HEXPIRE", "doc:0", 3600, "FIELDS", 1, "vec")
+        assert 3590 <= self.client.execute_command("HTTL", "doc:0", "FIELDS", 1, "vec")[0] <= 3600
+
+        self.client.rename("doc:0", "outside:0")
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0)
+
+        assert self.client.hget("outside:0", "vec") == vector(0)
+        ttl = self.client.execute_command("HTTL", "outside:0", "FIELDS", 1, "vec")[0]
+        assert ttl > 0, f"rename unshare cleared the field TTL (HTTL={ttl})"
+
 
 class TestVectorRegistryPersistence(ValkeySearchTestCaseDebugMode):
     """Save on one server, load on another.
@@ -2507,3 +2553,472 @@ class TestVectorRegistryPersistence(ValkeySearchTestCaseDebugMode):
         # The vector data in hash is still readable
         assert client.hget("shared_doc:1", "vec") == vec_bytes
         server.exit()
+
+
+class TestVectorRegistryClusterFieldTtl(ValkeySearchClusterTestCaseDebugMode):
+    """Cluster-mode replica coverage for preserving hash field TTL on unshare."""
+
+    CLUSTER_SIZE = 1
+    REPLICAS_COUNT = 1
+
+    def get_config_file_lines(self, testdir, port):
+        lines = super().get_config_file_lines(testdir, port)
+        lines.append("hash-max-listpack-entries 0")
+        return lines
+
+    def _registry_stat(self, client: Valkey, name: str) -> int:
+        key = f"search_vector_registry_{name}"
+        info = client.execute_command("INFO", "everything")
+        if isinstance(info, dict):
+            return int(info[key])
+        for line in info.decode().splitlines():
+            if line.startswith(key + ":"):
+                return int(line.split(":", 1)[1])
+        raise KeyError(key)
+
+    def test_cluster_replica_unshare_keeps_field_ttl(self):
+        """Cluster replicas must not strip hash field TTLs when unsharing.
+
+        On pre-VALKEYMODULE_HASH_KEEPTTL cores, detached-context ValkeyModule_Call
+        (HPEXPIRETIME/HPEXPIREAT) is rejected on cluster replicas by slot
+        redirection. UnshareWithValkey fails closed: it skips ValkeyModule_HashSet,
+        records an unshare error, and keeps the vector tracked and deferred until
+        promotion (CLUSTER FAILOVER), preserving both the vector payload and the
+        field's TTL across FT.DROPINDEX, RENAME out of prefix, and failover.
+        """
+        rg = self.get_replication_group(0)
+        primary = rg.primary.client
+        replica = rg.replicas[0].client
+        replica.execute_command("READONLY")
+
+        assert self._registry_stat(primary, "sharing_active") == 1
+        assert self._registry_stat(replica, "sharing_active") == 1
+
+        index = Index(
+            "idx",
+            [Vector("vec", DIM, type="HNSW", distance="L2")],
+            prefixes=["doc:"],
+            type=KeyDataType.HASH,
+        )
+        index.create(primary, wait_for_backfill=True)
+        waiters.wait_for_true(
+            lambda: b"idx" in replica.execute_command("FT._LIST")
+        )
+
+        primary.hset("doc:{t}1", mapping={"vec": vector(1), "other": "x"})
+        primary.hset("doc:{t}2", mapping={"vec": vector(2), "other": "x"})
+        primary.hset("doc:{t}3", mapping={"vec": vector(3), "other": "x"})
+        primary.execute_command("HEXPIRE", "doc:{t}1", 600, "FIELDS", 1, "vec")
+        primary.execute_command("HEXPIRE", "doc:{t}2", 600, "FIELDS", 1, "vec")
+
+        waiters.wait_for_equal(lambda: self._registry_stat(primary, "entry_cnt"), 3)
+        waiters.wait_for_equal(lambda: self._registry_stat(replica, "entry_cnt"), 3)
+        assert self._registry_stat(primary, "shared_externally_cnt") >= 3
+        assert self._registry_stat(replica, "shared_externally_cnt") >= 3
+
+        primary_exp1 = primary.execute_command(
+            "HPEXPIRETIME", "doc:{t}1", "FIELDS", 1, "vec"
+        )[0]
+        primary_exp2 = primary.execute_command(
+            "HPEXPIRETIME", "doc:{t}2", "FIELDS", 1, "vec"
+        )[0]
+        assert primary_exp1 > 0
+        assert primary_exp2 > 0
+        waiters.wait_for_equal(
+            lambda: replica.execute_command(
+                "HPEXPIRETIME", "doc:{t}1", "FIELDS", 1, "vec"
+            )[0],
+            primary_exp1,
+        )
+        waiters.wait_for_equal(
+            lambda: replica.execute_command(
+                "HPEXPIRETIME", "doc:{t}2", "FIELDS", 1, "vec"
+            )[0],
+            primary_exp2,
+        )
+
+        # Stimulus (b): RENAME out of prefix.
+        primary.rename("doc:{t}2", "other:{t}2")
+        waiters.wait_for_equal(lambda: self._registry_stat(primary, "entry_cnt"), 2)
+        assert self._registry_stat(primary, "unshare_errors") == 0
+        assert primary.hget("other:{t}2", "vec") == vector(2)
+        assert (
+            primary.execute_command(
+                "HPEXPIRETIME", "other:{t}2", "FIELDS", 1, "vec"
+            )[0]
+            == primary_exp2
+        )
+
+        # Replica fails closed on MoveKey unshare: TTL and bytes are preserved
+        # while the record stays tracked and deferred.
+        waiters.wait_for_equal(lambda: replica.exists("other:{t}2"), 1)
+        waiters.wait_for_true(
+            lambda: self._registry_stat(replica, "unshare_errors") >= 1
+        )
+        assert self._registry_stat(replica, "pending_unshare_cnt") == 1
+        assert self._registry_stat(replica, "entry_cnt") == 3
+        assert (
+            replica.execute_command(
+                "HPEXPIRETIME", "other:{t}2", "FIELDS", 1, "vec"
+            )[0]
+            == primary_exp2
+        )
+        assert replica.hget("other:{t}2", "vec") == vector(2)
+
+        # Set a short TTL on doc:{t}3 for the failover leg before dropping the index.
+        primary.execute_command("HEXPIRE", "doc:{t}3", 6, "FIELDS", 1, "vec")
+        primary_exp3 = primary.execute_command(
+            "HPEXPIRETIME", "doc:{t}3", "FIELDS", 1, "vec"
+        )[0]
+        assert primary_exp3 > 0
+        waiters.wait_for_equal(
+            lambda: replica.execute_command(
+                "HPEXPIRETIME", "doc:{t}3", "FIELDS", 1, "vec"
+            )[0],
+            primary_exp3,
+        )
+
+        # Stimulus (a): FT.DROPINDEX.
+        errors_before_drop = self._registry_stat(replica, "unshare_errors")
+        index.drop(primary)
+        waiters.wait_for_equal(
+            lambda: self._registry_stat(primary, "pending_unshare_cnt"), 0
+        )
+        waiters.wait_for_equal(lambda: self._registry_stat(primary, "entry_cnt"), 0)
+        assert self._registry_stat(primary, "unshare_errors") == 0
+        assert (
+            primary.execute_command(
+                "HPEXPIRETIME", "doc:{t}1", "FIELDS", 1, "vec"
+            )[0]
+            == primary_exp1
+        )
+        assert primary.hget("doc:{t}1", "vec") == vector(1)
+
+        waiters.wait_for_true(
+            lambda: b"idx" not in replica.execute_command("FT._LIST")
+        )
+        waiters.wait_for_equal(
+            lambda: self._registry_stat(replica, "pending_unshare_cnt"), 3
+        )
+        waiters.wait_for_true(
+            lambda: self._registry_stat(replica, "unshare_errors")
+            > errors_before_drop
+        )
+        assert (
+            replica.execute_command(
+                "HPEXPIRETIME", "doc:{t}1", "FIELDS", 1, "vec"
+            )[0]
+            == primary_exp1
+        )
+        assert (
+            replica.execute_command(
+                "HPEXPIRETIME", "other:{t}2", "FIELDS", 1, "vec"
+            )[0]
+            == primary_exp2
+        )
+        assert replica.hget("doc:{t}1", "vec") == vector(1)
+        assert replica.hget("other:{t}2", "vec") == vector(2)
+
+        # Failover leg: promote the replica and verify deferred unshares drain
+        # cleanly, long TTLs survive, and the short-TTL field expires on time.
+        replica.execute_command("CLUSTER", "FAILOVER")
+        waiters.wait_for_equal(lambda: replica.role()[0], b"master")
+        waiters.wait_for_equal(
+            lambda: self._registry_stat(replica, "pending_unshare_cnt"), 0
+        )
+        waiters.wait_for_equal(lambda: self._registry_stat(replica, "entry_cnt"), 0)
+        assert (
+            replica.execute_command(
+                "HPEXPIRETIME", "doc:{t}1", "FIELDS", 1, "vec"
+            )[0]
+            == primary_exp1
+        )
+        assert (
+            replica.execute_command(
+                "HPEXPIRETIME", "other:{t}2", "FIELDS", 1, "vec"
+            )[0]
+            == primary_exp2
+        )
+        assert replica.hget("doc:{t}1", "vec") == vector(1)
+        assert replica.hget("other:{t}2", "vec") == vector(2)
+
+        waiters.wait_for_equal(
+            lambda: replica.hexists("doc:{t}3", "vec"), 0, timeout=15
+        )
+
+
+class TestVectorRegistryStandaloneReplicaExpiredFieldTtl(
+    ValkeySearchTestCaseDebugMode
+):
+    """Standalone-replica coverage for expired hash fields holding shared refs."""
+
+    def get_config_file_lines(self, testdir, port):
+        lines = super().get_config_file_lines(testdir, port)
+        lines.append("hash-max-listpack-entries 0")
+        return lines
+
+    def _registry_stat(self, client: Valkey, name: str) -> int:
+        key = f"search_vector_registry_{name}"
+        info = client.execute_command("INFO", "everything")
+        if isinstance(info, dict):
+            return int(info[key])
+        for line in info.decode().splitlines():
+            if line.startswith(key + ":"):
+                return int(line.split(":", 1)[1])
+        raise KeyError(key)
+
+    @pytest.mark.parametrize(
+        "setup_test", [{"replica_count": 1}], indirect=True
+    )
+    def test_standalone_replica_unshare_drains_when_primary_reaps_expired_field(
+        self,
+    ):
+        primary = self.rg.primary.client
+        replica = self.rg.replicas[0].client
+
+        index = Index(
+            "idx",
+            [Vector("vec", DIM, type="HNSW", distance="L2")],
+            prefixes=["doc:"],
+            type=KeyDataType.HASH,
+        )
+        index.create(primary, wait_for_backfill=True)
+        waiters.wait_for_true(
+            lambda: b"idx" in replica.execute_command("FT._LIST")
+        )
+        index.wait_for_backfill_complete(replica)
+
+        # Pause active expiry on the primary so expired hash fields remain
+        # unreaped on the replica when RENAME and FT.DROPINDEX replicate.
+        primary.execute_command("DEBUG", "SET-ACTIVE-EXPIRE", "0")
+        try:
+            primary.hset("doc:drop", mapping={"vec": vector(1), "other": "x"})
+            primary.hset("doc:rename", mapping={"vec": vector(2), "other": "x"})
+            primary.execute_command(
+                "HPEXPIRE", "doc:drop", 150, "FIELDS", 1, "vec"
+            )
+            primary.execute_command(
+                "HPEXPIRE", "doc:rename", 150, "FIELDS", 1, "vec"
+            )
+
+            waiters.wait_for_equal(
+                lambda: self._registry_stat(replica, "entry_cnt"), 2
+            )
+            assert self._registry_stat(replica, "shared_externally_cnt") >= 2
+
+            waiters.wait_for_equal(
+                lambda: replica.execute_command(
+                    "HPEXPIRETIME", "doc:drop", "FIELDS", 1, "vec"
+                )[0],
+                -2,
+            )
+            waiters.wait_for_equal(
+                lambda: replica.execute_command(
+                    "HPEXPIRETIME", "doc:rename", "FIELDS", 1, "vec"
+                )[0],
+                -2,
+            )
+
+            # Out-of-prefix RENAME exercises MoveKey -> UnshareWithValkey inside
+            # the replication stream (POLICY_IGNORE_EXPIRE), where Valkey
+            # replaces the stringRef with an owned SDS copy and re-applies the
+            # past expiry timestamp in-place (checkAlreadyExpired == 0 on
+            # replicas). FT.DROPINDEX exercises async VectorBase teardown
+            # (POLICY_KEEP_EXPIRED), which defers doc:drop until HDEL arrives.
+            primary.rename("doc:rename", "moved:rename")
+            index.drop(primary)
+            waiters.wait_for_true(
+                lambda: b"idx" not in replica.execute_command("FT._LIST")
+            )
+            waiters.wait_for_equal(
+                lambda: self._registry_stat(replica, "pending_unshare_cnt"), 1
+            )
+            assert replica.hget("doc:drop", "vec") is None
+            assert replica.hget("moved:rename", "vec") is None
+            assert self._registry_stat(replica, "entry_cnt") == 1
+            assert self._registry_stat(replica, "unshare_errors") == 0
+
+            # Replica server cron must not drop or resurrect either field while
+            # primary active-expire is still paused.
+            time.sleep(0.25)
+            assert self._registry_stat(replica, "pending_unshare_cnt") == 1
+            assert self._registry_stat(replica, "entry_cnt") == 1
+            assert replica.hget("doc:drop", "vec") is None
+            assert replica.hget("moved:rename", "vec") is None
+
+            # Resume active expiry on the primary so it synthesizes HDEL on both
+            # multi-field hashes; the replica reconciles and drains doc:drop.
+            primary.execute_command("DEBUG", "SET-ACTIVE-EXPIRE", "1")
+            waiters.wait_for_equal(
+                lambda: self._registry_stat(replica, "pending_unshare_cnt"), 0
+            )
+            waiters.wait_for_equal(
+                lambda: self._registry_stat(replica, "entry_cnt"), 0
+            )
+            assert replica.hget("doc:drop", "vec") is None
+            assert replica.hget("moved:rename", "vec") is None
+            assert replica.hget("doc:drop", "other") == b"x"
+            assert replica.hget("moved:rename", "other") == b"x"
+            assert self._registry_stat(replica, "unshare_errors") == 0
+        finally:
+            primary.execute_command("DEBUG", "SET-ACTIVE-EXPIRE", "1")
+
+    @pytest.mark.parametrize(
+        "setup_test", [{"replica_count": 1}], indirect=True
+    )
+    def test_standalone_replica_promotion_does_not_resurrect_expired_field(
+        self,
+    ):
+        primary = self.rg.primary.client
+        replica = self.rg.replicas[0].client
+
+        index = Index(
+            "idx",
+            [Vector("vec", DIM, type="HNSW", distance="L2")],
+            prefixes=["doc:"],
+            type=KeyDataType.HASH,
+        )
+        index.create(primary, wait_for_backfill=True)
+        waiters.wait_for_true(
+            lambda: b"idx" in replica.execute_command("FT._LIST")
+        )
+        index.wait_for_backfill_complete(replica)
+
+        primary.execute_command("DEBUG", "SET-ACTIVE-EXPIRE", "0")
+        try:
+            primary.hset("doc:drop", mapping={"vec": vector(1), "other": "x"})
+            primary.hset("doc:rename", mapping={"vec": vector(2), "other": "x"})
+            primary.execute_command(
+                "HPEXPIRE", "doc:drop", 150, "FIELDS", 1, "vec"
+            )
+            primary.execute_command(
+                "HPEXPIRE", "doc:rename", 150, "FIELDS", 1, "vec"
+            )
+
+            waiters.wait_for_equal(
+                lambda: self._registry_stat(replica, "entry_cnt"), 2
+            )
+            waiters.wait_for_equal(
+                lambda: replica.execute_command(
+                    "HPEXPIRETIME", "doc:drop", "FIELDS", 1, "vec"
+                )[0],
+                -2,
+            )
+            waiters.wait_for_equal(
+                lambda: replica.execute_command(
+                    "HPEXPIRETIME", "doc:rename", "FIELDS", 1, "vec"
+                )[0],
+                -2,
+            )
+
+            primary.rename("doc:rename", "moved:rename")
+            index.drop(primary)
+            waiters.wait_for_true(
+                lambda: b"idx" not in replica.execute_command("FT._LIST")
+            )
+            waiters.wait_for_equal(
+                lambda: self._registry_stat(replica, "pending_unshare_cnt"), 1
+            )
+            assert self._registry_stat(replica, "entry_cnt") == 1
+            assert replica.hget("doc:drop", "vec") is None
+            assert replica.hget("moved:rename", "vec") is None
+
+            # Promote replica before primary HDEL arrives; neither expired field
+            # may become readable again, and on the promoted primary
+            # pending_unshare_cnt drains to 0 while the live multi-field hash
+            # doc:drop retains its registry record until key deletion.
+            replica.execute_command("REPLICAOF", "NO", "ONE")
+            waiters.wait_for_equal(lambda: replica.role()[0], b"master")
+            assert replica.hget("doc:drop", "vec") is None
+            assert replica.hget("moved:rename", "vec") is None
+            waiters.wait_for_equal(
+                lambda: self._registry_stat(replica, "pending_unshare_cnt"), 0
+            )
+            assert self._registry_stat(replica, "entry_cnt") == 1
+            assert replica.hget("doc:drop", "vec") is None
+            assert replica.hget("moved:rename", "vec") is None
+            assert replica.hget("doc:drop", "other") == b"x"
+            assert replica.hget("moved:rename", "other") == b"x"
+            assert self._registry_stat(replica, "unshare_errors") == 0
+
+            replica.delete("doc:drop")
+            waiters.wait_for_equal(
+                lambda: self._registry_stat(replica, "entry_cnt"), 0
+            )
+        finally:
+            primary.execute_command("DEBUG", "SET-ACTIVE-EXPIRE", "1")
+
+    @pytest.mark.parametrize(
+        "setup_test", [{"replica_count": 1}], indirect=True
+    )
+    def test_standalone_replica_backfill_retains_expired_shared_field(
+        self,
+    ):
+        primary = self.rg.primary.client
+        replica = self.rg.replicas[0].client
+
+        idx1 = Index(
+            "idx1",
+            [Vector("vec", DIM, type="HNSW", distance="L2")],
+            prefixes=["doc:"],
+            type=KeyDataType.HASH,
+        )
+        idx2 = Index(
+            "idx2",
+            [Vector("vec", DIM, type="FLAT", distance="L2")],
+            prefixes=["doc:"],
+            type=KeyDataType.HASH,
+        )
+        idx1.create(primary, wait_for_backfill=True)
+        waiters.wait_for_true(
+            lambda: b"idx1" in replica.execute_command("FT._LIST")
+        )
+        idx1.wait_for_backfill_complete(replica)
+
+        primary.execute_command("DEBUG", "SET-ACTIVE-EXPIRE", "0")
+        try:
+            primary.hset("doc:bf", mapping={"vec": vector(3), "other": "x"})
+            primary.execute_command(
+                "HPEXPIRE", "doc:bf", 150, "FIELDS", 1, "vec"
+            )
+            waiters.wait_for_equal(
+                lambda: self._registry_stat(replica, "entry_cnt"), 1
+            )
+            waiters.wait_for_equal(
+                lambda: replica.execute_command(
+                    "HPEXPIRETIME", "doc:bf", "FIELDS", 1, "vec"
+                )[0],
+                -2,
+            )
+
+            # idx2 backfills on replica cron under POLICY_KEEP_EXPIRED, seeing
+            # doc:bf alive ("other": "x") while "vec" appears missing; it must
+            # retain the shared VectorRecord rather than freeing it.
+            idx2.create(primary, wait_for_backfill=True)
+            waiters.wait_for_true(
+                lambda: b"idx2" in replica.execute_command("FT._LIST")
+            )
+            idx2.wait_for_backfill_complete(replica)
+            assert self._registry_stat(replica, "entry_cnt") == 1
+            assert self._registry_stat(replica, "pending_unshare_cnt") == 1
+
+            idx1.drop(primary)
+            idx2.drop(primary)
+            waiters.wait_for_true(
+                lambda: len(replica.execute_command("FT._LIST")) == 0
+            )
+            assert self._registry_stat(replica, "entry_cnt") == 1
+            assert self._registry_stat(replica, "pending_unshare_cnt") == 1
+
+            primary.execute_command("DEBUG", "SET-ACTIVE-EXPIRE", "1")
+            waiters.wait_for_equal(
+                lambda: self._registry_stat(replica, "pending_unshare_cnt"), 0
+            )
+            waiters.wait_for_equal(
+                lambda: self._registry_stat(replica, "entry_cnt"), 0
+            )
+            assert replica.hget("doc:bf", "vec") is None
+            assert replica.hget("doc:bf", "other") == b"x"
+            assert self._registry_stat(replica, "unshare_errors") == 0
+        finally:
+            primary.execute_command("DEBUG", "SET-ACTIVE-EXPIRE", "1")

@@ -41,6 +41,7 @@
 #include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/log.h"
+#include "vmsdk/src/memory_allocation.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -130,7 +131,9 @@ namespace {
 // small-page mmap so we do not round every metadata block up to 2 MiB.
 // Each successful allocation reports its actual size to
 // ValkeyModule_IncrExternalMemory so it counts against used_memory /
-// maxmemory just like the module's own malloc arena.
+// maxmemory just like the module's own malloc arena, and to the module's own
+// counter, so INFO SEARCH used_memory_bytes includes it as it does the
+// malloc arena.
 constexpr size_t kSvsAllocatorHugePageSize = 2 * 1024 * 1024;
 
 // SVS allocates data and graph in blocks of this size, reserved on the first
@@ -233,6 +236,7 @@ void* SvsAllocatorAllocate(void* /*self*/, size_t size, size_t alignment,
     }
   }
   ValkeyModule_IncrExternalMemory(aligned_size);
+  vmsdk::ReportAllocMemorySize(aligned_size);
   return ptr;
 }
 
@@ -244,6 +248,7 @@ void SvsAllocatorDeallocate(void* /*self*/, void* ptr, size_t size,
   const size_t aligned_size = SvsAllocatorAlignedSize(size, alignment);
   munmap(ptr, aligned_size);
   ValkeyModule_DecrExternalMemory(aligned_size);
+  vmsdk::ReportFreeMemorySize(aligned_size);
 }
 
 svs_allocator_ops_t kSvsAllocatorOps =

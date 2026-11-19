@@ -624,6 +624,7 @@ class TestSVSVamanaSmoke(ValkeySearchTestCaseBase):
         allocator vtable is actually installed."""
         client: Valkey = self.server.get_new_client()
         baseline = _module_external_memory(client)
+        search_baseline = int(client.info("SEARCH")["search_used_memory_bytes"])
 
         self._create_default_index(client, "mem_idx")
         # 200 vectors is enough to force the SVS graph builder to
@@ -636,6 +637,13 @@ class TestSVSVamanaSmoke(ValkeySearchTestCaseBase):
             f"after_ingest={after_ingest}); custom allocator vtable is "
             f"not being reached, or VM_IncrExternalMemory is unavailable"
         )
+        # INFO SEARCH used_memory_bytes counts the module's whole footprint,
+        # SVS's external memory included.
+        search_growth = (int(client.info("SEARCH")["search_used_memory_bytes"])
+                         - search_baseline)
+        assert search_growth >= after_ingest - baseline, (
+            f"search_used_memory_bytes grew {search_growth}, less than the "
+            f"{after_ingest - baseline} bytes of SVS external memory")
 
         client.execute_command("FT.DROPINDEX", "mem_idx")
         client.execute_command("FLUSHALL")

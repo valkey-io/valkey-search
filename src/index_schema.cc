@@ -12,9 +12,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <deque>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -77,11 +80,30 @@ namespace {
 constexpr size_t kMaxTextFieldsCount{64};
 
 ABSL_CONST_INIT absl::Mutex huge_map_migration_mutex(absl::kConstInit);
-// Schemas whose hash maps may need migration, drained by server cron.
-std::vector<std::weak_ptr<IndexSchema>> &HugeMapMigrationRequests()
+// Schemas whose hash maps may need migration, served in order by server cron.
+std::deque<std::weak_ptr<IndexSchema>> &HugeMapMigrationRequests()
     ABSL_EXCLUSIVE_LOCKS_REQUIRED(huge_map_migration_mutex) {
-  static auto *requests = new std::vector<std::weak_ptr<IndexSchema>>();
+  static auto *requests = new std::deque<std::weak_ptr<IndexSchema>>();
   return *requests;
+}
+// The smallest share of a batch given to one queued schema or index, which
+// bounds how many are visited per batch when many need migration.
+constexpr size_t kMinHugeMapMigrateShare{256};
+
+// Splits a batch of `n` > 0 entries among `waiting` > 0 queued items: returns
+// the share each served item moves and how many items to serve. The rest wait
+// for the next batch.
+std::pair<size_t, size_t> SplitMigrationBatch(size_t n, size_t waiting) {
+  size_t share = std::max(n / waiting, std::min(n, kMinHugeMapMigrateShare));
+  return {share, std::min(waiting, n / share)};
+}
+
+template <typename T>
+std::vector<T> TakeFront(std::deque<T> &queue, size_t count) {
+  std::vector<T> taken(std::make_move_iterator(queue.begin()),
+                       std::make_move_iterator(queue.begin() + count));
+  queue.erase(queue.begin(), queue.begin() + count);
+  return taken;
 }
 }  // namespace
 
@@ -1201,14 +1223,22 @@ void IndexSchema::RequestHugeMapMigration() {
 }
 
 void IndexSchema::MigrateRequestedHugeMaps(size_t n) {
-  std::vector<std::weak_ptr<IndexSchema>> requests;
+  // `n` caps the tick: the served schemas split it, and the rest wait.
+  std::vector<std::weak_ptr<IndexSchema>> served;
+  size_t share;
   {
     absl::MutexLock lock(&huge_map_migration_mutex);
-    requests.swap(HugeMapMigrationRequests());
+    auto &requests = HugeMapMigrationRequests();
+    if (n == 0 || requests.empty()) {
+      return;
+    }
+    size_t count;
+    std::tie(share, count) = SplitMigrationBatch(n, requests.size());
+    served = TakeFront(requests, count);
   }
-  for (const auto &weak_index_schema : requests) {
+  for (const auto &weak_index_schema : served) {
     if (auto index_schema = weak_index_schema.lock()) {
-      index_schema->MigrateHugeMaps(n);
+      index_schema->MigrateHugeMaps(share);
     }
   }
 }
@@ -1254,19 +1284,26 @@ void IndexSchema::RequestIndexMigration(
 }
 
 void IndexSchema::MigrateWriterMaps(size_t n) {
+  // The served indexes split the schema's share `n`, and the rest stay queued.
   std::vector<std::shared_ptr<indexes::IndexBase>> indexes;
+  size_t share = n;
   {
     absl::MutexLock lock(&migrating_indexes_mutex_);
-    indexes.swap(migrating_indexes_);
+    if (!migrating_indexes_.empty()) {
+      size_t count;
+      std::tie(share, count) =
+          SplitMigrationBatch(n, migrating_indexes_.size());
+      indexes = TakeFront(migrating_indexes_, count);
+    }
   }
   if (!is_destructing_ && (IndexKeyInfoNeedsMigration() || !indexes.empty())) {
     vmsdk::WriterMutexLock lock(&time_sliced_mutex_);
     {
       absl::MutexLock records_lock(&mutated_records_mutex_);
-      index_key_info_.MigrateSome(n);
+      index_key_info_.MigrateSome(share);
     }
     for (const auto &index : indexes) {
-      index->MigrateSome(n);
+      index->MigrateSome(share);
     }
   }
   writer_migration_scheduled_.store(false);
@@ -1281,7 +1318,7 @@ void IndexSchema::MigrateWriterMaps(size_t n) {
       RequestIndexMigration(index);
     }
   }
-  // Also covers indexes queued by writers after the swap above.
+  // Also covers indexes left queued above or queued by writers since.
   bool indexes_pending;
   {
     absl::MutexLock lock(&migrating_indexes_mutex_);

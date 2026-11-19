@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -552,7 +553,7 @@ class IndexSchema : public KeyspaceEventSubscription,
       ABSL_LOCKS_EXCLUDED(migrating_indexes_mutex_);
   absl::Mutex migrating_indexes_mutex_;
   // Indexes whose maps need migration, drained by MigrateWriterMaps().
-  std::vector<std::shared_ptr<indexes::IndexBase>> migrating_indexes_
+  std::deque<std::shared_ptr<indexes::IndexBase>> migrating_indexes_
       ABSL_GUARDED_BY(migrating_indexes_mutex_);
   // This schema is in the migration request list.
   std::atomic<bool> huge_map_migration_requested_{false};

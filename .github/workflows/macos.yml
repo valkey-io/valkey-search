@@ -36,5 +36,18 @@ jobs:
     - name: Pin OpenSSL 3
       run: echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
 
+    - name: Restore ICU
+      id: icu
+      uses: ./.github/actions/icu-cache
+      with:
+        build-dir: .build-release
+
     - name: Build Code
       run: ./build.sh
+
+    - name: Save ICU
+      if: always() && github.event_name == 'push' && steps.icu.outputs.cache-hit != 'true'
+      uses: ./.github/actions/icu-cache
+      with:
+        build-dir: .build-release
+        save: true

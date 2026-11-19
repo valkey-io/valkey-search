@@ -47,6 +47,12 @@ jobs:
           ccache-integration-plain-
 
 
+    - name: Restore ICU
+      id: icu
+      uses: ./.github/actions/icu-cache
+      with:
+        build-dir: .build-release
+
     - name: Run Integration Tests
       id: test-run
       timeout-minutes: 140
@@ -61,6 +67,13 @@ jobs:
           --user "ubuntu:ubuntu" \
           presubmit-image \
           sudo -E ci/build_ubuntu.sh --run-integration-tests --integration-output=/workspace/test-results
+
+    - name: Save ICU
+      if: always() && github.event_name == 'push' && steps.icu.outputs.cache-hit != 'true'
+      uses: ./.github/actions/icu-cache
+      with:
+        build-dir: .build-release
+        save: true
 
     - name: Save ccache
       if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'

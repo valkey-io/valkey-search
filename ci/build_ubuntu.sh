@@ -116,7 +116,7 @@ function save_integration_output() {
     echo "Saving integration test output to ${INTEGRATION_OUTPUT}"
     mkdir -p -- "${INTEGRATION_OUTPUT}" || return 1
     local artifacts_dir="${ROOT_DIR}/.build-${BUILD_CONFIG}${BUILD_DIR_SUFFIX:-}${san_suffix}"
-    local third_party_dir="${ROOT_DIR}/.build-release${san_suffix}"
+    local third_party_dir="${ROOT_DIR}/.build-release${BUILD_DIR_SUFFIX:-}${san_suffix}"
     local status=0
     echo "Saving build artifacts from ${artifacts_dir}"
     if [ -f "${artifacts_dir}/valkey-json/build/src/libjson.so" ]; then
@@ -141,25 +141,25 @@ function save_integration_output() {
         LOG_ERROR "Missing module artifact: ${artifacts_dir}/libsearch.so"
         status=1
     fi
-    local result_dir="${artifacts_dir}/integration/.valkey-test-framework"
+    local result_dir=$(ls -td "${artifacts_dir}"/integration/.valkey-test-framework* 2>/dev/null | head -n 1)
     echo "Results Directory is ${result_dir}"
-    if [ -d "${result_dir}" ]; then
-        if cp -r -P -- "${result_dir}" "${INTEGRATION_OUTPUT}"; then
-            rm -rf -- "${INTEGRATION_OUTPUT}/valkey-test-framework"
-            mv -- "${INTEGRATION_OUTPUT}/.valkey-test-framework" "${INTEGRATION_OUTPUT}/valkey-test-framework" || status=1
-        else
-            status=1
-        fi
+    if [ -n "${result_dir}" ] && [ -d "${result_dir}" ]; then
+        rm -rf -- "${INTEGRATION_OUTPUT}/valkey-test-framework"
+        cp -r -P -- "${result_dir}" "${INTEGRATION_OUTPUT}/valkey-test-framework" || status=1
     fi
     # Do the stest outputs too.
     local stest_dir="${ROOT_DIR}/testing/integration/.build-${BUILD_CONFIG}${BUILD_DIR_SUFFIX:-}${san_suffix}"
     echo "Stest Directory output is ${stest_dir}"
     if [ -d "${stest_dir}" ]; then
-        if [ -d "${stest_dir}/output" ]; then
-            cp -r -P -- "${stest_dir}/output" "${INTEGRATION_OUTPUT}" || status=1
+        local stest_out=$(ls -td "${stest_dir}"/output* 2>/dev/null | head -n 1)
+        if [ -n "${stest_out}" ] && [ -d "${stest_out}" ]; then
+            rm -rf -- "${INTEGRATION_OUTPUT}/output"
+            cp -r -P -- "${stest_out}" "${INTEGRATION_OUTPUT}/output" || status=1
         fi
-        if [ -d "${stest_dir}/tmp" ]; then
-            cp -r -P -- "${stest_dir}/tmp" "${INTEGRATION_OUTPUT}" || status=1
+        local stest_tmp=$(ls -td "${stest_dir}"/tmp* 2>/dev/null | head -n 1)
+        if [ -n "${stest_tmp}" ] && [ -d "${stest_tmp}" ]; then
+            rm -rf -- "${INTEGRATION_OUTPUT}/tmp"
+            cp -r -P -- "${stest_tmp}" "${INTEGRATION_OUTPUT}/tmp" || status=1
         fi
     fi
     return "${status}"

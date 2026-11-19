@@ -29,6 +29,7 @@ sed -e "s/\"USER_UID\": \"1000\"/\"USER_UID\": \"$user_id\"/g" \
     -e "s/\"remoteUser\": \"ubuntu\"/\"remoteUser\": \"$user_name\"/g" \
     -e "s/\"USER_NAME\": \"ubuntu\"/\"USER_NAME\": \"$user_name\"/g" \
     -e "s/\"USER_GNAME\": \"ubuntu\"/\"USER_GNAME\": \"$group_name\"/g" \
+    -e "s|/home/ubuntu/\.ccache|/home/$user_name/.ccache|g" \
     -e "s/USER=ubuntu/USER=$user_name/g" \
     "$source_file" > "$destination_file_tmp"
 

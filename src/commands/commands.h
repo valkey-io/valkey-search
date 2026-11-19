@@ -8,6 +8,7 @@
 #ifndef VALKEYSEARCH_SRC_COMMANDS_COMMANDS_H_
 #define VALKEYSEARCH_SRC_COMMANDS_COMMANDS_H_
 
+#include <atomic>
 #include <memory>
 #include <vector>
 
@@ -168,6 +169,11 @@ struct QueryCommand : public query::SearchParameters {
   //
   virtual void SendReply(ValkeyModuleCtx *ctx,
                          query::SearchResult &search_result) = 0;
+  // Generate the reply, including asynchronous failure and timeout handling.
+  int GenerateReply(ValkeyModuleCtx *ctx);
+  // Counts a failed reply on the main thread, or records it for async::Reply
+  // when the reply is generated in the background.
+  void CountFailedReply();
   //
   // Determine if we need full results or if we can optimize with trimming
   //
@@ -188,6 +194,13 @@ struct QueryCommand : public query::SearchParameters {
   // Set when SendReply hands ownership of this command to a cursor; whoever
   // owned it before must then release (not delete) it.
   bool adopted_by_cursor{false};
+  // A reply was accumulated with a thread-safe context before the blocked
+  // client was unblocked. The reply callback must then only complete the
+  // unblock, not serialize a second response.
+  std::atomic<bool> reply_generated_in_background{false};
+  // Whether that background reply was an error. Counted from this instead of
+  // re-evaluating the cancellation token, which may have expired since.
+  bool background_reply_failed{false};
 
  private:
   void QueryCompleteImpl(std::unique_ptr<SearchParameters> parameters);

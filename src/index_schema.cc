@@ -86,13 +86,10 @@ std::deque<std::weak_ptr<IndexSchema>> &HugeMapMigrationRequests()
   static auto *requests = new std::deque<std::weak_ptr<IndexSchema>>();
   return *requests;
 }
-// The smallest share of a batch given to one queued schema or index, which
-// bounds how many are visited per batch when many need migration.
+// Smallest share of a batch given to one queued schema or index.
 constexpr size_t kMinHugeMapMigrateShare{256};
 
-// Splits a batch of `n` > 0 entries among `waiting` > 0 queued items: returns
-// the share each served item moves and how many items to serve. The rest wait
-// for the next batch.
+// Returns the share each served item moves and how many of `waiting` to serve.
 std::pair<size_t, size_t> SplitMigrationBatch(size_t n, size_t waiting) {
   size_t share = std::max(n / waiting, std::min(n, kMinHugeMapMigrateShare));
   return {share, std::min(waiting, n / share)};
@@ -1211,8 +1208,7 @@ CONTROLLED_BOOLEAN(StopBackfill, false);
 CONTROLLED_BOOLEAN(ForceRDBLoadFailure, false);
 
 void IndexSchema::RequestHugeMapMigration() {
-  // Pairs with the fence in MigrateWriterMaps(): the maps' migration flags are
-  // relaxed, so order the caller's map update before the request flag read.
+  // Pairs with the fence in MigrateWriterMaps().
   std::atomic_thread_fence(std::memory_order_seq_cst);
   if (huge_map_migration_requested_.load() ||
       huge_map_migration_requested_.exchange(true)) {
@@ -1310,8 +1306,7 @@ void IndexSchema::MigrateWriterMaps(size_t n) {
   for (const auto &index : indexes) {
     index->ClearMigrationRequested();
   }
-  // Either the checks below see a writer's map update, or that writer sees the
-  // cleared flags and queues the work itself.
+  // Pairs with the fences in the Request*Migration() functions.
   std::atomic_thread_fence(std::memory_order_seq_cst);
   for (const auto &index : indexes) {
     if (index->NeedsMigration()) {

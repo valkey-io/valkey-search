@@ -116,8 +116,7 @@ class IndexBase {
 
   virtual void OnSwapDB(int new_db_num) {}
 
-  // NeedsMigration() is lock-free. MigrateSome() must run in the schema's
-  // write phase.
+  // MigrateSome() must run in the schema's write phase.
   virtual bool NeedsMigration() const { return false; }
   virtual void MigrateSome(size_t n) {}
   // Lets the owning schema queue this index for migration at most once.

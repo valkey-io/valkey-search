@@ -326,6 +326,13 @@ TEST_P(LoadTest, load) {
                  testing::StrEq("GET"), testing::StrEq("tls-port")))
             .WillOnce(testing::Return(nullptr));
       }
+      // Only read to warn about a plaintext coordinator, which these cases do
+      // not check.
+      EXPECT_CALL(
+          *kMockValkeyModule,
+          Call(testing::_, testing::StrEq("CONFIG"), testing::StrEq("cc"),
+               testing::StrEq("GET"), testing::StrEq("tls-cluster")))
+          .WillRepeatedly(testing::Return(nullptr));
     }
   }
   if (test_case.cluster_mode) {

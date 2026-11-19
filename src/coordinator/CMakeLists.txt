@@ -6,6 +6,16 @@ valkey_search_create_proto_library("src/coordinator/coordinator.proto"
                                    coordinator_cc_proto)
 
 target_link_libraries(coordinator_grpc_proto PUBLIC coordinator_cc_proto)
+set(SRCS_TLS ${CMAKE_CURRENT_LIST_DIR}/tls.cc ${CMAKE_CURRENT_LIST_DIR}/tls.h)
+
+valkey_search_add_static_library(coordinator_tls "${SRCS_TLS}")
+target_include_directories(coordinator_tls PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+if(APPLE)
+  target_link_libraries(coordinator_tls PUBLIC gRPC::grpc gRPC::grpc++)
+else()
+  target_link_libraries(coordinator_tls PUBLIC ${GRPC_LIB})
+endif()
+
 set(SRCS_SERVER ${CMAKE_CURRENT_LIST_DIR}/server.cc
                 ${CMAKE_CURRENT_LIST_DIR}/server.h)
 

@@ -739,7 +739,9 @@ class VectorBase : public IndexBase {
       RDBChunkOutputStream chunked_out) const = 0;
 
   virtual VectorRecord &GetVectorLockFree(uint64_t internal_id) const = 0;
-  virtual VectorRecord &GetVector(uint64_t internal_id) const = 0;
+  // Returns a copy taken under the index lock: a concurrent remove can move
+  // the slot once the lock is released.
+  virtual VectorRecord GetVector(uint64_t internal_id) const = 0;
 
   // The keyspace's shared copy of `key`'s vector if it still equals `saved`,
   // the vector the RDB holds for the key; nullopt if the key changed since.

@@ -422,6 +422,12 @@ static vmsdk::info_field::Integer vector_registry_pending_unshare_cnt(
       return VectorRegistry::Instance().GetPendingUnsharesCount();
     }));
 
+static vmsdk::info_field::Integer vector_registry_unshare_stalled_batches(
+    "vector_registry", "vector_registry_unshare_stalled_batches",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return VectorRegistry::Instance().GetStats().unshare_stalled_batches;
+    }));
+
 static vmsdk::info_field::Integer vector_registry_active_allocations(
     "vector_registry", "vector_registry_active_allocations",
     vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {

@@ -12,7 +12,7 @@
       ],
       [
         "1.3.0",
-        "Added INKEYS, SCORER, WITHSCORES and WITHCURSOR options, BM25STD scoring, VECTOR_RANGE queries and HYBRID_POLICY"
+        "Added INKEYS, SCORER, WITHSCORES and WITHCURSOR options, BM25STD scoring and the `$weight` query attribute, VECTOR_RANGE queries with `$EPSILON`, HYBRID_POLICY, field-scoped text groups, SORTBY on the KNN distance, `$param` values for the KNN `AS` name, a TIMEOUT limit set by `search.max-timeout-ms`, and (with `search.emulate-release 1.3.0`) last-wins RETURN, typed WITHSORTKEYS values, single-quoted phrases and rejection of invalid UTF-8 queries"
       ]
     ],
     "arguments": [

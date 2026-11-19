@@ -426,11 +426,10 @@ absl::StatusOr<bool> VectorBase::IsVectorUnchanged(
           absl::StrCat("Embedding id not found: ", key->Str()));
     }
     it->second.magnitude = magnitude;
-    auto &stored_ptr = GetVector(it->second.internal_id);
-    if (!stored_ptr) {
+    stored_record = GetVector(it->second.internal_id);
+    if (!stored_record) {
       return false;  // No stored record, so vectors are not matching
     }
-    stored_record = stored_ptr;
   }
   if (stored_record == vector_record) {
     return true;  // Fast path: shared VectorRegistry record, definitely

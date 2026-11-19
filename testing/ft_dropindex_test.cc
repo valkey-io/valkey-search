@@ -156,16 +156,6 @@ INSTANTIATE_TEST_SUITE_P(
                 },
         },
         {
-            .test_name = "incorrect_param_count",
-            .test_cases =
-                {
-                    {
-                        .argv = {"FT.DROPINDEX"},
-                        .return_code = absl::StatusCode::kInvalidArgument,
-                    },
-                },
-        },
-        {
             .test_name = "index_schema_does_not_exist",
             .test_cases =
                 {

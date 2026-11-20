@@ -13,6 +13,7 @@
 #endif
 
 #include <array>
+#include <cctype>
 #include <cerrno>
 #include <climits>
 #include <cstdint>
@@ -194,6 +195,12 @@ std::optional<absl::string_view> ParseHashTag(absl::string_view s) {
     return std::nullopt;
   }
   return s.substr(start + 1, tag_size);
+}
+
+bool StartsWithDbTag(absl::string_view name) {
+  auto hash_tag = ParseHashTag(name);
+  return hash_tag && hash_tag->data() == name.data() + 1 &&
+         std::isdigit(static_cast<unsigned char>(hash_tag->front()));
 }
 
 //

@@ -662,6 +662,16 @@ class TestSVSVamanaSmoke(ValkeySearchTestCaseBase):
             f"{baseline}, after_ingest={after_ingest}, after_drop="
             f"{after_drop})"
         )
+        # The module's own total gives the freed SVS bytes back too. Other
+        # module memory only shrinks here (the keys are flushed), so allow
+        # a 10% slack for unrelated allocations.
+        search_after_drop = int(
+            client.info("SEARCH")["search_used_memory_bytes"])
+        search_freed = search_baseline + search_growth - search_after_drop
+        svs_freed = after_ingest - after_drop
+        assert search_freed >= 0.9 * svs_freed, (
+            f"search_used_memory_bytes dropped {search_freed} after DROPINDEX,"
+            f" less than the {svs_freed} bytes of SVS memory freed")
 
     def test_float16_input_stored_as_fp16(self):
         """TYPE FLOAT16 with COMPRESSION NONE stores FP16 inside SVS: its

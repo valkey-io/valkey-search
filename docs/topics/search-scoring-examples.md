@@ -5,6 +5,7 @@ description: Worked scoring example and recipes to tune the ranking of Valkey Se
 
 These examples use the scores described in [Search - Scoring](search-scoring.md).
 They require Valkey Search 1.3.0 or later.
+They omit `SCORER`, so they use the scorer set by `search.default-scorer` (default `BM25STD`).
 
 # Read and Check Scores
 
@@ -266,33 +267,6 @@ To combine the score with a numeric field at query time, compute a new value wit
 The records are in the order `p:2` (rank 2.322), `p:3` (rank 1.348), and `p:1` (rank 0.929).
 `p:1` has the highest score, but `p:2` has many more sales.
 The logarithm keeps a large sales value from hiding the score.
-
-## Make the Order of Equal Scores Repeatable
-
-`FT.AGGREGATE` does not sort records by score automatically, so it does not order keys with equal scores.
-To get a repeatable order, sort by the score and then by a second field:
-
-```
-> FT.AGGREGATE p jacket ADDSCORES LOAD 1 @__key SORTBY 4 @__score DESC @__key ASC
-1) (integer) 3
-2) 1) __key
-   2) "p:1"
-   3) __score
-   4) "0.373659491539"
-3) 1) __key
-   2) "p:2"
-   3) __score
-   4) "0.341167360544"
-4) 1) __key
-   2) "p:3"
-   3) __score
-   4) "0.341167360544"
-```
-
-`p:2` and `p:3` have the same score, so `@__key ASC` puts `p:2` before `p:3`.
-Use the same sort when you page through results with `LIMIT`.
-If the index does not change between requests, no key appears on two pages.
-A change to the index between requests can change scores and move keys to a different page.
 
 ## Combine Text Results with Vector Results
 

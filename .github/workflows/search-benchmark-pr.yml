@@ -183,8 +183,8 @@ jobs:
       CORE_DIR: "valkey"
       CORE_PATH: "${{ github.workspace }}/valkey"
       # Benchmark configuration
-      PERF_BENCHMARK_REPO: "valkey-io/valkey-perf-benchmark"
-      PERF_BENCHMARK_BRANCH: "main"
+      PERF_BENCHMARK_REPO: "boda26/valkey-perf-benchmark"
+      PERF_BENCHMARK_BRANCH: "fix-cluster-conf-cleanup"
       PERF_BENCHMARK_DIR: "valkey-perf-benchmark"
       PERF_BENCHMARK_PATH: "${{ github.workspace }}/valkey-perf-benchmark"
       CONFIG_FILE: "${{ github.workspace }}/valkey-perf-benchmark/configs/${{ github.event.inputs.config_file || 'fts-benchmarks-shortened-arm.json' }}"

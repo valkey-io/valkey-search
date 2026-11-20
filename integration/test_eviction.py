@@ -86,9 +86,12 @@ class TestEviction(ValkeySearchTestCaseBase):
         with pytest.raises(OutOfMemoryError):
             index.load_data(client, total_docs)
 
-        # Verify index still has original documents
+        # Reply buffers freed after the pin fit ~20 docs.
+        freed_reply_buffer_docs = 25
         final_info = index.info(client)
-        assert final_info.num_docs <= initial_docs
+        assert final_info.num_docs >= initial_docs
+        assert final_info.num_docs <= initial_docs + freed_reply_buffer_docs
+        assert final_info.num_docs == client.dbsize()
 
         # Verify search still works
         with pytest.raises(OutOfMemoryError):

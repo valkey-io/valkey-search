@@ -96,6 +96,7 @@ The tag match operator is specified with one or more match strings separated by 
 Tag match supports both exact match and prefix match.
 If a match string end with an `*` then prefix matching is performed, otherwise exact matching is performed.
 Case insensitive matching can be configured when the field was declared.
+A tag may contain `=>[`, for example `@color:{a=>[b]}`. Redis rejects this.
 
 ```
 @<field-name>:{<tag>}

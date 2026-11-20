@@ -507,31 +507,31 @@ absl::Status SchemaManager::OnMetadataCallback(
     const coordinator::ObjName &obj_name, const google::protobuf::Any *metadata,
     uint64_t fingerprint, uint32_t version) {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
-  auto old_schema =
-      RemoveIndexSchemaInternal(obj_name.GetDbNum(), obj_name.GetName());
+  data_model::IndexSchema proposed_schema;
+  if (metadata != nullptr && !metadata->UnpackTo(&proposed_schema)) {
+    return absl::InternalError(
+        absl::StrCat("Unable to unpack metadata for index schema ", obj_name));
+  }
+  // A live entry names its index in the protobuf. An older module stores DB 0
+  // "{1}idx" under the id "{1}idx", which decodes as DB 1 "idx", so the
+  // decoded name is used only for a tombstone.
+  const int db_num = metadata != nullptr
+                         ? static_cast<int>(proposed_schema.db_num())
+                         : static_cast<int>(obj_name.GetDbNum());
+  const std::string name(metadata != nullptr ? proposed_schema.name()
+                                             : obj_name.GetName());
+  auto old_schema = RemoveIndexSchemaInternal(db_num, name);
   if (!old_schema.ok() && !absl::IsNotFound(old_schema.status())) {
     return old_schema.status();
   }
   absl::Status result = absl::OkStatus();
-  if (metadata == nullptr) {
-    // Nothing to create — just clean up the old schema below.
-  } else {
-    auto proposed_schema = std::make_unique<data_model::IndexSchema>();
-    if (!metadata->UnpackTo(proposed_schema.get())) {
-      result = absl::InternalError(absl::StrCat(
-          "Unable to unpack metadata for index schema ", obj_name));
-    } else {
-      auto create_status =
-          CreateIndexSchemaInternal(detached_ctx_.get(), *proposed_schema);
-      if (!create_status.ok()) {
-        result = create_status;
-      } else {
-        auto created_schema =
-            LookupInternal(obj_name.GetDbNum(), obj_name.GetName()).value();
-        CHECK(created_schema != nullptr);
-        created_schema->SetFingerprint(fingerprint);
-        created_schema->SetVersion(version);
-      }
+  if (metadata != nullptr) {
+    result = CreateIndexSchemaInternal(detached_ctx_.get(), proposed_schema);
+    if (result.ok()) {
+      auto created_schema = LookupInternal(db_num, name).value();
+      CHECK(created_schema != nullptr);
+      created_schema->SetFingerprint(fingerprint);
+      created_schema->SetVersion(version);
     }
   }
   if (old_schema.ok()) {

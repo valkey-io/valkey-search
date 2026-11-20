@@ -49,6 +49,14 @@ namespace {
 constexpr mstime_t kMetadataBroadcastIntervalMs = 30000;
 constexpr float kMetadataBroadcastJitterRatio = 0.5;
 
+// True if `name` starts with a hash tag whose first character is a digit.
+// Decode reads such a tag as a DB number.
+bool StartsWithDbTag(absl::string_view name) {
+  auto hash_tag = vmsdk::ParseHashTag(name);
+  return hash_tag && hash_tag->data() == name.data() + 1 &&
+         std::isdigit(static_cast<unsigned char>(hash_tag->front()));
+}
+
 }  // namespace
 
 CONTROLLED_BOOLEAN(PauseHandleClusterMessage, false);
@@ -911,11 +919,12 @@ ObjName ObjName::Decode(absl::string_view encoded) {
 }
 
 std::string ObjName::Encode() const {
-  if (db_num_ == 0) {
+  if (db_num_ == 0 && !StartsWithDbTag(name_)) {
     // 8/1.0 encoding.
     return name_;
   }
-  // 9/1.1 encoding.
+  // 9/1.1 encoding. A DB 0 name that starts with a tag of digits also gets
+  // its DB number, "{0}", so Decode does not read that tag as the DB number.
   return absl::StrCat("{", db_num_, "}", name_);
 }
 

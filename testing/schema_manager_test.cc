@@ -454,6 +454,25 @@ TEST_F(SchemaManagerTest,
   EXPECT_EQ(schema->GetVersion(), created->version());
 }
 
+// An older module stores DB 0 "{1}idx" under the id "{1}idx", which decodes
+// as DB 1 "idx". The callback creates the index the protobuf names.
+TEST_F(SchemaManagerTest, LiveEntryUnderBareIdCreatesIndexFromProtobuf) {
+  coordinator::MetadataManager::InitInstance(std::move(test_metadata_manager_));
+  SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
+      &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/true));
+
+  auto proto = test_index_schema_proto_;
+  proto.set_name("{1}idx");
+  coordinator::GlobalMetadataEntry entry;
+  entry.mutable_content()->PackFrom(proto);
+  VMSDK_EXPECT_OK(coordinator::MetadataManager::Instance().TriggerCallbacks(
+      kSchemaManagerMetadataTypeName, coordinator::ObjName::Decode("{1}idx"),
+      entry));
+
+  VMSDK_EXPECT_OK(SchemaManager::Instance().GetIndexSchema(0, "{1}idx"));
+  EXPECT_FALSE(SchemaManager::Instance().GetIndexSchema(1, "idx").ok());
+}
+
 TEST_F(SchemaManagerTest,
        TestOnLoadingEndedRestoresFingerprintVersionForNonZeroDb) {
   constexpr uint32_t kDbNum = 5;

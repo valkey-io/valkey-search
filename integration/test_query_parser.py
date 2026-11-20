@@ -397,3 +397,39 @@ class TestQueryParser(ValkeySearchTestCaseBase):
                 client.execute_command(f"CONFIG SET {config_name} {original_value}")
                 == b"OK"
             )
+
+    def test_literal_arrow_not_vector_delimiter(self):
+        client: Valkey = self.server.get_new_client()
+        assert client.execute_command(
+            "FT.CREATE", "arrow_idx", "ON", "HASH", "PREFIX", "1", "arrow:",
+            "SCHEMA", "tag", "TAG", "title", "TEXT",
+            "vec", "VECTOR", "FLAT", "6", "TYPE", "FLOAT32", "DIM", "2",
+            "DISTANCE_METRIC", "L2",
+        ) == b"OK"
+        vec = struct.pack("<2f", 1.0, 2.0)
+        client.execute_command(
+            "HSET", "arrow:1", "tag", "a=>[b]", "title", "foo bar", "vec", vec)
+        client.execute_command(
+            "HSET", "arrow:2", "tag", "c", "title", "baz", "vec", vec)
+        for query in ["@tag:{a=>[b]}", '@title:"foo =>[bar]"']:
+            assert client.execute_command(
+                "FT.SEARCH", "arrow_idx", query, "NOCONTENT"
+            ) == [1, b"arrow:1"]
+        assert client.execute_command(
+            "FT.SEARCH", "arrow_idx", "@tag:{a=>[b]} =>[KNN 2 @vec $BLOB]",
+            "PARAMS", 2, "BLOB", vec, "NOCONTENT",
+        ) == [1, b"arrow:1"]
+
+    def test_literal_arrow_in_apostrophe_phrase(self):
+        client: Valkey = self.server.get_new_client()
+        assert client.execute_command(
+            "CONFIG", "SET", "search.emulate-release", "1.3.0") == b"OK"
+        assert client.execute_command(
+            "FT.CREATE", "apos_idx", "ON", "HASH", "PREFIX", "1", "apos:",
+            "SCHEMA", "title", "TEXT",
+        ) == b"OK"
+        client.execute_command("HSET", "apos:1", "title", "foo bar")
+        client.execute_command("HSET", "apos:2", "title", "baz")
+        assert client.execute_command(
+            "FT.SEARCH", "apos_idx", "@title:'foo =>[bar]'", "NOCONTENT"
+        ) == [1, b"apos:1"]

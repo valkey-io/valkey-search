@@ -2103,12 +2103,8 @@ absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
   ++Metrics::GetStats().time_slice_queries;
   // Handle OOM for search requests, defends against request
   // coming from the coordinator
-  if (search_mode == SearchMode::kRemote) {
-    auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
-    auto ctx_flags = ValkeyModule_GetContextFlags(ctx.get());
-    if (ctx_flags & VALKEYMODULE_CTX_FLAGS_OOM) {
-      return absl::ResourceExhaustedError(kOOMMsg);
-    }
+  if (search_mode == SearchMode::kRemote && ValkeySearch::Instance().IsOOM()) {
+    return absl::ResourceExhaustedError(kOOMMsg);
   }
   if (parameters.IsNonVectorQuery()) {
     // Standalone vector range queries (no KNN) are routed through a dedicated

@@ -1120,6 +1120,8 @@ void ValkeySearch::OnServerCronCallback(ValkeyModuleCtx *ctx,
                                         [[maybe_unused]] ValkeyModuleEvent eid,
                                         [[maybe_unused]] uint64_t subevent,
                                         [[maybe_unused]] void *data) {
+  is_oom_.store(ValkeyModule_GetContextFlags(ctx) & VALKEYMODULE_CTX_FLAGS_OOM,
+                std::memory_order_relaxed);
   // Clean-up after threads that exited without being "joined"
   if (writer_thread_pool_) {
     writer_thread_pool_->JoinTerminatedWorkers();
@@ -1282,6 +1284,8 @@ void ValkeySearch::ResumeWriterThreadPool(ValkeyModuleCtx *ctx,
 absl::Status ValkeySearch::OnLoad(ValkeyModuleCtx *ctx,
                                   ValkeyModuleString **argv, int argc) {
   ctx_ = ValkeyModule_GetDetachedThreadSafeContext(ctx);
+  is_cluster_ =
+      ValkeyModule_GetContextFlags(ctx_) & VALKEYMODULE_CTX_FLAGS_CLUSTER;
 
   // Register a single module type for Aux load/save callbacks.
   VMSDK_RETURN_IF_ERROR(RegisterModuleType(ctx));

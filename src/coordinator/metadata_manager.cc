@@ -480,7 +480,8 @@ void MetadataManager::HandleBroadcastedMetadata(
           auto status = metadata_manager.ReconcileMetadata(*schema, address);
           if (!status.ok()) {
             VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
-                << "Failed to reconcile schemas: " << status.message();
+                << "Failed to reconcile schemas: "
+                << vmsdk::config::RedactIfNeeded(status.message());
             return;
           }
           VMSDK_LOG_EVERY_N_SEC(DEBUG, ctx, 1)
@@ -573,8 +574,9 @@ absl::Status MetadataManager::ReconcileMetadata(const GlobalMetadata &proposed,
         if (!result.ok()) {
           VMSDK_LOG(WARNING, detached_ctx_.get())
               << "Failed during reconciliation callback: %s"
-              << result.message().data() << " for type " << type_name << ", id "
-              << vmsdk::config::RedactIfNeeded(id) << " from " << source;
+              << vmsdk::config::RedactIfNeeded(result.message()) << " for type "
+              << type_name << ", id " << vmsdk::config::RedactIfNeeded(id)
+              << " from " << source;
           return result;
         }
         auto status = CallFTInternalUpdateForReconciliation(id, proposed_entry);
@@ -752,7 +754,8 @@ void MetadataManager::OnLoadingEnded(ValkeyModuleCtx *ctx) {
                                     /*prefer_incoming=*/true);
     if (!status.ok()) {
       VMSDK_LOG(WARNING, ctx)
-          << "Failed to apply staged metadata: %s" << status.message().data();
+          << "Failed to apply staged metadata: %s"
+          << vmsdk::config::RedactIfNeeded(status.message());
     }
     staged_metadata_ = GlobalMetadata();
     staging_metadata_due_to_repl_load_ = false;

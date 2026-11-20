@@ -2496,14 +2496,37 @@ size_t FindVectorDelimiter(absl::string_view expr) {
     }
     return after < expr.size() && expr[after] == '[';
   };
+  // A real vector delimiter is always followed by the KNN keyword; a literal
+  // `=>[...]` inside quoted text (e.g. an AS alias) is not. Used below to
+  // keep the apostrophe lookahead from crossing into the KNN clause.
+  auto is_knn_delimiter_at = [expr, is_delimiter_at](size_t pos) {
+    if (!is_delimiter_at(pos)) {
+      return false;
+    }
+    size_t after = pos + kVectorFilterDelimiter.size();
+    while (after < expr.size() && absl::ascii_isspace(expr[after])) {
+      after++;
+    }
+    size_t knn = after + 1;  // Skip the '['.
+    while (knn < expr.size() && absl::ascii_isspace(expr[knn])) {
+      knn++;
+    }
+    return absl::StartsWithIgnoreCase(expr.substr(knn), "KNN");
+  };
   // Scans the whole query, vector clause included, unlike
-  // FilterParser::ParseTextTokens, which sees only the pre-filter.
-  auto has_matching_apostrophe_ahead = [expr](size_t start) {
+  // FilterParser::ParseTextTokens, which sees only the pre-filter. Stop at an
+  // unguarded KNN delimiter: FilterParser never sees past it either, so a
+  // mid-word apostrophe (e.g. in "don't") must not pair with one that only
+  // appears inside the KNN clause (e.g. in an AS alias).
+  auto has_matching_apostrophe_ahead = [expr,
+                                        is_knn_delimiter_at](size_t start) {
     for (size_t i = start; i < expr.size(); ++i) {
       if (expr[i] == '\\') {
         ++i;
       } else if (expr[i] == '\'') {
         return true;
+      } else if (is_knn_delimiter_at(i)) {
+        return false;
       }
     }
     return false;

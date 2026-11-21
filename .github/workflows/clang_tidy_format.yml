@@ -85,7 +85,7 @@ jobs:
           # compile_commands.json was produced by a non-Clang build, and
           # -fno-openmp works around clang 18 rejecting lambda captures of
           # structured bindings when OpenMP is on (no first-party code uses it).
-          TS_CONFIG="{Checks: '-*,readability-redundant-control-flow,clang-diagnostic-thread-safety*', WarningsAsErrors: 'clang-diagnostic-thread-safety*', ExtraArgs: ['-Wthread-safety', '-fno-openmp'], HeaderFilterRegex: '^./(src|testing)\/.*\.(cc|h)$|^./vmsdk/src/[a-zA-Z0-9_]+(\.cc|\.h)$|^./vmsdk/testing/.*'}"
+          TS_CONFIG="{Checks: '-*,readability-redundant-control-flow,clang-diagnostic-thread-safety*', WarningsAsErrors: 'clang-diagnostic-thread-safety*', ExtraArgs: ['-Wthread-safety', '-fno-openmp'], HeaderFilterRegex: '^(/workspace/|\./)(src|testing)\/.*\.(cc|h)$|^(/workspace/|\./)vmsdk/src/[a-zA-Z0-9_]+(\.cc|\.h)$|^(/workspace/|\./)vmsdk/testing/.*'}"
 
           for FILE in $MODIFIED_FILES; do
             echo "Running clang-format check on $FILE"

@@ -20,6 +20,7 @@ for the release before it.
 
 import json
 import os
+import time
 import warnings
 
 import pytest
@@ -28,7 +29,7 @@ from valkey.client import Valkey
 from valkey_search_test_case import ValkeySearchTestCaseBase
 from valkeytestframework.conftest import resource_port_tracker  # noqa: F401
 from valkeytestframework.util import waiters
-from utils import compatibility_usage, extract_old_module
+from utils import cleanup_module_binary, compatibility_usage, extract_old_module
 
 RELEASE = "1.2.0"
 
@@ -40,7 +41,8 @@ RELEASE = "1.2.0"
 MODULES = [
     # On 1.2.0, timefmt() with an empty format never returns, and parsetime()
     # with a mismatched format returns uninitialized memory (a different
-    # number on every run); the emulation answers "" and -2209075200.
+    # number on every run); the emulation answers "" and
+    # -2209075200 (in UTC).
     (
         "1.2",
         "1.2.0",
@@ -90,6 +92,9 @@ class TestEmulateRelease1_2(ValkeySearchTestCaseBase):
         try:
             return self.start_new_server().client
         finally:
+            # The server has the module loaded by now, so the file can go:
+            # the test directory is uploaded as a CI artifact.
+            cleanup_module_binary(self.module_path)
             self.module_path = None
 
     def _load(self, c: Valkey) -> None:
@@ -239,7 +244,7 @@ class TestEmulateRelease1_2(ValkeySearchTestCaseBase):
 
         # ---- Ingestion-time rows: decided when the keys were indexed. ----
         check("invalid_data_drops_key", lambda: count("@tg:{bad}"), 1, at_load=True)
-        check("tag_rejects_non_utf8", lambda: count("@n:[4242 4242]"), 1, at_load=True)
+        check("tag_rejects_non_utf8", lambda: count(b"@tg:{\xff\xfe}"), 1, at_load=True)
         check("min_stem_size_code_points", lambda: count("aé"), 1, at_load=True)
 
         # ---- FT.SEARCH ----
@@ -435,13 +440,19 @@ class TestEmulateRelease1_2(ValkeySearchTestCaseBase):
         check("date_fn_negative_ts_to_nil", lambda: apply("year(-86400)"), "1969")
         check("lower_non_string_to_nil", lambda: apply("lower(12)"), "12")
         check("upper_non_string_to_nil", lambda: apply("upper(12)"), "12")
-        # 1700000000 is 2023-11-14; the 1st is 1698796800.
-        check("month_mday_off_by_one", lambda: apply("month(1700000000)"), "1698710400")
+        # month() and parsetime() call mktime(), so they answer in the server's
+        # local time. time.mktime() is the same libc call, and the server runs
+        # in this process's environment, so it gives the expected values in any
+        # TZ. 1700000000 is 2023-11-14; the legacy day 0 is October 31, and the
+        # tm from gmtime_r() has tm_isdst 0. In UTC: 1698710400.
+        local_oct_31 = str(int(time.mktime((2023, 11, 0, 0, 0, 0, 0, 0, 0))))
+        check("month_mday_off_by_one", lambda: apply("month(1700000000)"), local_oct_31)
         check("numeric_unary_nan_on_unparsable", lambda: apply('abs("abc")'), ABSENT)
         check(
             "parsetime_format_mismatch_to_nil",
             lambda: apply('parsetime("x", "%Y")'),
-            "-2209075200",
+            # A zeroed tm (1899-12-31) with tm_isdst -1. In UTC: -2209075200.
+            str(int(time.mktime((1900, 1, 0, 0, 0, 0, 0, 0, -1)))),
         )
         check("timefmt_empty_format_to_nil", lambda: apply('timefmt(0, "")'), "")
 

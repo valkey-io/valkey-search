@@ -216,6 +216,8 @@ class TestEmulateRelease1_2(ValkeySearchTestCaseBase):
                 actual = fn()
             except ResponseError as e:
                 actual = f"ERR {e}"
+            except Exception as e:
+                actual = f"{type(e).__name__}: {e}"
             counted = (loaded if at_load else usage(c)).get(label, 0) - base
             if actual != expected:
                 failures.append(f"{label}: expected {expected!r}, got {actual!r}")

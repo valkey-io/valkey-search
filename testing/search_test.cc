@@ -2064,6 +2064,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
     }
     query::QueryContext query_ctx(*schema,
                                   indexes::scoring::GetScorer(params.scorer));
+    vmsdk::ReaderMutexLock lock(&params.index_schema->GetTimeSlicedMutex());
     auto result = query::SearchVectorRangeQuery(params, query_ctx);
     EXPECT_TRUE(result.ok()) << result.status();
     absl::flat_hash_map<std::string, bool> found;
@@ -2343,6 +2344,7 @@ size_t CountVectorRangeMatches(
       std::string(VectorToStr(query)));
   query::QueryContext query_ctx(*schema,
                                 indexes::scoring::GetScorer(params.scorer));
+  vmsdk::ReaderMutexLock lock(&params.index_schema->GetTimeSlicedMutex());
   auto result = query::SearchVectorRangeQuery(params, query_ctx);
   EXPECT_TRUE(result.ok()) << result.status();
   if (result.ok() && matched_keys != nullptr) {

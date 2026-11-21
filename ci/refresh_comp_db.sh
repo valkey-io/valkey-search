@@ -16,7 +16,8 @@ fi
 # Ensure compile_commands.json root symlink is relative
 ln -sf .build-release/compile_commands.json ${ROOT_DIR}/compile_commands.json
 
-# Map container workspace path (${ROOT_DIR}) to host workspace path (${HOST_DIR}) in compile_commands.json
-if [ -f "${ROOT_DIR}/.build-release/compile_commands.json" ]; then
+# Map container workspace path (${ROOT_DIR}) to host workspace path (${HOST_DIR}) in compile_commands.json.
+# Set COMPDB_NO_HOST_REMAP=1 when the database will be consumed inside a container (e.g. CI).
+if [ -z "${COMPDB_NO_HOST_REMAP}" ] && [ -f "${ROOT_DIR}/.build-release/compile_commands.json" ]; then
   sed -i "s|${ROOT_DIR}|${HOST_DIR}|g" "${ROOT_DIR}/.build-release/compile_commands.json" 2>/dev/null || true
 fi

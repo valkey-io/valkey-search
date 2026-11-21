@@ -112,6 +112,32 @@ def start_server_with_old_module(test_case, testdir, dbfilename, version,
     Returns (server, client, logfile, module_path).
     """
     server_path = os.getenv("VALKEY_SERVER_PATH")
+    module_path = extract_old_module(testdir, version)
+
+    server, client = test_case.create_server(
+        testdir=testdir,
+        server_path=server_path,
+        args={
+            "appendonly": "no",
+            "dbfilename": dbfilename,
+            "loadmodule": module_path,
+        },
+        wait_for_ping=wait_for_ping,
+        connect_client=connect_client,
+    )
+
+    logfile = os.path.join(server.cwd, server.args["logfile"])
+    return server, client, logfile, module_path
+
+
+def extract_old_module(testdir, version):
+    """Extract an older search module binary for this machine into testdir.
+
+    Maps version → integration/module/{version}-libsearch.so.zip. Skips the
+    test if the zip, or this machine's binary inside it, is missing.
+
+    Returns the extracted module path.
+    """
     module_dir = os.path.join(os.path.dirname(__file__), "module")
     zip_path = os.path.join(module_dir, f"{version}-libsearch.so.zip")
 
@@ -133,24 +159,13 @@ def start_server_with_old_module(test_case, testdir, dbfilename, version,
         )
     module_path = os.path.join(testdir, f"{version}-libsearch.so")
     with zipfile.ZipFile(zip_path, "r") as zf:
+        if module_member not in zf.namelist():
+            import pytest
+            pytest.skip(f"{zip_path} has no {module_member}")
         with zf.open(module_member) as source, open(module_path, "wb") as target:
             shutil.copyfileobj(source, target)
     os.chmod(module_path, 0o755)
-
-    server, client = test_case.create_server(
-        testdir=testdir,
-        server_path=server_path,
-        args={
-            "appendonly": "no",
-            "dbfilename": dbfilename,
-            "loadmodule": module_path,
-        },
-        wait_for_ping=wait_for_ping,
-        connect_client=connect_client,
-    )
-
-    logfile = os.path.join(server.cwd, server.args["logfile"])
-    return server, client, logfile, module_path
+    return module_path
 
 
 def cleanup_module_binary(module_path):

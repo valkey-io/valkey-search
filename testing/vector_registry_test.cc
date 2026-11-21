@@ -28,6 +28,8 @@ class VectorRegistryTest : public ValkeySearchTest {
   void SetUp() override {
     ValkeySearchTest::SetUp();
     SetHashRegistrationSupported(VectorRegistry::Instance(), true);
+    ON_CALL(*kMockValkeyModule, KeyType(testing::_))
+        .WillByDefault(Return(VALKEYMODULE_KEYTYPE_HASH));
   }
   void SetHashRegistrationSupported(VectorRegistry &registry, bool supported) {
     registry.hash_vector_sharing_ = supported;
@@ -38,6 +40,11 @@ class VectorRegistryTest : public ValkeySearchTest {
   bool TrackedNeedsMigration(VectorRegistry &registry, int db_num) {
     auto it = registry.tracked_vectors_.find(db_num);
     return it != registry.tracked_vectors_.end() && it->second.NeedsMigration();
+  }
+  bool TrackedKeysNeedsMigration(VectorRegistry &registry, int db_num) {
+    auto it = registry.tracked_keys_by_db_.find(db_num);
+    return it != registry.tracked_keys_by_db_.end() &&
+           it->second.NeedsMigration();
   }
   vmsdk::UniqueValkeyString MakeFloatVectorString(
       const std::vector<float> &vec_data = {1.0f, 2.0f}) {
@@ -169,7 +176,10 @@ TEST_F(VectorRegistryTest, DedupOrConstructWithInvalidSize) {
   EXPECT_EQ(registry.GetStats().entry_cnt, 0);
 }
 
-TEST_F(VectorRegistryTest, OverwriteWithNullptrErasesTrackedRecord) {
+// A missing vector on a key that is still a hash may be a logically expired
+// field that holds the shared bytes, so the record is kept. Once the key holds
+// another type, nothing can reference it.
+TEST_F(VectorRegistryTest, OverwriteWithNullptrRetainsRecordWhileKeyIsHash) {
   auto &registry = VectorRegistry::Instance();
   auto key = StringInternStore::Intern("key_overwrite_null");
   auto attr = StringInternStore::Intern("attr");
@@ -186,11 +196,17 @@ TEST_F(VectorRegistryTest, OverwriteWithNullptrErasesTrackedRecord) {
   EXPECT_NE(rec, nullptr);
   EXPECT_EQ(registry.GetStats().entry_cnt, 1);
 
-  // Overwriting with nullptr erases from tracked_vectors_
   auto rec_null = registry.DedupOrConstruct(
       key, nullptr, data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0,
       &index);
   EXPECT_EQ(rec_null, nullptr);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 1);
+
+  ON_CALL(*kMockValkeyModule, KeyType(testing::_))
+      .WillByDefault(Return(VALKEYMODULE_KEYTYPE_STRING));
+  registry.DedupOrConstruct(
+      key, nullptr, data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0,
+      &index);
   EXPECT_EQ(registry.GetStats().entry_cnt, 0);
 }
 
@@ -827,7 +843,7 @@ TEST_F(VectorRegistryTest, RenameToUnindexedKeyMaterializesVector) {
       .WillOnce(Return(1));
   EXPECT_CALL(*kMockValkeyModule, HashSet(testing::_, VALKEYMODULE_HASH_NONE,
                                           testing::_, testing::_, nullptr))
-      .WillOnce(Return(VALKEYMODULE_OK));
+      .WillOnce(Return(1));
 
   // Rename source key to unindexed key (to_unshare)
   absl::flat_hash_map<InternedStringPtr, VectorRegistry::Action> actions = {
@@ -943,7 +959,7 @@ TEST_F(VectorRegistryTest, MoveKeyMixedActionsInSingleBatch) {
       .WillRepeatedly(Return(1));
   EXPECT_CALL(*kMockValkeyModule, HashSet(testing::_, VALKEYMODULE_HASH_NONE,
                                           testing::_, testing::_, nullptr))
-      .WillOnce(Return(VALKEYMODULE_OK));
+      .WillOnce(Return(1));
 
   // Batch move: vec1 is moved, vec2 is unshared
   absl::flat_hash_map<InternedStringPtr, VectorRegistry::Action> actions = {
@@ -1036,7 +1052,7 @@ TEST_F(VectorRegistryTest, MoveKeyDestinationOverwriteUnshare) {
       .WillOnce(Return(1));
   EXPECT_CALL(*kMockValkeyModule, HashSet(testing::_, VALKEYMODULE_HASH_NONE,
                                           testing::_, testing::_, nullptr))
-      .WillOnce(Return(VALKEYMODULE_OK));
+      .WillOnce(Return(1));
 
   // Unsharing overwrites and purges destination tracked record
   absl::flat_hash_map<InternedStringPtr, VectorRegistry::Action> actions = {
@@ -1141,7 +1157,7 @@ TEST_F(VectorRegistryTest, RemoveIndexKeysRateLimiting) {
       .WillRepeatedly(Return(1));
   EXPECT_CALL(*kMockValkeyModule, HashSet(testing::_, VALKEYMODULE_HASH_NONE,
                                           testing::_, testing::_, nullptr))
-      .WillRepeatedly(Return(VALKEYMODULE_OK));
+      .WillRepeatedly(Return(1));
 
   // Dropping index with 5 keys, batch size = 2
   // Immediate slice: 2 keys processed, 3 remain pending
@@ -1212,7 +1228,9 @@ TEST_F(VectorRegistryTest, ServerCronDrainsEveryDbsBackground) {
   size_t entries = 0;
   for (int db_num : {0, 1}) {
     MockIndex index(2, attr->Str(), db_num);
-    for (int i = 0; i < 64 || !TrackedNeedsMigration(registry, db_num); ++i) {
+    for (int i = 0; i < 64 || !TrackedNeedsMigration(registry, db_num) ||
+                    !TrackedKeysNeedsMigration(registry, db_num);
+         ++i) {
       ASSERT_LT(i, 100000);
       registry.DedupOrConstruct(
           StringInternStore::Intern(absl::StrCat("key", i)), valkey_vec.get(),
@@ -1223,7 +1241,9 @@ TEST_F(VectorRegistryTest, ServerCronDrainsEveryDbsBackground) {
   }
   int ticks = 0;
   while (TrackedNeedsMigration(registry, 0) ||
-         TrackedNeedsMigration(registry, 1)) {
+         TrackedNeedsMigration(registry, 1) ||
+         TrackedKeysNeedsMigration(registry, 0) ||
+         TrackedKeysNeedsMigration(registry, 1)) {
     ASSERT_LT(ticks++, 100000);
     registry.OnServerCronCallback(nullptr, ValkeyModuleEvent_CronLoop, 0,
                                   nullptr);
@@ -1302,20 +1322,26 @@ TEST_F(VectorRegistryTest, RemoveIndexKeysCancellationOnErase) {
   registry.RemoveIndexKeys(0, attr, keys);
   EXPECT_EQ(registry.GetPendingUnsharesCount(), 2);
 
-  // Overwriting with nullptr cancels pending unshare and untracks
+  // Overwriting with nullptr cancels the pending unshare. The key is still a
+  // hash, so the record is kept until the key is deleted.
   size_t before_erase = registry.GetPendingUnsharesCount();
+  InternedStringPtr cancelled;
   for (const auto &k : keys) {
     registry.DedupOrConstruct(
         k, nullptr, data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0,
         &index);
     if (registry.GetPendingUnsharesCount() < before_erase) {
+      cancelled = k;
       break;
     }
   }
+  ASSERT_TRUE(cancelled);
   EXPECT_EQ(registry.GetPendingUnsharesCount(), before_erase - 1);
 
   registry.ProcessPendingUnshares(10);
   EXPECT_EQ(registry.GetPendingUnsharesCount(), 0);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 1);
+  registry.OnKeyDeleted(0, cancelled->Str());
   EXPECT_EQ(registry.GetStats().entry_cnt, 0);
 
   VMSDK_EXPECT_OK(options::GetVectorUnshareBatchSize().SetValue(1024));
@@ -1392,8 +1418,10 @@ TEST_F(VectorRegistryTest, RemoveIndexKeysSwapDBMovesPending) {
   VMSDK_EXPECT_OK(options::GetVectorUnshareBatchSize().SetValue(1024));
 }
 
+// A field that is not visible may be logically expired and still hold the
+// reference, so the record is kept until the key is deleted.
 TEST_F(VectorRegistryTest,
-       UnshareWithValkeySkipsMissingFieldWithoutCallingHashHasStringRef) {
+       UnshareWithValkeyRetainsRecordForMissingFieldUntilKeyDeleted) {
   auto &registry = VectorRegistry::Instance();
   auto k1 = StringInternStore::Intern("k_hdel_unshare");
   auto attr = StringInternStore::Intern("vec");
@@ -1413,10 +1441,38 @@ TEST_F(VectorRegistryTest,
   std::vector<InternedStringPtr> keys = {k1};
   registry.RemoveIndexKeys(0, attr, keys);
   EXPECT_EQ(registry.GetPendingUnsharesCount(), 0);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 1);
+
+  registry.OnKeyDeleted(0, k1->Str());
   EXPECT_EQ(registry.GetStats().entry_cnt, 0);
 }
 
-TEST_F(VectorRegistryTest, MoveKeyUnshareSkipsMissingField) {
+// If the copy fails the field still references the record, so it is kept.
+TEST_F(VectorRegistryTest, FailedUnshareRetainsRecord) {
+  auto &registry = VectorRegistry::Instance();
+  auto key = StringInternStore::Intern("k_failed_unshare");
+  auto attr = StringInternStore::Intern("vec");
+  MockIndex index(2, attr->Str(), 0);
+  auto valkey_vec = MakeFloatVectorString();
+
+  registry.DedupOrConstruct(
+      key, valkey_vec.get(),
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &index);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 1);
+
+  EXPECT_CALL(*kMockValkeyModule, HashHasStringRef(testing::_, testing::_))
+      .WillOnce(Return(1));
+  EXPECT_CALL(*kMockValkeyModule,
+              HashSet(testing::_, testing::_, testing::_, testing::_, nullptr))
+      .WillOnce(Return(0));
+
+  std::vector<InternedStringPtr> keys = {key};
+  registry.RemoveIndexKeys(0, attr, keys);
+  EXPECT_EQ(registry.GetPendingUnsharesCount(), 0);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 1);
+}
+
+TEST_F(VectorRegistryTest, MoveKeyUnshareRetainsRecordForMissingField) {
   auto &registry = VectorRegistry::Instance();
   auto key_src = StringInternStore::Intern("doc_src_hdel");
   auto key_dst = vmsdk::MakeUniqueValkeyString("outside_dst_hdel");
@@ -1437,6 +1493,12 @@ TEST_F(VectorRegistryTest, MoveKeyUnshareSkipsMissingField) {
   absl::flat_hash_map<InternedStringPtr, VectorRegistry::Action> actions = {
       {attr, VectorRegistry::Action::kUnshare}};
   registry.MoveKey(0, key_src, 0, key_dst.get(), actions);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 1);
+  EXPECT_TRUE(registry.GetTrackedAttributes(0, key_src->Str()).empty());
+  EXPECT_TRUE(
+      registry.GetTrackedAttributes(0, "outside_dst_hdel").contains(attr));
+
+  registry.OnKeyDeleted(0, "outside_dst_hdel");
   EXPECT_EQ(registry.GetStats().entry_cnt, 0);
 }
 
@@ -1464,7 +1526,7 @@ TEST_F(VectorRegistryTest,
 
 TEST_F(
     VectorRegistryTest,
-    OverwriteWithInvalidSizeErasesWhenFieldMissingWithoutCallingHashHasStringRef) {
+    OverwriteWithInvalidSizeRetainsWhenFieldMissingWithoutCallingHashHasStringRef) {
   auto &registry = VectorRegistry::Instance();
   auto key = StringInternStore::Intern("k_hdel_invalid_size");
   auto attr = StringInternStore::Intern("vec");
@@ -1485,7 +1547,395 @@ TEST_F(
       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &index);
   EXPECT_NE(rec_bad, nullptr);
   EXPECT_EQ(rec_bad.size, 3 * sizeof(float));
+  // A field that is not visible may be logically expired and still shared.
+  EXPECT_EQ(registry.GetStats().entry_cnt, 1);
+}
+
+TEST_F(VectorRegistryTest, GetTrackedAttributesReturnsTrackedAttributesForKey) {
+  auto &registry = VectorRegistry::Instance();
+  auto key1 = StringInternStore::Intern("doc1");
+  auto key2 = StringInternStore::Intern("doc2");
+  auto attr1 = StringInternStore::Intern("vec1");
+  auto attr2 = StringInternStore::Intern("vec2");
+  MockIndex index1(2, attr1->Str(), 0);
+  MockIndex index2(4, attr2->Str(), 0);
+
+  EXPECT_TRUE(registry.GetTrackedAttributes(0, key1->Str()).empty());
+
+  auto valkey_vec1 = MakeFloatVectorString({1.0f, 2.0f});
+  auto valkey_vec2 = MakeFloatVectorString({1.0f, 2.0f, 3.0f, 4.0f});
+
+  registry.DedupOrConstruct(
+      key1, valkey_vec1.get(),
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &index1);
+  registry.DedupOrConstruct(
+      key1, valkey_vec2.get(),
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &index2);
+  registry.DedupOrConstruct(
+      key2, valkey_vec1.get(),
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &index1);
+
+  auto key1_attrs = registry.GetTrackedAttributes(0, key1->Str());
+  EXPECT_EQ(key1_attrs.size(), 2);
+  EXPECT_EQ(key1_attrs[attr1], 2 * sizeof(float));
+  EXPECT_EQ(key1_attrs[attr2], 4 * sizeof(float));
+
+  auto key2_attrs = registry.GetTrackedAttributes(0, key2->Str());
+  EXPECT_EQ(key2_attrs.size(), 1);
+  EXPECT_EQ(key2_attrs[attr1], 2 * sizeof(float));
+
+  // Erasing one attribute from key1 updates GetTrackedAttributes. A missing
+  // vector erases only once the key is no longer a hash.
+  ON_CALL(*kMockValkeyModule, KeyType(testing::_))
+      .WillByDefault(Return(VALKEYMODULE_KEYTYPE_STRING));
+  registry.DedupOrConstruct(
+      key1, nullptr, data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0,
+      &index1);
+  key1_attrs = registry.GetTrackedAttributes(0, key1->Str());
+  EXPECT_EQ(key1_attrs.size(), 1);
+  EXPECT_EQ(key1_attrs[attr2], 4 * sizeof(float));
+
+  // Erasing the remaining attribute leaves an empty map
+  registry.DedupOrConstruct(
+      key1, nullptr, data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0,
+      &index2);
+  EXPECT_TRUE(registry.GetTrackedAttributes(0, key1->Str()).empty());
+}
+
+TEST_F(VectorRegistryTest,
+       RenameWhilePendingUnshareUnsharesDestinationAndCancelsPending) {
+  auto &registry = VectorRegistry::Instance();
+  VMSDK_EXPECT_OK(options::GetVectorUnshareBatchSize().SetValue(1));
+
+  auto attr = StringInternStore::Intern("vec");
+  MockIndex index(2, attr->Str(), 0);
+  auto valkey_vec = MakeFloatVectorString();
+
+  std::vector<InternedStringPtr> keys;
+  for (int i = 1; i <= 3; ++i) {
+    auto key = StringInternStore::Intern(absl::StrCat("pending_k", i));
+    registry.DedupOrConstruct(
+        key, valkey_vec.get(),
+        data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &index);
+    keys.push_back(key);
+  }
+
+  EXPECT_CALL(*kMockValkeyModule,
+              OpenKey(testing::_, testing::_,
+                      VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_WRITE))
+      .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
+  EXPECT_CALL(*kMockValkeyModule, KeyType(testing::_))
+      .WillRepeatedly(Return(VALKEYMODULE_KEYTYPE_HASH));
+  EXPECT_CALL(*kMockValkeyModule, HashHasStringRef(testing::_, testing::_))
+      .WillRepeatedly(Return(1));
+  EXPECT_CALL(*kMockValkeyModule, HashSet(testing::_, VALKEYMODULE_HASH_NONE,
+                                          testing::_, testing::_, nullptr))
+      .WillRepeatedly(Return(1));
+
+  // Drop index: 1 key processed synchronously, 2 remain pending unshare
+  registry.RemoveIndexKeys(0, attr, keys);
+  EXPECT_EQ(registry.GetPendingUnsharesCount(), 2);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 2);
+
+  // Find one key that is still awaiting unshare
+  InternedStringPtr pending_key;
+  for (const auto &k : keys) {
+    if (!registry.GetTrackedAttributes(0, k->Str()).empty()) {
+      pending_key = k;
+      break;
+    }
+  }
+  ASSERT_TRUE(pending_key);
+
+  auto dst_key = vmsdk::MakeUniqueValkeyString("moved_pending_k");
+  absl::flat_hash_map<InternedStringPtr, VectorRegistry::Action> actions;
+  for (const auto &[tracked_attr, _] :
+       registry.GetTrackedAttributes(0, pending_key->Str())) {
+    actions.emplace(tracked_attr, VectorRegistry::Action::kUnshare);
+  }
+  registry.MoveKey(0, pending_key, 0, dst_key.get(), actions);
+
+  // Pending unshare for pending_key was cancelled and its vector was unshared
+  // into dst_key immediately
+  EXPECT_EQ(registry.GetPendingUnsharesCount(), 1);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 1);
+  EXPECT_TRUE(registry.GetTrackedAttributes(0, pending_key->Str()).empty());
+
+  registry.ProcessPendingUnshares(10);
+  EXPECT_EQ(registry.GetPendingUnsharesCount(), 0);
   EXPECT_EQ(registry.GetStats().entry_cnt, 0);
+
+  VMSDK_EXPECT_OK(options::GetVectorUnshareBatchSize().SetValue(1024));
+}
+
+TEST_F(VectorRegistryTest,
+       MoveKeyWithEmptyActionsErasesOverwrittenDestination) {
+  auto &registry = VectorRegistry::Instance();
+  VMSDK_EXPECT_OK(options::GetVectorUnshareBatchSize().SetValue(1));
+
+  auto attr = StringInternStore::Intern("vec");
+  MockIndex index(2, attr->Str(), 0);
+  auto valkey_vec = MakeFloatVectorString();
+
+  auto k1 = StringInternStore::Intern("dst_k1");
+  auto k2 = StringInternStore::Intern("dst_k2");
+  registry.DedupOrConstruct(
+      k1, valkey_vec.get(),
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &index);
+  registry.DedupOrConstruct(
+      k2, valkey_vec.get(),
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &index);
+
+  std::vector<InternedStringPtr> keys = {k1, k2};
+  registry.RemoveIndexKeys(0, attr, keys);
+  EXPECT_EQ(registry.GetPendingUnsharesCount(), 1);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 1);
+
+  InternedStringPtr remaining_dst =
+      !registry.GetTrackedAttributes(0, k1->Str()).empty() ? k1 : k2;
+  auto untracked_src = StringInternStore::Intern("untracked_src");
+  auto dst_valkey_str = vmsdk::MakeUniqueValkeyString(remaining_dst->Str());
+
+  // Renaming an untracked key over remaining_dst purges remaining_dst's
+  // tracked record and cancels its pending unshare.
+  registry.MoveKey(0, untracked_src, 0, dst_valkey_str.get(), {});
+  EXPECT_EQ(registry.GetPendingUnsharesCount(), 0);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 0);
+  EXPECT_TRUE(registry.GetTrackedAttributes(0, remaining_dst->Str()).empty());
+
+  VMSDK_EXPECT_OK(options::GetVectorUnshareBatchSize().SetValue(1024));
+}
+
+TEST_F(VectorRegistryTest,
+       GetTrackedAttributesAndOnKeyDeletedDoNotInternUntrackedKeys) {
+  auto &registry = VectorRegistry::Instance();
+  auto attr = StringInternStore::Intern("vec");
+  MockIndex index(2, attr->Str(), 0);
+  auto valkey_vec = MakeFloatVectorString();
+
+  auto tracked_key = StringInternStore::Intern("tracked_for_delete");
+  registry.DedupOrConstruct(
+      tracked_key, valkey_vec.get(),
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &index);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 1);
+
+  const size_t interned_before = StringInternStore::Instance().UniqueStrings();
+  EXPECT_TRUE(
+      registry.GetTrackedAttributes(0, "never_interned_probe_key").empty());
+  registry.OnKeyDeleted(0, "never_interned_delete_key");
+  EXPECT_EQ(StringInternStore::Instance().UniqueStrings(), interned_before);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 1);
+
+  registry.OnKeyDeleted(0, "tracked_for_delete");
+  EXPECT_EQ(registry.GetStats().entry_cnt, 0);
+  EXPECT_TRUE(registry.GetTrackedAttributes(0, "tracked_for_delete").empty());
+}
+
+// A batch whose every item is deferred while other unshares wait outside it
+// counts as stalled. The deferred items stay queued.
+TEST_F(VectorRegistryTest, ProcessPendingUnsharesCountsStalledBatch) {
+  auto &registry = VectorRegistry::Instance();
+  const auto saved_batch = options::GetVectorUnshareBatchSize().GetValue();
+  VMSDK_EXPECT_OK(options::GetVectorUnshareBatchSize().SetValue(1));
+  auto attr = StringInternStore::Intern("vec");
+  MockIndex index(2, attr->Str(), 0);
+  auto valkey_vec = MakeFloatVectorString();
+
+  std::vector<InternedStringPtr> keys;
+  std::vector<indexes::VectorRecordWithSize> held;
+  for (int i = 0; i < 2; ++i) {
+    auto key = StringInternStore::Intern(absl::StrCat("k_stall_", i));
+    // Distinct payloads so the two keys do not share one record.
+    auto vec = MakeFloatVectorString({1.0f, static_cast<float>(i)});
+    held.push_back(registry.DedupOrConstruct(
+        key, vec.get(), data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH,
+        0, &index));
+    keys.push_back(key);
+  }
+  const auto stalled = registry.GetStats().unshare_stalled_batches;
+
+  // Both records are busy: the batch of one defers its item while the other
+  // waits.
+  registry.RemoveIndexKeys(0, attr, keys);
+  EXPECT_EQ(registry.GetPendingUnsharesCount(), 2);
+  EXPECT_EQ(registry.GetStats().unshare_stalled_batches, stalled + 1);
+
+  // A batch that holds the whole queue and defers everything is a stall too.
+  VMSDK_EXPECT_OK(options::GetVectorUnshareBatchSize().SetValue(2));
+  EXPECT_EQ(registry.ProcessPendingUnshares(2), 2);
+  EXPECT_EQ(registry.GetPendingUnsharesCount(), 2);
+  EXPECT_EQ(registry.GetStats().unshare_stalled_batches, stalled + 2);
+
+  held.clear();
+  EXPECT_CALL(*kMockValkeyModule, HashHasStringRef(testing::_, testing::_))
+      .WillRepeatedly(Return(1));
+  EXPECT_CALL(*kMockValkeyModule, HashSet(testing::_, VALKEYMODULE_HASH_NONE,
+                                          testing::_, testing::_, nullptr))
+      .Times(2)
+      .WillRepeatedly(Return(1));
+  EXPECT_EQ(registry.ProcessPendingUnshares(2), 2);
+  EXPECT_EQ(registry.GetPendingUnsharesCount(), 0);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 0);
+  VMSDK_EXPECT_OK(options::GetVectorUnshareBatchSize().SetValue(saved_batch));
+}
+
+TEST_F(VectorRegistryTest, ProcessPendingUnsharesRetainsBusyRefCountRecord) {
+  auto &registry = VectorRegistry::Instance();
+  auto key = StringInternStore::Intern("k_busy_refcount");
+  auto attr = StringInternStore::Intern("vec");
+  MockIndex index(2, attr->Str(), 0);
+  auto valkey_vec = MakeFloatVectorString();
+
+  auto held_rec = registry.DedupOrConstruct(
+      key, valkey_vec.get(),
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &index);
+  ASSERT_NE(held_rec, nullptr);
+  EXPECT_EQ(held_rec.vector_record.RefCount(), 2);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 1);
+
+  // While RefCount() > 1, RemoveIndexKeys / ProcessPendingUnshares must defer
+  // the unshare rather than dropping it from pending_unshares_.
+  std::vector<InternedStringPtr> keys = {key};
+  registry.RemoveIndexKeys(0, attr, keys);
+  EXPECT_EQ(registry.GetPendingUnsharesCount(), 1);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 1);
+
+  // Release the extra reference and retry ProcessPendingUnshares.
+  held_rec.vector_record.reset();
+  EXPECT_CALL(*kMockValkeyModule,
+              OpenKey(testing::_, testing::_,
+                      VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_WRITE))
+      .WillOnce(TestValkeyModule_OpenKeyDefaultImpl);
+  EXPECT_CALL(*kMockValkeyModule, KeyType(testing::_))
+      .WillOnce(Return(VALKEYMODULE_KEYTYPE_HASH));
+  EXPECT_CALL(*kMockValkeyModule, HashHasStringRef(testing::_, testing::_))
+      .WillOnce(Return(1));
+  EXPECT_CALL(*kMockValkeyModule, HashSet(testing::_, VALKEYMODULE_HASH_NONE,
+                                          testing::_, testing::_, nullptr))
+      .WillOnce(Return(1));
+
+  EXPECT_EQ(registry.ProcessPendingUnshares(10), 1);
+  EXPECT_EQ(registry.GetPendingUnsharesCount(), 0);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 0);
+}
+
+TEST_F(VectorRegistryTest,
+       ProcessPendingUnsharesRetainsLogicallyExpiredKeyUntilDeleted) {
+  auto &registry = VectorRegistry::Instance();
+  auto key = StringInternStore::Intern("k_expired");
+  auto attr = StringInternStore::Intern("vec");
+  MockIndex index(2, attr->Str(), 0);
+  auto valkey_vec = MakeFloatVectorString();
+
+  registry.DedupOrConstruct(
+      key, valkey_vec.get(),
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &index);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 1);
+
+  // Simulate a logically expired key: OpenKey with NOEFFECTS returns nullptr.
+  EXPECT_CALL(*kMockValkeyModule,
+              OpenKey(testing::_, testing::_,
+                      VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_WRITE))
+      .WillOnce(Return(nullptr));
+
+  std::vector<InternedStringPtr> keys = {key};
+  registry.RemoveIndexKeys(0, attr, keys);
+  EXPECT_EQ(registry.GetPendingUnsharesCount(), 0);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 1);
+
+  // NotifySubscribers cleans up the retained record via OnKeyDeleted when the
+  // key is physically expired, even if another subscription matches.
+  MockKeyspaceEventSubscription sub;
+  MockAttributeDataType attr_type;
+  std::vector<std::string> prefixes = {"k_"};
+  EXPECT_CALL(*kMockValkeyModule,
+              SubscribeToKeyspaceEvents(testing::_, testing::_, testing::_))
+      .WillRepeatedly(Return(VALKEYMODULE_OK));
+  EXPECT_CALL(attr_type, GetValkeyEventTypes())
+      .WillRepeatedly(Return(VALKEYMODULE_NOTIFY_ALL));
+  EXPECT_CALL(sub, GetAttributeDataType())
+      .WillRepeatedly(testing::ReturnRef(attr_type));
+  EXPECT_CALL(sub, GetKeyPrefixes())
+      .WillRepeatedly(testing::ReturnRef(prefixes));
+  EXPECT_CALL(sub, OnKeyspaceNotification(testing::_, testing::_, testing::_,
+                                          testing::_))
+      .Times(1);
+  VMSDK_EXPECT_OK(
+      KeyspaceEventManager::Instance().InsertSubscription(&fake_ctx_, &sub));
+
+  auto key_str = vmsdk::MakeUniqueValkeyString("k_expired");
+  KeyspaceEventManager::Instance().NotifySubscribers(
+      &fake_ctx_, VALKEYMODULE_NOTIFY_EXPIRED, "expired", key_str.get());
+  EXPECT_EQ(registry.GetStats().entry_cnt, 0);
+
+  VMSDK_EXPECT_OK(KeyspaceEventManager::Instance().RemoveSubscription(&sub));
+}
+
+TEST_F(VectorRegistryTest,
+       DedupOrConstructNullptrRetainsLogicallyExpiredKeyUntilDeleted) {
+  auto &registry = VectorRegistry::Instance();
+  auto key = StringInternStore::Intern("k_expired_dedup_null");
+  auto attr = StringInternStore::Intern("vec");
+  MockIndex index(2, attr->Str(), 0);
+  auto valkey_vec = MakeFloatVectorString();
+
+  registry.DedupOrConstruct(
+      key, valkey_vec.get(),
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &index);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 1);
+
+  EXPECT_CALL(*kMockValkeyModule,
+              OpenKey(testing::_, testing::_,
+                      VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ))
+      .WillOnce(Return(nullptr));
+
+  registry.DedupOrConstruct(
+      key, nullptr, data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0,
+      &index);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 1);
+
+  registry.OnKeyDeleted(0, "k_expired_dedup_null");
+  EXPECT_EQ(registry.GetStats().entry_cnt, 0);
+}
+
+TEST_F(VectorRegistryTest, OnKeyDeletedCleansUpTrackedAndPendingEntries) {
+  auto &registry = VectorRegistry::Instance();
+  VMSDK_EXPECT_OK(options::GetVectorUnshareBatchSize().SetValue(1));
+
+  auto attr1 = StringInternStore::Intern("vec1");
+  auto attr2 = StringInternStore::Intern("vec2");
+  MockIndex index1(2, attr1->Str(), 0);
+  MockIndex index2(2, attr2->Str(), 0);
+  auto valkey_vec = MakeFloatVectorString();
+
+  auto k1 = StringInternStore::Intern("k_del_multi_1");
+  auto k2 = StringInternStore::Intern("k_del_multi_2");
+  for (const auto &k : {k1, k2}) {
+    registry.DedupOrConstruct(
+        k, valkey_vec.get(),
+        data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &index1);
+    registry.DedupOrConstruct(
+        k, valkey_vec.get(),
+        data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &index2);
+  }
+  ASSERT_EQ(registry.GetStats().entry_cnt, 4);
+
+  // Queue attr1 for unshare with batch_size=1 so one key remains pending for
+  // attr1 while both remain tracked for attr2.
+  std::vector<InternedStringPtr> keys = {k1, k2};
+  registry.RemoveIndexKeys(0, attr1, keys);
+  ASSERT_EQ(registry.GetPendingUnsharesCount(), 1);
+  ASSERT_EQ(registry.GetStats().entry_cnt, 3);
+
+  InternedStringPtr pending_key =
+      registry.GetTrackedAttributes(0, k1->Str()).contains(attr1) ? k1 : k2;
+  registry.OnKeyDeleted(0, pending_key->Str());
+
+  EXPECT_EQ(registry.GetPendingUnsharesCount(), 0);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 1);
+  EXPECT_TRUE(registry.GetTrackedAttributes(0, pending_key->Str()).empty());
+
+  VMSDK_EXPECT_OK(options::GetVectorUnshareBatchSize().SetValue(1024));
 }
 
 }  // namespace valkey_search

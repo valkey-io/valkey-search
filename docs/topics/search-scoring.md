@@ -33,7 +33,7 @@ The clauses of an `FT.SEARCH` query select the score measure, and that measure s
 | Query shape | Score measure | Default sort order |
 | :--- | :--- | :--- |
 | Text or tag clauses, with or without numeric clauses | `BM25STD` score | By score, highest first |
-| Only numeric or vector range clauses, or only tag clauses in an index whose schema has no `TEXT` field | 0 for every key | By key name |
+| Only numeric or vector range clauses, or only tag clauses in an index whose schema has no `TEXT` field | 0 for every key | Unspecified |
 | KNN query without a filter | Vector distance, in `__<field>_score` | By distance, nearest first |
 | KNN query with a text or tag clause in its filter | `BM25STD` score of the filter | By score, highest first |
 | KNN query with only numeric clauses in its filter | Vector distance, in `__<field>_score` | By distance, nearest first |
@@ -189,7 +189,7 @@ A vector query measures the distance between the query vector and each indexed v
 A smaller distance is a better match.
 See [Vector Distance](#vector-distance) for the distance formulas of `L2`, `IP`, and `COSINE`.
 
-A KNN query (`*=>[KNN ...]`) sorts its results by distance and returns the distance in the `__<field>_score` field.
+A KNN query (`*=>[KNN ...]`) sorts its results by distance and returns the distance in the `__<field>_score` field, unless `NOCONTENT` is given or a `RETURN` clause does not list that field.
 A KNN query can have a filter with no text or tag clause, such as `(@price:[0 100])=>[KNN ...]`.
 Then the score of each result is its distance, and the results stay sorted by distance.
 `WITHSCORES` does not return the distance. It reports 0, so read the distance from `__<field>_score`.
@@ -208,10 +208,11 @@ These options return scores to the client:
 | [`FT.SEARCH`](../commands/ft.search.md) | `WITHSCORES` | The score follows each key name in the reply. |
 | [`FT.AGGREGATE`](../commands/ft.aggregate.md) | `ADDSCORES` | Each record contains a `__score` field. Later stages can use it as `@__score`. |
 | [`FT.HYBRID`](../commands/ft.hybrid.md) | `COMBINE ... YIELD_SCORE_AS` | Without a `LOAD` clause, each record contains the fused score, under `__score` or under the alias that you name. With a `LOAD` clause, the fused score appears only if you name it with `YIELD_SCORE_AS` or load `@__score`. |
-| `FT.SEARCH` with a KNN query | `AS <name>` | Each result contains the vector distance, under `__<field>_score` or under `<name>`. A smaller distance is a better match. See [Vector Fields](#vector-fields). |
+| `FT.SEARCH` with a KNN query | `AS <name>` | Each result contains the vector distance, under `__<field>_score` or under `<name>`, unless `NOCONTENT` is given or a `RETURN` clause does not list that name. A smaller distance is a better match. See [Vector Fields](#vector-fields). |
 
-`SCORER <scorer>` selects the scoring function.
-The only supported value now is `BM25STD`, which is also the default. Any other value returns an error.
+`SCORER <scorer>` selects the scoring function for `FT.SEARCH`, `FT.AGGREGATE`, and the `SEARCH` arm of `FT.HYBRID`.
+When `SCORER` is omitted, the [`search.default-scorer`](search-configurables.md) configuration is used (default `BM25STD`).
+The only supported value now is `BM25STD`. Any other value returns an error.
 
 ## How Scores Order Results
 
@@ -220,9 +221,6 @@ In a KNN query with a text or tag clause in its filter, such as `(shoes)=>[KNN 1
 
 The sort occurs before `LIMIT`.
 Thus, when results are sorted by score, `LIMIT 0 10` returns the 10 keys with the highest scores.
-Keys with equal scores are sorted by key name, in byte order. For example, `doc:10` sorts before `doc:2`.
-Redis Search sorts keys with equal scores in the order in which they were added, so the two can return ties in a different order.
-To order ties by another field, or to get the same order in `FT.AGGREGATE`, see [Make the Order of Equal Scores Repeatable](search-scoring-examples.md#make-the-order-of-equal-scores-repeatable).
 
 `FT.AGGREGATE` does not sort by score automatically.
 To sort its records by score, use `ADDSCORES` and `SORTBY 2 @__score DESC`.

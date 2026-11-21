@@ -37,25 +37,30 @@ An array of key value pairs.
 
   The two fields above require `search.emulate-release` to be `1.3.0` or later. Below that — including at the default setting — `index_definition` omits `score_field` and reports `default_score` as the bulk string `"1"`. See [COMPATIBILITY.md](../../COMPATIBILITY.md).
 
+  The other fields that 1.3.0 adds to this reply, `filter_rejected_keys` and the per-attribute `SORTABLE` and `UNF` pairs, are reported regardless of `search.emulate-release`.
+
 - `attributes` (array of arrays) One entry per declared attribute of the index.
   - `identifier` (string) identifier for this attribute
   - `attribute` (string) The name used to refer to this index in query and aggregation expressions.
   - `user_indexed_memory` (integer) Number of bytes of user data ingested into this field.
   - `type` (string) One of `NUMERIC`, `TAG`, `TEXT` or `VECTOR`
   - Type-specific extension (see below)
-  - `SORTABLE` (string) `1` if the attribute was declared `SORTABLE`, `0` otherwise. Not reported for `VECTOR` attributes, which cannot be declared `SORTABLE`. RediSearch reports this as a bare token present only when declared.
-  - `UNF` (string) `1` if the attribute was declared `SORTABLE UNF`, `0` otherwise. Reported only for `TAG` and `TEXT` attributes, the only types whose sort value is normalized. RediSearch reports this as a bare token present only when declared.
+  - `SORTABLE` (string) `1` if the attribute was declared `SORTABLE`, `0` otherwise. Not reported for `VECTOR` attributes; `SORTABLE` on a vector is accepted but has no effect and is not reported.
+  - `UNF` (string) `1` if the attribute was declared `SORTABLE UNF`, `0` otherwise. Reported only for `TAG` and `TEXT` attributes, the only types whose sort value is normalized.
+
+  Unlike RediSearch, which emits `SORTABLE` and `UNF` as bare tokens only when set, Valkey Search always emits them as key/value pairs.
+
 - `num_docs` (integer) Total keys in the index
 - `num_records` (integer) Total number of fields indexed.
 - `total_term_occurrences` (integer) Total number of terms in all text fields in this index.
 - `num_terms` (integer) Total number of unique terms in all text fields in this index.
-- `hash_indexing_failures` (string) INTEGER. Count of unsuccessful indexing attempts
-- `filter_rejected_keys` (string) INTEGER. Number of filter-rejection events: each time a key is evaluated against the index `FILTER` expression and does not satisfy it, the count increases by one. A key can be rejected more than once (for example, when it is rewritten, or when it is written while the initial backfill is in progress), so this is not a count of distinct keys. For a `HASH` index a `FILTER` may reference a field that is not declared in the schema, in which case the field is read directly off the key; a misspelled field name therefore does not fail the command but instead behaves as a missing field. A `filter_rejected_keys` value that unexpectedly matches, nearly matches, or exceeds the number of ingested keys is the primary signal that a field name in the `FILTER` expression is misspelled.
+- `hash_indexing_failures` (string) INTEGER. Number of field values that produced nothing to index when a key was first added: malformed values (for example a non-numeric `NUMERIC` value, a wrong-size `VECTOR`, or invalid UTF-8) and values that yield no tags.
+- `filter_rejected_keys` (string) INTEGER. Number of filter-rejection events: each time a key is evaluated against the index `FILTER` expression and does not satisfy it, the count increases by one. A key can be rejected more than once (for example, when it is rewritten, or when it is written while the initial backfill is in progress), so this is not a count of distinct keys. For a `HASH` index a `FILTER` may reference a field that is not declared in the schema, so a misspelled field name behaves as a missing field rather than failing the command. A large value can mean that a field name in the `FILTER` is misspelled.
 - `backfill_in_progress` (string). "1" if a backfill is currently running. "0" if not.
 - `backfill_complete_percent` (string) Estimated progress of background indexing. Percentage is expressed as a fractional value from 0 to 1.0.
 - `mutation_queue_size` (string) Number of keys contained in the mutation queue.
 - `recent_mutations_queue_delay` (string) `0 sec` if the mutation queue is empty. Otherwise it is the elapsed time, from scheduling through completion of processing, recorded by the last sampled mutation to update this statistic, in whole seconds rounded down, in the form `<seconds> sec`. One in every 1000 scheduled mutations is sampled; mutations processed inline are not sampled.
-- `state` (string) Current backfill state. `ready` indicates not backfill is in progress. `backfill_in_progress` backfill operation proceeding normally. `backfill_paused_by_oom` backfill is paused because the Valkey instance is out of memory.
+- `state` (string) Current backfill state. `ready` indicates that no backfill is in progress. `backfill_in_progress` backfill operation proceeding normally. `backfill_paused_by_oom` backfill is paused because the Valkey instance is out of memory.
 
 The following four fields are only present when the index has at least one `TEXT` attribute.
 
@@ -102,8 +107,8 @@ The following field is always present:
 #### HNSW VECTOR Field Type Extension.
 
 - `name` (string) `HNSW`.
-- `m` (integer) The count of maximum permitted outgoing edges for each node in the graph in each layer. The maximum number of outgoing edges is 2\*M for layer 0\. The Default is 16\. The maximum is 512\.
-- `ef_construction` (integer) The count of vectors in the index. The default is 200, and the max is 4096\. Higher values increase the time needed to create indexes, but improve the recall ratio.
+- `m` (integer) The count of maximum permitted outgoing edges for each node in the graph in each layer. The maximum number of outgoing edges is 2\*M for layer 0\. The default is 16. The maximum is set by `search.max-vector-m`.
+- `ef_construction` (integer) Number of candidate vectors examined while building the index. The default is 200, and the maximum is set by `search.max-vector-ef-construction`. Higher values increase the time needed to create indexes, but improve the recall ratio.
 - `ef_runtime` (integer) The configured field-level `EF_RUNTIME` value.
 
 ### Response when the PRIMARY option is specified.
@@ -118,7 +123,7 @@ Inside `MULTI`/`EXEC` or a Lua script, no other nodes are queried and the LOCAL 
 - `index_name` (string) The index name
 - `num_docs` (string) INTEGER. Total keys in the index
 - `num_records` (string) INTEGER. Total records in the index
-- `hash_indexing_failures` (string) INTEGER. Count of unsuccessful indexing attempts
+- `hash_indexing_failures` (string) INTEGER. Number of field values that produced nothing to index when a key was first added: malformed values (for example a non-numeric `NUMERIC` value, a wrong-size `VECTOR`, or invalid UTF-8) and values that yield no tags.
 - `attributes` (array of arrays) One entry per declared attribute of the index.
   - `identifier` (string) identifier for this attribute
   - `attribute` (string) The name used to refer to this index in query and aggregation expressions.

@@ -106,9 +106,6 @@ class DropConsistencyCheckFanoutOperation
 
 absl::Status FTDropIndexCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                             int argc) {
-  if (argc != 2) {
-    return absl::InvalidArgumentError(vmsdk::WrongArity(kDropIndexCommand));
-  }
   auto index_schema_name = vmsdk::ToStringView(argv[1]);
 
   VMSDK_ASSIGN_OR_RETURN(

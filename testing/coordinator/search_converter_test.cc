@@ -449,6 +449,7 @@ TEST_F(SearchConverterTest, VectorRangeWireEfRuntimeIsClampedNotRejected) {
     params.has_vector_range = true;
     query::QueryContext query_ctx(*index_schema_,
                                   indexes::scoring::GetScorer(params.scorer));
+    vmsdk::ReaderMutexLock lock(&params.index_schema->GetTimeSlicedMutex());
     auto neighbors = query::SearchVectorRangeQuery(params, query_ctx);
     ASSERT_TRUE(neighbors.ok()) << neighbors.status();
     EXPECT_EQ(neighbors->size(), 3u);
@@ -504,6 +505,7 @@ TEST_F(SearchConverterTest, VectorRangeOutOfRangeEpsilonSearchesExactly) {
             params.filter_parse_results.root_predicate.get()) > 0;
     query::QueryContext query_ctx(*index_schema_,
                                   indexes::scoring::GetScorer(params.scorer));
+    vmsdk::ReaderMutexLock lock(&params.index_schema->GetTimeSlicedMutex());
     auto neighbors = query::SearchVectorRangeQuery(params, query_ctx);
     ASSERT_TRUE(neighbors.ok()) << neighbors.status();
     std::vector<std::string> keys;

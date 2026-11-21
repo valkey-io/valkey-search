@@ -819,7 +819,10 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
   if (ABSL_PREDICT_FALSE(invalid_data)) {
     VALKEY_SEARCH_COMPATIBILITY_FIX(
         1, 3, 0, "invalid_data_drops_key",
-        [&] { RemoveKeyFromAllIndexes(ctx, key); }, [] {});
+        [&]() ABSL_NO_THREAD_SAFETY_ANALYSIS {
+          RemoveKeyFromAllIndexes(ctx, key);
+        },
+        [] {});
   }
 }
 
@@ -2180,9 +2183,10 @@ bool IndexSchema::WaitForContendedKeys(
   absl::MutexLock lock(&mutated_records_mutex_);
   // A record is erased only after its mutation is applied.
   auto applied = [&]() ABSL_NO_THREAD_SAFETY_ANALYSIS {
-    return std::ranges::none_of(contended, [&](const Key &key) {
-      return tracked_mutated_records_.contains(key);
-    });
+    return std::ranges::none_of(
+        contended, [&](const Key &key) ABSL_NO_THREAD_SAFETY_ANALYSIS {
+          return tracked_mutated_records_.contains(key);
+        });
   };
   if (applied()) {
     return true;

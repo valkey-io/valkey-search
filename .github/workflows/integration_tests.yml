@@ -24,6 +24,9 @@ concurrency:
 jobs:
   integration-tests:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
 
     steps:
     # Checkout the code from the repository
@@ -68,6 +71,13 @@ jobs:
       with:
         path: .ccache
         key: ccache-integration-plain-${{ github.sha }}
+
+    - name: Prune superseded ccache
+      if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+      continue-on-error: true
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: ci/prune_ccache.sh ccache-integration-plain-
 
     - name: Update Test Results Permissions
       if: always()

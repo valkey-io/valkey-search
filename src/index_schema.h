@@ -204,8 +204,9 @@ class IndexSchema : public KeyspaceEventSubscription,
   inline bool HasScoreField() const { return score_field_.has_value(); }
   float GetDocumentScore(BorrowedInternedStringPtr key) const
       ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
-    auto itr = index_key_info_.find(key);
-    if (itr == index_key_info_.end()) {
+    const auto &index_key_info = GetIndexKeyInfo();
+    auto itr = index_key_info.find(key);
+    if (itr == index_key_info.end()) {
       return score_;
     }
     return itr->second.document_score;
@@ -232,7 +233,9 @@ class IndexSchema : public KeyspaceEventSubscription,
     // scoring hot path already holds time_sliced_mutex_ in read phase when this
     // runs, so reading index_key_info_ needs no extra lock.
     text_index_schema_->SetTotalDocsProvider(
-        [this]() -> uint32_t { return index_key_info_.size(); });
+        [this]() ABSL_NO_THREAD_SAFETY_ANALYSIS -> uint32_t {
+          return index_key_info_.size();
+        });
   }
   std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const {
     return text_index_schema_;
@@ -349,9 +352,10 @@ class IndexSchema : public KeyspaceEventSubscription,
   void PopulateIndexMutationSequenceNumbers(
       std::vector<indexes::Neighbor> &neighbors) const
       ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
+    const auto &index_key_info = GetIndexKeyInfo();
     for (auto &n : neighbors) {
-      auto itr = index_key_info_.find(n.external_id);
-      CHECK(itr != index_key_info_.end())
+      auto itr = index_key_info.find(n.external_id);
+      CHECK(itr != index_key_info.end())
           << "Key not found: "
           << vmsdk::config::RedactIfNeeded(n.external_id->Str());
       n.sequence_number = itr->second.mutation_sequence_number_;
@@ -382,15 +386,20 @@ class IndexSchema : public KeyspaceEventSubscription,
 
   // Accessor for global key map (for negation queries)
   // REQUIRES: time_sliced_mutex_ held in read phase
-  const IndexKeyInfoMap &GetIndexKeyInfo() const
-      ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
+  // index_key_info_ is written only in the write phase while holding
+  // mutated_records_mutex_, so holding either lock is enough to read it.
+  // Clang's analysis cannot express "either lock", so this is the one
+  // read-phase path exempt from it; callers are still checked for
+  // time_sliced_mutex_.
+  const IndexKeyInfoMap &GetIndexKeyInfo() const ABSL_SHARED_LOCKS_REQUIRED(
+      time_sliced_mutex_) ABSL_NO_THREAD_SAFETY_ANALYSIS {
     return index_key_info_;
   }
 
   // REQUIRES: time_sliced_mutex_ held in read phase
   size_t GetIndexKeyInfoSize() const
       ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
-    return index_key_info_.size();
+    return GetIndexKeyInfo().size();
   }
 
   // Main-thread read, which must not wait on the time-sliced mutex: every

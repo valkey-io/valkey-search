@@ -1689,7 +1689,8 @@ std::optional<float> RecomputeDocumentScore(const Predicate *root_predicate,
 }
 
 absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
-    const SearchParameters &parameters) {
+    const SearchParameters &parameters)
+    ABSL_SHARED_LOCKS_REQUIRED(parameters.index_schema->GetTimeSlicedMutex()) {
   const IndexSchema &index_schema = *parameters.index_schema;
   const auto text_index_schema = index_schema.GetTextIndexSchema();
 
@@ -1827,7 +1828,8 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
     if (score_in_drain) {
       for (auto &neighbor : borrowed) {
         neighbor.score = scorer->ComposeDocumentScore(
-            neighbor.score, index_schema.GetDocumentScore(neighbor.key));
+            neighbor.score,
+            parameters.index_schema->GetDocumentScore(neighbor.key));
       }
     }
   } else {
@@ -2098,8 +2100,7 @@ absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
         SearchResult(0, std::vector<indexes::Neighbor>{}, parameters);
     return absl::OkStatus();
   }
-  auto &time_sliced_mutex = parameters.index_schema->GetTimeSlicedMutex();
-  vmsdk::ReaderMutexLock lock(&time_sliced_mutex);
+  vmsdk::ReaderMutexLock lock(&parameters.index_schema->GetTimeSlicedMutex());
   ++Metrics::GetStats().time_slice_queries;
   // Handle OOM for search requests, defends against request
   // coming from the coordinator

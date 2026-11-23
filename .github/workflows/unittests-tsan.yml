@@ -52,6 +52,12 @@ jobs:
         sudo sysctl vm.mmap_rnd_bits
         sudo sysctl -w vm.mmap_rnd_bits=28
 
+    - name: Restore ICU
+      id: icu
+      uses: ./.github/actions/icu-cache
+      with:
+        build-dir: .build-release-tsan
+
     - name: Run Tests TSAN
       id: test-run
       continue-on-error: true
@@ -65,6 +71,13 @@ jobs:
           --user "ubuntu:ubuntu" \
           presubmit-image \
           sudo -E ci/build_ubuntu.sh --run-tests --tsan --unittest-output=/workspace/test-results
+
+    - name: Save ICU
+      if: always() && github.event_name == 'push' && steps.icu.outputs.cache-hit != 'true'
+      uses: ./.github/actions/icu-cache
+      with:
+        build-dir: .build-release-tsan
+        save: true
 
     - name: Save ccache
       if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'

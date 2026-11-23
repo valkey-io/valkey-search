@@ -130,6 +130,12 @@ jobs:
             ccache-codecov-integration-${{ github.ref }}-
             ccache-codecov-integration-
 
+      - name: Restore ICU
+        id: icu
+        uses: ./.github/actions/icu-cache
+        with:
+          build-dir: .build-debug
+
       - name: Build and Run Integration Tests with Coverage
         run: |
           mkdir -p test-results .ccache
@@ -163,6 +169,13 @@ jobs:
       - name: Update Test Results Permissions
         if: always()
         run: sudo chmod -R 755 test-results
+
+      - name: Save ICU
+        if: always() && github.event_name == 'push' && steps.icu.outputs.cache-hit != 'true'
+        uses: ./.github/actions/icu-cache
+        with:
+          build-dir: .build-debug
+          save: true
 
       - name: Upload Integration Test Coverage to Codecov
         uses: codecov/codecov-action@671740ac38dd9b0130fbe1cec585b89eea48d3de # v5.5.2

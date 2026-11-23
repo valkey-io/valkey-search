@@ -511,8 +511,9 @@ int64_t GetVectorRangeResultsFetchedLimitedCount();
 int64_t GetVectorRangeFallbackCount(indexes::RangeFallback fallback);
 
 // Scans for the vector filter delimiter `=>` that is followed by `[` (after
-// optional whitespace). Returns the position of `=>` or npos if not found.
-// Exposed for testing.
+// optional whitespace), skipping escaped characters, phrases and braces. An
+// opener that is never closed is treated as a literal. Returns the position of
+// `=>` or npos if not found. Exposed for testing.
 size_t FindVectorDelimiter(absl::string_view expr);
 
 // Scores admitted candidates in place by walking the predicate tree per

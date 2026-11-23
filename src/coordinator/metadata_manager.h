@@ -61,6 +61,7 @@ using AuxSaveCallback = void (*)(ValkeyModuleIO *rdb, int when);
 using AuxLoadCallback = int (*)(ValkeyModuleIO *rdb, int encver, int when);
 static constexpr int kEncodingVersion = 0;
 static constexpr uint8_t kMetadataBroadcastClusterMessageReceiverId = 0x00;
+static constexpr char kFTInternalUpdateTypeKeyword[] = "TYPE";
 
 // Randomly generated 32 bit key for fingerprinting the metadata.
 static constexpr highwayhash::HHKey kHashKey{

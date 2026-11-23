@@ -39,7 +39,9 @@ class FTInfoParser:
             value = self._decode_value(response[i + 1])
 
             # Special handling for nested structures
-            if key == "index_definition" and isinstance(value, list):
+            if key == "aliases" and isinstance(response[i + 1], list):
+                result[key] = [a.decode("utf-8") for a in response[i + 1]]
+            elif key == "index_definition" and isinstance(value, list):
                 result[key] = self._parse_key_value_list(value)
             elif key == "attributes" and isinstance(value, list):
                 result[key] = self._parse_attributes(value)

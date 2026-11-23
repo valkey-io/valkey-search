@@ -1001,7 +1001,8 @@ absl::Status MetadataManager::CallFTInternalUpdateForReconciliation(
     reply = ValkeyModule_Call(
         safe_context, "FT.INTERNAL_UPDATE", "!Kcbbccc", id.c_str(),
         metadata_binary.data(), metadata_binary.size(), header_binary.data(),
-        header_binary.size(), "TYPE", "1", type_name_str.c_str());
+        header_binary.size(), kFTInternalUpdateTypeKeyword, "1",
+        type_name_str.c_str());
   }
 
   if (reply == nullptr ||
@@ -1034,11 +1035,11 @@ void MetadataManager::ReplicateFTInternalUpdate(
                            header_binary.data(), header_binary.size());
   } else {
     std::string type_name_str(type_name);
-    ValkeyModule_Replicate(detached_ctx_.get(), "FT.INTERNAL_UPDATE", "cbbccc",
-                           std::string(encoded_id).c_str(),
-                           metadata_binary.data(), metadata_binary.size(),
-                           header_binary.data(), header_binary.size(), "TYPE",
-                           "1", type_name_str.c_str());
+    ValkeyModule_Replicate(
+        detached_ctx_.get(), "FT.INTERNAL_UPDATE", "cbbccc",
+        std::string(encoded_id).c_str(), metadata_binary.data(),
+        metadata_binary.size(), header_binary.data(), header_binary.size(),
+        kFTInternalUpdateTypeKeyword, "1", type_name_str.c_str());
   }
 }
 

@@ -96,7 +96,7 @@ absl::Status FTInternalUpdateCmd(ValkeyModuleCtx *ctx,
               "FT.INTERNAL_UPDATE: not enough args for keyword '" +
               std::string(key) + "'"));
     }
-    if (key == "TYPE" && arg_count >= 1) {
+    if (key == coordinator::kFTInternalUpdateTypeKeyword && arg_count >= 1) {
       type_name = vmsdk::ToStringView(argv[i]);
     }
     i += arg_count;

@@ -21,12 +21,12 @@ class TestAliasCompatibility(BaseCompatibilityTest):
         self.key_type = key_type
 
     def test_aliasadd_search(self, key_type):
-        """FT.SEARCH via alias returns same results as via index name."""
+        """FT.SEARCH through an alias."""
         self.execute_command(["FT.INFO", "alias_search"])
         self.execute_command(["FT.SEARCH", "alias_search", "@price:[0 +inf]"])
 
     def test_aliasadd_aggregate(self, key_type):
-        """FT.AGGREGATE via alias returns same results as via index name."""
+        """FT.AGGREGATE through an alias."""
         self.execute_command(["FT.INFO", "alias_agg"])
         self.execute_command(["FT.AGGREGATE", "alias_agg", "@category:{electronics}",
             "LOAD", "1", "@category",

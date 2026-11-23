@@ -2299,6 +2299,20 @@ def compute_scoring_data_sets(dataset_name, schema_type="nostem"):
     return data
 
 
+def _verify_live_aliases(client, setup_cmds):
+    """FT.INFO each alias the setup commands leave live, so it must resolve."""
+    live_aliases: set[str] = set()
+    for cmd in setup_cmds:
+        verb = cmd[0].upper()
+        alias = cmd[1]
+        if verb in ("FT.ALIASADD", "FT.ALIASUPDATE"):
+            live_aliases.add(alias)
+        elif verb == "FT.ALIASDEL":
+            live_aliases.discard(alias)
+    for alias in live_aliases:
+        client.execute_command("FT.INFO", alias)
+
+
 def load_data(client, data_set, key_type, data_source=None, schema_type="default", language=None, vector_data_type="FLOAT32"):
     # Auto-detect data source based on data_set name
     if data_source is None:
@@ -2366,19 +2380,7 @@ def load_data(client, data_set, key_type, data_source=None, schema_type="default
     # Run any post-load setup commands
     for setup_cmd in data[data_set].get(SETUP_KEY(key_type), []):
         client.execute_command(*setup_cmd)
-    # Verify that each alias expected to be live after setup actually resolves.
-    if data[data_set].get(SETUP_KEY(key_type)):
-        setup_cmds = data[data_set][SETUP_KEY(key_type)]
-        live_aliases: set[str] = set()
-        for cmd in setup_cmds:
-            verb = cmd[0].upper()
-            alias = cmd[1]
-            if verb in ("FT.ALIASADD", "FT.ALIASUPDATE"):
-                live_aliases.add(alias)
-            elif verb == "FT.ALIASDEL":
-                live_aliases.discard(alias)
-        for alias in live_aliases:
-            client.execute_command("FT.INFO", alias)
+    _verify_live_aliases(client, data[data_set].get(SETUP_KEY(key_type), []))
 
     print(f"setup_data completed {data_set} {key_type}")
 
@@ -2463,20 +2465,8 @@ def load_data_cluster(cluster_client, test_case, data_set, key_type, data_source
     for setup_cmd in data[data_set].get(SETUP_KEY(key_type), []):
         primary0.execute_command(*setup_cmd)
 
-    # Verify that each alias expected to be live after setup actually resolves,
-    # catching cluster-wide propagation failures early.
-    if data[data_set].get(SETUP_KEY(key_type)):
-        setup_cmds = data[data_set][SETUP_KEY(key_type)]
-        live_aliases: set[str] = set()
-        for cmd in setup_cmds:
-            verb = cmd[0].upper()
-            alias = cmd[1]
-            if verb in ("FT.ALIASADD", "FT.ALIASUPDATE"):
-                live_aliases.add(alias)
-            elif verb == "FT.ALIASDEL":
-                live_aliases.discard(alias)
-        for alias in live_aliases:
-            primary0.execute_command("FT.INFO", alias)
+    # Catches cluster-wide alias propagation failures early.
+    _verify_live_aliases(primary0, data[data_set].get(SETUP_KEY(key_type), []))
 
     print(f"cluster load completed {data_set} {key_type}")
 

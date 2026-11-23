@@ -258,8 +258,9 @@ class TestFTInfoAliases(ValkeySearchTestCaseBase):
         assert client.execute_command(*CREATE_TAG_INDEX) == b"OK"
         assert client.execute_command("FT.ALIASADD", "z_alias", INDEX_NAME) == b"OK"
         assert client.execute_command("FT.ALIASADD", "a_alias", INDEX_NAME) == b"OK"
+        assert client.execute_command("FT.ALIASADD", "2024", INDEX_NAME) == b"OK"
         aliases = _get_aliases_from_info(client, INDEX_NAME)
-        assert aliases == ["a_alias", "z_alias"]
+        assert aliases == ["2024", "a_alias", "z_alias"]
 
     def test_info_alias_updated_after_aliasupdate(self):
         """After ALIASUPDATE moves an alias, FT.INFO reflects the change."""

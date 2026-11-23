@@ -51,6 +51,20 @@ class TestFTSearchInkeys(ValkeySearchTestCaseBase):
         client.execute_command(
             "HSET", "d:3", "t", "shoes shoes shoes",
         )
+
+    def _setup_text_relevance_many_docs(self, client: Valkey, n: int = 20):
+        """N docs with increasing 'shoes' density — monotonic BM25 order."""
+        client.execute_command(
+            "FT.CREATE", "idx_many",
+            "ON", "HASH",
+            "PREFIX", "1", "dm:",
+            "SCHEMA", "t", "TEXT",
+        )
+        for i in range(n):
+            client.execute_command(
+                "HSET", f"dm:{i}", "t", " ".join(["shoes"] * (i + 1)),
+            )
+
     @staticmethod
     def _withscores_nocontent_keys(result) -> list[str]:
         """WITHSCORES + NOCONTENT reply: count, then key/score pairs."""
@@ -129,6 +143,7 @@ class TestFTSearchInkeys(ValkeySearchTestCaseBase):
                 "FT.SEARCH", "idx", "@score:[-inf +inf]",
                 "INKEYS", "5", "doc:0", "doc:1", "doc:2",
             )
+
     def test_inkeys_text_relevance_order_without_sortby(self):
         """INKEYS without SORTBY ranks by relevance like the base query (#1740).
         Order must not follow INKEYS list order or index scan order."""
@@ -162,6 +177,41 @@ class TestFTSearchInkeys(ValkeySearchTestCaseBase):
         )
         assert permuted[0] == 3
         assert self._withscores_nocontent_keys(permuted) == expected_keys
+
+    def test_inkeys_text_relevance_order_later_page_with_limit(self):
+        """INKEYS must fully sort before LIMIT; page 2 must match baseline (#1740).
+
+        More matches than the buffered sort window (default LIMIT 10 × 1.5)
+        catches regressions that partial-sort only the first page."""
+        client: Valkey = self.server.get_new_client()
+        n = 20
+        self._setup_text_relevance_many_docs(client, n)
+        all_keys = [f"dm:{i}" for i in range(n)]
+
+        def run(offset, count, inkeys=None):
+            cmd = [
+                "FT.SEARCH", "idx_many", "shoes",
+                "WITHSCORES", "NOCONTENT",
+                "LIMIT", str(offset), str(count),
+                "DIALECT", "2",
+            ]
+            if inkeys is not None:
+                cmd.extend(["INKEYS", str(len(inkeys)), *inkeys])
+            return client.execute_command(*cmd)
+
+        baseline = run(10, 10)
+        with_inkeys = run(10, 10, all_keys)
+        permuted = run(10, 10, list(reversed(all_keys)))
+
+        assert baseline[0] == n
+        assert with_inkeys[0] == n
+        baseline_keys = self._withscores_nocontent_keys(baseline)
+        assert self._withscores_nocontent_keys(with_inkeys) == baseline_keys
+        assert self._withscores_nocontent_keys(permuted) == baseline_keys
+
+        # Highest BM25: dm:(n-1) .. dm:0; page 2 is relevance ranks 10..19.
+        expected_page2 = [f"dm:{i}" for i in range(9, -1, -1)]
+        assert baseline_keys == expected_page2
 
     def _setup_hnsw_index(self, client: Valkey, num_docs: int = KNN_NUM_DOCS):
         """HNSW vector index plus a numeric @score field. The numeric field

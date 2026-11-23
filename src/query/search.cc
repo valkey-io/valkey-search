@@ -1976,24 +1976,30 @@ void SearchResult::TrimResults(std::vector<T> &vec,
   SerializationRange range = GetSerializationRange(parameters, vec.size());
   size_t max_needed = static_cast<size_t>(
       range.end_index * options::GetSearchResultBufferMultiplier());
+  // SORTBY reordering runs later in SendReply; relevance sort here would be
+  // redundant and costly on large result sets.
+  const bool sort_by_relevance_in_trim = !parameters.sortby_parameter.has_value();
   // Sort by score descending. For non-vector results (BorrowedNeighbor), use
   // partial_sort to only order the elements we'll actually keep.
   if constexpr (std::is_same_v<T, indexes::BorrowedNeighbor>) {
-    auto cmp = [](const indexes::BorrowedNeighbor &a,
-                  const indexes::BorrowedNeighbor &b) {
-      if (a.score != b.score) {
-        return a.score > b.score;
+    if (sort_by_relevance_in_trim) {
+      auto cmp = [](const indexes::BorrowedNeighbor &a,
+                    const indexes::BorrowedNeighbor &b) {
+        if (a.score != b.score) {
+          return a.score > b.score;
+        }
+        // Tie-break on key ascending for a deterministic result order.
+        return a.key->Str() < b.key->Str();
+      };
+      size_t sort_limit = parameters.RequiresCompleteResults()
+                              ? vec.size()
+                              : std::min(max_needed, vec.size());
+      if (sort_limit < vec.size()) {
+        std::partial_sort(vec.begin(), vec.begin() + sort_limit, vec.end(),
+                          cmp);
+      } else {
+        std::sort(vec.begin(), vec.end(), cmp);
       }
-      // Tie-break on key ascending for a deterministic result order.
-      return a.key->Str() < b.key->Str();
-    };
-    size_t sort_limit = parameters.RequiresCompleteResults()
-                        ? vec.size()
-                        : std::min(max_needed, vec.size());
-    if (sort_limit < vec.size()) {
-      std::partial_sort(vec.begin(), vec.begin() + sort_limit, vec.end(), cmp);
-    } else {
-      std::sort(vec.begin(), vec.end(), cmp);
     }
   } else if (parameters.ScoreIsRelevance()) {
     // Three cases sort by score descending here:
@@ -2012,15 +2018,17 @@ void SearchResult::TrimResults(std::vector<T> &vec,
     // Content resolution later drops some neighbors, but drops preserve
     // relative order, so this ordering survives. Pure vector queries (no text
     // or tag predicate) fall through and keep their distance-ascending order.
-    std::stable_sort(
-        vec.begin(), vec.end(),
-        [](const indexes::Neighbor &a, const indexes::Neighbor &b) {
-          if (a.score != b.score) {
-            return a.score > b.score;
-          }
-          // Tie-break on key ascending for a deterministic order.
-          return a.external_id->Str() < b.external_id->Str();
-        });
+    if (sort_by_relevance_in_trim) {
+      std::stable_sort(
+          vec.begin(), vec.end(),
+          [](const indexes::Neighbor &a, const indexes::Neighbor &b) {
+            if (a.score != b.score) {
+              return a.score > b.score;
+            }
+            // Tie-break on key ascending for a deterministic order.
+            return a.external_id->Str() < b.external_id->Str();
+          });
+    }
   }
   if (parameters.RequiresCompleteResults()) {
     return;

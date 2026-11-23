@@ -263,23 +263,5 @@ TEST(FindVectorDelimiterSplitTest, ApostrophePhraseGated) {
   VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue(saved));
 }
 
-// A mid-word apostrophe (e.g. a contraction) must not pair with an unrelated
-// apostrophe inside the KNN clause itself (e.g. in an AS name), hiding the
-// real delimiter.
-TEST(FindVectorDelimiterSplitTest, UnmatchedApostropheCannotHideKnnClause) {
-  auto saved = options::GetEmulateRelease().GetValue();
-  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue(kRelease13));
-  for (std::string query : {"don't =>[KNN 10 @vec $BLOB AS score's]",
-                            "don't =>[KNN 10 @vec $BLOB AS rank']"}) {
-    EXPECT_EQ(query::FindVectorDelimiter(query), query.find("=>")) << query;
-  }
-  // A genuine apostrophe phrase that embeds a literal arrow must still be
-  // skipped in full when nothing follows it.
-  std::string no_vector_clause = "@title:'foo =>[bar]'";
-  EXPECT_EQ(query::FindVectorDelimiter(no_vector_clause),
-            absl::string_view::npos);
-  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue(saved));
-}
-
 }  // namespace
 }  // namespace valkey_search

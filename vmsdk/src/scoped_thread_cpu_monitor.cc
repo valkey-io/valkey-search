@@ -7,8 +7,6 @@
 
 #include "vmsdk/src/scoped_thread_cpu_monitor.h"
 
-#include <pthread.h>
-
 namespace vmsdk {
 
 ScopedThreadCPUMonitor::ScopedThreadCPUMonitor(
@@ -17,19 +15,18 @@ ScopedThreadCPUMonitor::ScopedThreadCPUMonitor(
   if (accumulator_ == nullptr) {
     return;
   }
-  thread_monitor_.emplace(pthread_self());
-  auto start_cpu_time = thread_monitor_->GetCPUTime();
+  thread_monitor_.Init();
+  auto start_cpu_time = thread_monitor_.GetCPUTime();
   if (start_cpu_time.ok()) {
     start_cpu_time_usec_ = start_cpu_time.value();
   }
 }
 
 ScopedThreadCPUMonitor::~ScopedThreadCPUMonitor() {
-  if (accumulator_ == nullptr || !thread_monitor_.has_value() ||
-      !start_cpu_time_usec_.has_value()) {
+  if (accumulator_ == nullptr || !start_cpu_time_usec_.has_value()) {
     return;
   }
-  auto end_cpu_time = thread_monitor_->GetCPUTime();
+  auto end_cpu_time = thread_monitor_.GetCPUTime();
   if (end_cpu_time.ok() && end_cpu_time.value() >= *start_cpu_time_usec_) {
     accumulator_->Add(end_cpu_time.value() - *start_cpu_time_usec_);
   }

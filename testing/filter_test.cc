@@ -183,7 +183,8 @@ TEST_P(FilterTest, ParseParams) {
         *index_schema,
         indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std));
     indexes::PrefilterEvaluator evaluator(query_ctx, query_operations,
-                                          *index_schema);
+                                          *index_schema,
+                                          /*source_resolves_text=*/false);
     EXPECT_EQ(test_case.evaluate_success.value(),
               evaluator.Evaluate(root, interned_key));
     // The context is warm now; a second evaluation must not change the verdict.
@@ -1037,10 +1038,9 @@ INSTANTIATE_TEST_SUITE_P(
                                        "  TEXT-TERM(\"is\", field_mask=2)\n"
                                        "}\n",
         },
-        // The prefilter skips text children of an AND unless the query carries
-        // a negation, so these force evaluation. Both terms are present; only
-        // the proximity check can reject, which guards against a cached leaf
-        // answering a bare verdict without handing back its iterator.
+        // Both terms are present; only the proximity check can reject, which
+        // guards against a cached leaf answering a bare verdict without
+        // handing back its iterator.
         {
             .test_name = "proximity_adjacent_evaluated",
             .filter = "-@num_field_1.5:[5 6] @text_field1:\"my name\"",
@@ -1992,6 +1992,13 @@ INSTANTIATE_TEST_SUITE_P(
                 "Invalid option (Error parsing vector similarity parameters)",
         },
         {
+            .test_name = "vector_range_epsilon_hnsw_negative_zero_rejected",
+            .filter = "@vec_hnsw:[VECTOR_RANGE 1.5 $blob]=>{$epsilon: -0}",
+            .create_success = false,
+            .create_expected_error_message =
+                "Invalid option (Error parsing vector similarity parameters)",
+        },
+        {
             .test_name = "vector_range_with_both_query_attrs",
             .filter = "@vec_hnsw:[VECTOR_RANGE 1.5 "
                       "$blob]=>{$yield_distance_as: dist; "
@@ -2053,9 +2060,53 @@ INSTANTIATE_TEST_SUITE_P(
                 "Unexpected argument 'UNKNOWN_PARAM'",
         },
         {
-            .test_name = "vector_range_ef_runtime_ignored",
+            .test_name = "vector_range_ef_runtime",
             .filter = "@vec:[VECTOR_RANGE 1.5 $blob EF_RUNTIME 100]",
             .create_success = true,
+        },
+        {
+            // Resolved from PARAMS, and range-checked, after parsing.
+            .test_name = "vector_range_ef_runtime_param",
+            .filter = "@vec:[VECTOR_RANGE 1.5 $blob EF_RUNTIME $ef]",
+            .create_success = true,
+        },
+        {
+            // A bare `$` must not be read as "no override".
+            .test_name = "vector_range_ef_runtime_empty_param",
+            .filter = "@vec:[VECTOR_RANGE 1.5 $blob EF_RUNTIME $]",
+            .create_success = false,
+            .create_expected_error_message = "EF_RUNTIME argument is missing",
+        },
+        {
+            .test_name = "vector_range_ef_runtime_zero",
+            .filter = "@vec:[VECTOR_RANGE 1.5 $blob EF_RUNTIME 0]",
+            .create_success = false,
+            .create_expected_error_message =
+                "Invalid range: Value below minimum; `EF_RUNTIME` must be a "
+                "positive integer greater than 0 and cannot exceed 1000000.",
+        },
+        {
+            .test_name = "vector_range_ef_runtime_non_integer",
+            .filter = "@vec:[VECTOR_RANGE 1.5 $blob EF_RUNTIME abc]",
+            .create_success = false,
+            .create_expected_error_message =
+                "`abc` is not a valid numeric value",
+        },
+        {
+            .test_name = "vector_range_ef_runtime_negative",
+            .filter = "@vec:[VECTOR_RANGE 1.5 $blob EF_RUNTIME -5]",
+            .create_success = false,
+            .create_expected_error_message =
+                "Invalid range: Value below minimum; `EF_RUNTIME` must be a "
+                "positive integer greater than 0 and cannot exceed 1000000.",
+        },
+        {
+            .test_name = "vector_range_ef_runtime_above_max",
+            .filter = "@vec:[VECTOR_RANGE 1.5 $blob EF_RUNTIME 1000001]",
+            .create_success = false,
+            .create_expected_error_message =
+                "Invalid range: Value above maximum; `EF_RUNTIME` must be a "
+                "positive integer greater than 0 and cannot exceed 1000000.",
         },
         {
             .test_name = "vector_range_empty_yield_distance_as",
@@ -2072,8 +2123,55 @@ INSTANTIATE_TEST_SUITE_P(
                 "$epsilon must be a valid non-negative number",
         },
         {
+            // NaN, infinite and beyond-float values are accepted, as in
+            // Redis; the search saturates them to the widest shell.
+            .test_name = "vector_range_nan_epsilon",
+            .filter = "@vec_hnsw:[VECTOR_RANGE 1.5 $blob]=>{$epsilon: nan}",
+            .create_success = true,
+        },
+        {
+            .test_name = "vector_range_infinite_epsilon",
+            .filter = "@vec_hnsw:[VECTOR_RANGE 1.5 $blob]=>{$epsilon: inf}",
+            .create_success = true,
+        },
+        {
+            .test_name = "vector_range_plus_infinite_epsilon",
+            .filter = "@vec_hnsw:[VECTOR_RANGE 1.5 $blob]=>{$epsilon: +inf}",
+            .create_success = true,
+        },
+        {
+            .test_name = "vector_range_float_overflow_epsilon",
+            .filter = "@vec_hnsw:[VECTOR_RANGE 1.5 $blob]=>{$epsilon: 1e40}",
+            .create_success = true,
+        },
+        {
+            .test_name = "vector_range_above_float_max_epsilon",
+            .filter = "@vec_hnsw:[VECTOR_RANGE 1.5 $blob]=>{$epsilon: 1e39}",
+            .create_success = true,
+        },
+        {
+            // Read as +inf; Redis rejects a literal beyond double range.
+            .test_name = "vector_range_double_overflow_epsilon",
+            .filter = "@vec_hnsw:[VECTOR_RANGE 1.5 $blob]=>{$epsilon: 1e400}",
+            .create_success = true,
+        },
+        {
             .test_name = "vector_range_negative_epsilon",
             .filter = "@vec:[VECTOR_RANGE 1.5 $blob]=>{$epsilon: -0.5}",
+            .create_success = false,
+            .create_expected_error_message =
+                "$epsilon must be a valid non-negative number",
+        },
+        {
+            .test_name = "vector_range_negative_infinite_epsilon",
+            .filter = "@vec_hnsw:[VECTOR_RANGE 1.5 $blob]=>{$epsilon: -inf}",
+            .create_success = false,
+            .create_expected_error_message =
+                "$epsilon must be a valid non-negative number",
+        },
+        {
+            .test_name = "vector_range_negative_nan_epsilon",
+            .filter = "@vec_hnsw:[VECTOR_RANGE 1.5 $blob]=>{$epsilon: -nan}",
             .create_success = false,
             .create_expected_error_message =
                 "$epsilon must be a valid non-negative number",

@@ -62,10 +62,9 @@ class TestSearchOOMHandlingCME(ValkeySearchClusterTestCase):
         assert run_search_query(cluster_client)[0] == 2
 
         client_primary_1: Valkey = self.new_client_for_primary(1)
-        current_used_memory = client_primary_1.info("memory")["used_memory"]
-
-        # Update the maxmemory of the second primary node so we hit OOM
-        client_primary_1.config_set("maxmemory", current_used_memory)
+        # Put the second primary over its memory limit.
+        client_primary_1.config_set("maxmemory-policy", "noeviction")
+        client_primary_1.config_set("maxmemory", 1)
 
         # Get client for third primary, assert it has enough memory
         client_primary_2: Valkey = self.new_client_for_primary(2)
@@ -99,9 +98,9 @@ class TestSearchOOMHandlingCMD(ValkeySearchTestCaseBase):
         create_index(client)
         # Insert data
         insert_vectors(client)
-        # Set maxmemory for current used memory of the node
-        current_used_memory = client.info("memory")["used_memory"]
-        client.config_set("maxmemory", current_used_memory)
+        # Put the node over its memory limit.
+        client.config_set("maxmemory-policy", "noeviction")
+        client.config_set("maxmemory", 1)
         # Expect to fail on OOM
         with pytest.raises(OutOfMemoryError):
             run_search_query(client)

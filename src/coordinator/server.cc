@@ -167,6 +167,7 @@ class RemoteResponderSearch : public query::SearchParameters {
     }
     SerializeNeighbors(response, search_result.neighbors);
     response->set_total_count(search_result.total_count);
+    response->set_sortby_keyed_by_lookup_key(sortby_by_lookup_key);
     (*on_done)(grpc::Status::OK);
     RecordSearchMetrics(false, std::move(latency_sample));
   }

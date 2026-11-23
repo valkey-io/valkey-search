@@ -15,7 +15,7 @@
 #include "absl/log/check.h"
 #include "libstemmer.h"
 #include "src/utils/scanner.h"
-#include "vmsdk/src/info.h"
+#include "src/valkey_search_options.h"
 
 namespace valkey_search::indexes::text {
 
@@ -28,13 +28,6 @@ struct StemmerDeleter {
 using StemmerPtr = std::unique_ptr<sb_stemmer, StemmerDeleter>;
 
 thread_local absl::flat_hash_map<data_model::Language, StemmerPtr> stemmers_;
-
-// INFO counter for the min_stem_size code-point compatibility defect (see
-// COMPATIBILITY.md). Statically constructed because stemming runs on worker
-// threads. Only counts words where the byte and code point lengths disagree.
-vmsdk::info_field::Integer min_stem_size_code_points_compat_counter(
-    "compatibility", "compatibility-min_stem_size_code_points",
-    vmsdk::info_field::IntegerBuilder().App());
 
 bool IsKnownAlgorithm(absl::string_view name) {
   for (const char** algorithm = sb_stemmer_list(); *algorithm != nullptr;
@@ -81,8 +74,11 @@ std::string_view SnowballStemFilter::DoStemming(absl::string_view word,
     if (unit != LengthUnit::kBytes || word.size() < min_stem_size) {
       return word;
     }
-    // Long enough only when counted in bytes (1.2 behavior).
-    min_stem_size_code_points_compat_counter.Increment();
+    // Long enough only when counted in bytes (1.2 behavior). `unit` already
+    // selected the legacy path (SnowballLanguage::GetLengthUnit); the macro
+    // only counts the words where byte and code point lengths disagree.
+    VALKEY_SEARCH_COMPATIBILITY_FIX(
+        1, 3, 0, "min_stem_size_code_points", [] {}, [] {});
   }
   CHECK(stemmer) << "Stemmer is not initialized";
   const sb_symbol* stemmed = sb_stemmer_stem(

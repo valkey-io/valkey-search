@@ -7,6 +7,7 @@
 
 #include "vmsdk/src/blocked_client.h"
 
+#include "absl/synchronization/mutex.h"
 #include "gtest/gtest.h"
 #include "vmsdk/src/testing_infra/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -29,6 +30,7 @@ class BlockedClientTest
 std::vector<size_t> FetchTrackedBlockedClients(
     BlockedClientCategory category = BlockedClientCategory::kOther) {
   std::vector<size_t> tracked_bc_cnt;
+  absl::MutexLock lock(&blocked_clients_mutex);
   const auto &category_map = BlockedClientTracker::GetInstance()[category];
   for (auto &entry : category_map) {
     tracked_bc_cnt.push_back(entry.second.cnt);

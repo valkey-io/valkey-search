@@ -3528,8 +3528,8 @@ TEST_F(IndexSchemaScoreFieldTest, KeyspaceNotificationDeletesRegistryEntry) {
       .WillOnce(Return(nullptr));
 
   // 3. Process the deletion notification
-  index_schema->OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_HASH,
-                                       "del", key_valkey_str.get());
+  KeyspaceEventManager::Instance().NotifySubscribers(
+      &fake_ctx_, VALKEYMODULE_NOTIFY_HASH, "del", key_valkey_str.get());
   WaitWorkerTasksAreCompleted(mutations_thread_pool);
   kMockValkeyModule->RunPendingOneShots();
 
@@ -3617,7 +3617,7 @@ TEST_F(IndexSchemaScoreFieldTest,
 }
 
 TEST_F(IndexSchemaScoreFieldTest,
-       KeyspaceNotificationMissingVectorFieldRemovesRegistryEntry) {
+       KeyspaceNotificationMissingVectorFieldRetainsRegistryEntry) {
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
   mutations_thread_pool.StartWorkers();
 
@@ -3688,8 +3688,12 @@ TEST_F(IndexSchemaScoreFieldTest,
   WaitWorkerTasksAreCompleted(mutations_thread_pool);
   kMockValkeyModule->RunPendingOneShots();
 
-  // 3. Verify vector removed from index and vector registry
+  // 3. The vector leaves the index. The registry keeps it while the key is a
+  // hash, since a field that is not visible may be logically expired and still
+  // hold the shared bytes; it goes when the key is deleted.
   EXPECT_FALSE(hnsw_index->IsTracked(key));
+  EXPECT_EQ(VectorRegistry::Instance().GetStats().entry_cnt, 1);
+  VectorRegistry::Instance().OnKeyDeleted(0, key->Str());
   EXPECT_EQ(VectorRegistry::Instance().GetStats().entry_cnt, 0);
 }
 

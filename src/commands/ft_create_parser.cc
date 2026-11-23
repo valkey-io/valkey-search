@@ -65,6 +65,7 @@ constexpr absl::string_view kSkipInitialScan("SKIPINITIALSCAN");
 constexpr absl::string_view kNoHlParam{"NOHL"};
 constexpr absl::string_view kSortableParam{"SORTABLE"};
 constexpr absl::string_view kUnfParam{"UNF"};
+constexpr absl::string_view kQueryTimeoutParam{"QUERY_TIMEOUT"};
 constexpr size_t kDefaultAttributesCountLimit{1000};
 constexpr int kDefaultDimensionsCountLimit{32768};
 constexpr int kDefaultPrefixesCountLimit{8};
@@ -324,14 +325,15 @@ absl::Status ParseLanguage(vmsdk::ArgsIterator &itr,
   data_model::Language language{data_model::Language::LANGUAGE_ENGLISH};
   VMSDK_ASSIGN_OR_RETURN(auto res, ParseParam(kLanguageParam, false, itr,
                                               language, *kLanguageByStr));
+  if (res) {
+    index_schema_proto.set_language(language);
+  }
   VMSDK_ASSIGN_OR_RETURN(
       res, vmsdk::IsParamKeyMatch(kLanguageFieldParam, false, itr));
   if (res) {
     return absl::InvalidArgumentError(
         NotSupportedParamErrorMsg(kLanguageFieldParam));
   }
-
-  index_schema_proto.set_language(language);
   return absl::OkStatus();
 }
 absl::Status ParseScore(vmsdk::ArgsIterator &itr,
@@ -358,6 +360,26 @@ absl::Status ParseScore(vmsdk::ArgsIterator &itr,
   }
   return absl::OkStatus();
 }
+
+absl::Status ParseQueryTimeout(vmsdk::ArgsIterator &itr,
+                               data_model::IndexSchema &index_schema_proto) {
+  uint32_t timeout_ms = 0;
+  VMSDK_ASSIGN_OR_RETURN(
+      auto res, vmsdk::ParseParam(kQueryTimeoutParam, false, itr, timeout_ms));
+  if (!res) {
+    return absl::OkStatus();
+  }
+  if (timeout_ms < kMinTimeoutMs || timeout_ms > kMaxTimeoutMs) {
+    return absl::InvalidArgumentError(
+        absl::StrCat(kQueryTimeoutParam,
+                     " must be a positive integer greater than 0 and cannot "
+                     "exceed ",
+                     kMaxTimeoutMs, "."));
+  }
+  index_schema_proto.set_query_timeout_ms(timeout_ms);
+  return absl::OkStatus();
+}
+
 vmsdk::KeyValueParser<HNSWParameters> CreateHNSWParser() {
   vmsdk::KeyValueParser<HNSWParameters> parser;
   parser.AddParamParser(kDimensionsParam,
@@ -442,7 +464,15 @@ absl::Status ParseNumeric(vmsdk::ArgsIterator &itr,
 vmsdk::KeyValueParser<FTCreateTagParameters> CreateTagParser() {
   vmsdk::KeyValueParser<FTCreateTagParameters> parser;
   parser.AddParamParser(
-      kSeparatorParam, GENERATE_VALUE_PARSER(FTCreateTagParameters, separator));
+      kSeparatorParam,
+      std::make_unique<vmsdk::ParamParser<FTCreateTagParameters>>(
+          [](FTCreateTagParameters &params,
+             vmsdk::ArgsIterator &itr) -> absl::Status {
+            VMSDK_RETURN_IF_ERROR(
+                vmsdk::ParseParamValue(itr, params.separator));
+            params.explicit_separator = true;
+            return absl::OkStatus();
+          }));
   parser.AddParamParser(
       kCaseSensitiveParam,
       GENERATE_FLAG_PARSER(FTCreateTagParameters, case_sensitive));
@@ -465,6 +495,7 @@ absl::Status ParseTag(vmsdk::ArgsIterator &itr, data_model::Index &index_proto,
                      parameters.separator, "`"));
   }
   tag_index_proto->set_separator(parameters.separator);
+  tag_index_proto->set_explicit_separator(parameters.explicit_separator);
   tag_index_proto->set_case_sensitive(parameters.case_sensitive);
   index_proto.set_allocated_tag_index(tag_index_proto.release());
   return absl::OkStatus();
@@ -743,6 +774,8 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
       return absl::InvalidArgumentError(
           NotSupportedParamErrorMsg(kPayloadFieldParam));
     }
+
+    VMSDK_RETURN_IF_ERROR(ParseQueryTimeout(itr, index_schema_proto));
 
     // Try schema text parameters using the KeyValue parser
     VMSDK_RETURN_IF_ERROR(

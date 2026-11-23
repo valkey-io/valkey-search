@@ -35,6 +35,7 @@
 #include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
 #include "src/vector_registry.h"
+#include "vmsdk/src/huge_page_allocation.h"
 #include "vmsdk/src/info.h"
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
@@ -421,6 +422,12 @@ static vmsdk::info_field::Integer vector_registry_pending_unshare_cnt(
       return VectorRegistry::Instance().GetPendingUnsharesCount();
     }));
 
+static vmsdk::info_field::Integer vector_registry_unshare_stalled_batches(
+    "vector_registry", "vector_registry_unshare_stalled_batches",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return VectorRegistry::Instance().GetStats().unshare_stalled_batches;
+    }));
+
 static vmsdk::info_field::Integer vector_registry_active_allocations(
     "vector_registry", "vector_registry_active_allocations",
     vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
@@ -574,6 +581,22 @@ static vmsdk::info_field::Float coordinator_threads_cpu_time_sec(
         .VisibleIf([]() -> bool {
           return ValkeySearch::Instance().UsingCoordinator();
         }));
+
+static vmsdk::info_field::Integer
+    coordinator_server_search_index_partition_cpu_time_usec(
+        "coordinator",
+        "coordinator_server_search_index_partition_cpu_time_usec",
+        vmsdk::info_field::IntegerBuilder()
+            .App()
+            .Units(vmsdk::info_field::Units::kMicroSeconds)
+            .Computed([]() -> long long {
+              return Metrics::GetStats()
+                  .coordinator_server_search_index_partition_cpu_time_usec
+                  .GetTotal();
+            })
+            .VisibleIf([]() -> bool {
+              return ValkeySearch::Instance().UsingCoordinator();
+            }));
 
 static vmsdk::info_field::Integer
     coordinator_server_get_global_metadata_success_count(
@@ -1043,6 +1066,9 @@ void ValkeySearch::Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const {
 // happening. For more details see:
 // https://pubs.opengroup.org/onlinepubs/009695399/functions/pthread_atfork.html
 void ValkeySearch::AtForkPrepare() {
+  // Apply queued multi/exec mutations while the writer pool can still run them,
+  // so the child does not copy an index that is missing them (#1651).
+  SchemaManager::AtFork();
   // Sanity: fork can occur (by example: calling to "popen") before the thread
   // pool is initialized
   if (writer_thread_pool_ == nullptr || reader_thread_pool_ == nullptr ||
@@ -1270,6 +1296,7 @@ absl::Status ValkeySearch::OnLoad(ValkeyModuleCtx *ctx,
 
   // Apply command line arguments and initialize the module
   VMSDK_RETURN_IF_ERROR(LoadAndParseArgv(ctx, argv, argc));
+  vmsdk::InitHugePageAllocation(ctx);
   VectorRegistry::Construct(ctx_);
   VMSDK_RETURN_IF_ERROR(Startup(ctx));
 

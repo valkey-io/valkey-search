@@ -37,14 +37,6 @@ namespace valkey_search::indexes {
 
 namespace {
 
-// INFO counter for the non-UTF-8 TAG compatibility defect (see
-// COMPATIBILITY.md). Statically constructed because AddRecord/ModifyRecord run
-// on worker threads, where VALKEY_SEARCH_COMPATIBILITY_FIX's lazily
-// constructed counter is unsafe.
-vmsdk::info_field::Integer tag_rejects_non_utf8_compat_counter(
-    "compatibility", "compatibility-tag_rejects_non_utf8",
-    vmsdk::info_field::IntegerBuilder().App());
-
 // Redisearch rejects non-UTF-8 TAG data. This is gated on
 // search.emulate-release so the legacy behavior (index it) is preserved by
 // default.
@@ -52,11 +44,9 @@ bool RejectNonUtf8(absl::string_view data) {
   if (ABSL_PREDICT_TRUE(utils::IsValidUtf8(data))) {
     return false;
   }
-  if (options::EnabledInVersion(1, 3, 0)) {
-    return true;
-  }
-  tag_rejects_non_utf8_compat_counter.Increment();
-  return false;
+  return VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 3, 0, "tag_rejects_non_utf8", [] { return true; },
+      [] { return false; });
 }
 
 inline uintptr_t SlotToStorage(void *p) {
@@ -100,6 +90,10 @@ bool IsValidPrefix(absl::string_view str) {
 Tag::Tag(const data_model::TagIndex &tag_index_proto)
     : IndexBase(IndexerType::kTag),
       separator_(tag_index_proto.separator()[0]),
+      explicit_separator_(
+          tag_index_proto.has_explicit_separator()
+              ? std::optional<bool>(tag_index_proto.explicit_separator())
+              : std::nullopt),
       case_sensitive_(tag_index_proto.case_sensitive()),
       tree_(raxNew()) {}
 
@@ -327,6 +321,9 @@ std::unique_ptr<data_model::Index> Tag::ToProto() const {
   auto index_proto = std::make_unique<data_model::Index>();
   auto tag_index = std::make_unique<data_model::TagIndex>();
   tag_index->set_separator(absl::string_view(&separator_, 1));
+  if (explicit_separator_.has_value()) {
+    tag_index->set_explicit_separator(*explicit_separator_);
+  }
   tag_index->set_case_sensitive(case_sensitive_);
   index_proto->set_allocated_tag_index(tag_index.release());
   return index_proto;

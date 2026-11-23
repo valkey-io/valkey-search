@@ -168,12 +168,10 @@ KNN_CLAUSES = [
 ]
 
 
-# HASH only. A JSON index under `LOAD *` returns the document as a single
-# `$` column, which no `@field` reference in a pipeline stage resolves
-# against -- an FT.AGGREGATE limitation being fixed on its own branch. That
-# has nothing to do with FT.HYBRID, and sweeping JSON here would only pin
-# that gap. FT.HYBRID has no key-type-specific code of its own.
-@pytest.mark.parametrize("key_type", ["hash"])
+# Both key types. A JSON index under `LOAD *` returns the document as a
+# single `$` column, and a `@field` named by a pipeline stage is fetched
+# alongside it, so the same sweeps hold for HASH and JSON.
+@pytest.mark.parametrize("key_type", ["hash", "json"])
 class TestHybridCompatibility(BaseCompatibilityTest):
     ANSWER_FILE_NAME = "hybrid-answers.pickle.gz"
     DATA_SET = "hybrid text"
@@ -609,40 +607,13 @@ class TestHybridCompatibility(BaseCompatibilityTest):
         for load, tail in self._load_cases(key_type):
             self.hybrid(key_type, "@title:alpha", load=load, tail=tail)
 
-    # Skipped until PR 1381 ("Ask for content with `all_content`, not by
-    # leaving the list empty") merges, plus the three-line follow-up it needs
-    # in FT.HYBRID.
-    #
-    # What these sweep is `LOAD *` feeding a pipeline stage. `LOAD *` today
-    # means "return_attributes is empty", which is the same encoding as "fetch
-    # nothing", so a stage that names a field cannot ask for it alongside the
-    # whole record. 1381 splits the two with an explicit `all_content` flag.
-    # FT.HYBRID does not get the fix for free: its `FusedResolver` copies
-    # `return_attributes` and `no_content` but not `all_content`, and
-    # `WantsNoDatabaseContent` still tests `loadall_`, so landing 1381 without
-    # touching `src/commands/ft_hybrid.cc` silently empties `LOAD *` replies
-    # instead of fixing them.
-    #
-    # Measured on a merged build (hybrid + 1381 + that follow-up) against a
-    # redis:8 reference, over the 15 cases below and on both key types:
-    #
-    #                        hash                json
-    #   hybrid alone         10 pass / 1 fail    4 pass / 7 fail
-    #   merged + follow-up   11 pass / 0 fail    11 pass / 0 fail
-    #
-    # (Four of the 15 record a reference error rather than an answer -- Redis
-    # auto-loads for SORTBY and GROUPBY but not for APPLY or FILTER -- so they
-    # pass unconditionally and are kept only to pin that behaviour, the same
-    # way 1381 does for FT.AGGREGATE.)
-    #
-    # The seven JSON failures are exactly unsupported_tests.md 5.2, the reason
-    # this suite is HASH-only. When 1381 lands: drop the skip, and 5.2 can
-    # come off with the class parametrized over both key types -- but
-    # test_load_unknown_field's `LOAD 1 $.price` case has to be gated to HASH
-    # first, because that path resolves on a JSON index and would XPASS for
-    # the wrong reason.
-    @pytest.mark.skip(reason="needs PR 1381 plus the all_content follow-up in "
-                             "ft_hybrid.cc; enable once both have merged")
+    # `LOAD *` feeding a pipeline stage. `LOAD *` asks for the whole record
+    # through `all_content`, and a field a stage names is fetched alongside
+    # it, so the stage resolves on both key types. Four of these record a
+    # reference error rather than an answer -- Redis auto-loads for SORTBY and
+    # GROUPBY but not for APPLY or FILTER -- so they pass unconditionally and
+    # are kept only to pin that behaviour, the same way FT.AGGREGATE's
+    # test_aggregate_loadall_stage does.
     def test_loadall_feeding_a_stage(self, key_type):
         self.setup_data(key_type)
         cases = [
@@ -699,8 +670,10 @@ class TestHybridCompatibility(BaseCompatibilityTest):
             ["LOAD", "2", "@price", "@nosuchfield"],
         ]
         # A JSON path against a HASH index names nothing, the same way an
-        # unknown attribute does.
-        cases += [["LOAD", "1", "$.price"]]
+        # unknown attribute does. On a JSON index the path resolves, so it is
+        # not an unknown field there.
+        if key_type == "hash":
+            cases += [["LOAD", "1", "$.price"]]
         # The reserved column names are matched case-sensitively by both
         # engines, so an upper-case spelling names nothing either. Included
         # because the lower-case spellings are real columns, which makes this
@@ -1020,17 +993,16 @@ class TestHybridCompatibility(BaseCompatibilityTest):
     def test_score_columns_json(self, key_type):
         """The score-column rules again, on a JSON index.
 
-        The class sweeps HASH only, because a pipeline stage naming an
-        indexed field does not resolve against a JSON document under `LOAD *`
-        (see the note on the class, and unsupported_tests.md 5.2). None of the
-        score columns depend on that: a score alias is written by fusion, not
-        read out of the document, so it is reachable on JSON where an
-        `@color` reference is not. This sweep therefore uses no pipeline
+        A score alias is written by fusion, not read out of the document, so
+        none of these depend on the key type. This sweep uses no pipeline
         stage, and pins that the emission rules are the same for both key
         types on both engines.
 
-        `key_type` is ignored: this case names its own.
+        `key_type` only gates the run: this case names its own key type, so
+        it runs once, under the HASH parametrization.
         """
+        if key_type != "hash":
+            pytest.skip("names its own key type; run once")
         self.setup_data("json")
         for load in [NO_LOAD, LOAD_ALL, ["LOAD", "1", "@price"]]:
             # Unaliased, so the default `__score` rule is what is under test.

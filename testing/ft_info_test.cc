@@ -53,7 +53,7 @@ struct MultiFtInfoTestCase {
 // and later emit an 8-element block whose default_score is a double and which
 // carries a score_field pair, while earlier releases emit a 6-element block
 // with default_score as the bulk string "1" and no score_field. See
-// COMPATIBILITY.md ("compatibility-ft_info_score_field").
+// COMPATIBILITY.md ("ft_info_score_field").
 //
 // Each expected_output below is written in the 1.3.0 (fixed) shape; the legacy
 // expectation is derived from it so the two cannot drift apart. The segment is

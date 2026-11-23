@@ -2453,7 +2453,10 @@ absl::Status query::SearchParameters::ParseFilter() {
     return absl::InvalidArgumentError("Index does not support offsets");
   }
   TextParsingOptions options{
-      .verbatim = verbatim, .inorder = inorder, .slop = slop};
+      .verbatim = verbatim,
+      .inorder = inorder,
+      .slop = slop,
+      .infields = infields.has_value() ? &*infields : nullptr};
   FilterParser parser(*index_schema, parse_vars.filter_expression, options);
   VMSDK_ASSIGN_OR_RETURN(filter_parse_results, parser.Parse(),
                          _.SetPrepend()

@@ -1948,9 +1948,7 @@ SearchResult::SearchResult(size_t total_count,
     this->neighbors.clear();
     return;
   }
-  if (!parameters.RequiresCompleteResults()) {
-    TrimResults(this->neighbors, parameters, trim_offset_in_background);
-  }
+  TrimResults(this->neighbors, parameters, trim_offset_in_background);
 }
 
 SearchResult::SearchResult(size_t total_count,
@@ -1963,9 +1961,7 @@ SearchResult::SearchResult(size_t total_count,
   if (ShouldReturnNoResults(parameters)) {
     return;
   }
-  if (!parameters.RequiresCompleteResults()) {
-    TrimResults(borrowed, parameters, trim_offset_in_background);
-  }
+  TrimResults(borrowed, parameters, trim_offset_in_background);
   // Materialize only the survivors into owning Neighbor vector.
   neighbors.reserve(borrowed.size());
   for (auto &b : borrowed) {
@@ -1991,7 +1987,9 @@ void SearchResult::TrimResults(std::vector<T> &vec,
       // Tie-break on key ascending for a deterministic result order.
       return a.key->Str() < b.key->Str();
     };
-    size_t sort_limit = std::min(max_needed, vec.size());
+    size_t sort_limit = parameters.RequiresCompleteResults()
+                        ? vec.size()
+                        : std::min(max_needed, vec.size());
     if (sort_limit < vec.size()) {
       std::partial_sort(vec.begin(), vec.begin() + sort_limit, vec.end(), cmp);
     } else {
@@ -2023,6 +2021,9 @@ void SearchResult::TrimResults(std::vector<T> &vec,
           // Tie-break on key ascending for a deterministic order.
           return a.external_id->Str() < b.external_id->Str();
         });
+  }
+  if (parameters.RequiresCompleteResults()) {
+    return;
   }
   // In standalone mode, we can optimize by trimming from front first.
   // In cluster mode on remote searches on individual shards, we cannot trim

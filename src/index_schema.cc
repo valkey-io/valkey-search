@@ -55,7 +55,6 @@
 #include "version.h"
 #include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/debug.h"
-#include "vmsdk/src/info.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/module_config.h"
@@ -84,6 +83,11 @@ static auto config_rdb_read_v2 =
     vmsdk::config::BooleanBuilder("rdb-read-v2", true).Dev().Build();
 static auto config_rdb_validate_on_write =
     vmsdk::config::BooleanBuilder("rdb-validate-on-write", false).Dev().Build();
+// Saves key labels ahead of each vector index so the load can share vectors
+// with the keyspace. When off (or for RDBs from older versions), every vector
+// is copied during the load, which can roughly double peak vector memory.
+static auto config_rdb_write_v3 =
+    vmsdk::config::BooleanBuilder("rdb-write-v3", true).Dev().Build();
 
 namespace options {
 const vmsdk::config::Boolean &GetRdbWriteV2() {
@@ -101,6 +105,11 @@ static bool RDBReadV2() {
 
 static bool RDBWriteV2() {
   return dynamic_cast<vmsdk::config::Boolean &>(*config_rdb_write_v2)
+      .GetValue();
+}
+
+static bool RDBWriteKeyLabels() {
+  return dynamic_cast<vmsdk::config::Boolean &>(*config_rdb_write_v3)
       .GetValue();
 }
 
@@ -155,17 +164,17 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> CreateVectorIndex(
     ValkeyModuleCtx *ctx, IndexSchema *index_schema,
     const data_model::Attribute &attribute,
     const data_model::VectorIndex &vector_index_proto,
-    std::optional<SupplementalContentChunkIter> &iter) {
-  VMSDK_ASSIGN_OR_RETURN(
-      auto index,
-      iter.has_value()
-          ? AlgoT<T>::LoadFromRDB(ctx, &index_schema->GetAttributeDataType(),
-                                  vector_index_proto, attribute.identifier(),
-                                  std::move(*iter), index_schema->GetDBNum())
-          : AlgoT<T>::Create(vector_index_proto, attribute.identifier(),
-                             index_schema->GetAttributeDataType().ToProto(),
-                             index_schema->GetDBNum()));
-  return index;
+    std::optional<SupplementalContentChunkIter> &iter,
+    indexes::TrackedKeys *key_labels) {
+  if (!iter.has_value()) {
+    return AlgoT<T>::Create(vector_index_proto, attribute.identifier(),
+                            index_schema->GetAttributeDataType().ToProto(),
+                            index_schema->GetDBNum());
+  }
+  return AlgoT<T>::LoadFromRDB(ctx, &index_schema->GetAttributeDataType(),
+                               vector_index_proto, attribute.identifier(),
+                               std::move(*iter), index_schema->GetDBNum(),
+                               key_labels);
 }
 
 // Selects the storage type for `AlgoT` from the schema's declared data type.
@@ -176,18 +185,19 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> CreateVectorIndexForType(
     ValkeyModuleCtx *ctx, IndexSchema *index_schema,
     const data_model::Attribute &attribute,
     const data_model::VectorIndex &vector_index_proto,
-    std::optional<SupplementalContentChunkIter> &iter) {
+    std::optional<SupplementalContentChunkIter> &iter,
+    indexes::TrackedKeys *key_labels) {
   switch (vector_index_proto.vector_data_type()) {
     case data_model::VECTOR_DATA_TYPE_FLOAT32:
-      return CreateVectorIndex<AlgoT, float>(ctx, index_schema, attribute,
-                                             vector_index_proto, iter);
+      return CreateVectorIndex<AlgoT, float>(
+          ctx, index_schema, attribute, vector_index_proto, iter, key_labels);
     case data_model::VECTOR_DATA_TYPE_FLOAT16:
-      return CreateVectorIndex<AlgoT, float16>(ctx, index_schema, attribute,
-                                               vector_index_proto, iter);
+      return CreateVectorIndex<AlgoT, float16>(
+          ctx, index_schema, attribute, vector_index_proto, iter, key_labels);
     case data_model::VECTOR_DATA_TYPE_BFLOAT16:
       VMSDK_RETURN_IF_ERROR(indexes::CheckSimsimdBf16Capability());
-      return CreateVectorIndex<AlgoT, bfloat16>(ctx, index_schema, attribute,
-                                                vector_index_proto, iter);
+      return CreateVectorIndex<AlgoT, bfloat16>(
+          ctx, index_schema, attribute, vector_index_proto, iter, key_labels);
     default:
       return absl::InvalidArgumentError("Unsupported vector data type.");
   }
@@ -198,7 +208,8 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> CreateVectorIndexForType(
 absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
     ValkeyModuleCtx *ctx, IndexSchema *index_schema,
     const data_model::Attribute &attribute,
-    std::optional<SupplementalContentChunkIter> iter) {
+    std::optional<SupplementalContentChunkIter> iter,
+    indexes::TrackedKeys *key_labels = nullptr) {
   const auto &index = attribute.index();
   switch (index.index_type_case()) {
     case data_model::Index::IndexTypeCase::kTagIndex: {
@@ -222,10 +233,12 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
       switch (vector_index_proto.algorithm_case()) {
         case data_model::VectorIndex::kHnswAlgorithm:
           return CreateVectorIndexForType<indexes::VectorHNSW>(
-              ctx, index_schema, attribute, vector_index_proto, iter);
+              ctx, index_schema, attribute, vector_index_proto, iter,
+              key_labels);
         case data_model::VectorIndex::kFlatAlgorithm:
           return CreateVectorIndexForType<indexes::VectorFlat>(
-              ctx, index_schema, attribute, vector_index_proto, iter);
+              ctx, index_schema, attribute, vector_index_proto, iter,
+              key_labels);
         default:
           return absl::InvalidArgumentError("Unsupported algorithm.");
       }
@@ -331,6 +344,10 @@ IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
       stop_words_(index_schema_proto.stop_words().begin(),
                   index_schema_proto.stop_words().end()),
       skip_initial_scan_(index_schema_proto.skip_initial_scan()),
+      query_timeout_ms_(
+          index_schema_proto.has_query_timeout_ms()
+              ? std::make_optional(index_schema_proto.query_timeout_ms())
+              : std::nullopt),
       filter_expression_str_(
           index_schema_proto.has_filter() ? index_schema_proto.filter() : ""),
       min_stem_size_(index_schema_proto.min_stem_size() > 0
@@ -530,12 +547,6 @@ absl::Status IndexSchema::AddIndex(absl::string_view attribute_alias,
   return absl::OkStatus();
 }
 
-// INFO counter for the invalid-data compatibility defect (see COMPATIBILITY.md
-// and the "Compatibility Defects" section).
-static vmsdk::info_field::Integer invalid_data_drops_key_compat_counter(
-    "compatibility", "compatibility-invalid_data_drops_key",
-    vmsdk::info_field::IntegerBuilder().App());
-
 void TrackResults(
     ValkeyModuleCtx *ctx, const absl::StatusOr<bool> &status,
     const char *operation_str,
@@ -648,6 +659,9 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
   auto key_cstr = vmsdk::ToStringView(key);
   auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
       ctx, key, VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
+  if (!key_obj && from_backfill) {
+    return;
+  }
 
   auto interned_key = StringInternStore::Intern(key_cstr);
   if (key_obj && !GetAttributeDataType().IsProperType(key_obj.get())) {
@@ -803,14 +817,12 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
   // the legacy behavior (treat the offending field as missing) is preserved by
   // default. See COMPATIBILITY.md.
   if (ABSL_PREDICT_FALSE(invalid_data)) {
-    // Equivalent to VALKEY_SEARCH_COMPATIBILITY_FIX, but that macro lazily
-    // constructs its INFO counter on first invocation, which here is a worker
-    // thread; we use a statically-constructed counter instead (see above).
-    if (options::EnabledInVersion(1, 3, 0)) {
-      RemoveKeyFromAllIndexes(ctx, key);
-    } else {
-      invalid_data_drops_key_compat_counter.Increment();
-    }
+    VALKEY_SEARCH_COMPATIBILITY_FIX(
+        1, 3, 0, "invalid_data_drops_key",
+        [&]() ABSL_NO_THREAD_SAFETY_ANALYSIS {
+          RemoveKeyFromAllIndexes(ctx, key);
+        },
+        [] {});
   }
 }
 
@@ -1439,6 +1451,9 @@ std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {
   if (!filter_expression_str_.empty()) {
     index_schema_proto->set_filter(filter_expression_str_);
   }
+  if (query_timeout_ms_.has_value()) {
+    index_schema_proto->set_query_timeout_ms(*query_timeout_ms_);
+  }
 
   auto *stats = index_schema_proto->mutable_stats();
   stats->set_documents_count(stats_.document_cnt);
@@ -1497,12 +1512,14 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
   rdb_section->set_allocated_index_schema_contents(
       index_schema_proto.release());
 
+  // Each vector attribute adds a KEY_TO_ID_MAP section, plus a KEY_LABELS
+  // section when enabled.
+  const size_t vector_count = std::count_if(
+      attributes_.begin(), attributes_.end(), [](const auto &attribute) {
+        return indexes::IsVectorIndex(attribute.second.GetIndex());
+      });
   size_t supplemental_count =
-      GetAttributeCount() +
-      std::count_if(
-          attributes_.begin(), attributes_.end(), [](const auto &attribute) {
-            return indexes::IsVectorIndex(attribute.second.GetIndex());
-          });
+      GetAttributeCount() + vector_count * (RDBWriteKeyLabels() ? 2 : 1);
   if (RDBWriteV2()) {
     supplemental_count += 1;  // For Index Extension
   }
@@ -1526,6 +1543,18 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
     // serialized index schema proto above. We store here again to avoid any
     // dependencies on the ordering of multiple attributes.
     // We could remove the duplication in the future.
+    if (RDBWriteKeyLabels() &&
+        indexes::IsVectorIndex(attribute.second.GetIndex())) {
+      VMSDK_RETURN_IF_ERROR(SaveSupplementalSection(
+          rdb, data_model::SUPPLEMENTAL_CONTENT_KEY_LABELS,
+          [&](auto &header) {
+            header.mutable_key_labels_header()->set_allocated_attribute(
+                attribute.second.ToProto().release());
+          },
+          std::bind_front(&indexes::VectorBase::SaveTrackedKeys,
+                          dynamic_cast<const indexes::VectorBase *>(
+                              attribute.second.GetIndex().get()))));
+    }
     VMSDK_RETURN_IF_ERROR(SaveSupplementalSection(
         rdb, data_model::SUPPLEMENTAL_CONTENT_INDEX_CONTENT,
         [&](auto &header) {
@@ -1865,6 +1894,8 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
     index_schema->MarkAsDestructing();
   };
 
+  // A vector attribute's key labels precede its index content.
+  absl::flat_hash_map<std::string, indexes::TrackedKeys> key_labels_by_alias;
   // Supplemental content will include indices and any content for them
   while (supplemental_iter.HasNext()) {
     rdb_load_sections.Increment();
@@ -1881,13 +1912,24 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
           VMSDK_LOG(DEBUG, nullptr)
               << "Loading Index Content for attribute: "
               << vmsdk::config::RedactIfNeeded(attribute.alias());
+          auto key_labels = key_labels_by_alias.extract(attribute.alias());
           VMSDK_ASSIGN_OR_RETURN(
               std::shared_ptr<indexes::IndexBase> index,
               IndexFactory(ctx, index_schema.get(), attribute,
-                           supplemental_iter.IterateChunks()));
+                           supplemental_iter.IterateChunks(),
+                           key_labels ? &key_labels.mapped() : nullptr));
           VMSDK_RETURN_IF_ERROR(index_schema->AddIndex(
               attribute.alias(), attribute.identifier(), index,
               {.sortable = attribute.sortable(), .unf = attribute.unf()}));
+          break;
+        }
+        case data_model::SupplementalContentType::
+            SUPPLEMENTAL_CONTENT_KEY_LABELS: {
+          const auto &attribute =
+              supplemental_content->key_labels_header().attribute();
+          VMSDK_ASSIGN_OR_RETURN(key_labels_by_alias[attribute.alias()],
+                                 indexes::VectorBase::LoadKeyLabels(
+                                     supplemental_iter.IterateChunks()));
           break;
         }
         case data_model::SupplementalContentType::
@@ -1947,6 +1989,10 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
           break;
       }
     }
+  }
+  if (!key_labels_by_alias.empty()) {
+    return absl::InternalError(
+        "Key labels found for an attribute without vector index content");
   }
   // Idempotent: covers a stream that carried no INDEX_EXTENSION section, so
   // the index still has its filter for everything ingested after the load.
@@ -2140,9 +2186,10 @@ bool IndexSchema::WaitForContendedKeys(
   absl::MutexLock lock(&mutated_records_mutex_);
   // A record is erased only after its mutation is applied.
   auto applied = [&]() ABSL_NO_THREAD_SAFETY_ANALYSIS {
-    return std::ranges::none_of(contended, [&](const Key &key) {
-      return tracked_mutated_records_.contains(key);
-    });
+    return std::ranges::none_of(
+        contended, [&](const Key &key) ABSL_NO_THREAD_SAFETY_ANALYSIS {
+          return tracked_mutated_records_.contains(key);
+        });
   };
   if (applied()) {
     return true;
@@ -2506,6 +2553,8 @@ absl::Status IndexSchema::CompileFilter() {
   if (filter_expression_str_.empty() || compiled_filter_) {
     return absl::OkStatus();
   }
+  // FT.CREATE FILTER is new in 1.3.0, so it emulates at least 1.3.0.
+  options::ScopedMinimumRelease minimum(vmsdk::ValkeyVersion(1, 3, 0));
   VMSDK_ASSIGN_OR_RETURN(compiled_filter_, expr::Expression::Compile(
                                                *this, filter_expression_str_));
   return absl::OkStatus();
@@ -2523,6 +2572,8 @@ bool IndexSchema::EvaluateFilter(const MutatedAttributes &mutated_attributes,
   // take the stats by reference and count conversion failures directly.
   FilterRecord record(mutated_attributes, stats_);
   FilterEvalContext eval_ctx(ctx, open_key, key, attribute_data_type_.get());
+  // FT.CREATE FILTER is new in 1.3.0, so it emulates at least 1.3.0.
+  options::ScopedMinimumRelease minimum(vmsdk::ValkeyVersion(1, 3, 0));
   auto result = compiled_filter_->Evaluate(eval_ctx, record);
   // Only a definite true admits the document. A missing field already made
   // its comparison false (see FilterFunc* in expr/value.cc), and an

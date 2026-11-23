@@ -7,3 +7,7 @@ FT.DROPINDEX <index-name>
 - `<index-name>` (required): The name of the index to delete.
 
 `RESPONSE` OK or Error.
+
+## Reply
+
+`OK`.

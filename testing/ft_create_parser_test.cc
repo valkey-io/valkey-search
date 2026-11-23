@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <iostream>
 #include <iterator>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -69,6 +70,7 @@ struct FTCreateParameters {
   absl::string_view payload_field;
   bool skip_initial_scan{false};
   std::string filter;
+  std::optional<uint32_t> query_timeout_ms;
   std::vector<AttributeParameters> attributes;
   ExpectedPerIndexTextParameters per_index_text_params;
 };
@@ -154,6 +156,12 @@ TEST_P(FTCreateParserTest, ParseParams) {
       EXPECT_EQ(index_schema_proto->filter(), test_case.expected.filter);
     } else {
       EXPECT_FALSE(index_schema_proto->has_filter());
+    }
+    EXPECT_EQ(index_schema_proto->has_query_timeout_ms(),
+              test_case.expected.query_timeout_ms.has_value());
+    if (test_case.expected.query_timeout_ms.has_value()) {
+      EXPECT_EQ(index_schema_proto->query_timeout_ms(),
+                *test_case.expected.query_timeout_ms);
     }
 
     // Verify schema-level text parameters if we have text fields
@@ -250,6 +258,9 @@ TEST_P(FTCreateParserTest, ParseParams) {
         auto tag_proto = index_schema_proto->attributes(i).index().tag_index();
         EXPECT_EQ(tag_proto.separator(),
                   test_case.tag_parameters[tag_index].separator);
+        EXPECT_TRUE(tag_proto.has_explicit_separator());
+        EXPECT_EQ(tag_proto.explicit_separator(),
+                  test_case.tag_parameters[tag_index].explicit_separator);
         EXPECT_EQ(tag_proto.case_sensitive(),
                   test_case.tag_parameters[tag_index].case_sensitive);
         ++tag_index;
@@ -349,6 +360,38 @@ INSTANTIATE_TEST_SUITE_P(
                           }}},
          },
          {
+             .test_name = "happy_path_query_timeout",
+             .success = true,
+             .command_str = "idx1 on HASH QUERY_TIMEOUT 1234 SCHEMA "
+                            "hash_field1 numeric ",
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .query_timeout_ms = 1234,
+                          .attributes = {{
+                              .identifier = "hash_field1",
+                              .attribute_alias = "hash_field1",
+                              .indexer_type = indexes::IndexerType::kNumeric,
+                          }}},
+         },
+         {
+             .test_name = "query_timeout_zero",
+             .success = false,
+             .command_str = "idx1 on HASH QUERY_TIMEOUT 0 SCHEMA "
+                            "hash_field1 numeric ",
+             .expected_error_message =
+                 "QUERY_TIMEOUT must be a positive integer greater than 0 and "
+                 "cannot exceed 60000.",
+         },
+         {
+             .test_name = "query_timeout_too_large",
+             .success = false,
+             .command_str = "idx1 on HASH QUERY_TIMEOUT 60001 SCHEMA "
+                            "hash_field1 numeric ",
+             .expected_error_message =
+                 "QUERY_TIMEOUT must be a positive integer greater than 0 and "
+                 "cannot exceed 60000.",
+         },
+         {
              .test_name = "happy_path_hnsw_and_numeric",
              .success = true,
              .command_str = " idx1 on HASH PREFIx 3 abc def ghi LANGUAGe "
@@ -409,6 +452,7 @@ INSTANTIATE_TEST_SUITE_P(
              }},
              .tag_parameters = {{
                  .separator = "|",
+                 .explicit_separator = true,
                  .case_sensitive = true,
              }},
              .expected =
@@ -454,10 +498,12 @@ INSTANTIATE_TEST_SUITE_P(
              }},
              .tag_parameters = {{
                                     .separator = "|",
+                                    .explicit_separator = true,
                                     .case_sensitive = true,
                                 },
                                 {
                                     .separator = "$",
+                                    .explicit_separator = true,
                                     .case_sensitive = false,
                                 },
                                 {
@@ -548,6 +594,7 @@ INSTANTIATE_TEST_SUITE_P(
              }},
              .tag_parameters = {{
                  .separator = "@",
+                 .explicit_separator = true,
                  .case_sensitive = false,
              }},
              .expected =
@@ -2259,6 +2306,87 @@ INSTANTIATE_TEST_SUITE_P(
              .expected = {
                  .index_schema_name = "idx1",
                  .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                 .attributes = {{
+                     .identifier = "text_field",
+                     .attribute_alias = "text_field",
+                     .indexer_type = indexes::IndexerType::kText,
+                 }},
+                 .per_index_text_params = {
+                     .punctuation = indexes::text::kFrenchPunctuation,
+                     .stop_words = {indexes::text::kFrenchStopWords},
+                     .language = data_model::Language::LANGUAGE_FRENCH,
+                     .with_offsets = true,
+                     .min_stem_size = 4,
+                 }
+             },
+         },
+         {
+             // LANGUAGE keeps its value when an option parsed on a later
+             // pass of the pre-SCHEMA loop follows it.
+             .test_name = "language_french_then_prefix",
+             .success = true,
+             .command_str = "idx1 on HASH LANGUAGE french PREFIX 1 doc: SCHEMA text_field TEXT",
+             .text_parameters = {{
+                 .with_suffix_trie = false,
+                 .no_stem = false,
+             }},
+             .expected = {
+                 .index_schema_name = "idx1",
+                 .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                 .prefixes = {"doc:"},
+                 .attributes = {{
+                     .identifier = "text_field",
+                     .attribute_alias = "text_field",
+                     .indexer_type = indexes::IndexerType::kText,
+                 }},
+                 .per_index_text_params = {
+                     .punctuation = indexes::text::kFrenchPunctuation,
+                     .stop_words = {indexes::text::kFrenchStopWords},
+                     .language = data_model::Language::LANGUAGE_FRENCH,
+                     .with_offsets = true,
+                     .min_stem_size = 4,
+                 }
+             },
+         },
+         {
+             .test_name = "language_french_then_score",
+             .success = true,
+             .command_str = "idx1 on HASH LANGUAGE french SCORE 0.5 SCHEMA text_field TEXT",
+             .text_parameters = {{
+                 .with_suffix_trie = false,
+                 .no_stem = false,
+             }},
+             .expected = {
+                 .index_schema_name = "idx1",
+                 .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                 .score = 0.5,
+                 .attributes = {{
+                     .identifier = "text_field",
+                     .attribute_alias = "text_field",
+                     .indexer_type = indexes::IndexerType::kText,
+                 }},
+                 .per_index_text_params = {
+                     .punctuation = indexes::text::kFrenchPunctuation,
+                     .stop_words = {indexes::text::kFrenchStopWords},
+                     .language = data_model::Language::LANGUAGE_FRENCH,
+                     .with_offsets = true,
+                     .min_stem_size = 4,
+                 }
+             },
+         },
+         {
+             .test_name = "language_french_then_skipinitialscan_prefix",
+             .success = true,
+             .command_str = "idx1 on HASH LANGUAGE french SKIPINITIALSCAN PREFIX 1 doc: SCHEMA text_field TEXT",
+             .text_parameters = {{
+                 .with_suffix_trie = false,
+                 .no_stem = false,
+             }},
+             .expected = {
+                 .index_schema_name = "idx1",
+                 .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                 .prefixes = {"doc:"},
+                 .skip_initial_scan = true,
                  .attributes = {{
                      .identifier = "text_field",
                      .attribute_alias = "text_field",

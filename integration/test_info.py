@@ -104,17 +104,10 @@ class TestAppMetrics(ValkeySearchTestCaseDebugMode):
         # Expected baseline: 71 APP metrics as of current implementation
         # This list should be updated intentionally when metrics are added/removed
         expected_metrics = {
-            # Counts uses of the legacy (incompatible) invalid-data handling
-            # while search.emulate-release is below the fix version. See
+            # label=count list of legacy compatibility branches taken while
+            # search.emulate-release is below their fix version. See
             # COMPATIBILITY.md.
-            "compatibility-invalid_data_drops_key",
-            # Count English MINSTEMSIZE checks and fuzzy terms that use 1.2's
-            # byte lengths while search.emulate-release is below 1.3.0.
-            "compatibility-min_stem_size_code_points",
-            "compatibility-fuzzy_code_point_distance",
-            # Counts non-UTF-8 TAG values indexed while search.emulate-release
-            # is below 1.3.0.
-            "compatibility-tag_rejects_non_utf8",
+            "compatibility_usage",
             "coordinator_bytes_in",
             "coordinator_bytes_out",
             "coordinator_client_get_global_metadata_failure_count",
@@ -133,6 +126,7 @@ class TestAppMetrics(ValkeySearchTestCaseDebugMode):
             "coordinator_server_search_index_partition_failure_count",
             "coordinator_server_search_index_partition_failure_latency_usec",
             "coordinator_server_search_index_partition_success_count",
+            "coordinator_server_search_index_partition_cpu_time_usec",
             "coordinator_server_search_index_partition_success_latency_usec",
             "coordinator_threads_cpu_time_sec",
             "hnsw_add_exceptions_count",
@@ -159,6 +153,7 @@ class TestAppMetrics(ValkeySearchTestCaseDebugMode):
             "result_record_dropped_count",
             "successful_requests_count",
             "vector_requests_count",
+            "vector_range_results_fetched_limited_count",
             "rdb_load_failure_cnt",
             "rdb_load_success_cnt",
             "rdb_save_failure_cnt",

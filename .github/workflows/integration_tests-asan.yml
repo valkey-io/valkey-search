@@ -24,6 +24,9 @@ concurrency:
 jobs:
   integration-tests-asan:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
 
     steps:
     # Checkout the code from the repository
@@ -60,7 +63,7 @@ jobs:
           -e CCACHE_MAXSIZE=1G \
           --user "ubuntu:ubuntu" \
           presubmit-image \
-          sudo -E ci/build_ubuntu.sh --run-integration-tests --asan --integration-output=/workspace/test-results
+          sudo -E ci/build_ubuntu.sh --run-integration-tests --asan --jobs=4 --integration-output=/workspace/test-results
 
     - name: Save ccache
       if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -68,6 +71,13 @@ jobs:
       with:
         path: .ccache
         key: ccache-integration-asan-${{ github.sha }}
+
+    - name: Prune superseded ccache
+      if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+      continue-on-error: true
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: ci/prune_ccache.sh ccache-integration-asan-
 
     - name: Update Test Results Permissions
       if: always()

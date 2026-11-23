@@ -131,3 +131,5 @@ include_directories(${__PROTOBUF_INCLUDE_PATH})
 find_package(gRPC REQUIRED CONFIG)
 list(APPEND THIRD_PARTY_LIBS gRPC::grpc++)
 list(APPEND THIRD_PARTY_LIBS gRPC::grpc)
+
+find_package(re2 REQUIRED CONFIG)

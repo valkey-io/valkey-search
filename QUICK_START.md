@@ -7,8 +7,6 @@ Follow these steps to set up, build, and run the Valkey server with the valkey-s
 1. Follow the [instructions to build Valkey from source](https://github.com/valkey-io/valkey?tab=readme-ov-file#building-valkey-using-makefile). Make sure to use Valkey version 9.1.0 or later.
 2. Follow the [instructions to build the valkey-search module from source](https://github.com/valkey-io/valkey-search/tree/main?tab=readme-ov-file#build-instructions).
 
-Alternatively, you can get started quickly using the [pre-built Docker bundle](https://github.com/valkey-io/valkey-search#docker), which includes both Valkey and valkey-search ready to run.
-
 ## Step 2: Run the Valkey Server
 
 Once valkey-search is built, run the Valkey server with the valkey-search module loaded:
@@ -36,13 +34,14 @@ valkey-cli
 ### Create a Vector Index
 
 ```bash
-FT.CREATE myIndex SCHEMA embedding VECTOR HNSW 6 TYPE FLOAT32 DIM 3 DISTANCE_METRIC COSINE
+FT.CREATE myIndex SCHEMA embedding VECTOR HNSW 6 TYPE FLOAT32 DIM 3 DISTANCE_METRIC COSINE category TAG
 ```
 
 - `embedding` is the field name for storing vectors.
 - `VECTOR HNSW` uses the Hierarchical Navigable Small World algorithm for approximate nearest neighbor search. The other option is `VECTOR FLAT` for exact brute-force search.
 - `DIM 3` sets the vector dimensionality to 3.
 - `DISTANCE_METRIC COSINE` sets the distance metric to cosine similarity. Other options are `L2` and `IP`.
+- `category` is a TAG field, used below to filter a vector query.
 
 ### Insert Some Vectors
 
@@ -50,9 +49,9 @@ Vectors must be encoded in little-endian byte order using the element type the i
 
 ```bash
 # [0.0, 0.0, 1.0]
-HSET my_hash_key_1 embedding "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x80?"
+HSET my_hash_key_1 embedding "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x80?" category "electronics"
 # [0.000145, 0.0, 1.0]
-HSET my_hash_key_2 embedding "\x00\xaa\x00\x00\x00\x00\x00\x00\x00\x00\x80?"
+HSET my_hash_key_2 embedding "\x00\xaa\x00\x00\x00\x00\x00\x00\x00\x00\x80?" category "books"
 ```
 
 ### Issue a Vector Query
@@ -262,6 +261,7 @@ INFO SEARCH
 - [Command Reference](docs/COMMANDS.md) — detailed syntax and options for all commands.
 - [Query Language](docs/topics/search-query.md) — full filter expression syntax, logical operators, and text search operators.
 - [Data Formats](docs/topics/search-data-formats.md) — ingestion formats for tag, numeric, vector, and text fields.
+- [Scoring](docs/topics/search-scoring.md) — how query results are scored and ordered.
 - [Search Overview](docs/topics/search.md) — architecture, cluster mode, replication, and consistency model.
 - [Configuration](docs/topics/search-configurables.md) — tunable parameters for the search module.
 - [INFO SEARCH Metrics](docs/topics/search-observables.md) — module-wide memory, latency, query, and thread pool metrics.

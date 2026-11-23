@@ -20,7 +20,7 @@ from valkey_search_test_case import (
     ValkeySearchClusterTestCase,
 )
 from valkeytestframework.conftest import resource_port_tracker
-from indexes import Index, Text
+from indexes import Index, Text, Vector
 from utils import (
     IndexingTestHelper,
     cleanup_module_binary,
@@ -39,6 +39,7 @@ from utils import (
 
 _compat_index = Index("compat_idx", [Text("t")])
 _compat_index_french = Index("compat_idx", [Text("t")], language="FRENCH")
+_compat_index_hnsw = Index("compat_idx", [Vector("v", 3, type="HNSW")])
 
 
 def _create_english_text_index(client):
@@ -51,6 +52,12 @@ def _create_french_text_index(client):
     """Create a French text index — stamps kRelease13."""
     _compat_index_french.create(client, wait_for_backfill=True)
     _compat_index_french.load_data(client, 10)
+
+
+def _create_hnsw_index(client):
+    """Create an HNSW index — its RDB has a key labels section 1.2 must skip."""
+    _compat_index_hnsw.create(client, wait_for_backfill=True)
+    _compat_index_hnsw.load_data(client, 10)
 
 
 # The stamp follows the features used, not the module version: the same
@@ -67,6 +74,10 @@ CURRENT_RDB_ON_OLD_MODULE_CASES = [
     pytest.param(
         "1.2.0", _create_french_text_index, "reject",
         id="french_rdb_rejected_by_v1.2",
+    ),
+    pytest.param(
+        "1.2.0", _create_hnsw_index, "accept",
+        id="hnsw_rdb_accepted_by_v1.2",
     ),
 ]
 

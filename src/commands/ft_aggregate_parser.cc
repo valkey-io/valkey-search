@@ -212,6 +212,8 @@ ConstructApplyParser() {
             parameters.MakeReference(vmsdk::ToStringView(name_string), true));
         apply->name_ = std::unique_ptr<Attribute>(
             dynamic_cast<Attribute *>(name.release()));
+        parameters.record_info_by_index_[apply->name_->record_index_]
+            .result_type_ = apply->expr_->GetResultType();
         DBG << *apply << "\n";
         parameters.stages_.emplace_back(std::move(apply));
         return absl::OkStatus();
@@ -318,6 +320,7 @@ ConstructGroupByParser() {
       [](AggregateParameters &parameters,
          vmsdk::ArgsIterator &itr) -> absl::Status {
         auto groupby = std::make_unique<GroupBy>();
+        parameters.groupby_writes_.emplace();
         uint32_t cnt{0};
         // GROUPBY 0 puts every record into a single group, as in Redisearch.
         VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, cnt));
@@ -352,6 +355,10 @@ ConstructGroupByParser() {
               reducer_itr->second(*uc_name.AsStringView(), parameters, itr));
           groupby->reducers_.emplace_back(std::move(r));
         }
+        for (auto &name : *parameters.groupby_writes_) {
+          parameters.written_names_.insert(std::move(name));
+        }
+        parameters.groupby_writes_.reset();
         parameters.stages_.emplace_back(std::move(groupby));
         DBG << "After groupby: " << parameters << "\n";
         return absl::OkStatus();
@@ -400,9 +407,20 @@ vmsdk::KeyValueParser<AggregateParameters> CreateAggregateParser() {
 absl::StatusOr<std::unique_ptr<expr::Expression::AttributeReference>>
 AggregateParameters::MakeReference(const absl::string_view name, bool create) {
   DBG << "MakeReference : " << name << " Create:" << create << "\n";
+  // Note each name a stage reads or writes; see `read_names_`.
+  if (create) {
+    if (groupby_writes_.has_value()) {
+      groupby_writes_->emplace_back(name);
+    } else {
+      written_names_.emplace(name);
+    }
+  } else if (!written_names_.contains(name)) {
+    read_names_.emplace(name);
+  }
   auto it = record_indexes_by_alias_.find(name);
   if (it != record_indexes_by_alias_.end()) {
-    return std::make_unique<Attribute>(name, it->second);
+    return std::make_unique<Attribute>(
+        name, it->second, record_info_by_index_[it->second].result_type_);
   }
   indexes::IndexerType fieldType = indexes::IndexerType::kNone;
   if (!create) {
@@ -420,21 +438,50 @@ AggregateParameters::MakeReference(const absl::string_view name, bool create) {
         return absl::InvalidArgumentError(
             absl::StrCat("Invalid data type for @", name));
     }
+    if (fieldType == indexes::IndexerType::kNumeric && LoadsRawString(name)) {
+      fieldType = indexes::IndexerType::kNone;
+    }
   }
   auto identifier = parse_vars_.index_interface_->GetIdentifier(name);
   size_t new_index;
   if (identifier.ok()) {
     // DBG << "Adding Record Attribute: " << name << " with alias "
     //     << identifier.value() << "\n";
-    new_index = AddRecordAttribute(*identifier, name,
-                                   OutputNameFor(name, *identifier), fieldType);
+    new_index =
+        AddRecordAttribute(*identifier, name, OutputNameFor(name, *identifier),
+                           fieldType, ResultTypeFor(fieldType));
   } else {
     // DBG << "Adding Record Attribute: " << name
     //     << " with synthetic alias (no index schema)\n";
     new_index =
-        AddRecordAttribute(name, name, name, indexes::IndexerType::kNone);
+        AddRecordAttribute(name, name, name, indexes::IndexerType::kNone,
+                           expr::Expression::Type::kString);
   }
-  return std::make_unique<Attribute>(name, new_index);
+  return std::make_unique<Attribute>(
+      name, new_index, record_info_by_index_[new_index].result_type_);
+}
+
+// FT.AGGREGATE hands a HASH field that only LOAD * fetched to the pipeline as
+// its raw string, NUMERIC (and SORTABLE) fields included: `@n < '5'` compares
+// strings, strlen(@n) answers, and SORTBY @n orders the strings. A field named
+// in a LOAD clause is a number. Measured on Redis 8; JSON's LOAD * exposes no
+// fields there, so JSON keeps its numbers, and FT.HYBRID's LOAD * sorts such
+// a field as a number (hybrid-answers.pickle.gz).
+bool AggregateParameters::LoadsRawString(absl::string_view name) const {
+  if (hybrid_ || !loadall_ || index_schema == nullptr ||
+      index_schema->GetAttributeDataType().ToProto() !=
+          data_model::ATTRIBUTE_DATA_TYPE_HASH ||
+      !index_schema->GetIndex(name).ok()) {
+    return false;
+  }
+  for (const auto &load : loads_) {
+    if (load.identifier == name || load.alias == name) {
+      return false;
+    }
+  }
+  return VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 3, 0, "aggregate_load_all_raw_strings", [] { return true; },
+      [] { return false; });
 }
 
 // SORTBY's retention bound is a property of the whole pipeline, not of the

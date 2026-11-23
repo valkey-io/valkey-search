@@ -9,9 +9,12 @@
 #include <string_view>
 #include <vector>
 
+#include "absl/strings/str_cat.h"
+#include "absl/synchronization/mutex.h"
 #include "valkey_search.h"
 #include "version.h"
 #include "vmsdk/src/concurrency.h"
+#include "vmsdk/src/huge_page_allocation.h"
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/thread_pool.h"
 
@@ -82,6 +85,17 @@ static auto cursor_max_count =
                           100000,                 // default
                           1,                      // min
                           INT64_MAX)              // max
+        .Build();
+
+/// Register the "--max-regex-pattern-bytes" flag. The longest REGEX pattern
+/// (in bytes) accepted by FT._LIST.
+constexpr absl::string_view kMaxRegexPatternBytesConfig{
+    "max-regex-pattern-bytes"};
+static auto max_regex_pattern_bytes =
+    config::NumberBuilder(kMaxRegexPatternBytesConfig,  // name
+                          1024,                         // default
+                          1,                            // min
+                          1 << 20)                      // max
         .Build();
 
 /// Register the "--cursor-max-idle-ms" flag. The largest MAXIDLE accepted by
@@ -185,6 +199,20 @@ constexpr absl::string_view kHNSWValidationEnable{"hnsw-validation-enable"};
 static auto hnsw_validation_enable =
     config::BooleanBuilder(kHNSWValidationEnable, true)  // default true
         .Dev()
+        .Build();
+
+/// Allocate HNSW / FLAT vector index memory (graph and vector storage) in
+/// units of transparent huge pages.
+/// Takes effect only when the server provides the external memory accounting
+/// APIs (Valkey 9.2+), and only for memory allocated after the change. Huge
+/// pages are best effort: with the host THP mode set to "always", Valkey
+/// disables THP for the process unless "disable-thp no" is set.
+constexpr absl::string_view kVectorChunkHugePages{"vector-chunk-huge-pages"};
+static auto vector_chunk_huge_pages =
+    config::BooleanBuilder(kVectorChunkHugePages, true)  // default true
+        .WithModifyCallback([](auto new_value) {
+          vmsdk::SetHugePageAllocationEnabled(new_value);
+        })
         .Build();
 
 // Register an enumerator for the log level
@@ -577,10 +605,10 @@ static auto rax_target_mutex_pool_size =
         .Build();
 
 /// Register the "--max-nonvector-search-results-fetched" flag. Controls the
-/// maximum number of results to fetch in background threads before content
-/// fetching on non-vector (numeric/tag/text) query paths. This controls
-/// potential OOM by limiting the result set size before expensive content
-/// fetching from the keyspace.
+/// maximum number of results retained in background threads before content
+/// fetching on non-vector (numeric/tag/text/VECTOR_RANGE) query paths. This
+/// controls potential OOM by limiting the result set size before expensive
+/// content fetching from the keyspace.
 /// Note: If queries use LIMIT with a large offset (e.g., LIMIT offset count
 /// where offset + count exceeds this value), consider increasing this config
 /// to ensure all paginated results are accessible.
@@ -748,6 +776,10 @@ vmsdk::config::Number &GetCursorMaxCount() {
   return dynamic_cast<vmsdk::config::Number &>(*cursor_max_count);
 }
 
+vmsdk::config::Number &GetMaxRegexPatternBytes() {
+  return dynamic_cast<vmsdk::config::Number &>(*max_regex_pattern_bytes);
+}
+
 vmsdk::config::Number &GetCursorMaxIdleMs() {
   return dynamic_cast<vmsdk::config::Number &>(*cursor_max_idle_ms);
 }
@@ -904,9 +936,40 @@ config::Version &GetEmulateRelease() {
   return dynamic_cast<config::Version &>(*emulate_release_config);
 }
 
+thread_local vmsdk::ValkeyVersion ScopedMinimumRelease::minimum_{0, 0, 0};
+
 bool EnabledInVersion(vmsdk::ValkeyVersion version) {
-  return GetEmulateRelease().GetValue() >= version;
+  return version <= ScopedMinimumRelease::Minimum() ||
+         GetEmulateRelease().GetValue() >= version;
 }
+
+std::map<std::string, std::atomic<long long>> CompatibilityUsageMap;
+
+// Serializes inserts into CompatibilityUsageMap against each other and against
+// the INFO walk below. Increments of an existing entry do not take it.
+static absl::Mutex compatibility_usage_mutex;
+
+std::map<std::string, std::atomic<long long>>::iterator
+RegisterCompatibilityUsage(absl::string_view label) {
+  absl::MutexLock lock(&compatibility_usage_mutex);
+  return CompatibilityUsageMap.try_emplace(std::string(label), 0).first;
+}
+
+static vmsdk::info_field::String compatibility_usage(
+    "compatibility", "compatibility_usage",
+    vmsdk::info_field::StringBuilder().App().ComputedString(
+        []() -> std::string {
+          absl::MutexLock lock(&compatibility_usage_mutex);
+          std::string result;
+          for (const auto &[label, count] : CompatibilityUsageMap) {
+            if (!result.empty()) {
+              result += ',';
+            }
+            absl::StrAppend(&result, label, "=",
+                            count.load(std::memory_order_relaxed));
+          }
+          return result;
+        }));
 
 }  // namespace options
 }  // namespace valkey_search

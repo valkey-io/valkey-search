@@ -156,6 +156,9 @@ struct MultiSearchParameters {
   // kFunction). Compiled by the FT.HYBRID parser against the per-arm score
   // aliases; evaluated per fused document in BuildFusedNeighbors.
   std::unique_ptr<expr::Expression> combine_function;
+  // The first evaluation error the COMBINE FUNCTION raised during fusion, if
+  // any. The reply is that error, as an APPLY or FILTER error would be.
+  absl::Status combine_error;
   // Aggregate post-pipeline state (populated by the FT.HYBRID parser in Phase
   // 4). Fed the fused neighbor list via aggregate::RunAggregatePipeline.
   std::unique_ptr<aggregate::AggregateParameters> agg;

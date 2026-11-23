@@ -890,6 +890,13 @@ jobs:
               per_page: 100,
             });
             const ALLOWED_LABELS = new Set(repoLabels.map(l => l.name));
+            const BENCHMARK_LABELS = new Map([
+              // label -> extra workflow_dispatch inputs for search-benchmark-pr.yml.
+              // Keys must be declared inputs on that workflow; unlisted inputs use
+              // their workflow default.
+              ['run-search-benchmark',                { skip_profiling: 'false' }],
+              ['run-search-benchmark-skip-profiling', { skip_profiling: 'true'  }],
+            ]);
 
             const labelMatch = body.match(/^\/label\s+(.+)$/m);
             const removeLabelMatch = body.match(/^\/remove-label\s+(.+)$/m);
@@ -909,7 +916,8 @@ jobs:
               });
               const current = new Set(issue.labels.map(l => l.name));
 
-              const changed = [], noop = [], unknown = [], failed = [];
+              let changed = [], noop = [], unknown = [], failed = [];
+              const dispatchFailed = [], dispatchSkipped = [], dispatchRolledBack = [], dispatchRollbackFailed = [];
               for (const name of requested) {
                 if (removing) {
                   if (!current.has(name)) { noop.push(name); continue; }
@@ -946,6 +954,48 @@ jobs:
                   failed.push(...changed);
                   changed.length = 0;
                 }
+                const benchmarkLabels = changed.filter(name => BENCHMARK_LABELS.has(name));
+                if (benchmarkLabels.length > 0) {
+                  if (!context.payload.issue.pull_request) {
+                    dispatchSkipped.push(...benchmarkLabels);
+                  } else {
+                    const benchmarkRef = context.payload.repository.default_branch;
+                    const rollbackLabels = [];
+                    for (const benchmarkLabel of benchmarkLabels) {
+                      try {
+                        await github.rest.actions.createWorkflowDispatch({
+                          owner: context.repo.owner,
+                          repo: context.repo.repo,
+                          workflow_id: 'search-benchmark-pr.yml',
+                          ref: benchmarkRef,
+                          inputs: {
+                            ...BENCHMARK_LABELS.get(benchmarkLabel),
+                            pr_number: String(context.issue.number),
+                            trigger_label: benchmarkLabel,
+                          },
+                        });
+                      } catch (e) {
+                        dispatchFailed.push(`${benchmarkLabel} (${e.message})`);
+                        rollbackLabels.push(benchmarkLabel);
+                      }
+                    }
+
+                    for (const benchmarkLabel of rollbackLabels) {
+                      try {
+                        await github.rest.issues.removeLabel({
+                          owner: context.repo.owner,
+                          repo: context.repo.repo,
+                          issue_number: context.issue.number,
+                          name: benchmarkLabel,
+                        });
+                        dispatchRolledBack.push(benchmarkLabel);
+                      } catch (e) {
+                        dispatchRollbackFailed.push(`${benchmarkLabel} (${e.message})`);
+                      }
+                    }
+                    changed = changed.filter(name => !dispatchRolledBack.includes(name));
+                  }
+                }
               }
 
               const fmt = (names) => names.map(n => `\`${n}\``).join(', ');
@@ -953,6 +1003,10 @@ jobs:
               if (changed.length) notes.push(`${removing ? 'Removed' : 'Applied'}: ${fmt(changed)}.`);
               if (noop.length) notes.push(`${removing ? 'Not applied' : 'Already applied'}: ${fmt(noop)}.`);
               if (failed.length) notes.push(`Failed: ${fmt(failed)}.`);
+              if (dispatchFailed.length) notes.push(`Benchmark workflow dispatch failed: ${fmt(dispatchFailed)}.`);
+              if (dispatchRolledBack.length) notes.push(`Rolled back benchmark label after dispatch failure: ${fmt(dispatchRolledBack)}.`);
+              if (dispatchRollbackFailed.length) notes.push(`Could not roll back benchmark label after dispatch failure: ${fmt(dispatchRollbackFailed)}.`);
+              if (dispatchSkipped.length) notes.push(`Benchmark workflow not started because ${fmt(dispatchSkipped)} only works on pull requests.`);
               if (unknown.length) {
                 notes.push(
                   `Not a recognised label: ${fmt(unknown)}. Allowed labels: ${fmt([...ALLOWED_LABELS])}.`

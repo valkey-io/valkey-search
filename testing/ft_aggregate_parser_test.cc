@@ -10,6 +10,7 @@
 #include <iostream>
 #include <limits>
 #include <map>
+#include <string>
 #include <vector>
 
 #include "gmock/gmock.h"
@@ -299,7 +300,15 @@ TEST_F(AggregateTest, WithCursorMaxIdleConfigTest) {
 struct TestStage {
   const char *stage_in_;
   const char *stage_out_;
+  // Expected error message, checked when the stage is parsed on its own.
+  absl::string_view error_;
 };
+static constexpr const char *kQuantileRangeError =
+    "Error parsing value for the parameter `GROUPBY` - QUANTILE: quantile "
+    "value must be between 0.0 and 1.0";
+static constexpr const char *kQuantileLiteralError =
+    "Error parsing value for the parameter `GROUPBY` - QUANTILE: quantile "
+    "value must be a numeric literal";
 static std::vector<TestStage> TestStages{
     {"bogus", nullptr},
     {"LiMiT", nullptr},
@@ -325,8 +334,8 @@ static std::vector<TestStage> TestStages{
     {"SORTBY 1 @n1 MAX", nullptr},
     {"SORTBY 1 @n1 max 5", "SORTBY: ASC:@n1 MAX:5"},
     {"SOrTBY 2 @n1 max", nullptr},
-    {"GrOUPBY 0", "GROUPBY "},
-    {"GROUPBY 0 REDUCE COUNT 0 AS c", "GROUPBY  COUNT() => c"},
+    {"GrOUPBY 0", "GROUPBY"},
+    {"GROUPBY 0 REDUCE COUNT 0 AS c", "GROUPBY COUNT() => c"},
     {"GROUPBY 0 @n1", nullptr},
     {"GROUPBY -1", nullptr},
     {"GROUPBY 1", nullptr},
@@ -343,6 +352,41 @@ static std::vector<TestStage> TestStages{
      "GROUPBY @n1 TOLIST(@n2) => items"},
     {"GROUPBY 1 @n1 REDUCE TOLIST 0", nullptr},
     {"GROUPBY 1 @n1 REDUCE TOLIST 2 @n1 @n2", nullptr},
+    {"GROUPBY 1 @n1 REDUCE QUANTILE", nullptr},
+    {"GROUPBY 1 @n1 REDUCE QUANTILE 0", nullptr,
+     "Error parsing value for the parameter `GROUPBY` - incorrect number of "
+     "arguments (0) to reducer QUANTILE"},
+    {"GROUPBY 1 @n1 REDUCE QUANTILE 1", nullptr},
+    {"GROUPBY 1 @n1 REDUCE QUANTILE 1 @n2", nullptr,
+     "Error parsing value for the parameter `GROUPBY` - incorrect number of "
+     "arguments (1) to reducer QUANTILE"},
+    {"GROUPBY 1 @n1 REDUCE QUANTILE 2 @n2", nullptr},
+    {"GROUPBY 1 @n1 REDUCE QUANTILE 2 @n2 0.5",
+     "GROUPBY @n1 QUANTILE(@n2,0.5) => QUANTILE(@n2,0.5)"},
+    {"GROUPBY 1 @n1 REDUCE QUANTILE 2 @n2 0.5 AS median",
+     "GROUPBY @n1 QUANTILE(@n2,0.5) => median"},
+    {"GROUPBY 1 @n1 REDUCE QUANTILE 2 @n2 0.0 AS min",
+     "GROUPBY @n1 QUANTILE(@n2,0.0) => min"},
+    {"GROUPBY 1 @n1 REDUCE QUANTILE 2 @n2 1.0 AS max",
+     "GROUPBY @n1 QUANTILE(@n2,1.0) => max"},
+    {"GROUPBY 1 @n1 REDUCE QUANTILE 2 @n2 0.99 AS p99",
+     "GROUPBY @n1 QUANTILE(@n2,0.99) => p99"},
+    {"GROUPBY 1 @n1 REDUCE QUANTILE 3 @n2 0.5 extra", nullptr,
+     "Error parsing value for the parameter `GROUPBY` - incorrect number of "
+     "arguments (3) to reducer QUANTILE"},
+    {"GROUPBY 1 @n1 REDUCE QUANTILE 2 @n2 -0.1", nullptr, kQuantileRangeError},
+    {"GROUPBY 1 @n1 REDUCE QUANTILE 2 @n2 1.1", nullptr, kQuantileRangeError},
+    {"GROUPBY 1 @n1 REDUCE QUANTILE 2 @n2 -10", nullptr, kQuantileRangeError},
+    {"GROUPBY 1 @n1 REDUCE QUANTILE 2 @n2 10", nullptr, kQuantileRangeError},
+    {"GROUPBY 1 @n1 REDUCE QUANTILE 2 @n2 nan", nullptr, kQuantileRangeError},
+    {"GROUPBY 1 @n1 REDUCE QUANTILE 2 @n2 inf", nullptr, kQuantileRangeError},
+    {"GROUPBY 1 @n1 REDUCE QUANTILE 2 @n2 -inf", nullptr, kQuantileRangeError},
+    {"GROUPBY 1 @n1 REDUCE QUANTILE 2 @n2 abc", nullptr, kQuantileLiteralError},
+    {"GROUPBY 1 @n1 REDUCE QUANTILE 2 @n2 ''", nullptr, kQuantileLiteralError},
+    {"GROUPBY 1 @n1 REDUCE COUNT_DISTINCTISH 1 @n2",
+     "GROUPBY @n1 COUNT_DISTINCTISH(@n2) => COUNT_DISTINCTISH(@n2)"},
+    {"GROUPBY 1 @n1 REDUCE COUNT_DISTINCTISH 0", nullptr},
+    {"GROUPBY 1 @n1 REDUCE COUNT_DISTINCTISH 2 @n1 @n2", nullptr},
     {"apply", nullptr},
     {"apply x", nullptr},
     {"apply @n1", nullptr},
@@ -376,6 +420,9 @@ static void DoStageTest(FakeIndexInterface *fake_index,
       std::cout << "Failed status: " << result << "\n";
     }
     EXPECT_FALSE(result.ok());
+    if (indexes.size() == 1 && !TestStages[indexes[0]].error_.empty()) {
+      EXPECT_EQ(result.message(), TestStages[indexes[0]].error_) << text;
+    }
   } else {
     EXPECT_TRUE(result.ok());
     EXPECT_EQ(params.stages_.size(), indexes.size());
@@ -431,13 +478,64 @@ TEST_F(AggregateTest, DefaultReducerAliasFollowsEmulateRelease) {
   VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue({1, 2, 0}));
   EXPECT_EQ(dump("GROUPBY 1 @n1 REDUCE MIN 1 @n2"),
             "GROUPBY @n1 MIN(@n2) => MIN(@n2)");
+  EXPECT_EQ(dump("GROUPBY 1 @n1 REDUCE QUANTILE 2 @n2 0.5"),
+            "GROUPBY @n1 QUANTILE(@n2,0.5) => QUANTILE(@n2,0.5)");
 
   VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue({1, 3, 0}));
   EXPECT_EQ(dump("GROUPBY 1 @n1 REDUCE COUNT 0"),
             "GROUPBY @n1 COUNT() => __generated_aliascount");
   EXPECT_EQ(dump("GROUPBY 1 @n1 REDUCE MAX 1 @N3"),
             "GROUPBY @n1 MAX(@N3) => __generated_aliasmaxn3");
+  EXPECT_EQ(dump("GROUPBY 1 @n1 REDUCE QUANTILE 2 @N3 0.5"),
+            "GROUPBY @n1 QUANTILE(@N3,0.5) => __generated_aliasquantilen3,0.5");
   VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue(saved));
+}
+
+// Every column knows the type of the values it holds, so an expression that
+// reads it can be typed at compile time. A stage that writes a column sets its
+// type from what it writes; a reference keeps the type the column had when the
+// reference was compiled.
+TEST_F(AggregateTest, ColumnResultTypes) {
+  using Type = expr::Expression::Type;
+  fake_index.fields_["t1"] = indexes::IndexerType::kTag;
+  fake_index.fields_["v1"] = indexes::IndexerType::kHNSW;
+  auto argv = vmsdk::ToValkeyStringVector(
+      "APPLY @n1 AS a APPLY lower(@t1) AS b APPLY @v1 AS v "
+      "APPLY @a AS before APPLY lower(@t1) AS a APPLY @a AS after "
+      "GROUPBY 2 @b @before REDUCE COUNT 0 AS cnt REDUCE SUM 1 @before AS s "
+      "REDUCE TOLIST 1 @b AS tl REDUCE RANDOM_SAMPLE 2 @b 3 AS rs "
+      "REDUCE FIRST_VALUE 1 @b AS fv REDUCE QUANTILE 2 @before 0.5 AS q "
+      "APPLY @cnt+1 AS c1");
+  vmsdk::ArgsIterator itr(argv.data(), argv.size());
+  AggregateParameters params(0);
+  params.timeout_ms = 0;
+  params.parse_vars_.index_interface_ = &fake_index;
+  auto parser = CreateAggregateParser();
+  auto status = parser.Parse(params, itr);
+  ASSERT_TRUE(status.ok()) << status;
+  auto type_of = [&](const std::string &name) {
+    return params
+        .record_info_by_index_[params.record_indexes_by_alias_.at(name)]
+        .result_type_;
+  };
+  EXPECT_EQ(type_of("n1"), Type::kNumber);
+  EXPECT_EQ(type_of("t1"), Type::kString);
+  EXPECT_EQ(type_of("v1"), Type::kVector);
+  EXPECT_EQ(type_of("b"), Type::kString);
+  EXPECT_EQ(type_of("v"), Type::kVector);
+  EXPECT_EQ(type_of("a"), Type::kString);  // rewritten by APPLY lower(@t1) AS a
+  EXPECT_EQ(type_of("before"), Type::kNumber);
+  EXPECT_EQ(type_of("after"), Type::kString);
+  EXPECT_EQ(type_of("cnt"), Type::kNumber);
+  EXPECT_EQ(type_of("q"), Type::kNumber);
+  EXPECT_EQ(type_of("s"), Type::kNumber);
+  EXPECT_EQ(type_of("tl"), Type::kArray);
+  EXPECT_EQ(type_of("rs"), Type::kArray);
+  EXPECT_EQ(type_of("fv"), Type::kString);
+  EXPECT_EQ(type_of("c1"), Type::kNumber);
+  for (auto arg : argv) {
+    ValkeyModule_FreeString(nullptr, arg);
+  }
 }
 
 TEST_F(AggregateTest, EmptyApplyAndFilterExpressionsAreRejected) {
@@ -475,6 +573,19 @@ TEST_F(AggregateTest, AddScoresFlagParses) {
       ValkeyModule_FreeString(nullptr, arg);
     }
   }
+}
+
+// GetParam must return a value that owns its bytes: the params map views the
+// command's argv, which is freed before a WITHCURSOR reply is sent.
+TEST_F(AggregateTest, GetParamReturnsOwnedCopy) {
+  AggregateParameters params(0);
+  std::string argv_value = "param-value";
+  params.parse_vars.params["p"] = {0, argv_value};
+  auto value = params.GetParam("p");
+  VMSDK_EXPECT_OK(value);
+  // Simulate argv being freed and its memory reused.
+  argv_value.replace(0, argv_value.size(), argv_value.size(), 'X');
+  EXPECT_EQ(value->AsString(), "param-value");
 }
 
 TEST_F(AggregateTest, GetSerializationRange_NoStages) {
@@ -561,17 +672,32 @@ TEST_F(AggregateTest, GetSerializationRange_OtherStagesBeforeLimit) {
 }
 
 TEST_F(AggregateTest, ExpressionDepthAtLimit) {
-  auto limit = options::GetQueryStringDepth().GetValue();
+  auto &depth = options::GetQueryStringDepth();
+  auto original = depth.GetValue();
+#ifdef SAN_BUILD
+  // A sanitizer's larger stack frames overflow the stack before the parser's
+  // recursion reaches the default limit, so test a smaller one.
+  VMSDK_EXPECT_OK(depth.SetValue(500));
+#endif
+  auto limit = depth.GetValue();
   std::string deep_expr(limit - 1, '(');
   deep_expr += "1";
   deep_expr += std::string(limit - 1, ')');
 
   AggregateParameters params(0);
   EXPECT_TRUE(expr::Expression::Compile(params, deep_expr).ok());
+  VMSDK_EXPECT_OK(depth.SetValue(original));
 }
 
 TEST_F(AggregateTest, ExpressionDepthExceedsLimit) {
-  auto limit = options::GetQueryStringDepth().GetValue();
+  auto &depth = options::GetQueryStringDepth();
+  auto original = depth.GetValue();
+#ifdef SAN_BUILD
+  // A sanitizer's larger stack frames overflow the stack before the parser's
+  // recursion reaches the default limit, so test a smaller one.
+  VMSDK_EXPECT_OK(depth.SetValue(500));
+#endif
+  auto limit = depth.GetValue();
   std::string deep_expr(limit, '(');
   deep_expr += "1";
   deep_expr += std::string(limit, ')');
@@ -580,6 +706,7 @@ TEST_F(AggregateTest, ExpressionDepthExceedsLimit) {
   auto result = expr::Expression::Compile(params, deep_expr);
   EXPECT_FALSE(result.ok());
   EXPECT_TRUE(absl::IsInvalidArgument(result.status()));
+  VMSDK_EXPECT_OK(depth.SetValue(original));
 }
 
 // ---------------------------------------------------------------------------

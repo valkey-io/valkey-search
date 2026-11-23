@@ -34,6 +34,7 @@
 #include "src/query/search.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/cancel.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/utils.h"
@@ -99,7 +100,7 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::LoadFromRDB(
     ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
     const data_model::VectorIndex &vector_index_proto,
     absl::string_view attribute_identifier, SupplementalContentChunkIter &&iter,
-    int db_num) {
+    int db_num, TrackedKeys *key_labels) {
   try {
     auto index = std::shared_ptr<VectorFlat<T>>(
         new VectorFlat<T>(vector_index_proto.dimension_count(),
@@ -113,8 +114,20 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::LoadFromRDB(
         std::make_unique<FlatIndex>(index->space_.get(), index->normalize_);
     RDBChunkInputStream input(std::move(iter));
 
-    auto generator = [allocator = index->GetVectorAllocator()](
-                         absl::string_view vector_data) {
+    size_t keys_changed_since_save = 0;
+    auto generator = [&, allocator = index->GetVectorAllocator()](
+                         absl::string_view vector_data,
+                         hnswlib::labeltype label) {
+      if (key_labels) {
+        auto it = key_labels->key_by_internal_id.find(label);
+        if (it != key_labels->key_by_internal_id.end()) {
+          if (auto shared = index->ShareIfUnchangedSinceSave(
+                  ctx, attribute_data_type, it->second, vector_data)) {
+            return std::move(*shared);
+          }
+          ++keys_changed_since_save;
+        }
+      }
       float reciprocal_magnitude = CalcReciprocalMagnitude(
           reinterpret_cast<const T *>(vector_data.data()),
           vector_data.size() / sizeof(T));
@@ -124,6 +137,11 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::LoadFromRDB(
     };
     VMSDK_RETURN_IF_ERROR(
         index->algo_->LoadIndex(input, index->space_.get(), generator));
+    if (key_labels) {
+      index->AdoptTrackedKeys(std::move(*key_labels));
+      index->vectors_resolved_on_load_ = true;
+    }
+    index->keys_changed_since_save_ = keys_changed_since_save;
     return index;
   } catch (const std::exception &e) {
     ++Metrics::GetStats().flat_create_exceptions_cnt;
@@ -189,7 +207,9 @@ template <typename T>
 absl::Status VectorFlat<T>::ModifyRecordImpl(uint64_t internal_id,
                                              VectorRecord &&vector_record) {
   absl::ReaderMutexLock lock(&resize_mutex_);
-  VectorRecord *stored_record = algo_->GetPoint(internal_id);
+  // A concurrent removePoint() can move or destroy this slot.
+  std::unique_lock<std::mutex> index_lock(algo_->index_lock);
+  VectorRecord *stored_record = algo_->GetPointLockFree(internal_id);
   if (!stored_record) {
     return absl::InternalError(
         absl::StrCat("Couldn't find internal id: ", internal_id));
@@ -213,19 +233,6 @@ absl::Status VectorFlat<T>::RemoveRecordImpl(uint64_t internal_id) {
   }
   return absl::OkStatus();
 }
-
-// Paper over the impedance mismatch between the
-// cancel::Token and hnswlib::BaseCancellationFunctor.
-class CancelCondition : public hnswlib::BaseCancellationFunctor {
- public:
-  explicit CancelCondition(cancel::Token &token) : token_(token) {
-    CHECK(&token);
-  }
-  bool isCancelled() override { return token_->IsCancelled(); }
-
- private:
-  cancel::Token &token_;
-};
 
 template <typename T>
 absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::Search(
@@ -277,34 +284,44 @@ float VectorFlat<T>::ComputeDistance(absl::string_view query,
 // Linear scan of the contiguous FLAT store: the loop and distance kernel of
 // FLAT KNN (BruteforceSearch::searchKnn), resolving a key only for a match.
 template <typename T>
-absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::SearchRange(
-    absl::string_view query, float radius, cancel::Token &cancellation_token,
-    std::unique_ptr<hnswlib::BaseFilterFunctor> filter) {
+absl::StatusOr<RangeResult> VectorFlat<T>::SearchRange(
+    absl::string_view query, const RangeQuery &range,
+    cancel::Token &cancellation_token) {
+  VMSDK_ASSIGN_OR_RETURN(const float radius,
+                         this->ValidateRangeSearchInputs(query, range));
+  const size_t max_results = RangeResultLimit(
+      range, static_cast<size_t>(
+                 options::GetMaxNonVectorSearchResultsFetched().GetValue()));
   auto nq = this->NormalizeQueryIfNeeded(query);
   const float query_magnitude =
       normalize_ ? CalcReciprocalMagnitude(nq.view, this->GetVectorDataType())
                  : kDefaultMagnitude;
 
-  std::vector<Neighbor> neighbors;
-  neighbors.reserve(kRangeReserve);
+  RangeResult result;
+  std::vector<Neighbor> &neighbors = result.neighbors;
+  neighbors.reserve(std::min(kRangeReserve, max_results));
   for (size_t i = 0; i < algo_->cur_element_count_; ++i) {
     if (cancellation_token->IsCancelled()) {
       break;
     }
     const auto *stored_vector = algo_->GetDataPtrByInternalId(i);
     const hnswlib::labeltype label = algo_->GetLabel(stored_vector);
-    if (!*stored_vector || (filter && !(*filter)(label))) {
+    if (!*stored_vector || (range.filter && !(*range.filter)(label))) {
       continue;
     }
     float distance =
         this->RangeDistance(nq.view, query_magnitude, *stored_vector);
     if (distance <= radius) {
       if (const auto *key = this->FindKeyDuringSearch(label)) {
+        if (neighbors.size() >= max_results) {
+          result.truncated = true;
+          break;
+        }
         neighbors.emplace_back(*key, distance);
       }
     }
   }
-  return neighbors;
+  return result;
 }
 
 template <typename T>
@@ -358,8 +375,10 @@ VectorRecord &VectorFlat<T>::GetVectorLockFree(uint64_t internal_id) const {
 }
 
 template <typename T>
-VectorRecord &VectorFlat<T>::GetVector(uint64_t internal_id) const {
-  return *algo_->GetPoint(internal_id);
+VectorRecord VectorFlat<T>::GetVector(uint64_t internal_id) const {
+  std::unique_lock<std::mutex> index_lock(algo_->index_lock);
+  auto *ptr = algo_->GetPointLockFree(internal_id);
+  return ptr ? *ptr : VectorRecord();
 }
 
 template class VectorFlat<float>;

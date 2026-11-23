@@ -775,6 +775,16 @@ void MetadataManager::OnLoadingEnded(ValkeyModuleCtx *ctx) {
   }
 }
 
+void MetadataManager::OnLoadingFailed(ValkeyModuleCtx *ctx) {
+  if (staging_metadata_due_to_repl_load_.Get()) {
+    VMSDK_LOG(WARNING, ctx)
+        << "Clearing staged metadata due to RDB loading failure";
+    staged_metadata_ = GlobalMetadata();
+    staging_metadata_due_to_repl_load_ = false;
+  }
+  is_loading_ = false;
+}
+
 void MetadataManager::OnReplicationLoadStart(ValkeyModuleCtx *ctx) {
   VMSDK_LOG(NOTICE, ctx) << "Staging metadata during RDB load due to "
                             "replication, will apply on loading finished";
@@ -793,6 +803,10 @@ void MetadataManager::OnLoadingCallback(ValkeyModuleCtx *ctx,
                                         [[maybe_unused]] void *data) {
   if (subevent == VALKEYMODULE_SUBEVENT_LOADING_ENDED) {
     MetadataManager::Instance().OnLoadingEnded(ctx);
+    return;
+  }
+  if (subevent == VALKEYMODULE_SUBEVENT_LOADING_FAILED) {
+    MetadataManager::Instance().OnLoadingFailed(ctx);
     return;
   }
   if (subevent == VALKEYMODULE_SUBEVENT_LOADING_REPL_START) {

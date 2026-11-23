@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "absl/base/thread_annotations.h"
+#include "absl/cleanup/cleanup.h"
 #include "absl/functional/any_invocable.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
@@ -21,9 +22,11 @@
 #include "gtest/gtest.h"
 #include "src/commands/commands.h"
 #include "src/metrics.h"
+#include "src/query/multi_search.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
 #include "testing/common.h"
+#include "testing/coordinator/common.h"
 #include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/testing_infra/module.h"
@@ -365,6 +368,209 @@ TEST_F(MultiExecTest, FtSearchMulti) {
   for (auto cmd_arg : cmd_argv) {
     TestValkeyModule_FreeString(&fake_ctx_, cmd_arg);
   }
+  index_schema = nullptr;
+}
+
+TEST_F(MultiExecTest, FtSearchAsyncLoading) {
+  VMSDK_EXPECT_OK(
+      ValkeySearch::Instance().GetReaderThreadPool()->SuspendWorkers());
+  EXPECT_CALL(
+      *kMockValkeyModule,
+      OpenKey(&fake_ctx_, testing::An<ValkeyModuleString *>(), testing::_))
+      .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
+
+  EXPECT_CALL(*kMockValkeyModule, GetContextFlags(testing::_))
+      .WillRepeatedly(testing::Return(VALKEYMODULE_CTX_FLAGS_ASYNC_LOADING));
+  EXPECT_CALL(
+      *kMockValkeyModule,
+      BlockClient(testing::_, testing::_, testing::_, testing::_, testing::_))
+      .Times(0);
+  EXPECT_CALL(*kMockValkeyModule,
+              UnblockClient((ValkeyModuleBlockedClient *)1, testing::_))
+      .Times(0);
+
+  std::vector<std::string> argv = {
+      "FT.SEARCH",
+      "index_schema_name",
+      "*=>[KNN 1 @vector $query_vector EF_RUNTIME 100 AS score]",
+      "params",
+      "2",
+      "query_vector",
+      "$embedding",
+      "DIALECT",
+      "2",
+  };
+  auto vectors = DeterministicallyGenerateVectors(1, 100, 10.0);
+  std::vector<ValkeyModuleString *> cmd_argv;
+  std::transform(
+      argv.begin(), argv.end(), std::back_inserter(cmd_argv),
+      [&](std::string val) {
+        if (val == "$embedding") {
+          return ValkeyModule_CreateString(&fake_ctx_,
+                                           (char *)vectors[0].data(),
+                                           vectors[0].size() * sizeof(float));
+        }
+        return ValkeyModule_CreateString(&fake_ctx_, val.data(), val.size());
+      });
+  VMSDK_EXPECT_OK(FTSearchCmd(&fake_ctx_, cmd_argv.data(), cmd_argv.size()));
+  for (auto cmd_arg : cmd_argv) {
+    TestValkeyModule_FreeString(&fake_ctx_, cmd_arg);
+  }
+  index_schema = nullptr;
+}
+
+TEST_F(MultiExecTest, FtHybridAsyncLoadingReturnsLoadingError) {
+  ASSERT_TRUE(ValkeySearch::Instance().SupportParallelQueries());
+  EXPECT_CALL(
+      *kMockValkeyModule,
+      BlockClient(testing::_, testing::_, testing::_, testing::_, testing::_))
+      .Times(0);
+
+  std::vector<std::string> argv = {
+      "FT.HYBRID",
+      "index_schema_name",
+      "SEARCH",
+      "@attribute_name:{val}",
+      "VSIM",
+      "@vector",
+      "$query_vector",
+      "PARAMS",
+      "2",
+      "query_vector",
+      "$embedding",
+  };
+  auto vectors = DeterministicallyGenerateVectors(1, 100, 10.0);
+  std::vector<ValkeyModuleString *> cmd_argv;
+  std::transform(
+      argv.begin(), argv.end(), std::back_inserter(cmd_argv),
+      [&](std::string val) {
+        if (val == "$embedding") {
+          return ValkeyModule_CreateString(&fake_ctx_,
+                                           (char *)vectors[0].data(),
+                                           vectors[0].size() * sizeof(float));
+        }
+        return ValkeyModule_CreateString(&fake_ctx_, val.data(), val.size());
+      });
+
+  EXPECT_CALL(*kMockValkeyModule, GetContextFlags(testing::_))
+      .WillRepeatedly(testing::Return(VALKEYMODULE_CTX_FLAGS_ASYNC_LOADING));
+  auto async_status = FTHybridCmd(&fake_ctx_, cmd_argv.data(), cmd_argv.size());
+  EXPECT_EQ(async_status.code(), absl::StatusCode::kFailedPrecondition);
+  EXPECT_EQ(async_status.message(), query::kAsyncLoadingUnsupportedMsg);
+
+  EXPECT_CALL(*kMockValkeyModule, GetContextFlags(testing::_))
+      .WillRepeatedly(testing::Return(VALKEYMODULE_CTX_FLAGS_ASYNC_LOADING |
+                                      VALKEYMODULE_CTX_FLAGS_MULTI));
+  auto multi_status = FTHybridCmd(&fake_ctx_, cmd_argv.data(), cmd_argv.size());
+  EXPECT_EQ(multi_status.code(), absl::StatusCode::kInvalidArgument);
+  EXPECT_EQ(multi_status.message(), query::kSyncLocalUnsupportedMsg);
+
+  for (auto cmd_arg : cmd_argv) {
+    TestValkeyModule_FreeString(&fake_ctx_, cmd_arg);
+  }
+  index_schema = nullptr;
+}
+
+TEST_F(MultiExecTest, ClusterFanoutAsyncLoadingReturnsLoadingError) {
+  ASSERT_TRUE(ValkeySearch::Instance().SupportParallelQueries());
+  ValkeySearch::Instance().SetCoordinatorServer(
+      std::make_unique<coordinator::MockServer>());
+  absl::Cleanup reset_coord = []() {
+    ValkeySearch::Instance().SetCoordinatorServer(nullptr);
+  };
+
+  EXPECT_CALL(
+      *kMockValkeyModule,
+      OpenKey(&fake_ctx_, testing::An<ValkeyModuleString *>(), testing::_))
+      .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
+  EXPECT_CALL(*kMockValkeyModule, GetContextFlags(testing::_))
+      .WillRepeatedly(testing::Return(VALKEYMODULE_CTX_FLAGS_CLUSTER |
+                                      VALKEYMODULE_CTX_FLAGS_ASYNC_LOADING));
+  EXPECT_CALL(
+      *kMockValkeyModule,
+      BlockClient(testing::_, testing::_, testing::_, testing::_, testing::_))
+      .Times(0);
+
+  auto vectors = DeterministicallyGenerateVectors(1, 100, 10.0);
+  auto make_argv = [&](const std::vector<std::string> &tokens) {
+    std::vector<ValkeyModuleString *> out;
+    out.reserve(tokens.size());
+    for (const auto &val : tokens) {
+      if (val == "$embedding") {
+        out.push_back(ValkeyModule_CreateString(
+            &fake_ctx_, reinterpret_cast<const char *>(vectors[0].data()),
+            vectors[0].size() * sizeof(float)));
+      } else {
+        out.push_back(
+            ValkeyModule_CreateString(&fake_ctx_, val.data(), val.size()));
+      }
+    }
+    return out;
+  };
+  auto free_argv = [&](std::vector<ValkeyModuleString *> &args) {
+    for (auto *arg : args) {
+      TestValkeyModule_FreeString(&fake_ctx_, arg);
+    }
+  };
+
+  constexpr absl::string_view kExpectedFanoutErr =
+      "Cluster fan-out queries are temporarily unavailable while async "
+      "replication RDB loading is in progress.";
+
+  auto search_fanout_argv = make_argv({
+      "FT.SEARCH",
+      "index_schema_name",
+      "*=>[KNN 1 @vector $query_vector EF_RUNTIME 100 AS score]",
+      "PARAMS",
+      "2",
+      "query_vector",
+      "$embedding",
+      "DIALECT",
+      "2",
+  });
+  auto search_status = FTSearchCmd(&fake_ctx_, search_fanout_argv.data(),
+                                   search_fanout_argv.size());
+  EXPECT_EQ(search_status.code(), absl::StatusCode::kFailedPrecondition);
+  EXPECT_EQ(search_status.message(), kExpectedFanoutErr);
+  free_argv(search_fanout_argv);
+
+  auto hybrid_fanout_argv = make_argv({
+      "FT.HYBRID",
+      "index_schema_name",
+      "SEARCH",
+      "@attribute_name:{val}",
+      "VSIM",
+      "@vector",
+      "$query_vector",
+      "PARAMS",
+      "2",
+      "query_vector",
+      "$embedding",
+  });
+  auto hybrid_status = FTHybridCmd(&fake_ctx_, hybrid_fanout_argv.data(),
+                                   hybrid_fanout_argv.size());
+  EXPECT_EQ(hybrid_status.code(), absl::StatusCode::kFailedPrecondition);
+  EXPECT_EQ(hybrid_status.message(), kExpectedFanoutErr);
+  free_argv(hybrid_fanout_argv);
+
+  // LOCALONLY bypasses fan-out and executes synchronously against the active
+  // local pre-swap schema without blocking the client.
+  auto search_local_argv = make_argv({
+      "FT.SEARCH",
+      "index_schema_name",
+      "*=>[KNN 1 @vector $query_vector EF_RUNTIME 100 AS score]",
+      "PARAMS",
+      "2",
+      "query_vector",
+      "$embedding",
+      "LOCALONLY",
+      "DIALECT",
+      "2",
+  });
+  VMSDK_EXPECT_OK(FTSearchCmd(&fake_ctx_, search_local_argv.data(),
+                              search_local_argv.size()));
+  free_argv(search_local_argv);
+
   index_schema = nullptr;
 }
 

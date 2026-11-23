@@ -473,10 +473,26 @@ class VectorBase : public IndexBase {
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   absl::Status LoadTrackedKeys(ValkeyModuleCtx *ctx,
                                const AttributeDataType *attribute_data_type,
-                               SupplementalContentChunkIter &&iter);
+                               SupplementalContentChunkIter &&iter,
+                               bool defer_keyspace_load = false);
   // Reads a section written by SaveTrackedKeys into the key maps.
   static absl::StatusOr<TrackedKeys> LoadKeyLabels(
       SupplementalContentChunkIter &&iter);
+  void OnSwapDbPublished() {
+    registered_in_vector_registry_.store(true, std::memory_order_release);
+  }
+  void ClearVectorRegistryRegistration() {
+    registered_in_vector_registry_.store(false, std::memory_order_release);
+  }
+  bool IsRegisteredInVectorRegistry() const {
+    return registered_in_vector_registry_.load(std::memory_order_acquire);
+  }
+  void ClearDeferredRdbVectors() {
+    has_deferred_rdb_vectors_.store(false, std::memory_order_release);
+  }
+  bool HasDeferredRdbVectors() const {
+    return has_deferred_rdb_vectors_.load(std::memory_order_acquire);
+  }
 
   uint32_t GetMutationWeight() const override;
 
@@ -730,6 +746,9 @@ class VectorBase : public IndexBase {
   virtual absl::Status RemoveRecordImpl(uint64_t internal_id) = 0;
   virtual absl::Status ModifyRecordImpl(uint64_t internal_id,
                                         VectorRecord &&vector_record) = 0;
+  virtual absl::Status ReplaceVectorRecordImpl(uint64_t internal_id,
+                                               VectorRecord &&vector_record)
+      ABSL_LOCKS_EXCLUDED(resize_mutex_) = 0;
   virtual int RespondWithInfoImpl(ValkeyModuleCtx *ctx) const = 0;
 
   virtual size_t GetDataTypeSize() const = 0;
@@ -754,6 +773,17 @@ class VectorBase : public IndexBase {
   // resolved every node's vector, so LoadTrackedKeys skips the older copy.
   bool vectors_resolved_on_load_{false};
   size_t keys_changed_since_save_{0};
+  // Set when vectors were loaded from saved RDB bytes without reading the
+  // keyspace (swapdb replication load), and cleared once post-swap recovery
+  // completes. While true, ModifyRecord upgrades matching unshared RDB slots
+  // to shared VectorRegistry records without rebuilding HNSW edges.
+  std::atomic<bool> has_deferred_rdb_vectors_{false};
+  // Guards VectorRegistry::RemoveIndexKeys in ~VectorBase() and
+  // MarkAsDestructing(). Cleared while a swapdb schema is staged (not yet
+  // published on the live DB) and when old schemas are superseded after a
+  // swapdb VectorRegistry::OnFlushDB so deferred teardown cannot remove keys
+  // registered by the newly published schema.
+  std::atomic<bool> registered_in_vector_registry_{true};
 
   int db_num_;
   int dimensions_;
@@ -770,14 +800,19 @@ class VectorBase : public IndexBase {
   mutable absl::Mutex resize_mutex_;
 
  private:
+  enum class VectorMatch {
+    kDifferent,
+    kSameRecord,
+    kSameValueReplaceRecord,
+  };
   absl::StatusOr<uint64_t> TrackKey(const InternedStringPtr &key,
                                     float magnitude)
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   absl::StatusOr<std::optional<uint64_t>> UnTrackKey(
       const InternedStringPtr &key) ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
-  absl::StatusOr<bool> IsVectorUnchanged(const InternedStringPtr &key,
-                                         float magnitude,
-                                         const VectorRecord &vector_record)
+  absl::StatusOr<VectorMatch> IsVectorUnchanged(
+      const InternedStringPtr &key, float magnitude,
+      const VectorRecord &vector_record)
       ABSL_LOCKS_EXCLUDED(resize_mutex_, key_to_metadata_mutex_);
   absl::StatusOr<uint64_t> GetInternalId(const InternedStringPtr &key) const
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);

@@ -4638,6 +4638,140 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   EXPECT_EQ(stale, 0);
 }
 
+TEST_F(VectorIndexTest, ModifyRecordReplacesDeferredRdbVectorRecord)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  constexpr int kDims = 4;
+  // Non-unit vector so COSINE RDB bytes (normalized: {0.6, 0.8, 0, 0}) differ
+  // from raw incoming bytes ({3.0, 4.0, 0, 0}).
+  const std::vector<float> raw_vals = {3.0f, 4.0f, 0.0f, 0.0f};
+  const std::string raw_bytes(reinterpret_cast<const char *>(raw_vals.data()),
+                              raw_vals.size() * sizeof(float));
+  const auto key = StringInternStore::Intern("doc:1");
+
+  HashAttributeDataType hash_attribute_data_type;
+  for (bool hnsw : {true, false}) {
+    for (auto metric :
+         {data_model::DISTANCE_METRIC_L2, data_model::DISTANCE_METRIC_COSINE}) {
+      for (bool with_key_labels : {true, false}) {
+        auto proto =
+            hnsw ? CreateHNSWVectorIndexProto(kDims, metric, /*initial_cap=*/10,
+                                              /*m=*/16, /*ef_construction=*/100,
+                                              /*ef_runtime=*/10)
+                 : CreateFlatVectorIndexProto(kDims, metric, /*initial_cap=*/10,
+                                              /*block_size=*/10);
+        std::shared_ptr<VectorBase> orig;
+        if (hnsw) {
+          auto created = VectorHNSW<float>::Create(
+              proto, "vec", data_model::ATTRIBUTE_DATA_TYPE_HASH, 0);
+          ASSERT_TRUE(created.ok()) << created.status();
+          orig = std::move(*created);
+        } else {
+          auto created = VectorFlat<float>::Create(
+              proto, "vec", data_model::ATTRIBUTE_DATA_TYPE_HASH, 0);
+          ASSERT_TRUE(created.ok()) << created.status();
+          orig = std::move(*created);
+        }
+        VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(*orig, key, raw_bytes));
+
+        FakeSafeRDB labels_rdb;
+        FakeSafeRDB index_rdb;
+        if (with_key_labels) {
+          VMSDK_EXPECT_OK(
+              orig->SaveTrackedKeys(RDBChunkOutputStream(&labels_rdb)));
+        }
+        VMSDK_EXPECT_OK(orig->SaveIndex(RDBChunkOutputStream(&index_rdb)));
+        VMSDK_EXPECT_OK(
+            orig->SaveTrackedKeys(RDBChunkOutputStream(&index_rdb)));
+
+        // Deferred load must not read the keyspace via OpenKey.
+        EXPECT_CALL(*kMockValkeyModule,
+                    OpenKey(testing::_, testing::_, testing::_))
+            .Times(0);
+
+        absl::StatusOr<TrackedKeys> labels;
+        if (with_key_labels) {
+          labels = VectorBase::LoadKeyLabels(
+              SupplementalContentChunkIter(&labels_rdb));
+          ASSERT_TRUE(labels.ok()) << labels.status();
+        }
+        std::shared_ptr<VectorBase> loaded;
+        if (hnsw) {
+          auto res = VectorHNSW<float>::LoadFromRDB(
+              &fake_ctx_, &hash_attribute_data_type, proto, "vec",
+              SupplementalContentChunkIter(&index_rdb), 0,
+              with_key_labels ? &*labels : nullptr,
+              /*defer_keyspace_load=*/true);
+          ASSERT_TRUE(res.ok()) << res.status();
+          loaded = std::move(*res);
+        } else {
+          auto res = VectorFlat<float>::LoadFromRDB(
+              &fake_ctx_, &hash_attribute_data_type, proto, "vec",
+              SupplementalContentChunkIter(&index_rdb), 0,
+              with_key_labels ? &*labels : nullptr,
+              /*defer_keyspace_load=*/true);
+          ASSERT_TRUE(res.ok()) << res.status();
+          loaded = std::move(*res);
+        }
+        VMSDK_EXPECT_OK(
+            loaded->LoadTrackedKeys(&fake_ctx_, &hash_attribute_data_type,
+                                    SupplementalContentChunkIter(&index_rdb),
+                                    /*defer_keyspace_load=*/true));
+
+        EXPECT_TRUE(loaded->HasDeferredRdbVectors());
+        EXPECT_FALSE(loaded->IsRegisteredInVectorRegistry());
+        loaded->OnSwapDbPublished();
+        EXPECT_TRUE(loaded->IsRegisteredInVectorRegistry());
+
+        // Passing a distinct shared VectorRecord with the same vector value
+        // while has_deferred_rdb_vectors_ is set replaces the unshared RDB slot
+        // in place and returns RecordResult::kMissing (no graph rebuild).
+        const float recip_mag =
+            CalcReciprocalMagnitude(raw_bytes, loaded->GetVectorDataType());
+        VectorRecord shared_rec = VectorRecord::Construct(
+            raw_bytes, recip_mag, loaded->GetVectorAllocator());
+        ASSERT_EQ(shared_rec.RefCount(), 1u);
+        {
+          VectorRecord copy = shared_rec;
+          ASSERT_EQ(shared_rec.RefCount(), 2u);
+          auto mod_res = loaded->ModifyRecord(
+              key, AttributeData(VectorRecordWithSize{std::move(copy),
+                                                      raw_bytes.size()}));
+          ASSERT_TRUE(mod_res.ok()) << mod_res.status();
+          EXPECT_EQ(*mod_res, RecordResult::kMissing);
+        }
+        // Index now retains shared_rec in place.
+        EXPECT_EQ(shared_rec.RefCount(), 2u);
+
+        // Search must still find the key at distance ~0.
+        auto search_res = loaded->Search(raw_bytes, 1, CancelNever());
+        ASSERT_TRUE(search_res.ok()) << search_res.status();
+        ASSERT_EQ(search_res->size(), 1u);
+        EXPECT_EQ((*search_res)[0].external_id->Str(), key->Str());
+        EXPECT_NEAR((*search_res)[0].distance, 0.0f, 1e-5f);
+
+        // Once deferred RDB vectors are cleared, steady-state same-value
+        // ModifyRecord must skip slot replacement (no lock/retire overhead).
+        loaded->ClearDeferredRdbVectors();
+        EXPECT_FALSE(loaded->HasDeferredRdbVectors());
+        VectorRecord second_rec = VectorRecord::Construct(
+            raw_bytes, recip_mag, loaded->GetVectorAllocator());
+        ASSERT_EQ(second_rec.RefCount(), 1u);
+        {
+          VectorRecord copy = second_rec;
+          auto mod_res = loaded->ModifyRecord(
+              key, AttributeData(VectorRecordWithSize{std::move(copy),
+                                                      raw_bytes.size()}));
+          ASSERT_TRUE(mod_res.ok()) << mod_res.status();
+          EXPECT_EQ(*mod_res, RecordResult::kMissing);
+        }
+        EXPECT_EQ(second_rec.RefCount(), 1u);
+        EXPECT_EQ(shared_rec.RefCount(), 2u);
+        testing::Mock::VerifyAndClearExpectations(kMockValkeyModule);
+      }
+    }
+  }
+}
+
 }  // namespace
 
 }  // namespace valkey_search::indexes

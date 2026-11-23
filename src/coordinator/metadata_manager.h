@@ -143,6 +143,7 @@ class MetadataManager {
                             uint64_t subevent, void *data);
 
   void OnLoadingEnded(ValkeyModuleCtx *ctx);
+  void OnLoadingFailed(ValkeyModuleCtx *ctx);
   void OnLoadingStarted(ValkeyModuleCtx *ctx);
   void OnReplicationLoadStart(ValkeyModuleCtx *ctx);
   void OnLoadingCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,

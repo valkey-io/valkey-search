@@ -45,9 +45,11 @@
 #include "src/indexes/vector_hnsw.h"
 #include "src/keyspace_event_manager.h"
 #include "src/metrics.h"
+#include "src/query/search.h"
 #include "src/schema_manager.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
+#include "src/vector_registry.h"
 #include "src/version.h"
 #include "testing/common.h"
 #include "third_party/hnswlib/hnswlib.h"  // IWYU pragma: keep
@@ -3915,6 +3917,1007 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   FakeSafeRDB rdb;
   EXPECT_TRUE(
       index_schema->SaveIndexExtension(RDBChunkOutputStream(&rdb)).ok());
+}
+
+TEST_F(IndexSchemaRDBTest, SwapDbDeferredV2LoadAndCronRecovery)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  auto &write_v2 =
+      const_cast<vmsdk::config::Boolean &>(options::GetRdbWriteV2());
+  auto &read_v2 = const_cast<vmsdk::config::Boolean &>(options::GetRdbReadV2());
+  auto &enable_sharing =
+      const_cast<vmsdk::config::Boolean &>(options::GetEnableVectorSharing());
+  VMSDK_EXPECT_OK(write_v2.SetValue(true));
+  VMSDK_EXPECT_OK(read_v2.SetValue(true));
+  VMSDK_EXPECT_OK(enable_sharing.SetValue(true));
+  VectorRegistry::Construct(&fake_ctx_);
+  absl::Cleanup restore = [&]() {
+    VMSDK_EXPECT_OK(write_v2.SetValue(false));
+    VMSDK_EXPECT_OK(read_v2.SetValue(false));
+    VMSDK_EXPECT_OK(enable_sharing.SetValue(false));
+    VectorRegistry::Construct(&fake_ctx_);
+    vmsdk::DrainPendingMainCallbacks();
+  };
+
+  ValkeyModuleCtx parent_ctx;
+  ValkeyModuleCtx scan_ctx;
+  ON_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
+      .WillByDefault(Return(&scan_ctx));
+  ON_CALL(*kMockValkeyModule, SelectDb(testing::_, testing::_))
+      .WillByDefault(Return(VALKEYMODULE_OK));
+
+  constexpr int kDims = 4;
+  // key0..key2 survive; key3 is in extension_keys but absent from the swapped
+  // DB (e.g. missing/expired on RDB load); key4 has a pending DEL in
+  // mutation_entries. Both must be evicted on top of #1734.
+  constexpr int kNumKeys = 5;
+  auto vectors = DeterministicallyGenerateVectors(kNumKeys, kDims, 2);
+  std::vector<vmsdk::UniqueValkeyString> vec_strs;
+  std::vector<vmsdk::UniqueValkeyString> tag_strs;
+  for (int i = 0; i < kNumKeys; ++i) {
+    vec_strs.push_back(vmsdk::MakeUniqueValkeyString(
+        absl::string_view(reinterpret_cast<const char *>(vectors[i].data()),
+                          kDims * sizeof(float))));
+    tag_strs.push_back(vmsdk::MakeUniqueValkeyString(absl::StrCat("tag", i)));
+  }
+
+  std::vector<absl::AnyInvocable<void()>> queued_tasks;
+  bool run_inline = true;
+  MockThreadPool pool("swapdb-v2-pool-", 1);
+  ON_CALL(pool, Schedule(testing::_, testing::_))
+      .WillByDefault(
+          [&](absl::AnyInvocable<void()> task, vmsdk::ThreadPool::Priority) {
+            if (run_inline) {
+              task();
+            } else {
+              queued_tasks.push_back(std::move(task));
+            }
+            return true;
+          });
+  auto drain_tasks = [&]() {
+    while (!queued_tasks.empty()) {
+      auto batch = std::move(queued_tasks);
+      queued_tasks.clear();
+      for (auto &t : batch) {
+        t();
+      }
+    }
+    vmsdk::DrainPendingMainCallbacks();
+  };
+
+  bool key3_exists = true;
+  bool key4_exists = true;
+  auto setup_keyspace_mocks = [&]() {
+    EXPECT_CALL(*kMockValkeyModule, OpenKey(testing::_, testing::_, testing::_))
+        .WillRepeatedly([&](ValkeyModuleCtx *ctx, ValkeyModuleString *key,
+                            int flags) -> ValkeyModuleKey * {
+          if ((!key3_exists && vmsdk::ToStringView(key) == "prefix1:key3") ||
+              (!key4_exists && vmsdk::ToStringView(key) == "prefix1:key4")) {
+            return nullptr;
+          }
+          return TestValkeyModule_OpenKeyDefaultImpl(ctx, key, flags);
+        });
+    EXPECT_CALL(*kMockValkeyModule, KeyType(testing::_))
+        .WillRepeatedly(Return(VALKEYMODULE_KEYTYPE_HASH));
+    EXPECT_CALL(*kMockValkeyModule,
+                HashGet(testing::_, VALKEYMODULE_HASH_CFIELDS, testing::_,
+                        testing::An<ValkeyModuleString **>(),
+                        testing::TypedEq<void *>(nullptr)))
+        .WillRepeatedly([&](ValkeyModuleKey *key, int, const char *field,
+                            ValkeyModuleString **value_out, void *) {
+          absl::string_view key_str = key->key;
+          CHECK(absl::ConsumePrefix(&key_str, "prefix1:key"));
+          int idx = 0;
+          CHECK(absl::SimpleAtoi(key_str, &idx));
+          ValkeyModuleString *src = (absl::string_view(field) == "vec")
+                                        ? vec_strs[idx].get()
+                                        : tag_strs[idx].get();
+          *value_out = src;
+          ValkeyModule_RetainString(nullptr, src);
+          return VALKEYMODULE_OK;
+        });
+  };
+
+  FakeSafeRDB rdb_stream;
+  {
+    setup_keyspace_mocks();
+    std::vector<absl::string_view> prefixes = {"prefix1:"};
+    auto orig = MockIndexSchema::Create(
+                    &fake_ctx_, "swapdb_v2_idx", prefixes,
+                    std::make_unique<HashAttributeDataType>(), &pool)
+                    .value();
+    auto hnsw = indexes::VectorHNSW<float>::Create(
+                    CreateHNSWVectorIndexProto(
+                        kDims, data_model::DISTANCE_METRIC_L2, 16, 16, 100, 10),
+                    "vec", data_model::ATTRIBUTE_DATA_TYPE_HASH, 0)
+                    .value();
+    auto tag = std::make_shared<indexes::Tag>(CreateTagIndexProto(",", false));
+    VMSDK_EXPECT_OK(orig->AddIndex("vec", "vec", hnsw));
+    VMSDK_EXPECT_OK(orig->AddIndex("tag", "tag", tag));
+    EXPECT_CALL(*kMockValkeyModule,
+                Scan(&scan_ctx, testing::An<ValkeyModuleScanCursor *>(),
+                     testing::An<ValkeyModuleScanCB>(), testing::An<void *>()))
+        .WillOnce(Return(0));
+    EXPECT_EQ(orig->PerformBackfill(&fake_ctx_, 1024), 0u);
+    ASSERT_FALSE(orig->IsBackfillInProgress());
+
+    for (int i = 0; i < kNumKeys; ++i) {
+      auto key_str =
+          vmsdk::MakeUniqueValkeyString(absl::StrCat("prefix1:key", i));
+      orig->OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_HASH, "hset",
+                                   key_str.get());
+    }
+    // Queue a pending DEL on prefix1:key4 (unprocessed before RDBSave) so V2
+    // mutation_entries is also exercised.
+    run_inline = false;
+    key4_exists = false;
+    auto del_key = vmsdk::MakeUniqueValkeyString("prefix1:key4");
+    orig->OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_GENERIC, "del",
+                                 del_key.get());
+    ASSERT_EQ(queued_tasks.size(), 1u);
+
+    VMSDK_EXPECT_OK(orig->RDBSave(&rdb_stream));
+    queued_tasks.clear();
+  }
+
+  VectorRegistry::Instance().OnFlushDB(nullptr);
+  ASSERT_EQ(VectorRegistry::Instance().GetStats().entry_cnt, 0u);
+  testing::Mock::VerifyAndClearExpectations(kMockValkeyModule);
+
+  // During deferred LoadFromRDB AND OnLoadingEnded, zero OpenKey or KeyExists
+  // calls may occur and VectorRegistry must remain untouched.
+  EXPECT_CALL(*kMockValkeyModule, OpenKey(testing::_, testing::_, testing::_))
+      .Times(0);
+  EXPECT_CALL(*kMockValkeyModule, KeyExists(testing::_, testing::_)).Times(0);
+
+  RDBSectionIter iter(&rdb_stream, 1);
+  auto section = iter.Next();
+  VMSDK_EXPECT_OK_STATUSOR(section);
+  auto loaded_or = IndexSchema::LoadFromRDB(
+      &parent_ctx, &pool,
+      std::make_unique<data_model::IndexSchema>(
+          (*section)->index_schema_contents()),
+      iter.IterateSupplementalContent(), /*defer_keyspace_load=*/true);
+  VMSDK_EXPECT_OK_STATUSOR(loaded_or);
+  auto loaded = std::move(loaded_or.value());
+
+  EXPECT_TRUE(loaded->IsSwapDbRecoveryInProgress());
+  EXPECT_TRUE(loaded->IsBackfillInProgress());
+  EXPECT_EQ(loaded->GetStateForInfo(), "backfill_in_progress");
+  EXPECT_LT(loaded->GetBackfillPercent(), 1.0f);
+  EXPECT_EQ(VectorRegistry::Instance().GetStats().entry_cnt, 0u);
+  auto loaded_tag = loaded->GetIndex("tag").value();
+  auto loaded_vec = std::dynamic_pointer_cast<indexes::VectorBase>(
+      loaded->GetIndex("vec").value());
+  ASSERT_NE(loaded_vec, nullptr);
+  EXPECT_EQ(loaded_tag->GetTrackedKeyCount(), 0u);
+  EXPECT_TRUE(loaded_vec->HasDeferredRdbVectors());
+  EXPECT_FALSE(loaded_vec->IsRegisteredInVectorRegistry());
+
+  // Local query::Search must fail closed during recovery.
+  {
+    UnitTestSearchParameters params;
+    params.index_schema = loaded;
+    auto status = query::Search(params, query::SearchMode::kLocal);
+    EXPECT_EQ(status.code(), absl::StatusCode::kFailedPrecondition);
+    EXPECT_EQ(status.message(), IndexSchema::kSwapDbRecoveryInProgressMsg);
+  }
+
+  // OnLoadingEnded must perform zero OpenKey / KeyExists calls.
+  loaded->OnLoadingEnded(&parent_ctx);
+  EXPECT_TRUE(loaded->IsSwapDbRecoveryInProgress());
+  EXPECT_TRUE(loaded_vec->IsRegisteredInVectorRegistry());
+  testing::Mock::VerifyAndClearExpectations(kMockValkeyModule);
+
+  // Now simulate post-swap keyspace (with prefix1:key3 absent despite being in
+  // extension_keys, and prefix1:key4 absent via mutation_entries) and drain
+  // PerformBackfill in bounded batches of 2.
+  key3_exists = false;
+  setup_keyspace_mocks();
+  run_inline = false;
+  uint32_t first_batch = loaded->PerformBackfill(&parent_ctx, /*batch_size=*/2);
+  EXPECT_EQ(first_batch, 2u);
+  EXPECT_TRUE(loaded->IsSwapDbRecoveryInProgress());
+  EXPECT_EQ(loaded->GetBackfillScannedKeyCount(), 2u);
+  EXPECT_LT(loaded->GetBackfillPercent(), 1.0f);
+  EXPECT_EQ(loaded->GetStateForInfo(), "backfill_in_progress");
+  drain_tasks();
+
+  int ticks = 0;
+  while (loaded->IsSwapDbRecoveryInProgress() && ticks < 20) {
+    loaded->PerformBackfill(&parent_ctx, /*batch_size=*/2);
+    drain_tasks();
+    ++ticks;
+  }
+
+  EXPECT_FALSE(loaded->IsSwapDbRecoveryInProgress());
+  EXPECT_FALSE(loaded->IsBackfillInProgress());
+  EXPECT_EQ(loaded->GetStateForInfo(), "ready");
+  EXPECT_FLOAT_EQ(loaded->GetBackfillPercent(), 1.0f);
+  EXPECT_FALSE(loaded_vec->HasDeferredRdbVectors());
+  EXPECT_EQ(loaded_vec->GetTrackedKeyCount(), 3u);
+  EXPECT_FALSE(
+      loaded_vec->IsTracked(StringInternStore::Intern("prefix1:key3")));
+  EXPECT_FALSE(
+      loaded_vec->IsTracked(StringInternStore::Intern("prefix1:key4")));
+  EXPECT_EQ(loaded_tag->GetTrackedKeyCount(), 3u);
+  EXPECT_EQ(VectorRegistry::Instance().GetStats().entry_cnt, 3u);
+}
+
+TEST_F(IndexSchemaRDBTest, SwapDbDeferredEmptyIndexFinishesInOnLoadingEnded)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  auto &write_v2 =
+      const_cast<vmsdk::config::Boolean &>(options::GetRdbWriteV2());
+  auto &read_v2 = const_cast<vmsdk::config::Boolean &>(options::GetRdbReadV2());
+  VMSDK_EXPECT_OK(write_v2.SetValue(true));
+  VMSDK_EXPECT_OK(read_v2.SetValue(true));
+  absl::Cleanup restore = [&]() {
+    VMSDK_EXPECT_OK(write_v2.SetValue(false));
+    VMSDK_EXPECT_OK(read_v2.SetValue(false));
+  };
+
+  ValkeyModuleCtx parent_ctx;
+  ValkeyModuleCtx scan_ctx;
+  ON_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
+      .WillByDefault(Return(&scan_ctx));
+
+  FakeSafeRDB rdb_stream;
+  {
+    std::vector<absl::string_view> prefixes = {"empty:"};
+    auto orig = MockIndexSchema::Create(
+                    &fake_ctx_, "swapdb_empty_idx", prefixes,
+                    std::make_unique<HashAttributeDataType>(), nullptr)
+                    .value();
+    auto hnsw = indexes::VectorHNSW<float>::Create(
+                    CreateHNSWVectorIndexProto(
+                        4, data_model::DISTANCE_METRIC_L2, 8, 16, 100, 10),
+                    "vec", data_model::ATTRIBUTE_DATA_TYPE_HASH, 0)
+                    .value();
+    VMSDK_EXPECT_OK(orig->AddIndex("vec", "vec", hnsw));
+    EXPECT_CALL(*kMockValkeyModule,
+                Scan(&scan_ctx, testing::An<ValkeyModuleScanCursor *>(),
+                     testing::An<ValkeyModuleScanCB>(), testing::An<void *>()))
+        .WillOnce(Return(0));
+    EXPECT_EQ(orig->PerformBackfill(&fake_ctx_, 1024), 0u);
+    ASSERT_FALSE(orig->IsBackfillInProgress());
+    VMSDK_EXPECT_OK(orig->RDBSave(&rdb_stream));
+  }
+
+  EXPECT_CALL(*kMockValkeyModule, OpenKey(testing::_, testing::_, testing::_))
+      .Times(0);
+  EXPECT_CALL(*kMockValkeyModule, KeyExists(testing::_, testing::_)).Times(0);
+
+  RDBSectionIter iter(&rdb_stream, 1);
+  auto section = iter.Next();
+  VMSDK_EXPECT_OK_STATUSOR(section);
+  auto loaded_or = IndexSchema::LoadFromRDB(
+      &parent_ctx, nullptr,
+      std::make_unique<data_model::IndexSchema>(
+          (*section)->index_schema_contents()),
+      iter.IterateSupplementalContent(), /*defer_keyspace_load=*/true);
+  VMSDK_EXPECT_OK_STATUSOR(loaded_or);
+  auto loaded = std::move(loaded_or.value());
+
+  EXPECT_TRUE(loaded->IsSwapDbRecoveryInProgress());
+  loaded->OnLoadingEnded(&parent_ctx);
+  EXPECT_FALSE(loaded->IsSwapDbRecoveryInProgress());
+  EXPECT_FALSE(loaded->IsBackfillInProgress());
+  EXPECT_EQ(loaded->GetStateForInfo(), "ready");
+}
+
+TEST_F(IndexSchemaRDBTest,
+       SwapDbDeferredV1CleansUpStalePendingDelViaPerformBackfill)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  // IndexSchemaRDBTest::SetUp already sets rdb-write-v2=false,
+  // rdb-read-v2=false.
+  absl::Cleanup restore = [&]() { vmsdk::DrainPendingMainCallbacks(); };
+
+  ValkeyModuleCtx parent_ctx;
+  ValkeyModuleCtx scan_ctx;
+  ON_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
+      .WillByDefault(Return(&scan_ctx));
+  ON_CALL(*kMockValkeyModule, SelectDb(testing::_, testing::_))
+      .WillByDefault(Return(VALKEYMODULE_OK));
+  ON_CALL(*kMockValkeyModule, DbSize(testing::_)).WillByDefault(Return(2));
+
+  constexpr int kDims = 4;
+  constexpr int kNumKeys = 3;
+  auto vectors = DeterministicallyGenerateVectors(kNumKeys, kDims, 2);
+
+  FakeSafeRDB rdb_stream;
+  {
+    std::vector<absl::string_view> prefixes = {"v1:"};
+    auto orig = MockIndexSchema::Create(
+                    &fake_ctx_, "swapdb_v1_idx", prefixes,
+                    std::make_unique<HashAttributeDataType>(), nullptr)
+                    .value();
+    auto hnsw = indexes::VectorHNSW<float>::Create(
+                    CreateHNSWVectorIndexProto(
+                        kDims, data_model::DISTANCE_METRIC_L2, 16, 16, 100, 10),
+                    "vec", data_model::ATTRIBUTE_DATA_TYPE_HASH, 0)
+                    .value();
+    VMSDK_EXPECT_OK(orig->AddIndex("vec", "vec", hnsw));
+    auto itr = orig->attributes_.find("vec");
+    for (int i = 0; i < kNumKeys; ++i) {
+      auto key = StringInternStore::Intern(absl::StrCat("v1:key", i));
+      auto data = testing_infra::MakeAttributeData(
+          *hnsw, key,
+          absl::string_view(reinterpret_cast<const char *>(vectors[i].data()),
+                            kDims * sizeof(float)));
+      orig->ProcessAttributeMutation(&fake_ctx_, itr->second, key,
+                                     std::move(data));
+    }
+    VMSDK_EXPECT_OK(orig->RDBSave(&rdb_stream));
+  }
+
+  MockThreadPool pool("swapdb-v1-pool-", 1);
+  ON_CALL(pool, Schedule(testing::_, testing::_))
+      .WillByDefault(
+          [](absl::AnyInvocable<void()> task, vmsdk::ThreadPool::Priority) {
+            task();
+            return true;
+          });
+
+  // Zero OpenKey / KeyExists during deferred LoadFromRDB AND OnLoadingEnded.
+  EXPECT_CALL(*kMockValkeyModule, OpenKey(testing::_, testing::_, testing::_))
+      .Times(0);
+  EXPECT_CALL(*kMockValkeyModule, KeyExists(testing::_, testing::_)).Times(0);
+
+  RDBSectionIter iter(&rdb_stream, 1);
+  auto section = iter.Next();
+  VMSDK_EXPECT_OK_STATUSOR(section);
+  auto loaded_or = IndexSchema::LoadFromRDB(
+      &parent_ctx, &pool,
+      std::make_unique<data_model::IndexSchema>(
+          (*section)->index_schema_contents()),
+      iter.IterateSupplementalContent(), /*defer_keyspace_load=*/true);
+  VMSDK_EXPECT_OK_STATUSOR(loaded_or);
+  auto loaded = std::move(loaded_or.value());
+  EXPECT_TRUE(loaded->IsSwapDbRecoveryInProgress());
+
+  loaded->OnLoadingEnded(&parent_ctx);
+  EXPECT_TRUE(loaded->IsSwapDbRecoveryInProgress());
+  testing::Mock::VerifyAndClearExpectations(kMockValkeyModule);
+
+  // Now simulate post-swap keyspace: v1:key2 is absent (pending DEL), v1:key0
+  // and v1:key1 exist.
+  EXPECT_CALL(*kMockValkeyModule, KeyExists(&parent_ctx, testing::_))
+      .WillRepeatedly([](ValkeyModuleCtx *, ValkeyModuleString *key) {
+        return vmsdk::ToStringView(key) == "v1:key2" ? 0 : 1;
+      });
+  EXPECT_CALL(*kMockValkeyModule, OpenKey(testing::_, testing::_, testing::_))
+      .WillRepeatedly([](ValkeyModuleCtx *, ValkeyModuleString *key,
+                         int) -> ValkeyModuleKey * {
+        EXPECT_EQ(vmsdk::ToStringView(key), "v1:key2");
+        return nullptr;
+      });
+  EXPECT_CALL(*kMockValkeyModule,
+              Scan(testing::_, testing::_, testing::_, testing::_))
+      .WillRepeatedly(Return(0));
+
+  loaded->PerformBackfill(&parent_ctx, /*batch_size=*/100);
+  vmsdk::DrainPendingMainCallbacks();
+
+  EXPECT_FALSE(loaded->IsSwapDbRecoveryInProgress());
+  EXPECT_EQ(loaded->GetStateForInfo(), "ready");
+  auto loaded_vec = loaded->GetIndex("vec").value();
+  EXPECT_EQ(loaded_vec->GetTrackedKeyCount(), 2u);
+  EXPECT_FALSE(loaded_vec->IsTracked(StringInternStore::Intern("v1:key2")));
+}
+
+TEST_F(IndexSchemaRDBTest, SwapDbMidRecoveryRdbSavePreservesFullParity)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  auto &write_v2 =
+      const_cast<vmsdk::config::Boolean &>(options::GetRdbWriteV2());
+  auto &read_v2 = const_cast<vmsdk::config::Boolean &>(options::GetRdbReadV2());
+  VMSDK_EXPECT_OK(write_v2.SetValue(true));
+  VMSDK_EXPECT_OK(read_v2.SetValue(true));
+  absl::Cleanup restore = [&]() {
+    VMSDK_EXPECT_OK(write_v2.SetValue(false));
+    VMSDK_EXPECT_OK(read_v2.SetValue(false));
+    vmsdk::DrainPendingMainCallbacks();
+  };
+
+  ValkeyModuleCtx parent_ctx;
+  ValkeyModuleCtx scan_ctx;
+  ON_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
+      .WillByDefault(Return(&scan_ctx));
+  ON_CALL(*kMockValkeyModule, SelectDb(testing::_, testing::_))
+      .WillByDefault(Return(VALKEYMODULE_OK));
+
+  constexpr int kDims = 4;
+  constexpr int kNumKeys = 5;  // key0..key3 survive, key4 deleted
+  auto vectors = DeterministicallyGenerateVectors(kNumKeys, kDims, 3);
+  std::vector<vmsdk::UniqueValkeyString> vec_strs;
+  std::vector<vmsdk::UniqueValkeyString> tag_strs;
+  for (int i = 0; i < kNumKeys; ++i) {
+    vec_strs.push_back(vmsdk::MakeUniqueValkeyString(
+        absl::string_view(reinterpret_cast<const char *>(vectors[i].data()),
+                          kDims * sizeof(float))));
+    tag_strs.push_back(vmsdk::MakeUniqueValkeyString(absl::StrCat("t", i)));
+  }
+
+  MockThreadPool pool("swapdb-mid-save-pool-", 1);
+  ON_CALL(pool, Schedule(testing::_, testing::_))
+      .WillByDefault(
+          [](absl::AnyInvocable<void()> task, vmsdk::ThreadPool::Priority) {
+            task();
+            return true;
+          });
+
+  bool key4_exists = true;
+  auto setup_mocks = [&]() {
+    EXPECT_CALL(*kMockValkeyModule, OpenKey(testing::_, testing::_, testing::_))
+        .WillRepeatedly([&](ValkeyModuleCtx *ctx, ValkeyModuleString *key,
+                            int flags) -> ValkeyModuleKey * {
+          if (!key4_exists && vmsdk::ToStringView(key) == "mid:key4") {
+            return nullptr;
+          }
+          return TestValkeyModule_OpenKeyDefaultImpl(ctx, key, flags);
+        });
+    EXPECT_CALL(*kMockValkeyModule, KeyType(testing::_))
+        .WillRepeatedly(Return(VALKEYMODULE_KEYTYPE_HASH));
+    EXPECT_CALL(*kMockValkeyModule,
+                HashGet(testing::_, VALKEYMODULE_HASH_CFIELDS, testing::_,
+                        testing::An<ValkeyModuleString **>(),
+                        testing::TypedEq<void *>(nullptr)))
+        .WillRepeatedly([&](ValkeyModuleKey *key, int, const char *field,
+                            ValkeyModuleString **value_out, void *) {
+          absl::string_view key_str = key->key;
+          CHECK(absl::ConsumePrefix(&key_str, "mid:key"));
+          int idx = 0;
+          CHECK(absl::SimpleAtoi(key_str, &idx));
+          ValkeyModuleString *src = (absl::string_view(field) == "vec")
+                                        ? vec_strs[idx].get()
+                                        : tag_strs[idx].get();
+          *value_out = src;
+          ValkeyModule_RetainString(nullptr, src);
+          return VALKEYMODULE_OK;
+        });
+  };
+
+  FakeSafeRDB initial_rdb;
+  {
+    setup_mocks();
+    std::vector<absl::string_view> prefixes = {"mid:"};
+    auto orig = MockIndexSchema::Create(
+                    &fake_ctx_, "swapdb_mid_idx", prefixes,
+                    std::make_unique<HashAttributeDataType>(), &pool)
+                    .value();
+    auto hnsw = indexes::VectorHNSW<float>::Create(
+                    CreateHNSWVectorIndexProto(
+                        kDims, data_model::DISTANCE_METRIC_L2, 16, 16, 100, 10),
+                    "vec", data_model::ATTRIBUTE_DATA_TYPE_HASH, 0)
+                    .value();
+    auto tag = std::make_shared<indexes::Tag>(CreateTagIndexProto(",", false));
+    VMSDK_EXPECT_OK(orig->AddIndex("vec", "vec", hnsw));
+    VMSDK_EXPECT_OK(orig->AddIndex("tag", "tag", tag));
+    EXPECT_CALL(*kMockValkeyModule,
+                Scan(&scan_ctx, testing::An<ValkeyModuleScanCursor *>(),
+                     testing::An<ValkeyModuleScanCB>(), testing::An<void *>()))
+        .WillOnce(Return(0));
+    EXPECT_EQ(orig->PerformBackfill(&fake_ctx_, 1024), 0u);
+    ASSERT_FALSE(orig->IsBackfillInProgress());
+    for (int i = 0; i < kNumKeys; ++i) {
+      auto key_str = vmsdk::MakeUniqueValkeyString(absl::StrCat("mid:key", i));
+      orig->OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_HASH, "hset",
+                                   key_str.get());
+    }
+    VMSDK_EXPECT_OK(orig->RDBSave(&initial_rdb));
+  }
+
+  // Load with defer_keyspace_load=true, process only 2 of 5 keys, then RDBSave
+  // mid-recovery (simulating a sub-replica full resync mid-recovery).
+  key4_exists = false;
+  RDBSectionIter iter1(&initial_rdb, 1);
+  auto section1 = iter1.Next();
+  VMSDK_EXPECT_OK_STATUSOR(section1);
+  auto mid_schema =
+      IndexSchema::LoadFromRDB(&parent_ctx, &pool,
+                               std::make_unique<data_model::IndexSchema>(
+                                   (*section1)->index_schema_contents()),
+                               iter1.IterateSupplementalContent(),
+                               /*defer_keyspace_load=*/true)
+          .value();
+  mid_schema->OnLoadingEnded(&parent_ctx);
+  EXPECT_EQ(mid_schema->PerformBackfill(&parent_ctx, /*batch_size=*/2), 2u);
+  ASSERT_TRUE(mid_schema->IsSwapDbRecoveryInProgress());
+
+  FakeSafeRDB mid_rdb;
+  VMSDK_EXPECT_OK(mid_schema->RDBSave(&mid_rdb));
+
+  // Sub-replica loads the mid-recovery snapshot normally (non-deferred).
+  RDBSectionIter iter2(&mid_rdb, 1);
+  auto section2 = iter2.Next();
+  VMSDK_EXPECT_OK_STATUSOR(section2);
+  auto sub_replica_or = IndexSchema::LoadFromRDB(
+      &parent_ctx, &pool,
+      std::make_unique<data_model::IndexSchema>(
+          (*section2)->index_schema_contents()),
+      iter2.IterateSupplementalContent(), /*defer_keyspace_load=*/false);
+  VMSDK_EXPECT_OK_STATUSOR(sub_replica_or);
+  auto sub_replica = std::move(sub_replica_or.value());
+  sub_replica->OnLoadingEnded(&parent_ctx);
+
+  EXPECT_FALSE(sub_replica->IsSwapDbRecoveryInProgress());
+  EXPECT_FALSE(sub_replica->IsBackfillInProgress());
+  EXPECT_EQ(sub_replica->GetIndex("vec").value()->GetTrackedKeyCount(), 4u);
+  EXPECT_FALSE(sub_replica->GetIndex("vec").value()->IsTracked(
+      StringInternStore::Intern("mid:key4")));
+  EXPECT_EQ(sub_replica->GetIndex("tag").value()->GetTrackedKeyCount(), 4u);
+}
+
+TEST_F(IndexSchemaRDBTest,
+       SwapDbMarkAsDestructingPreservesRecoveryFlagForQueuedQueries)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  auto &write_v2 =
+      const_cast<vmsdk::config::Boolean &>(options::GetRdbWriteV2());
+  auto &read_v2 = const_cast<vmsdk::config::Boolean &>(options::GetRdbReadV2());
+  VMSDK_EXPECT_OK(write_v2.SetValue(true));
+  VMSDK_EXPECT_OK(read_v2.SetValue(true));
+  absl::Cleanup restore = [&]() {
+    VMSDK_EXPECT_OK(write_v2.SetValue(false));
+    VMSDK_EXPECT_OK(read_v2.SetValue(false));
+  };
+
+  ValkeyModuleCtx parent_ctx;
+  ValkeyModuleCtx scan_ctx;
+  ON_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
+      .WillByDefault(Return(&scan_ctx));
+
+  FakeSafeRDB rdb_stream;
+  {
+    std::vector<absl::string_view> prefixes = {"destr:"};
+    auto orig = MockIndexSchema::Create(
+                    &fake_ctx_, "swapdb_destr_idx", prefixes,
+                    std::make_unique<HashAttributeDataType>(), nullptr)
+                    .value();
+    auto hnsw = indexes::VectorHNSW<float>::Create(
+                    CreateHNSWVectorIndexProto(
+                        4, data_model::DISTANCE_METRIC_L2, 8, 16, 100, 10),
+                    "vec", data_model::ATTRIBUTE_DATA_TYPE_HASH, 0)
+                    .value();
+    VMSDK_EXPECT_OK(orig->AddIndex("vec", "vec", hnsw));
+    VMSDK_EXPECT_OK(orig->RDBSave(&rdb_stream));
+  }
+
+  RDBSectionIter iter(&rdb_stream, 1);
+  auto section = iter.Next();
+  VMSDK_EXPECT_OK_STATUSOR(section);
+  auto loaded =
+      IndexSchema::LoadFromRDB(&parent_ctx, nullptr,
+                               std::make_unique<data_model::IndexSchema>(
+                                   (*section)->index_schema_contents()),
+                               iter.IterateSupplementalContent(),
+                               /*defer_keyspace_load=*/true)
+          .value();
+  ASSERT_TRUE(loaded->IsSwapDbRecoveryInProgress());
+
+  loaded->MarkAsDestructing();
+  // Queued queries already holding shared_ptr<IndexSchema> must still see
+  // IsSwapDbRecoveryInProgress() == true and fail closed.
+  EXPECT_TRUE(loaded->IsSwapDbRecoveryInProgress());
+  UnitTestSearchParameters params;
+  params.index_schema = loaded;
+  auto status = query::Search(params, query::SearchMode::kLocal);
+  EXPECT_EQ(status.code(), absl::StatusCode::kFailedPrecondition);
+  EXPECT_EQ(status.message(), IndexSchema::kSwapDbRecoveryInProgressMsg);
+}
+
+TEST_F(IndexSchemaFriendTest, SwapDbCoalescedLiveMutationDelaysRecoveryFinish)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  auto k = StringInternStore::Intern("prefix1_coalesced");
+  auto vectors = DeterministicallyGenerateVectors(1, dimensions, 2);
+  absl::string_view vec_view(reinterpret_cast<const char *>(vectors[0].data()),
+                             dimensions * sizeof(float));
+
+  // Put schema into active swapdb recovery with 1 key remaining.
+  IndexSchema::SwapDbRecoveryState state;
+  state.extension_keys.push_back(k);
+  state.total_items = 1;
+  index_schema->swapdb_recovery_.Get().emplace(std::move(state));
+  index_schema->swapdb_recovery_in_progress_.store(true,
+                                                   std::memory_order_release);
+
+  // Simulate an in-flight live mutation on `k` currently being consumed by a
+  // worker (consume_in_progress == true, attributes already consumed).
+  {
+    auto live_attrs = CreateMutatedAttributes(attribute_identifier, vec_view, k,
+                                              hnsw_index.get());
+    ASSERT_TRUE(index_schema->TrackMutatedRecord(
+        nullptr, k, std::move(live_attrs), /*sequence_number=*/1,
+        /*from_backfill=*/false, /*block_client=*/false, /*from_multi=*/false,
+        0));
+    auto consumed =
+        index_schema->ConsumeTrackedMutatedAttribute(k, /*first_time=*/true);
+    ASSERT_TRUE(consumed.has_value());
+  }
+
+  // Now backfill recovery processes `k`: it coalesces into the existing
+  // tracked record (TrackMutatedRecord returns false), recording `{k, seq}` in
+  // `coalesced_keys` with zero `backfill_inqueue_tasks`.
+  auto recovery_attrs = CreateMutatedAttributes(attribute_identifier, vec_view,
+                                                k, hnsw_index.get());
+  index_schema->ProcessMutation(&fake_ctx, recovery_attrs, k,
+                                /*from_backfill=*/true, /*is_delete=*/false, 0);
+  index_schema->swapdb_recovery_.Get()->extension_keys.pop_front();
+  index_schema->swapdb_recovery_enqueue_done_.store(true,
+                                                    std::memory_order_release);
+
+  // Even if the worker consumes the coalesced attributes (bumping
+  // index_key_info_[k].mutation_sequence_number_ >= seq), `consume_in_progress`
+  // is still true while SyncProcessMutation is running, so recovery MUST NOT
+  // finish yet.
+  auto consumed2 =
+      index_schema->ConsumeTrackedMutatedAttribute(k, /*first_time=*/false);
+  ASSERT_TRUE(consumed2.has_value());
+  index_schema->TryFinishSwapDbRecovery();
+  EXPECT_TRUE(index_schema->IsSwapDbRecoveryInProgress());
+
+  // Once the worker finishes SyncProcessMutation and calls
+  // ConsumeTrackedMutatedAttribute a final time (erasing tracked entry),
+  // TryFinishSwapDbRecovery completes recovery.
+  auto consumed3 =
+      index_schema->ConsumeTrackedMutatedAttribute(k, /*first_time=*/false);
+  EXPECT_FALSE(consumed3.has_value());
+  index_schema->TryFinishSwapDbRecovery();
+  EXPECT_FALSE(index_schema->IsSwapDbRecoveryInProgress());
+}
+
+TEST_F(IndexSchemaFriendTest,
+       SwapDbDeferredCorruptExtensionCountReturnsStatusError)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  ASSERT_TRUE(options::GetRdbReadV2().GetValue());
+
+  FakeSafeRDB rdb_stream;
+  {
+    RDBChunkOutputStream chunk_out(&rdb_stream);
+    // Write a corrupt huge key_count with no string payloads so LoadString
+    // fails cleanly instead of pre-allocating a contiguous vector upfront.
+    VMSDK_EXPECT_OK(chunk_out.SaveObject<size_t>(size_t{1} << 40));
+  }
+
+  SupplementalContentChunkIter chunk_iter(&rdb_stream);
+  auto status = index_schema->LoadIndexExtension(
+      &fake_ctx, RDBChunkInputStream(std::move(chunk_iter)),
+      /*defer_keyspace_load=*/true);
+  EXPECT_FALSE(status.ok());
+}
+
+TEST_F(IndexSchemaRDBTest,
+       SwapDbDeferredV2WithBackfillingTrueWaitsForScanBeforeClearingRecovery)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  auto &write_v2 =
+      const_cast<vmsdk::config::Boolean &>(options::GetRdbWriteV2());
+  auto &read_v2 = const_cast<vmsdk::config::Boolean &>(options::GetRdbReadV2());
+  VMSDK_EXPECT_OK(write_v2.SetValue(true));
+  VMSDK_EXPECT_OK(read_v2.SetValue(true));
+  absl::Cleanup restore = [&]() {
+    VMSDK_EXPECT_OK(write_v2.SetValue(false));
+    VMSDK_EXPECT_OK(read_v2.SetValue(false));
+    vmsdk::DrainPendingMainCallbacks();
+  };
+
+  ValkeyModuleCtx parent_ctx;
+  ValkeyModuleCtx scan_ctx;
+  ON_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
+      .WillByDefault(Return(&scan_ctx));
+  ON_CALL(*kMockValkeyModule, SelectDb(testing::_, testing::_))
+      .WillByDefault(Return(VALKEYMODULE_OK));
+  ON_CALL(*kMockValkeyModule, DbSize(testing::_)).WillByDefault(Return(2));
+
+  MockThreadPool pool("swapdb-v2-scan-pool-", 1);
+  ON_CALL(pool, Schedule(testing::_, testing::_))
+      .WillByDefault(
+          [](absl::AnyInvocable<void()> task, vmsdk::ThreadPool::Priority) {
+            task();
+            return true;
+          });
+
+  constexpr int kDims = 4;
+  auto vectors = DeterministicallyGenerateVectors(2, kDims, 3);
+  std::vector<vmsdk::UniqueValkeyString> vec_strs;
+  vec_strs.reserve(2);
+  for (int i = 0; i < 2; ++i) {
+    vec_strs.push_back(vmsdk::MakeUniqueValkeyString(
+        absl::string_view(reinterpret_cast<const char *>(vectors[i].data()),
+                          kDims * sizeof(float))));
+  }
+  ON_CALL(*kMockValkeyModule, KeyType(testing::_))
+      .WillByDefault(Return(VALKEYMODULE_KEYTYPE_HASH));
+  ON_CALL(*kMockValkeyModule, OpenKey(testing::_, testing::_, testing::_))
+      .WillByDefault(TestValkeyModule_OpenKeyDefaultImpl);
+  ON_CALL(*kMockValkeyModule,
+          HashGet(testing::_, VALKEYMODULE_HASH_CFIELDS, testing::_,
+                  testing::An<ValkeyModuleString **>(),
+                  testing::TypedEq<void *>(nullptr)))
+      .WillByDefault([&](ValkeyModuleKey *key, int, const char *,
+                         ValkeyModuleString **value_out, void *) {
+        int idx = (absl::string_view(key->key) == "v2scan:key1") ? 1 : 0;
+        *value_out = vec_strs[idx].get();
+        ValkeyModule_RetainString(nullptr, vec_strs[idx].get());
+        return VALKEYMODULE_OK;
+      });
+
+  // Save a V2 snapshot while initial backfill is still unfinished
+  // (backfilling=true, extension_keys empty, unvisited keys still in DB).
+  FakeSafeRDB rdb_stream;
+  {
+    std::vector<absl::string_view> prefixes = {"v2scan:"};
+    auto orig = MockIndexSchema::Create(
+                    &fake_ctx_, "swapdb_v2_scan_idx", prefixes,
+                    std::make_unique<HashAttributeDataType>(), &pool)
+                    .value();
+    auto hnsw = indexes::VectorHNSW<float>::Create(
+                    CreateHNSWVectorIndexProto(
+                        kDims, data_model::DISTANCE_METRIC_L2, 8, 16, 100, 10),
+                    "vec", data_model::ATTRIBUTE_DATA_TYPE_HASH, 0)
+                    .value();
+    VMSDK_EXPECT_OK(orig->AddIndex("vec", "vec", hnsw));
+    ASSERT_TRUE(orig->IsBackfillInProgress());
+    VMSDK_EXPECT_OK(orig->RDBSave(&rdb_stream));
+  }
+
+  RDBSectionIter iter(&rdb_stream, 1);
+  auto section = iter.Next();
+  VMSDK_EXPECT_OK_STATUSOR(section);
+  auto loaded =
+      IndexSchema::LoadFromRDB(&parent_ctx, &pool,
+                               std::make_unique<data_model::IndexSchema>(
+                                   (*section)->index_schema_contents()),
+                               iter.IterateSupplementalContent(),
+                               /*defer_keyspace_load=*/true)
+          .value();
+
+  // Even though V2 extension_keys and mutation_entries are empty,
+  // OnLoadingEnded must keep swapdb recovery active because backfilling=true
+  // requires a scan.
+  loaded->OnLoadingEnded(&parent_ctx);
+  EXPECT_TRUE(loaded->IsSwapDbRecoveryInProgress());
+
+  UnitTestSearchParameters blocked_params;
+  blocked_params.index_schema = loaded;
+  auto blocked_status =
+      query::Search(blocked_params, query::SearchMode::kLocal);
+  EXPECT_EQ(blocked_status.code(), absl::StatusCode::kFailedPrecondition);
+  EXPECT_EQ(blocked_status.message(),
+            IndexSchema::kSwapDbRecoveryInProgressMsg);
+
+  // First PerformBackfill(batch_size=1) scans 1 of 2 keys; recovery stays on.
+  int scan_step = 0;
+  EXPECT_CALL(*kMockValkeyModule,
+              Scan(&scan_ctx, testing::An<ValkeyModuleScanCursor *>(),
+                   testing::An<ValkeyModuleScanCB>(), testing::An<void *>()))
+      .WillRepeatedly([&](ValkeyModuleCtx *ctx, ValkeyModuleScanCursor *,
+                          ValkeyModuleScanCB fn, void *privdata) -> int {
+        if (scan_step < 2) {
+          std::string k = absl::StrCat("v2scan:key", scan_step++);
+          auto k_str = vmsdk::MakeUniqueValkeyString(k);
+          ValkeyModuleKey vkey = {.ctx = ctx, .key = k};
+          fn(ctx, k_str.get(), &vkey, privdata);
+          return 1;
+        }
+        return 0;
+      });
+
+  EXPECT_EQ(loaded->PerformBackfill(&parent_ctx, /*batch_size=*/1), 1u);
+  vmsdk::DrainPendingMainCallbacks();
+  EXPECT_TRUE(loaded->IsSwapDbRecoveryInProgress());
+
+  // Remaining scan completes and clears swapdb recovery.
+  EXPECT_EQ(loaded->PerformBackfill(&parent_ctx, /*batch_size=*/10), 1u);
+  vmsdk::DrainPendingMainCallbacks();
+  EXPECT_FALSE(loaded->IsSwapDbRecoveryInProgress());
+  EXPECT_FALSE(loaded->IsBackfillInProgress());
+  EXPECT_EQ(loaded->GetIndex("vec").value()->GetTrackedKeyCount(), 2u);
+}
+
+TEST_F(IndexSchemaFriendTest,
+       SwapDbRecoveryBackpressureDrainsQueuedMultiExecMutations)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  auto &max_restore_q = options::GetMaxMutationQueueSizeOnRestore();
+  const auto prev_max = max_restore_q.GetValue();
+  VMSDK_EXPECT_OK(max_restore_q.SetValue(1));
+  absl::Cleanup restore_q = [&]() {
+    VMSDK_EXPECT_OK(max_restore_q.SetValue(prev_max));
+  };
+
+  vmsdk::ThreadPool multi_pool("multi-writer-", 2);
+  multi_pool.StartWorkers();
+  absl::Cleanup join_pool = [&]() { multi_pool.JoinWorkers(); };
+
+  ValkeyModuleCtx scan_ctx;
+  ON_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
+      .WillByDefault(Return(&scan_ctx));
+  ON_CALL(*kMockValkeyModule, KeyType(testing::_))
+      .WillByDefault(Return(VALKEYMODULE_KEYTYPE_HASH));
+  ON_CALL(*kMockValkeyModule, OpenKey(testing::_, testing::_, testing::_))
+      .WillByDefault(TestValkeyModule_OpenKeyDefaultImpl);
+
+  auto vectors = DeterministicallyGenerateVectors(2, dimensions, 2);
+  auto vec0_str = vmsdk::MakeUniqueValkeyString(
+      absl::string_view(reinterpret_cast<const char *>(vectors[0].data()),
+                        dimensions * sizeof(float)));
+  auto vec1_str = vmsdk::MakeUniqueValkeyString(
+      absl::string_view(reinterpret_cast<const char *>(vectors[1].data()),
+                        dimensions * sizeof(float)));
+  ON_CALL(*kMockValkeyModule,
+          HashGet(testing::_, VALKEYMODULE_HASH_CFIELDS, testing::_,
+                  testing::An<ValkeyModuleString **>(),
+                  testing::TypedEq<void *>(nullptr)))
+      .WillByDefault([&](ValkeyModuleKey *key, int, const char *,
+                         ValkeyModuleString **value_out, void *) {
+        ValkeyModuleString *src =
+            (absl::string_view(key->key) == "prefix1_multi") ? vec0_str.get()
+                                                             : vec1_str.get();
+        *value_out = src;
+        ValkeyModule_RetainString(nullptr, src);
+        return VALKEYMODULE_OK;
+      });
+
+  std::vector<absl::string_view> prefixes = {"prefix1_"};
+  auto schema = MockIndexSchema::Create(
+                    &fake_ctx, "swapdb_multi_bp_idx", prefixes,
+                    std::make_unique<HashAttributeDataType>(), &multi_pool)
+                    .value();
+  auto hnsw =
+      indexes::VectorHNSW<float>::Create(
+          CreateHNSWVectorIndexProto(dimensions, data_model::DISTANCE_METRIC_L2,
+                                     8, 16, 100, 10),
+          attribute_identifier, data_model::ATTRIBUTE_DATA_TYPE_HASH, 0)
+          .value();
+  VMSDK_EXPECT_OK(
+      schema->AddIndex(attribute_identifier, attribute_identifier, hnsw));
+  schema->backfill_job_.Get()->MarkScanAsDone();
+
+  // Put schema into post-swap recovery with 1 extension key waiting to replay.
+  auto k_replay = StringInternStore::Intern("prefix1_replay");
+  IndexSchema::SwapDbRecoveryState state;
+  state.extension_keys.push_back(k_replay);
+  state.total_items = 1;
+  schema->swapdb_recovery_.Get().emplace(std::move(state));
+  schema->swapdb_recovery_in_progress_.store(true, std::memory_order_release);
+
+  // Enqueue a single post-swap MULTI/EXEC mutation (< pool size 2, so
+  // EnqueueMultiMutation does not auto-drain, yet GetMutatedRecordsSize() == 1
+  // reaches max-mutation-queue-size-on-restore=1).
+  EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx))
+      .WillOnce(Return(VALKEYMODULE_CTX_FLAGS_MULTI))
+      .WillRepeatedly(Return(0));
+  auto multi_key_str = vmsdk::MakeUniqueValkeyString("prefix1_multi");
+  schema->OnKeyspaceNotification(&fake_ctx, VALKEYMODULE_NOTIFY_HASH, "hset",
+                                 multi_key_str.get());
+  ASSERT_EQ(schema->GetMutatedRecordsSize(), 1u);
+  ASSERT_FALSE(schema->multi_mutations_keys_.Get().empty());
+
+  // PerformBackfill must drain multi_mutations_keys_ rather than stalling.
+  EXPECT_EQ(schema->PerformBackfill(&fake_ctx, /*batch_size=*/10), 1u);
+  EXPECT_TRUE(schema->multi_mutations_keys_.Get().empty());
+
+  WaitWorkerTasksAreCompleted(multi_pool);
+  schema->TryFinishSwapDbRecovery();
+  EXPECT_FALSE(schema->IsSwapDbRecoveryInProgress());
+  EXPECT_EQ(hnsw->GetTrackedKeyCount(), 2u);
+}
+
+TEST_F(IndexSchemaFriendTest, SwapDbRecoveryScanAppliesRestoreQueueBackpressure)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  auto &max_restore_q = options::GetMaxMutationQueueSizeOnRestore();
+  const auto prev_max = max_restore_q.GetValue();
+  VMSDK_EXPECT_OK(max_restore_q.SetValue(1));
+  absl::Cleanup restore_q = [&]() {
+    VMSDK_EXPECT_OK(max_restore_q.SetValue(prev_max));
+    vmsdk::DrainPendingMainCallbacks();
+  };
+
+  std::vector<absl::AnyInvocable<void()>> queued_tasks;
+  MockThreadPool scan_bp_pool("scan-bp-pool-", 1);
+  ON_CALL(scan_bp_pool, Schedule(testing::_, testing::_))
+      .WillByDefault(
+          [&](absl::AnyInvocable<void()> task, vmsdk::ThreadPool::Priority) {
+            queued_tasks.push_back(std::move(task));
+            return true;
+          });
+  auto drain_queued = [&]() {
+    while (!queued_tasks.empty()) {
+      auto batch = std::move(queued_tasks);
+      queued_tasks.clear();
+      for (auto &t : batch) {
+        t();
+      }
+    }
+    vmsdk::DrainPendingMainCallbacks();
+  };
+
+  ValkeyModuleCtx scan_ctx;
+  ON_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
+      .WillByDefault(Return(&scan_ctx));
+  ON_CALL(*kMockValkeyModule, KeyType(testing::_))
+      .WillByDefault(Return(VALKEYMODULE_KEYTYPE_HASH));
+  ON_CALL(*kMockValkeyModule, OpenKey(testing::_, testing::_, testing::_))
+      .WillByDefault(TestValkeyModule_OpenKeyDefaultImpl);
+  ON_CALL(*kMockValkeyModule, DbSize(testing::_)).WillByDefault(Return(2));
+
+  auto vectors = DeterministicallyGenerateVectors(2, dimensions, 2);
+  auto vec0_str = vmsdk::MakeUniqueValkeyString(
+      absl::string_view(reinterpret_cast<const char *>(vectors[0].data()),
+                        dimensions * sizeof(float)));
+  auto vec1_str = vmsdk::MakeUniqueValkeyString(
+      absl::string_view(reinterpret_cast<const char *>(vectors[1].data()),
+                        dimensions * sizeof(float)));
+  ON_CALL(*kMockValkeyModule,
+          HashGet(testing::_, VALKEYMODULE_HASH_CFIELDS, testing::_,
+                  testing::An<ValkeyModuleString **>(),
+                  testing::TypedEq<void *>(nullptr)))
+      .WillByDefault([&](ValkeyModuleKey *key, int, const char *,
+                         ValkeyModuleString **value_out, void *) {
+        ValkeyModuleString *src =
+            (absl::string_view(key->key) == "prefix1_scan1") ? vec1_str.get()
+                                                             : vec0_str.get();
+        *value_out = src;
+        ValkeyModule_RetainString(nullptr, src);
+        return VALKEYMODULE_OK;
+      });
+
+  std::vector<absl::string_view> prefixes = {"prefix1_"};
+  auto schema = MockIndexSchema::Create(
+                    &fake_ctx, "swapdb_scan_bp_idx", prefixes,
+                    std::make_unique<HashAttributeDataType>(), &scan_bp_pool)
+                    .value();
+  auto hnsw =
+      indexes::VectorHNSW<float>::Create(
+          CreateHNSWVectorIndexProto(dimensions, data_model::DISTANCE_METRIC_L2,
+                                     8, 16, 100, 10),
+          attribute_identifier, data_model::ATTRIBUTE_DATA_TYPE_HASH, 0)
+          .value();
+  VMSDK_EXPECT_OK(
+      schema->AddIndex(attribute_identifier, attribute_identifier, hnsw));
+
+  // Put schema into post-swap recovery with an empty extension queue and
+  // backfilling=true (scan_required=true).
+  IndexSchema::SwapDbRecoveryState state;
+  state.scan_required = true;
+  schema->swapdb_recovery_.Get().emplace(std::move(state));
+  schema->swapdb_recovery_in_progress_.store(true, std::memory_order_release);
+
+  int scan_step = 0;
+  EXPECT_CALL(*kMockValkeyModule,
+              Scan(&scan_ctx, testing::An<ValkeyModuleScanCursor *>(),
+                   testing::An<ValkeyModuleScanCB>(), testing::An<void *>()))
+      .WillRepeatedly([&](ValkeyModuleCtx *ctx, ValkeyModuleScanCursor *,
+                          ValkeyModuleScanCB fn, void *privdata) -> int {
+        if (scan_step < 2) {
+          std::string k = absl::StrCat("prefix1_scan", scan_step++);
+          auto k_str = vmsdk::MakeUniqueValkeyString(k);
+          ValkeyModuleKey vkey = {.ctx = ctx, .key = k};
+          fn(ctx, k_str.get(), &vkey, privdata);
+          return 1;
+        }
+        return 0;
+      });
+
+  // First tick: batch_size=10, but max-mutation-queue-size-on-restore=1 stops
+  // scanning after 1 key while the worker has not yet drained it.
+  EXPECT_EQ(schema->PerformBackfill(&fake_ctx, /*batch_size=*/10), 1u);
+  EXPECT_EQ(scan_step, 1);
+  EXPECT_EQ(schema->GetMutatedRecordsSize(), 1u);
+  EXPECT_TRUE(schema->IsSwapDbRecoveryInProgress());
+
+  // Second tick while queue is still full scans 0 keys and keeps recovery gate.
+  EXPECT_EQ(schema->PerformBackfill(&fake_ctx, /*batch_size=*/10), 0u);
+  EXPECT_EQ(scan_step, 1);
+  EXPECT_TRUE(schema->IsSwapDbRecoveryInProgress());
+
+  // Drain first key, scan second key (again bounded at 1), then drain & finish.
+  drain_queued();
+  EXPECT_EQ(schema->PerformBackfill(&fake_ctx, /*batch_size=*/10), 1u);
+  EXPECT_EQ(scan_step, 2);
+  EXPECT_TRUE(schema->IsSwapDbRecoveryInProgress());
+
+  drain_queued();
+  EXPECT_EQ(schema->PerformBackfill(&fake_ctx, /*batch_size=*/10), 0u);
+  drain_queued();
+  EXPECT_FALSE(schema->IsSwapDbRecoveryInProgress());
+  EXPECT_EQ(hnsw->GetTrackedKeyCount(), 2u);
 }
 
 }  // namespace valkey_search

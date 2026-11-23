@@ -9,10 +9,12 @@
 #define VALKEYSEARCH_SRC_SCHEMA_MANAGER_H_
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
@@ -89,6 +91,9 @@ class SchemaManager {
   void OnLoadingEnded(ValkeyModuleCtx *ctx)
       ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
   void OnReplicationLoadStart(ValkeyModuleCtx *ctx);
+  void OnReplAsyncLoadCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
+                               uint64_t subevent, void *data)
+      ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
 
   void PerformBackfill(ValkeyModuleCtx *ctx, uint32_t batch_size)
       ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
@@ -98,7 +103,8 @@ class SchemaManager {
       ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
 
   void OnLoadingCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
-                         uint64_t subevent, void *data);
+                         uint64_t subevent, void *data)
+      ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
 
   void OnServerCronCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
                             uint64_t subevent, void *data);
@@ -129,8 +135,13 @@ class SchemaManager {
                                 vmsdk::ArgsIterator &itr) const;
 
  private:
-  absl::Status RemoveAll()
+  absl::StatusOr<std::vector<std::shared_ptr<IndexSchema>>> RemoveAll()
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);
+  void ApplyStagedSchemasIfNeeded(ValkeyModuleCtx *ctx)
+      ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
+  void CleanupStagedSchemasOnLoadFailure(ValkeyModuleCtx *ctx)
+      ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
+
   absl::AnyInvocable<void()> server_events_subscriber_callback_;
   bool is_subscribed_to_server_events_ = false;
   vmsdk::ThreadPool *mutations_thread_pool_;
@@ -174,6 +185,8 @@ class SchemaManager {
       int db_num, absl::string_view name) const
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);
   vmsdk::MainThreadAccessGuard<bool> staging_indices_due_to_repl_load_ = false;
+  vmsdk::MainThreadAccessGuard<bool> repl_async_load_in_progress_ = false;
+  vmsdk::MainThreadAccessGuard<size_t> backfill_rotation_idx_ = 0;
 
   bool coordinator_enabled_;
 };

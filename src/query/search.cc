@@ -2093,6 +2093,11 @@ absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
   if (parameters.cancellation_token->IsCancelled()) {
     return absl::OkStatus();
   }
+  if (parameters.index_schema &&
+      parameters.index_schema->IsSwapDbRecoveryInProgress()) {
+    return absl::FailedPreconditionError(
+        IndexSchema::kSwapDbRecoveryInProgressMsg);
+  }
   // INKEYS with an empty set means no keys can match.
   // Short-circuit before acquiring the lock to avoid unnecessary contention.
   if (parameters.inkeys.has_value() && parameters.inkeys->empty()) {

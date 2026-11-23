@@ -74,3 +74,11 @@ target_include_directories(hyperloglog_counter
                            PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(hyperloglog_counter PUBLIC hyperloglog)
 target_link_libraries(hyperloglog_counter PUBLIC expr)
+
+set(SRCS_REGEX_UTIL ${CMAKE_CURRENT_LIST_DIR}/regex_util.cc
+                    ${CMAKE_CURRENT_LIST_DIR}/regex_util.h)
+
+valkey_search_add_static_library(regex_util "${SRCS_REGEX_UTIL}")
+target_include_directories(regex_util PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(regex_util PUBLIC absl::status absl::statusor absl::strings)
+target_link_libraries(regex_util PRIVATE re2::re2)

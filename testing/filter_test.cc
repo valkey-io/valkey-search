@@ -2478,7 +2478,8 @@ TEST_P(InfieldsFilterTest, ParseParams) {
           *index_schema,
           indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std));
       indexes::PrefilterEvaluator evaluator(
-          query_ctx, parse_results.value().query_operations, *index_schema);
+          query_ctx, parse_results.value().query_operations, *index_schema,
+          /*source_resolves_text=*/false);
       EXPECT_EQ(test_case.evaluate_success.value(),
                 evaluator.Evaluate(*parse_results.value().root_predicate,
                                    interned_key));
@@ -2717,7 +2718,8 @@ TEST_F(InfieldsFilterBoundaryTest, SixtyFourthTextFieldInInfields) {
         *index_schema,
         indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std));
     indexes::PrefilterEvaluator evaluator(
-        query_ctx, parse_results.value().query_operations, *index_schema);
+        query_ctx, parse_results.value().query_operations, *index_schema,
+        /*source_resolves_text=*/false);
     EXPECT_TRUE(evaluator.Evaluate(*parse_results.value().root_predicate, key));
   }
 
@@ -2735,7 +2737,7 @@ TEST_F(InfieldsFilterBoundaryTest, SixtyFourthTextFieldInInfields) {
         indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std));
     indexes::PrefilterEvaluator evaluator(
         other_query_ctx, other_parse_results.value().query_operations,
-        *index_schema);
+        *index_schema, /*source_resolves_text=*/false);
     EXPECT_FALSE(
         evaluator.Evaluate(*other_parse_results.value().root_predicate, key));
   }

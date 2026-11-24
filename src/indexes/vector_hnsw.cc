@@ -276,29 +276,26 @@ absl::Status VectorHNSW<T>::AlgoDeleteRecord(uint64_t label) {
     return absl::NotFoundError(
         absl::StrCat("Internal ID not found for label: ", label));
   }
-  if (!normalize_) {
-    // A deleted node keeps its data for graph traversal. Give it a private
-    // copy, so that it does not keep a vector shared with others busy.
-    const auto &stored_record = algo_->GetDataByInternalId(*hnsw_internal_id);
-    if (stored_record.RefCount() > 1) {
-      auto vector_record = VectorRecord::Construct(
-          absl::string_view(stored_record.GetRawVector(), GetVectorDataSize()),
-          stored_record.GetReciprocalMagnitude(), GetVectorAllocator());
-      algo_->SetDataByInternalId(*hnsw_internal_id, std::move(vector_record));
-    }
-    algo_->markDeletedInternal(*hnsw_internal_id);
-    return absl::OkStatus();
-  }
+  // A deleted node keeps its data for graph traversal. Give it a private
+  // copy when normalized or shared, so that it does not keep a vector shared
+  // with others busy.
   const auto &stored_record = algo_->GetDataByInternalId(*hnsw_internal_id);
-  absl::string_view unnorm_vector(stored_record.GetRawVector(),
-                                  GetVectorDataSize());
-
-  auto norm_record = NormalizeVector<T>(unnorm_vector);
-
-  absl::string_view norm_view(norm_record.data(), norm_record.size());
-  auto vector_record =
-      VectorRecord::Construct(norm_view, 1.0f, GetVectorAllocator());
-  algo_->SetDataByInternalId(*hnsw_internal_id, std::move(vector_record));
+  if (normalize_ || stored_record.RefCount() > 1) {
+    absl::string_view unnorm_vector(stored_record.GetRawVector(),
+                                    GetVectorDataSize());
+    VectorRecord vector_record;
+    if (normalize_) {
+      auto norm_record = NormalizeVector<T>(unnorm_vector);
+      vector_record = VectorRecord::Construct(
+          absl::string_view(norm_record.data(), norm_record.size()), 1.0f,
+          GetVectorAllocator());
+    } else {
+      vector_record = VectorRecord::Construct(
+          unnorm_vector, stored_record.GetReciprocalMagnitude(),
+          GetVectorAllocator());
+    }
+    algo_->SetDataByInternalId(*hnsw_internal_id, std::move(vector_record));
+  }
   algo_->markDeletedInternal(*hnsw_internal_id);
   return absl::OkStatus();
 }

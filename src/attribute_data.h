@@ -30,8 +30,10 @@ class AttributeData {
   explicit AttributeData(vmsdk::UniqueValkeyString str)
       : data_(std::move(str)) {}
 
-  explicit AttributeData(indexes::VectorRecordWithSize vec)
-      : data_(std::move(vec)) {}
+  explicit AttributeData(
+      indexes::VectorRecordWithSize vec,
+      indexes::DeletionType del = indexes::DeletionType::kNone)
+      : deletion_type(del), data_(std::move(vec)) {}
 
   bool IsNull() const {
     if (std::holds_alternative<std::monostate>(data_)) {

@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include "absl/cleanup/cleanup.h"
 #include "absl/strings/str_cat.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -1936,6 +1937,168 @@ TEST_F(VectorRegistryTest, OnKeyDeletedCleansUpTrackedAndPendingEntries) {
   EXPECT_TRUE(registry.GetTrackedAttributes(0, pending_key->Str()).empty());
 
   VMSDK_EXPECT_OK(options::GetVectorUnshareBatchSize().SetValue(1024));
+}
+
+TEST_F(VectorRegistryTest,
+       ProcessPendingUnsharesDefersUntilRefCountDropsToOne) {
+  auto &registry = VectorRegistry::Instance();
+  auto k1 = StringInternStore::Intern("k_refcount_defer");
+  auto attr = StringInternStore::Intern("vec");
+  MockIndex index(2, attr->Str(), 0);
+  auto valkey_vec = MakeFloatVectorString();
+
+  auto held_rec = registry.DedupOrConstruct(
+      k1, valkey_vec.get(),
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &index);
+  ASSERT_NE(held_rec, nullptr);
+  EXPECT_EQ(held_rec.vector_record.RefCount(), 2u);
+
+  // While held_rec keeps RefCount() > 1, RemoveIndexKeys must defer the
+  // unshare rather than dropping it from pending_unshares_.
+  std::vector<InternedStringPtr> keys = {k1};
+  registry.RemoveIndexKeys(0, attr, keys);
+  EXPECT_EQ(registry.GetPendingUnsharesCount(), 1u);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 1u);
+
+  // Once the external reference is released, the next server cron tick
+  // unshares and erases the tracked entry.
+  held_rec.vector_record.reset();
+  registry.OnServerCronCallback(nullptr, ValkeyModuleEvent_CronLoop, 0,
+                                nullptr);
+  EXPECT_EQ(registry.GetPendingUnsharesCount(), 0u);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 0u);
+}
+
+TEST_F(VectorRegistryTest, ProcessPendingUnsharesBusyDbDoesNotStarveOtherDbs) {
+  auto &registry = VectorRegistry::Instance();
+  const auto saved_batch = options::GetVectorUnshareBatchSize().GetValue();
+  auto restore_batch = absl::MakeCleanup([saved_batch]() {
+    VMSDK_EXPECT_OK(options::GetVectorUnshareBatchSize().SetValue(saved_batch));
+  });
+  VMSDK_EXPECT_OK(options::GetVectorUnshareBatchSize().SetValue(1));
+
+  auto attr = StringInternStore::Intern("vec");
+  MockIndex index_db0(2, attr->Str(), 0);
+  MockIndex index_db1(2, attr->Str(), 1);
+
+  auto k_db0_busy = StringInternStore::Intern("k_db0_busy");
+  auto k_db1_ready_a = StringInternStore::Intern("k_db1_ready_a");
+  auto k_db1_ready_b = StringInternStore::Intern("k_db1_ready_b");
+  auto vec_db0 = MakeFloatVectorString({1.0f, 2.0f});
+  auto vec_db1_a = MakeFloatVectorString({3.0f, 4.0f});
+  auto vec_db1_b = MakeFloatVectorString({5.0f, 6.0f});
+
+  auto held_db0 = registry.DedupOrConstruct(
+      k_db0_busy, vec_db0.get(),
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &index_db0);
+  ASSERT_NE(held_db0, nullptr);
+  EXPECT_EQ(held_db0.vector_record.RefCount(), 2u);
+
+  registry.DedupOrConstruct(
+      k_db1_ready_a, vec_db1_a.get(),
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 1, &index_db1);
+  registry.DedupOrConstruct(
+      k_db1_ready_b, vec_db1_b.get(),
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 1, &index_db1);
+  ASSERT_EQ(registry.GetStats().entry_cnt, 3u);
+
+  // Queue DB 0 (busy record deferred) and two eligible records in DB 1
+  // (one processed immediately by RemoveIndexKeys(batch_size=1), leaving one
+  // busy record in DB 0 and one eligible record in DB 1 with cursor wrapping
+  // back to DB 0).
+  std::vector<InternedStringPtr> db0_keys = {k_db0_busy};
+  registry.RemoveIndexKeys(0, attr, db0_keys);
+  std::vector<InternedStringPtr> db1_keys = {k_db1_ready_a, k_db1_ready_b};
+  registry.RemoveIndexKeys(1, attr, db1_keys);
+
+  ASSERT_FALSE(registry.GetTrackedAttributes(0, k_db0_busy->Str()).empty());
+  ASSERT_EQ(registry.GetPendingUnsharesCount(), 2u);
+
+  // Within at most 2 ProcessPendingUnshares(1) calls (one examining DB 0 and
+  // advancing the cursor past the re-inserted busy item, the next examining
+  // DB 1), DB 1's remaining eligible record must be unshared while DB 0's
+  // busy record stays pending.
+  for (int step = 0; step < 2 && registry.GetStats().entry_cnt > 1u; ++step) {
+    EXPECT_EQ(registry.ProcessPendingUnshares(1), 1u);
+  }
+  EXPECT_TRUE(registry.GetTrackedAttributes(1, k_db1_ready_a->Str()).empty());
+  EXPECT_TRUE(registry.GetTrackedAttributes(1, k_db1_ready_b->Str()).empty());
+  EXPECT_FALSE(registry.GetTrackedAttributes(0, k_db0_busy->Str()).empty());
+  EXPECT_EQ(registry.GetPendingUnsharesCount(), 1u);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 1u);
+
+  held_db0.vector_record.reset();
+  EXPECT_EQ(registry.ProcessPendingUnshares(1), 1u);
+  EXPECT_EQ(registry.GetPendingUnsharesCount(), 0u);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 0u);
+}
+
+TEST_F(VectorRegistryTest,
+       ProcessPendingUnsharesReclaimsEachIndexAtMostOncePerBatch) {
+  class CountingReclaimIndex : public MockIndex {
+   public:
+    using MockIndex::MockIndex;
+    void ReclaimRetired() const override { ++reclaim_calls; }
+    mutable int reclaim_calls{0};
+  };
+
+  auto &registry = VectorRegistry::Instance();
+  auto attr = StringInternStore::Intern("vec");
+  CountingReclaimIndex index(2, attr->Str(), 0);
+  EXPECT_CALL(index, IsTracked(testing::_)).WillRepeatedly(Return(false));
+
+  MockKeyspaceEventSubscription sub;
+  sub.db_num_ = 0;
+  sub.vector_indexes_ = {&index};
+  MockAttributeDataType attr_type;
+  std::vector<std::string> prefixes = {"k_reclaim_"};
+  EXPECT_CALL(*kMockValkeyModule,
+              SubscribeToKeyspaceEvents(testing::_, testing::_, testing::_))
+      .WillRepeatedly(Return(VALKEYMODULE_OK));
+  EXPECT_CALL(attr_type, GetValkeyEventTypes())
+      .WillRepeatedly(Return(VALKEYMODULE_NOTIFY_ALL));
+  EXPECT_CALL(sub, GetAttributeDataType())
+      .WillRepeatedly(testing::ReturnRef(attr_type));
+  EXPECT_CALL(sub, GetKeyPrefixes())
+      .WillRepeatedly(testing::ReturnRef(prefixes));
+  VMSDK_EXPECT_OK(
+      KeyspaceEventManager::Instance().InsertSubscription(&fake_ctx_, &sub));
+  auto remove_sub = absl::MakeCleanup([&sub]() {
+    VMSDK_EXPECT_OK(KeyspaceEventManager::Instance().RemoveSubscription(&sub));
+  });
+
+  auto k0 = StringInternStore::Intern("k_reclaim_0");
+  auto k1 = StringInternStore::Intern("k_reclaim_1");
+  auto k2 = StringInternStore::Intern("k_reclaim_2");
+  auto vec0 = MakeFloatVectorString({1.0f, 0.0f});
+  auto vec1 = MakeFloatVectorString({1.0f, 1.0f});
+  auto vec2 = MakeFloatVectorString({1.0f, 2.0f});
+
+  // Hold k0 so it stays deferred for a second cron batch, while k1 and k2
+  // unshare in the first batch.
+  auto held0 = registry.DedupOrConstruct(
+      k0, vec0.get(), data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH,
+      0, &index);
+  registry.DedupOrConstruct(
+      k1, vec1.get(), data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH,
+      0, &index);
+  registry.DedupOrConstruct(
+      k2, vec2.get(), data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH,
+      0, &index);
+
+  std::vector<InternedStringPtr> keys = {k0, k1, k2};
+  registry.RemoveIndexKeys(0, attr, keys);
+  // All 3 untracked keys checked `index` in one batch, so ReclaimRetired()
+  // must have run exactly once for that batch.
+  EXPECT_EQ(index.reclaim_calls, 1);
+  EXPECT_EQ(registry.GetPendingUnsharesCount(), 1u);
+
+  // Next batch retries the deferred key and reclaims once more.
+  held0.vector_record.reset();
+  EXPECT_EQ(registry.ProcessPendingUnshares(10), 1u);
+  EXPECT_EQ(index.reclaim_calls, 2);
+  EXPECT_EQ(registry.GetPendingUnsharesCount(), 0u);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 0u);
 }
 
 }  // namespace valkey_search

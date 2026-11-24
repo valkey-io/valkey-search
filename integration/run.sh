@@ -271,13 +271,15 @@ function run_pytest() {
   PYTEST_CMD+=(--cache-clear -rfE -v "${ROOT_DIR}/integration/")
 
   LOG_INFO "Running: ${PYTEST_CMD[*]}"
-  # Capture pytest output to check for sanitizer errors
+  # Capture pytest output to check for sanitizer errors. Append so every
+  # retry attempt is checked, and record failure instead of exiting so the
+  # sanitizer check still runs when tests fail.
+  RUN_SUCCESS=0
   if [[ "$(uname -s)" == "Darwin" ]]; then
-    script -q "${PYTEST_OUTPUT_LOG}" "${PYTEST_CMD[@]}"
+    script -q -a "${PYTEST_OUTPUT_LOG}" "${PYTEST_CMD[@]}" || RUN_SUCCESS=$?
   else
-    script -q -e -c "$(printf '%q ' "${PYTEST_CMD[@]}")" "${PYTEST_OUTPUT_LOG}"
+    script -q -a -e -c "$(printf '%q ' "${PYTEST_CMD[@]}")" "${PYTEST_OUTPUT_LOG}" || RUN_SUCCESS=$?
   fi
-  RUN_SUCCESS=$?
 }
 
 function run_with_retries() {
@@ -300,7 +302,6 @@ function run_with_retries() {
       LOG_NOTICE "Retrying..."
     done
     LOG_ERROR "Retries exhausted"
-    exit 1
   fi
 }
 
@@ -324,3 +325,8 @@ fi
 END_TIME=$(date +%s)
 TEST_RUNTIME=$((END_TIME - START_TIME))
 printf "\n${GREEN}Integration tests execution time: %dm %ds (${TEST_RUNTIME}s)${RESET}\n\n" $((TEST_RUNTIME / 60)) $((TEST_RUNTIME % 60))
+
+if [[ "${RUN_SUCCESS}" != "0" ]]; then
+  LOG_ERROR "Integration tests failed"
+  exit 1
+fi

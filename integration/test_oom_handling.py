@@ -2,6 +2,7 @@ from valkey.client import Valkey
 from valkey.cluster import ValkeyCluster
 from valkey_search_test_case import ValkeySearchClusterTestCase, ValkeySearchTestCaseBase
 from valkeytestframework.conftest import resource_port_tracker
+from valkeytestframework.util import waiters
 import struct
 import pytest
 from valkey.exceptions import OutOfMemoryError, ResponseError
@@ -83,9 +84,16 @@ class TestSearchOOMHandlingCME(ValkeySearchClusterTestCase):
             node.client.execute_command("CONFIG", "SET", "search.enable-partial-results", "no")
         # The OOM error during fanout results in the coordinator cancelling the command.
         # Even if it cancels it, it should propagate the correct reason (OOM) in the error message.
-        with pytest.raises(ResponseError, match="command not allowed when used memory > 'maxmemory'"):
-            res = run_search_query(client_primary_2)
-            print(res)
+        # Shards read the OOM state their server cron records, so the fanout can
+        # succeed until primary 1's next cron tick.
+        def fanout_fails_on_oom():
+            try:
+                run_search_query(client_primary_2)
+            except ResponseError as e:
+                assert "command not allowed when used memory > 'maxmemory'" in str(e)
+                return True
+            return False
+        waiters.wait_for_true(fanout_fails_on_oom)
 
 class TestSearchOOMHandlingCMD(ValkeySearchTestCaseBase):
     """

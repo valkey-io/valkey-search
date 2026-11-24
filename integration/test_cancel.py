@@ -3,6 +3,7 @@ from valkey.client import Valkey
 from valkey_search_test_case import (
     ValkeySearchTestCaseDebugMode,
     ValkeySearchClusterTestCaseDebugMode,
+    is_sanitizer_enabled,
 )
 from valkeytestframework.conftest import resource_port_tracker
 from indexes import *
@@ -20,6 +21,12 @@ def canceller(client, client_id):
     client.execute_command("client kill id ", client_id)
 
 
+# Timeouts in these tests are forced (ForceTimeout or a pausepoint), so the
+# budget only has to cover the nominal searches, which sanitizer builds run
+# several times slower.
+SEARCH_TIMEOUT_MS = "1000" if is_sanitizer_enabled() else "10"
+
+
 def search_command(index: str, filter: Union[int, None], enable_partial_results: bool = True, enable_consistency: bool = False) -> list[str]:
     predicate = "*" if filter is None else f"(@n:[0 {filter}])"
     return [
@@ -31,7 +38,7 @@ def search_command(index: str, filter: Union[int, None], enable_partial_results:
         "BLOB",
         float_to_bytes([10.0, 10.0, 10.0]),
         "TIMEOUT",
-        "10",
+        SEARCH_TIMEOUT_MS,
         "SOMESHARDS" if enable_partial_results else "ALLSHARDS",
         "CONSISTENT" if enable_consistency else "INCONSISTENT"
     ]

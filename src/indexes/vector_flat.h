@@ -97,6 +97,12 @@ class VectorFlat : public VectorType<T> {
                                           cancel::Token &cancellation_token)
       override ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
+  // algo_ is set only when the index is created or loaded.
+  bool NeedsMigration() const override ABSL_NO_THREAD_SAFETY_ANALYSIS {
+    return this->VectorBase::NeedsMigration() || algo_->NeedsMigration();
+  }
+  void MigrateSome(size_t n) override ABSL_LOCKS_EXCLUDED(resize_mutex_);
+
  protected:
   absl::Status ResizeIfFull() ABSL_LOCKS_EXCLUDED(resize_mutex_);
   absl::Status AddRecordImpl(uint64_t internal_id,

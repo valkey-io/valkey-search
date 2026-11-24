@@ -8,6 +8,7 @@
 #ifndef VALKEYSEARCH_SRC_INDEXES_INDEX_BASE_H
 #define VALKEYSEARCH_SRC_INDEXES_INDEX_BASE_H
 
+#include <atomic>
 #include <cstddef>
 #include <memory>
 
@@ -115,8 +116,18 @@ class IndexBase {
 
   virtual void OnSwapDB(int new_db_num) {}
 
+  // MigrateSome() must run in the schema's write phase.
+  virtual bool NeedsMigration() const { return false; }
+  virtual void MigrateSome(size_t n) {}
+  // Lets the owning schema queue this index for migration at most once.
+  bool MarkMigrationRequested() {
+    return !migration_requested_.load() && !migration_requested_.exchange(true);
+  }
+  void ClearMigrationRequested() { migration_requested_.store(false); }
+
  private:
   IndexerType indexer_type_{IndexerType::kNone};
+  std::atomic<bool> migration_requested_{false};
 };
 
 inline bool IsVectorIndex(const IndexBase &index) {

@@ -1,17 +1,20 @@
 """
 Advisory HugeFlatHashMap migration (vmsdk/src/huge/flat_hash_map.h).
 
-While a table grows it keeps its old table (the background) and moves entries
-out of it a few at a time. Besides each mutation's own moves, server cron moves
-more for the main-thread tables it owns, so their backgrounds finish even when
-traffic stops. The controlled variable HugeMapAdvisoryMigration turns cron's
-moves off, which lets a test leave backgrounds in place and then turn them back
-on. The dev INFO field huge_hash_maps_migrating counts the tables that still
-have a background.
+While a table grows or shrinks it keeps its old table (the background) and
+moves entries out of it a few at a time. Besides each mutation's own moves,
+server cron moves more, so backgrounds finish even when traffic stops:
+main-thread tables migrate in cron itself, and an index's own tables in a
+mutations-pool task inside the index's write phase. The controlled variable
+HugeMapAdvisoryMigration turns cron's moves off, which lets a test leave
+backgrounds in place and then turn them back on. The dev INFO field
+huge_hash_maps_migrating counts the tables that still have a background.
 """
 
+import json
 import time
 
+import pytest
 from valkey import Valkey
 from valkey_search_test_case import ValkeySearchTestCaseDebugMode
 from valkeytestframework.conftest import resource_port_tracker
@@ -40,14 +43,57 @@ def _advisory_migration(client: Valkey, value: str) -> None:
                                   "HugeMapAdvisoryMigration", value) == b"OK"
 
 
+def _create_and_ingest(client: Valkey, algorithm: str,
+                       key_type: KeyDataType) -> Index:
+    index = Index(
+        "idx",
+        [Vector("vec", DIM, type=algorithm, distance="L2")],
+        prefixes=["doc:"],
+        type=key_type,
+    )
+    index.create(client)
+    pipe = client.pipeline(transaction=False)
+    for i in range(NUM_KEYS):
+        vec = [float(i)] * DIM
+        if key_type == KeyDataType.HASH:
+            pipe.hset(f"doc:{i}", mapping={"vec": float_to_bytes(vec)})
+        else:
+            pipe.execute_command("JSON.SET", f"doc:{i}", "$",
+                                 json.dumps({"vec": vec}))
+        if (i + 1) % PIPELINE == 0:
+            pipe.execute()
+    pipe.execute()
+    waiters.wait_for_equal(lambda: index.info(client).num_docs, NUM_KEYS)
+    return index
+
+
+def _expect_frozen_then_drained(client: Valkey) -> None:
+    frozen = _maps_migrating(client)
+    assert frozen > 0, "no background was left behind"
+    # Ten or more cron ticks at the default hz, with nothing draining.
+    time.sleep(1.5)
+    assert _maps_migrating(client) == frozen
+
+    # From here on, no command touches search: whatever drains now is server
+    # cron.
+    _advisory_migration(client, "yes")
+    waiters.wait_for_equal(lambda: _maps_migrating(client), 0, timeout=30)
+
+
 class TestHugeHashMapMigration(ValkeySearchTestCaseDebugMode):
 
-    def test_server_cron_drains_main_thread_maps(self):
+    @pytest.mark.parametrize("algorithm,key_type", [
+        ("FLAT", KeyDataType.HASH),
+        ("HNSW", KeyDataType.HASH),
+        ("FLAT", KeyDataType.JSON),
+    ], ids=["FLAT-HASH", "HNSW-HASH", "FLAT-JSON"])
+    def test_server_cron_drains_all_maps(self, algorithm, key_type):
         """
         With cron's migration off, ingest leaves backgrounds behind and they
-        stay. Turned back on with no traffic at all, server cron drains the
-        main-thread maps it owns (the string intern store, and the vector
-        registry's tables).
+        stay. Turned back on with no traffic at all, server cron drains every
+        table: the main-thread ones (the string intern store, the vector
+        registry's tables, the schema's db_key_info_) and the index's own
+        (index_key_info_, the vector index's key maps, the FLAT label map).
         """
         client: Valkey = self.server.get_new_client()
         _advisory_migration(client, "no")
@@ -55,34 +101,34 @@ class TestHugeHashMapMigration(ValkeySearchTestCaseDebugMode):
         # keeps its background for nearly the whole of its next cycle.
         _config_set(client, "huge-hash-map-migrate-batch", "1")
         try:
-            index = Index(
-                "idx",
-                [Vector("vec", DIM, type="FLAT", distance="L2")],
-                prefixes=["doc:"],
-                type=KeyDataType.HASH,
-            )
-            index.create(client)
-            pipe = client.pipeline(transaction=False)
-            for i in range(NUM_KEYS):
-                pipe.hset(f"doc:{i}",
-                          mapping={"vec": float_to_bytes([float(i)] * DIM)})
-                if (i + 1) % PIPELINE == 0:
-                    pipe.execute()
-            pipe.execute()
-            waiters.wait_for_equal(lambda: index.info(client).num_docs,
-                                   NUM_KEYS)
-
-            frozen = _maps_migrating(client)
-            assert frozen > 0, "ingest left no background behind"
-            # Ten or more cron ticks at the default hz, with nothing draining.
-            time.sleep(1.5)
-            assert _maps_migrating(client) == frozen
-
-            # From here on, no command touches search: whatever drains now is
-            # server cron.
+            _create_and_ingest(client, algorithm, key_type)
+            _expect_frozen_then_drained(client)
+        finally:
             _advisory_migration(client, "yes")
-            waiters.wait_for_true(lambda: _maps_migrating(client) < frozen,
-                                  timeout=30)
+            _config_set(client, "huge-hash-map-migrate-batch", "8")
+
+    def test_server_cron_drains_shrinking_maps(self):
+        """
+        Deleting keys until the tables shrink also leaves backgrounds, and
+        server cron drains those too. Deleting stops as soon as a shrink
+        starts: further erases would empty the background themselves.
+        """
+        client: Valkey = self.server.get_new_client()
+        index = _create_and_ingest(client, "FLAT", KeyDataType.HASH)
+        waiters.wait_for_equal(lambda: _maps_migrating(client), 0, timeout=30)
+
+        _advisory_migration(client, "no")
+        _config_set(client, "huge-hash-map-migrate-batch", "1")
+        try:
+            chunk = 500
+            for start in range(NUM_KEYS - chunk, 0, -chunk):
+                keys = [f"doc:{i}" for i in range(start, start + chunk)]
+                client.delete(*keys)
+                waiters.wait_for_equal(
+                    lambda: index.info(client).mutation_queue_size, 0)
+                if _maps_migrating(client) > 0:
+                    break
+            _expect_frozen_then_drained(client)
         finally:
             _advisory_migration(client, "yes")
             _config_set(client, "huge-hash-map-migrate-batch", "8")

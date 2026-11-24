@@ -24,6 +24,7 @@
 #include "src/version.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -232,7 +233,7 @@ int AuxLoadCallback(ValkeyModuleIO *rdb, int encver, int when) {
   Metrics::GetStats().rdb_load_failure_cnt++;
   VMSDK_LOG_EVERY_N_SEC(WARNING, ctx.get(), 0.1)
       << "Failed to load ValkeySearch aux section from RDB: "
-      << result.message();
+      << vmsdk::config::RedactIfNeeded(result.message());
   return VALKEYMODULE_ERR;
 }
 

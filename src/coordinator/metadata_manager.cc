@@ -475,17 +475,19 @@ void MetadataManager::HandleBroadcastedMetadata(
           }
           VMSDK_LOG_EVERY_N_SEC(DEBUG, ctx, 1)
               << "Got GlobalMetadata from " << address << ": "
-              << schema->DebugString();
+              << vmsdk::config::RedactIfNeeded(schema->DebugString());
           auto &metadata_manager = MetadataManager::Instance();
           auto status = metadata_manager.ReconcileMetadata(*schema, address);
           if (!status.ok()) {
             VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
-                << "Failed to reconcile schemas: " << status.message();
+                << "Failed to reconcile schemas: "
+                << vmsdk::config::RedactIfNeeded(status.message());
             return;
           }
           VMSDK_LOG_EVERY_N_SEC(DEBUG, ctx, 1)
               << "Successfully reconciled schemas! New GlobalMetadata: "
-              << metadata_manager.GetGlobalMetadata()->DebugString();
+              << vmsdk::config::RedactIfNeeded(
+                     metadata_manager.GetGlobalMetadata()->DebugString());
         });
       });
 }
@@ -572,8 +574,9 @@ absl::Status MetadataManager::ReconcileMetadata(const GlobalMetadata &proposed,
         if (!result.ok()) {
           VMSDK_LOG(WARNING, detached_ctx_.get())
               << "Failed during reconciliation callback: %s"
-              << result.message().data() << " for type " << type_name << ", id "
-              << vmsdk::config::RedactIfNeeded(id) << " from " << source;
+              << vmsdk::config::RedactIfNeeded(result.message()) << " for type "
+              << type_name << ", id " << vmsdk::config::RedactIfNeeded(id)
+              << " from " << source;
           return result;
         }
         auto status = CallFTInternalUpdateForReconciliation(id, proposed_entry);
@@ -751,7 +754,8 @@ void MetadataManager::OnLoadingEnded(ValkeyModuleCtx *ctx) {
                                     /*prefer_incoming=*/true);
     if (!status.ok()) {
       VMSDK_LOG(WARNING, ctx)
-          << "Failed to apply staged metadata: %s" << status.message().data();
+          << "Failed to apply staged metadata: %s"
+          << vmsdk::config::RedactIfNeeded(status.message());
     }
     staged_metadata_ = GlobalMetadata();
     staging_metadata_due_to_repl_load_ = false;
@@ -831,7 +835,8 @@ void MetadataManager::RegisterForClusterMessages(ValkeyModuleCtx *ctx) {
 absl::Status MetadataManager::ShowMetadata(
     ValkeyModuleCtx *ctx, [[maybe_unused]] vmsdk::ArgsIterator &itr) const {
   auto metadata = metadata_.Get().DebugString();
-  VMSDK_LOG(DEBUG, ctx) << "Metadata: " << metadata;
+  VMSDK_LOG(DEBUG, ctx) << "Metadata: "
+                        << vmsdk::config::RedactIfNeeded(metadata);
   ValkeyModule_ReplyWithStringBuffer(ctx, metadata.data(), metadata.size());
   return absl::OkStatus();
 }

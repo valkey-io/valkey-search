@@ -375,7 +375,8 @@ absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     msg += ' ';
     msg += vmsdk::ToStringView(argv[i]);
   }
-  VMSDK_LOG(WARNING, ctx) << "FT._DEBUG: " << msg;
+  VMSDK_LOG(WARNING, ctx) << "FT._DEBUG: "
+                          << vmsdk::config::RedactIfNeeded(msg);
   vmsdk::ArgsIterator itr{argv, argc};
   itr.Next();  // Skip the command name
   std::string keyword;

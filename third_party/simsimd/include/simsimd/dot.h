@@ -750,6 +750,12 @@ SIMSIMD_PUBLIC void simsimd_dot_bf16_neon_shift(simsimd_bf16_t const* a, simsimd
 #pragma GCC target("+sve")
 #pragma clang attribute push(__attribute__((target("+sve"))), apply_to = function)
 
+// VALKEYSEARCH: the SVE kernels below accumulate with the merging (_m) form of
+// svmla/svmls rather than the don't-care (_x) form. The last iteration runs
+// under a partial predicate, and _x leaves the inactive accumulator lanes
+// undefined, so the partial sums they hold from earlier iterations could be
+// lost (observed with GCC at -O0 on 256-bit SVE). _m keeps them.
+
 SIMSIMD_PUBLIC void simsimd_dot_f32_sve(simsimd_f32_t const* a, simsimd_f32_t const* b, simsimd_size_t n,
                                         simsimd_distance_t* result) {
     simsimd_size_t i = 0;
@@ -758,7 +764,7 @@ SIMSIMD_PUBLIC void simsimd_dot_f32_sve(simsimd_f32_t const* a, simsimd_f32_t co
         svbool_t pg_vec = svwhilelt_b32((unsigned int)i, (unsigned int)n);
         svfloat32_t a_vec = svld1_f32(pg_vec, a + i);
         svfloat32_t b_vec = svld1_f32(pg_vec, b + i);
-        ab_vec = svmla_f32_x(pg_vec, ab_vec, a_vec, b_vec);
+        ab_vec = svmla_f32_m(pg_vec, ab_vec, a_vec, b_vec);
         i += svcntw();
     } while (i < n);
     *result = svaddv_f32(svptrue_b32(), ab_vec);
@@ -777,10 +783,10 @@ SIMSIMD_PUBLIC void simsimd_dot_f32c_sve(simsimd_f32_t const* a, simsimd_f32_t c
         svfloat32_t a_imag_vec = svget2_f32(a_vec, 1);
         svfloat32_t b_real_vec = svget2_f32(b_vec, 0);
         svfloat32_t b_imag_vec = svget2_f32(b_vec, 1);
-        ab_real_vec = svmla_f32_x(pg_vec, ab_real_vec, a_real_vec, b_real_vec);
-        ab_real_vec = svmls_f32_x(pg_vec, ab_real_vec, a_imag_vec, b_imag_vec);
-        ab_imag_vec = svmla_f32_x(pg_vec, ab_imag_vec, a_real_vec, b_imag_vec);
-        ab_imag_vec = svmla_f32_x(pg_vec, ab_imag_vec, a_imag_vec, b_real_vec);
+        ab_real_vec = svmla_f32_m(pg_vec, ab_real_vec, a_real_vec, b_real_vec);
+        ab_real_vec = svmls_f32_m(pg_vec, ab_real_vec, a_imag_vec, b_imag_vec);
+        ab_imag_vec = svmla_f32_m(pg_vec, ab_imag_vec, a_real_vec, b_imag_vec);
+        ab_imag_vec = svmla_f32_m(pg_vec, ab_imag_vec, a_imag_vec, b_real_vec);
         i += svcntw() * 2;
     } while (i < n);
     results[0] = svaddv_f32(svptrue_b32(), ab_real_vec);
@@ -800,10 +806,10 @@ SIMSIMD_PUBLIC void simsimd_vdot_f32c_sve(simsimd_f32_t const* a, simsimd_f32_t 
         svfloat32_t a_imag_vec = svget2_f32(a_vec, 1);
         svfloat32_t b_real_vec = svget2_f32(b_vec, 0);
         svfloat32_t b_imag_vec = svget2_f32(b_vec, 1);
-        ab_real_vec = svmla_f32_x(pg_vec, ab_real_vec, a_real_vec, b_real_vec);
-        ab_real_vec = svmla_f32_x(pg_vec, ab_real_vec, a_imag_vec, b_imag_vec);
-        ab_imag_vec = svmla_f32_x(pg_vec, ab_imag_vec, a_real_vec, b_imag_vec);
-        ab_imag_vec = svmls_f32_x(pg_vec, ab_imag_vec, a_imag_vec, b_real_vec);
+        ab_real_vec = svmla_f32_m(pg_vec, ab_real_vec, a_real_vec, b_real_vec);
+        ab_real_vec = svmla_f32_m(pg_vec, ab_real_vec, a_imag_vec, b_imag_vec);
+        ab_imag_vec = svmla_f32_m(pg_vec, ab_imag_vec, a_real_vec, b_imag_vec);
+        ab_imag_vec = svmls_f32_m(pg_vec, ab_imag_vec, a_imag_vec, b_real_vec);
         i += svcntw() * 2;
     } while (i < n);
     results[0] = svaddv_f32(svptrue_b32(), ab_real_vec);
@@ -818,7 +824,7 @@ SIMSIMD_PUBLIC void simsimd_dot_f64_sve(simsimd_f64_t const* a, simsimd_f64_t co
         svbool_t pg_vec = svwhilelt_b64((unsigned int)i, (unsigned int)n);
         svfloat64_t a_vec = svld1_f64(pg_vec, a + i);
         svfloat64_t b_vec = svld1_f64(pg_vec, b + i);
-        ab_vec = svmla_f64_x(pg_vec, ab_vec, a_vec, b_vec);
+        ab_vec = svmla_f64_m(pg_vec, ab_vec, a_vec, b_vec);
         i += svcntd();
     } while (i < n);
     *result = svaddv_f64(svptrue_b32(), ab_vec);
@@ -837,10 +843,10 @@ SIMSIMD_PUBLIC void simsimd_dot_f64c_sve(simsimd_f64_t const* a, simsimd_f64_t c
         svfloat64_t a_imag_vec = svget2_f64(a_vec, 1);
         svfloat64_t b_real_vec = svget2_f64(b_vec, 0);
         svfloat64_t b_imag_vec = svget2_f64(b_vec, 1);
-        ab_real_vec = svmla_f64_x(pg_vec, ab_real_vec, a_real_vec, b_real_vec);
-        ab_real_vec = svmls_f64_x(pg_vec, ab_real_vec, a_imag_vec, b_imag_vec);
-        ab_imag_vec = svmla_f64_x(pg_vec, ab_imag_vec, a_real_vec, b_imag_vec);
-        ab_imag_vec = svmla_f64_x(pg_vec, ab_imag_vec, a_imag_vec, b_real_vec);
+        ab_real_vec = svmla_f64_m(pg_vec, ab_real_vec, a_real_vec, b_real_vec);
+        ab_real_vec = svmls_f64_m(pg_vec, ab_real_vec, a_imag_vec, b_imag_vec);
+        ab_imag_vec = svmla_f64_m(pg_vec, ab_imag_vec, a_real_vec, b_imag_vec);
+        ab_imag_vec = svmla_f64_m(pg_vec, ab_imag_vec, a_imag_vec, b_real_vec);
         i += svcntd() * 2;
     } while (i < n);
     results[0] = svaddv_f64(svptrue_b64(), ab_real_vec);
@@ -860,10 +866,10 @@ SIMSIMD_PUBLIC void simsimd_vdot_f64c_sve(simsimd_f64_t const* a, simsimd_f64_t 
         svfloat64_t a_imag_vec = svget2_f64(a_vec, 1);
         svfloat64_t b_real_vec = svget2_f64(b_vec, 0);
         svfloat64_t b_imag_vec = svget2_f64(b_vec, 1);
-        ab_real_vec = svmla_f64_x(pg_vec, ab_real_vec, a_real_vec, b_real_vec);
-        ab_real_vec = svmla_f64_x(pg_vec, ab_real_vec, a_imag_vec, b_imag_vec);
-        ab_imag_vec = svmla_f64_x(pg_vec, ab_imag_vec, a_real_vec, b_imag_vec);
-        ab_imag_vec = svmls_f64_x(pg_vec, ab_imag_vec, a_imag_vec, b_real_vec);
+        ab_real_vec = svmla_f64_m(pg_vec, ab_real_vec, a_real_vec, b_real_vec);
+        ab_real_vec = svmla_f64_m(pg_vec, ab_real_vec, a_imag_vec, b_imag_vec);
+        ab_imag_vec = svmla_f64_m(pg_vec, ab_imag_vec, a_real_vec, b_imag_vec);
+        ab_imag_vec = svmls_f64_m(pg_vec, ab_imag_vec, a_imag_vec, b_real_vec);
         i += svcntd() * 2;
     } while (i < n);
     results[0] = svaddv_f64(svptrue_b64(), ab_real_vec);
@@ -887,7 +893,7 @@ SIMSIMD_PUBLIC void simsimd_dot_f16_sve(simsimd_f16_t const* a_enum, simsimd_f16
         svbool_t pg_vec = svwhilelt_b16((unsigned int)i, (unsigned int)n);
         svfloat16_t a_vec = svld1_f16(pg_vec, a + i);
         svfloat16_t b_vec = svld1_f16(pg_vec, b + i);
-        ab_vec = svmla_f16_x(pg_vec, ab_vec, a_vec, b_vec);
+        ab_vec = svmla_f16_m(pg_vec, ab_vec, a_vec, b_vec);
         i += svcnth();
     } while (i < n);
     simsimd_f16_for_arm_simd_t ab = svaddv_f16(svptrue_b16(), ab_vec);
@@ -907,10 +913,10 @@ SIMSIMD_PUBLIC void simsimd_dot_f16c_sve(simsimd_f16_t const* a, simsimd_f16_t c
         svfloat16_t a_imag_vec = svget2_f16(a_vec, 1);
         svfloat16_t b_real_vec = svget2_f16(b_vec, 0);
         svfloat16_t b_imag_vec = svget2_f16(b_vec, 1);
-        ab_real_vec = svmla_f16_x(pg_vec, ab_real_vec, a_real_vec, b_real_vec);
-        ab_real_vec = svmls_f16_x(pg_vec, ab_real_vec, a_imag_vec, b_imag_vec);
-        ab_imag_vec = svmla_f16_x(pg_vec, ab_imag_vec, a_real_vec, b_imag_vec);
-        ab_imag_vec = svmla_f16_x(pg_vec, ab_imag_vec, a_imag_vec, b_real_vec);
+        ab_real_vec = svmla_f16_m(pg_vec, ab_real_vec, a_real_vec, b_real_vec);
+        ab_real_vec = svmls_f16_m(pg_vec, ab_real_vec, a_imag_vec, b_imag_vec);
+        ab_imag_vec = svmla_f16_m(pg_vec, ab_imag_vec, a_real_vec, b_imag_vec);
+        ab_imag_vec = svmla_f16_m(pg_vec, ab_imag_vec, a_imag_vec, b_real_vec);
         i += svcnth() * 2;
     } while (i < n);
     results[0] = svaddv_f16(svptrue_b16(), ab_real_vec);
@@ -930,10 +936,10 @@ SIMSIMD_PUBLIC void simsimd_vdot_f16c_sve(simsimd_f16_t const* a, simsimd_f16_t 
         svfloat16_t a_imag_vec = svget2_f16(a_vec, 1);
         svfloat16_t b_real_vec = svget2_f16(b_vec, 0);
         svfloat16_t b_imag_vec = svget2_f16(b_vec, 1);
-        ab_real_vec = svmla_f16_x(pg_vec, ab_real_vec, a_real_vec, b_real_vec);
-        ab_real_vec = svmla_f16_x(pg_vec, ab_real_vec, a_imag_vec, b_imag_vec);
-        ab_imag_vec = svmla_f16_x(pg_vec, ab_imag_vec, a_real_vec, b_imag_vec);
-        ab_imag_vec = svmls_f16_x(pg_vec, ab_imag_vec, a_imag_vec, b_real_vec);
+        ab_real_vec = svmla_f16_m(pg_vec, ab_real_vec, a_real_vec, b_real_vec);
+        ab_real_vec = svmla_f16_m(pg_vec, ab_real_vec, a_imag_vec, b_imag_vec);
+        ab_imag_vec = svmla_f16_m(pg_vec, ab_imag_vec, a_real_vec, b_imag_vec);
+        ab_imag_vec = svmls_f16_m(pg_vec, ab_imag_vec, a_imag_vec, b_real_vec);
         i += svcnth() * 2;
     } while (i < n);
     results[0] = svaddv_f16(svptrue_b16(), ab_real_vec);

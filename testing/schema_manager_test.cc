@@ -13,6 +13,7 @@
 #include <string>
 #include <utility>
 
+#include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
 #include "absl/strings/str_format.h"
 #include "gmock/gmock.h"
@@ -21,6 +22,7 @@
 #include "src/coordinator/metadata_manager.h"
 #include "testing/common.h"
 #include "testing/coordinator/common.h"
+#include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -558,6 +560,43 @@ TEST_F(SchemaManagerTest, OnServerCronCallback) {
   EXPECT_TRUE(SchemaManager::Instance().IsIndexingInProgress());
   SchemaManager::Instance().OnServerCronCallback(&fake_ctx_, eid, 0, nullptr);
   EXPECT_FALSE(SchemaManager::Instance().IsIndexingInProgress());
+}
+
+TEST_F(SchemaManagerTest, PerformBackfillBudgetSharedAcrossIndexes) {
+  InitThreadPools(10, 5, 1);
+  auto index_a =
+      CreateIndexSchema("index_a", &fake_ctx_, nullptr, nullptr, db_num_);
+  VMSDK_EXPECT_OK(index_a);
+  auto index_b =
+      CreateIndexSchema("index_b", &fake_ctx_, nullptr, nullptr, db_num_);
+  VMSDK_EXPECT_OK(index_b);
+
+  // Each Scan call returns a whole bucket of 2 keys, so the first index
+  // overshoots a budget of 1. Keys don't match the index prefix, so they
+  // are only counted as scanned.
+  constexpr int kKeysPerIndex = 100;
+  absl::flat_hash_map<void *, int> keys_left;
+  EXPECT_CALL(*kMockValkeyModule,
+              Scan(testing::_, testing::An<ValkeyModuleScanCursor *>(),
+                   testing::An<ValkeyModuleScanCB>(), testing::An<void *>()))
+      .WillRepeatedly([&](ValkeyModuleCtx *ctx, ValkeyModuleScanCursor *cursor,
+                          ValkeyModuleScanCB fn, void *privdata) -> int {
+        auto [it, _] = keys_left.try_emplace(privdata, kKeysPerIndex);
+        for (int i = 0; i < 2 && it->second > 0; ++i, --it->second) {
+          auto key = vmsdk::MakeUniqueValkeyString(
+              absl::StrFormat("other:%d", it->second));
+          fn(ctx, key.get(), nullptr, privdata);
+        }
+        return it->second > 0 ? 1 : 0;
+      });
+
+  SchemaManager::Instance().PerformBackfill(&fake_ctx_, 1);
+
+  // Only the first index scans one bucket; the overshoot must not hand the
+  // second index an unbounded budget.
+  EXPECT_EQ((*index_a)->GetBackfillScannedKeyCount() +
+                (*index_b)->GetBackfillScannedKeyCount(),
+            2);
 }
 
 struct OnSwapDBCallbackTestCase {

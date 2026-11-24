@@ -438,6 +438,8 @@ TEST_F(ThreadPoolTest, ConcurrentResizeAndSuspendResume) {
 
 namespace {
 constexpr size_t kThreadCount = 2;
+// Each task spins until `atomic_flag` is set, sleeping every `modulo`
+// iterations. `modulo == 0` means never sleep.
 std::shared_ptr<absl::BlockingCounter> ScheduleTasks(
     ThreadPool& thread_pool, std::atomic_bool& atomic_flag, size_t modulo) {
   std::shared_ptr<absl::BlockingCounter> blocking_counter =
@@ -449,7 +451,7 @@ std::shared_ptr<absl::BlockingCounter> ScheduleTasks(
           uint64_t counter = 0;
           while (!atomic_flag) {
             counter++;
-            if (counter % modulo == 0) {
+            if (modulo != 0 && counter % modulo == 0) {
               absl::SleepFor(absl::Microseconds(1));
             }
           }
@@ -485,9 +487,8 @@ TEST_F(ThreadPoolTest, TestCPUUsage) {
   EXPECT_LT(thread_pool.GetAvgCPUPercentage().value(), 1.0);
 
   atomic_flag.store(false);
-  // Increasing modulo means we will be sleeping less in the task, so CPU
-  // expected to rise
-  modulo = 1000;
+  // Sleep on every iteration, so the threads are mostly idle
+  modulo = 1;
   blocking_counter = ScheduleTasks(thread_pool, atomic_flag, modulo);
   absl::SleepFor(absl::Milliseconds(100));
   double first_sample = thread_pool.GetAvgCPUPercentage().value();
@@ -498,8 +499,11 @@ TEST_F(ThreadPoolTest, TestCPUUsage) {
 
   // Occupy again the threads with new tasks
   atomic_flag.store(false);
-  // Decrease the amount of time the threads will sleep by increasing modulo
-  modulo = 10000;
+  // Spin without sleeping. Comparing two partially-sleeping workloads was
+  // flaky: a "1us" sleep really lasts tens of microseconds, and under CPU
+  // contention (sanitizers, parallel ctest) both samples collapse to the
+  // threads' CPU share and can land in either order.
+  modulo = 0;
   blocking_counter = ScheduleTasks(thread_pool, atomic_flag, modulo);
   absl::SleepFor(absl::Milliseconds(100));
   // Threads are expected now to work harder, so current CPU will be higher

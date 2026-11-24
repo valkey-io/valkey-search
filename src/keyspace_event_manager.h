@@ -74,6 +74,9 @@ class KeyspaceEventManager {
       absl::string_view key, int type, int db_num = -1);
   static void InitInstance(std::unique_ptr<KeyspaceEventManager> instance);
   static KeyspaceEventManager &Instance();
+  void SetSuppressHexpireNotifications(bool suppress) {
+    suppress_hexpire_notifications_ = suppress;
+  }
 
  private:
   absl::Status StartValkeySubscriptionIfNeeded(ValkeyModuleCtx *ctx, int types);
@@ -95,6 +98,7 @@ class KeyspaceEventManager {
   vmsdk::MainThreadAccessGuard<PatriciaTree<KeyspaceEventSubscription *>>
       subscription_trie_{/*case_sensitive=*/true};
   int subscribed_types_bit_mask_{0};
+  bool suppress_hexpire_notifications_{false};
   vmsdk::UniqueValkeyString moved_src_key_;
   int src_db_num_{-1};
 };

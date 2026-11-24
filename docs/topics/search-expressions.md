@@ -66,7 +66,7 @@ Numeric constants are the usual syntax of decimal integer and floating point exp
 
 String constants are enclosed with single (`'`) or double quotes(`"`). A backslash (`\`) followed by a quote can be used to insert a quote character.
 
-A parameter-ref selects a string value provided by the `PARAMS` clause of the executing `FT.AGGREGATE` command. With `search.emulate-release` 1.3.0 or later, a parameter whose text is a number is a numeric value.
+A parameter-ref selects a string value provided by the `PARAMS` clause of the executing `FT.AGGREGATE` command, or a number provided by its `JPARAMS` clause. With `search.emulate-release` 1.3.0 or later, a parameter whose text is a number is a numeric value.
 
 A field-ref is used to access values from the record currently being processed. If the field doesn't exist then the reference returns a Nil value. With `search.emulate-release` 1.3.0 or later, a reference to a field the key does not have is _missing_: an operator or function (other than `exists`, `concat` and `&&`) given a missing value returns missing, and an `APPLY` whose expression is missing drops the record. `concat` given a missing value returns Nil instead, so an `APPLY` that uses it keeps the record.
 

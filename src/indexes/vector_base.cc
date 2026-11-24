@@ -151,8 +151,8 @@ std::vector<char> NormalizeVector(absl::string_view record,
 PrefilterEvaluator::PrefilterEvaluator(query::QueryContext &query_ctx,
                                        QueryOperations query_operations,
                                        const IndexSchema &index_schema,
-                                       bool source_resolves_text)
-    : query::Evaluator(query_operations),
+                                       bool source_resolves_text, bool scoring)
+    : query::Evaluator(query_operations, scoring),
       query_ctx_(query_ctx),
       index_schema_(index_schema),
       source_resolves_text_(source_resolves_text) {}
@@ -170,6 +170,7 @@ query::EvaluationResult PrefilterEvaluator::EvaluateFull(
   per_key_index_fetched_ = false;
   auto res = predicate.Evaluate(*this);
   key_ = nullptr;
+  known_vector_range_.reset();
   return res;
 }
 
@@ -184,8 +185,12 @@ const text::TextIndex *PrefilterEvaluator::PerKeyTextIndex() {
 query::EvaluationResult PrefilterEvaluator::EvaluateTags(
     const query::TagPredicate &predicate) {
   CHECK(key_);
-  return predicate.Evaluate(
-      std::get<query::TagLeaf>(query_ctx_.GetOrResolve(&predicate)), *key_);
+  return query_ctx_.EvaluateTag(
+      std::get<query::TagLeaf>(query_ctx_.GetOrResolve(&predicate)), predicate,
+      *key_, Scoring(), [this](const query::TagLeaf::Value &value) {
+        CHECK(value.bag.has_value()) << "tag bags are background-only";
+        return value.bag->contains(BorrowedInternedStringPtr(*key_));
+      });
 }
 
 query::EvaluationResult PrefilterEvaluator::EvaluateNumeric(
@@ -198,14 +203,18 @@ query::EvaluationResult PrefilterEvaluator::EvaluateNumeric(
 query::EvaluationResult PrefilterEvaluator::EvaluateText(
     const query::TextPredicate &predicate, bool require_positions) {
   CHECK(key_);
-  return query::EvaluateTextLeaf(query_ctx_, predicate, *key_,
-                                 require_positions,
+  return query_ctx_.EvaluateText(predicate, *key_, require_positions, Scoring(),
                                  [this] { return PerKeyTextIndex(); });
 }
 
 query::EvaluationResult PrefilterEvaluator::EvaluateVectorRange(
     const query::VectorRangePredicate &predicate) {
   CHECK(key_);
+  if (known_vector_range_) {
+    return *known_vector_range_
+               ? query::EvaluationResult(true, **known_vector_range_)
+               : query::EvaluationResult(false);
+  }
   auto query_vector = predicate.GetQueryVector();
   if (query_vector.empty()) {
     return query::EvaluationResult(false);

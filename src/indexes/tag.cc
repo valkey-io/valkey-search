@@ -259,19 +259,40 @@ absl::StatusOr<RecordResult> Tag::ModifyRecord(const InternedStringPtr &key,
         absl::StrCat("Key `", key->Str(), "` not found"));
   }
   auto &tag_info = it->second;
+  // Interning makes equal values share a pointer.
+  if (tag_info.raw_tag_string == interned_data) {
+    return RecordResult::kAdded;
+  }
   auto old_parsed_tags = ParseRecordTags(*tag_info.raw_tag_string, separator_);
 
-  // insert new tags that are not present in the old tags.
-  for (const auto &tag : new_parsed_tags) {
-    if (!old_parsed_tags.contains(tag)) {
-      IndexTagForKey(tag, key);
+  auto apply_diff = [&](const auto &old_tags, const auto &new_tags)
+                        ABSL_EXCLUSIVE_LOCKS_REQUIRED(index_mutex_) -> void {
+    // insert new tags that are not present in the old tags.
+    for (const auto &tag : new_tags) {
+      if (!old_tags.contains(tag)) {
+        IndexTagForKey(tag, key);
+      }
     }
-  }
-  // remove old tags that are not present in the new tags.
-  for (const auto &tag : old_parsed_tags) {
-    if (!new_parsed_tags.contains(tag)) {
-      DeindexTagForKey(tag, key);
+    // remove old tags that are not present in the new tags.
+    for (const auto &tag : old_tags) {
+      if (!new_tags.contains(tag)) {
+        DeindexTagForKey(tag, key);
+      }
     }
+  };
+
+  if (case_sensitive_) {
+    apply_diff(old_parsed_tags, new_parsed_tags);
+  } else {
+    // Diff normalized values: a case-only change maps to the same bag.
+    auto normalize_all = [this](const auto &tags) {
+      absl::flat_hash_set<std::string> normalized;
+      for (const auto &tag : tags) {
+        normalized.insert(Normalize(tag));
+      }
+      return normalized;
+    };
+    apply_diff(normalize_all(old_parsed_tags), normalize_all(new_parsed_tags));
   }
 
   tag_info.raw_tag_string = std::move(interned_data);

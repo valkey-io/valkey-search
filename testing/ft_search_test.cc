@@ -70,6 +70,8 @@ struct SendReplyTestInput {
   query::LimitParameter limit;
   std::vector<TestReturnAttribute> return_attributes;
   bool with_scores{false};
+  bool with_sort_keys{false};
+  std::optional<query::SortByParameter> sortby;
 };
 
 struct SendReplyTestCase {
@@ -179,6 +181,10 @@ void SendReplyTest::DoSendReplyTest(
                                .value();
   EXPECT_CALL(*test_index_schema, GetIdentifier(input.attribute_alias))
       .WillRepeatedly(testing::Return(attribute_id));
+  if (input.sortby.has_value()) {
+    EXPECT_CALL(*test_index_schema, GetIdentifier(input.sortby->field))
+        .WillRepeatedly(testing::Return(input.sortby->field));
+  }
   std::vector<indexes::Neighbor> neighbors;
   neighbors.reserve(input.neighbors.size());
   for (const auto &neighbor : input.neighbors) {
@@ -193,6 +199,8 @@ void SendReplyTest::DoSendReplyTest(
   parameters->limit = input.limit;
   parameters->no_content = no_content;
   parameters->with_scores = input.with_scores;
+  parameters->with_sort_keys = input.with_sort_keys;
+  parameters->sortby_parameter = input.sortby;
   for (const auto &return_attribute : input.return_attributes) {
     parameters->return_attributes.push_back(
         ToReturnAttribute(return_attribute));
@@ -268,6 +276,36 @@ INSTANTIATE_TEST_SUITE_P(
                 "6\r\nvalue1\r\n$3\r\ndef\r\n$1\r\n0\r\n*6\r\n$"
                 "10\r\nscore_as_1\r\n$14\r\n0.019999999553\r\n$"
                 "17\r\nattribute_alias_1\r\n$"
+                "28\r\nattribute_alias_1_hash_value\r\n$6\r\nfield1\r\n$"
+                "6\r\nvalue1\r\n",
+            .expected_output_no_content =
+                "*5\r\n:2\r\n$3\r\nabc\r\n$1\r\n0\r\n$3\r\ndef\r\n$1\r\n0\r\n",
+        },
+        {
+            // WITHSCORES and WITHSORTKEYS, sorted by the KNN distance: each
+            // row is the key, the score, the '#'-prefixed sort key, then the
+            // fields. NOCONTENT drops the sort key with the fields.
+            .test_name = "with_scores_and_sort_keys",
+            .input =
+                {
+                    .neighbors =
+                        {{.external_id = "abc", .score = 0.00999999977648},
+                         {.external_id = "def", .score = 0.019999999553}},
+                    .attribute_alias = "attribute_alias_1",
+                    .score_as = "score_as_1",
+                    .limit = {.first_index = 0, .number = 10},
+                    .with_scores = true,
+                    .with_sort_keys = true,
+                    .sortby = query::SortByParameter{.field = "score_as_1"},
+                },
+            .expected_output =
+                "*9\r\n:2\r\n$3\r\nabc\r\n$1\r\n0\r\n$17\r\n#0."
+                "00999999977648\r\n*6\r\n$10\r\nscore_as_1\r\n$16\r\n0."
+                "00999999977648\r\n$17\r\nattribute_alias_1\r\n$"
+                "28\r\nattribute_alias_1_hash_value\r\n$6\r\nfield1\r\n$"
+                "6\r\nvalue1\r\n$3\r\ndef\r\n$1\r\n0\r\n$15\r\n#0."
+                "019999999553\r\n*6\r\n$10\r\nscore_as_1\r\n$14\r\n0."
+                "019999999553\r\n$17\r\nattribute_alias_1\r\n$"
                 "28\r\nattribute_alias_1_hash_value\r\n$6\r\nfield1\r\n$"
                 "6\r\nvalue1\r\n",
             .expected_output_no_content =

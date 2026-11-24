@@ -135,11 +135,13 @@ absl::Status InfoCommand::Execute(ValkeyModuleCtx *ctx) {
         VMSDK_LOG(NOTICE, nullptr) << "The server is loading AOF or inside "
                                       "multi/exec or lua script, skip "
                                       "fanout operation";
-        index_schema->RespondWithInfo(ctx);
+        index_schema->RespondWithInfo(
+            ctx, SchemaManager::Instance().GetAliasesForIndex(
+                     index_schema->GetDBNum(), index_schema->GetName()));
       } else {
         auto op = new query::primary_info_fanout::PrimaryInfoFanoutOperation(
-            ValkeyModule_GetSelectedDb(ctx), index_schema_name, timeout_ms,
-            enable_partial_results, require_consistency);
+            ValkeyModule_GetSelectedDb(ctx), index_schema->GetName(),
+            timeout_ms, enable_partial_results, require_consistency);
         op->StartOperation(ctx);
       }
       break;
@@ -149,11 +151,13 @@ absl::Status InfoCommand::Execute(ValkeyModuleCtx *ctx) {
         VMSDK_LOG(NOTICE, nullptr) << "The server is loading AOF or inside "
                                       "multi/exec or lua script, skip "
                                       "fanout operation";
-        index_schema->RespondWithInfo(ctx);
+        index_schema->RespondWithInfo(
+            ctx, SchemaManager::Instance().GetAliasesForIndex(
+                     index_schema->GetDBNum(), index_schema->GetName()));
       } else {
         auto op = new query::cluster_info_fanout::ClusterInfoFanoutOperation(
-            ValkeyModule_GetSelectedDb(ctx), index_schema_name, timeout_ms,
-            enable_partial_results, require_consistency);
+            ValkeyModule_GetSelectedDb(ctx), index_schema->GetName(),
+            timeout_ms, enable_partial_results, require_consistency);
         op->StartOperation(ctx);
       }
       break;
@@ -161,7 +165,9 @@ absl::Status InfoCommand::Execute(ValkeyModuleCtx *ctx) {
     case InfoScope::kLocal:
     default:
       VMSDK_LOG(DEBUG, ctx) << "Using Local Scope";
-      index_schema->RespondWithInfo(ctx);
+      index_schema->RespondWithInfo(
+          ctx, SchemaManager::Instance().GetAliasesForIndex(
+                   index_schema->GetDBNum(), index_schema->GetName()));
       break;
   }
 

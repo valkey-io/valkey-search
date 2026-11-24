@@ -39,7 +39,9 @@ class FTInfoParser:
             value = self._decode_value(response[i + 1])
 
             # Special handling for nested structures
-            if key == "index_definition" and isinstance(value, list):
+            if key == "aliases" and isinstance(response[i + 1], list):
+                result[key] = [a.decode("utf-8") for a in response[i + 1]]
+            elif key == "index_definition" and isinstance(value, list):
                 result[key] = self._parse_key_value_list(value)
             elif key == "attributes" and isinstance(value, list):
                 result[key] = self._parse_attributes(value)
@@ -129,6 +131,14 @@ class FTInfoParser:
     def attributes(self) -> List[Dict[str, Any]]:
         """Get all field attributes."""
         return self.parsed_data.get("attributes", [])
+
+    @property
+    def aliases(self) -> List[str]:
+        """Get list of aliases for this index."""
+        raw = self.parsed_data.get("aliases", [])
+        if isinstance(raw, list):
+            return raw
+        return []
 
     @property
     def num_docs(self) -> int:

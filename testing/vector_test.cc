@@ -661,6 +661,8 @@ TEST_F(VectorIndexTest, ResizeHNSW) ABSL_NO_THREAD_SAFETY_ANALYSIS {
       VERIFY_ADD(index->get(), vectors, i, ExpectedResults::kSuccess);
     }
     EXPECT_EQ(index.value()->GetCapacity(), initial_cap + 2 * block_size);
+    EXPECT_EQ(index.value()->ToProto()->vector_index().initial_cap(),
+              initial_cap);
   }
 }
 
@@ -679,6 +681,8 @@ TEST_F(VectorIndexTest, ResizeFlat) ABSL_NO_THREAD_SAFETY_ANALYSIS {
       VERIFY_ADD(index->get(), vectors, i, ExpectedResults::kSuccess);
     }
     EXPECT_EQ(index.value()->GetCapacity(), initial_cap + 2 * kBlockSize);
+    EXPECT_EQ(index.value()->ToProto()->vector_index().initial_cap(),
+              initial_cap);
     for (size_t i = 0; i < vectors.size(); ++i) {
       VMSDK_EXPECT_OK(
           index.value()->RemoveRecord(IndexToKey(i), DeletionType::kNone));
@@ -2473,6 +2477,7 @@ TEST_F(VectorIndexTest, SaveAndLoadHnsw) {
       VMSDK_EXPECT_OK(
           (*loaded_index_hnsw)->SaveTrackedKeys(RDBChunkOutputStream(&rdb)));
       hnsw_proto = (*loaded_index_hnsw)->ToProto()->vector_index();
+      EXPECT_EQ(hnsw_proto.initial_cap(), initial_cap);
     }
 
     // Load the HNSW index, run search queries and validate recall
@@ -2606,6 +2611,7 @@ TEST_F(VectorIndexTest, SaveAndLoadFlat) {
       VMSDK_EXPECT_OK(index->SaveIndex(RDBChunkOutputStream(&rdb)));
       VMSDK_EXPECT_OK(index->SaveTrackedKeys(RDBChunkOutputStream(&rdb)));
       flat_proto = index->ToProto()->vector_index();
+      EXPECT_EQ(flat_proto.initial_cap(), initial_cap);
     }
 
     // Load the index, run search queries and validate that the search results

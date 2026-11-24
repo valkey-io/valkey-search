@@ -1,0 +1,83 @@
+{
+    "FT.ALIASADD": {
+        "acl_categories": [
+            "FAST",
+            "WRITE",
+            "SEARCH"
+        ],
+        "history": [],
+        "arguments": [
+            {
+                "name": "alias",
+                "type": "string"
+            },
+            {
+                "key_spec_index": 0,
+                "name": "index-name",
+                "type": "key"
+            }
+        ],
+        "arity": 3,
+        "complexity": "O(1)",
+        "group": "search",
+        "module_since": "1.3.0",
+        "summary": "Add an alias to an existing index"
+    },
+    "FT.ALIASDEL": {
+        "acl_categories": [
+            "FAST",
+            "WRITE",
+            "SEARCH"
+        ],
+        "history": [],
+        "arguments": [
+            {
+                "name": "alias",
+                "type": "string"
+            }
+        ],
+        "arity": 2,
+        "complexity": "O(1)",
+        "group": "search",
+        "module_since": "1.3.0",
+        "summary": "Remove an alias from an index"
+    },
+    "FT.ALIASUPDATE": {
+        "acl_categories": [
+            "FAST",
+            "WRITE",
+            "SEARCH"
+        ],
+        "history": [],
+        "arguments": [
+            {
+                "name": "alias",
+                "type": "string"
+            },
+            {
+                "key_spec_index": 0,
+                "name": "index-name",
+                "type": "key"
+            }
+        ],
+        "arity": 3,
+        "complexity": "O(1)",
+        "group": "search",
+        "module_since": "1.3.0",
+        "summary": "Add or update an alias for an existing index"
+    },
+    "FT.ALIASLIST": {
+        "acl_categories": [
+            "FAST",
+            "READ",
+            "SEARCH"
+        ],
+        "history": [],
+        "arguments": [],
+        "arity": 1,
+        "complexity": "O(N) where N is the number of aliases",
+        "group": "search",
+        "module_since": "1.3.0",
+        "summary": "List all aliases in the current database"
+    }
+}

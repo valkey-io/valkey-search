@@ -425,6 +425,23 @@ void SchemaManager::NormalizeIndexSchemaProtoDefaults(
   // IndexSchema constructor behavior.
   if (proto.subscribed_key_prefixes().empty()) {
     proto.add_subscribed_key_prefixes("");
+  } else {
+    // Drop any prefix that already starts with a prefix kept earlier, the
+    // same rule the IndexSchema constructor applies, so the stored proto
+    // matches the live index's deduped prefix list.
+    std::vector<std::string> deduped;
+    for (const auto &prefix : proto.subscribed_key_prefixes()) {
+      if (!std::any_of(deduped.begin(), deduped.end(),
+                       [&](const std::string &kept) {
+                         return prefix.starts_with(kept);
+                       })) {
+        deduped.push_back(prefix);
+      }
+    }
+    proto.mutable_subscribed_key_prefixes()->Clear();
+    for (const auto &prefix : deduped) {
+      proto.add_subscribed_key_prefixes(prefix);
+    }
   }
   // Vector indexes derive `normalize` from the metric and ToProto() reports
   // it; FT.CREATE never sets it.

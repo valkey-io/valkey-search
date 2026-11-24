@@ -1661,11 +1661,17 @@ TEST_F(StoredProtoRoundTripTest, StoredProtoMatchesToProto) {
 // play no part.
 class CrossIndexAliasConflictTest : public AliasPropertyTestBase {
  public:
-  void CreateIndex(const std::string &name) {
+  void CreateIndex(const std::string &name,
+                   std::vector<std::string> key_prefixes = {}) {
+    if (key_prefixes.empty()) {
+      key_prefixes = {"prefix_" + name + ":"};
+    }
     data_model::IndexSchema proto;
     proto.set_name(name);
     proto.set_db_num(kDbNum);
-    proto.add_subscribed_key_prefixes("prefix_" + name + ":");
+    for (const auto &prefix : key_prefixes) {
+      proto.add_subscribed_key_prefixes(prefix);
+    }
     proto.set_attribute_data_type(data_model::ATTRIBUTE_DATA_TYPE_HASH);
     auto *attr = proto.add_attributes();
     attr->set_alias("attr_" + name);
@@ -2009,6 +2015,20 @@ TEST_F(CrossIndexAliasConflictTest,
   VMSDK_EXPECT_OK(coordinator::MetadataManager::Instance().CreateEntry(
       kSchemaManagerMetadataTypeName, coordinator::ObjName(kDbNum, "idx_a"),
       std::move(packed)));
+
+  EXPECT_EQ(SchemaManager::Instance().GetIndexSchema(kDbNum, "idx_a")->get(),
+            schema->get());
+}
+
+// `PREFIX 2 doc: doc:child:` collapses to a single live prefix, because
+// `doc:child:` starts with the already-kept `doc:`. The stored metadata kept
+// both, so a later alias edit must not treat that gap as structural.
+TEST_F(CrossIndexAliasConflictTest, AliasEditWithRedundantPrefixKeepsIndex) {
+  CreateIndex("idx_a", {"doc:", "doc:child:"});
+  auto schema = SchemaManager::Instance().GetIndexSchema(kDbNum, "idx_a");
+  ASSERT_TRUE(schema.ok()) << schema.status();
+
+  VMSDK_EXPECT_OK(SchemaManager::Instance().AddAlias(kDbNum, "p1", "idx_a"));
 
   EXPECT_EQ(SchemaManager::Instance().GetIndexSchema(kDbNum, "idx_a")->get(),
             schema->get());

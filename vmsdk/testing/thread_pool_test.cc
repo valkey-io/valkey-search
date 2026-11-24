@@ -15,6 +15,7 @@
 #include <thread>  // NOLINT(build/c++11)
 #include <vector>
 
+#include "absl/base/call_once.h"
 #include "absl/synchronization/blocking_counter.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/synchronization/notification.h"
@@ -458,9 +459,16 @@ std::shared_ptr<absl::BlockingCounter> ScheduleTasks(
   }
   return blocking_counter;
 }
+
+// GetThreadCPUPercentage may only be called on the main thread, as INFO is.
+void TrackMainThreadOnce() {
+  static absl::once_flag flag;
+  absl::call_once(flag, []() { vmsdk::TrackCurrentAsMainThread(); });
+}
 }  // namespace
 
 TEST_F(ThreadPoolTest, TestCPUUsage) {
+  TrackMainThreadOnce();
   const size_t thread_count{2};
   ThreadPool thread_pool("test-pool", thread_count);
   std::atomic_bool atomic_flag{true};
@@ -501,6 +509,25 @@ TEST_F(ThreadPoolTest, TestCPUUsage) {
   atomic_flag.store(true);
   blocking_counter->Wait();
   thread_pool.JoinWorkers();
+}
+
+// A worker initializes its monitor while the main thread (INFO) polls it.
+// Meaningful under TSAN, which reports any unsynchronized access.
+TEST_F(ThreadPoolTest, ThreadMonitorInitRacesWithCPUUsage) {
+  TrackMainThreadOnce();
+  for (int round = 0; round < 100; ++round) {
+    ThreadPool::Thread thread;
+    absl::Notification done;
+    std::thread worker([&thread, &done]() {
+      thread.thread_id = pthread_self();
+      thread.InitThreadMonitor();
+      done.WaitForNotification();
+    });
+    while (!thread.GetThreadCPUPercentage().ok()) {
+    }
+    done.Notify();
+    worker.join();
+  }
 }
 
 // ============================================================================

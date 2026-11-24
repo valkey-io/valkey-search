@@ -1321,20 +1321,12 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         assert (result[0], set(result[1::2])) == (2, {b"doc:1", b"doc:2"})
         result = client.execute_command("FT.SEARCH", "idx", 'term11 term12 term14 term15')
         assert (result[0], set(result[1::2])) == (2, {b"doc:1", b"doc:2"})
-        # Exact Phrase Text Searches should fail without offsets
-        with pytest.raises(ResponseError) as err:
-            client.execute_command("FT.SEARCH", "idx", '@content1:"term1 term2 term3 term4 term5 term6 term7 term8 term9 term10"')
-        assert "Index does not support offsets" in str(err.value)
-        # Text searches with INORDER / SLOP should fail without offsets
-        with pytest.raises(ResponseError) as err:
-            client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4 term5 term6 term7 term8 term9 term10', "SLOP", "2")
-        assert "Index does not support offsets" in str(err.value)
-        with pytest.raises(ResponseError) as err:
-            client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4 term5 term6 term7 term8 term9 term10', "INORDER")
-        assert "Index does not support offsets" in str(err.value)
-        with pytest.raises(ResponseError) as err:
-            client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4 term5 term6 term7 term8 term9 term10', "SLOP", "2", "INORDER")
-        assert "Index does not support offsets" in str(err.value)
+        # Without offsets a phrase matches its words in any order, and INORDER / SLOP are ignored.
+        result = client.execute_command("FT.SEARCH", "idx", '@content1:"term10 term9 term8 term7 term6 term5 term4 term3 term2 term1"')
+        assert (result[0], result[1]) == (1, b"doc:1")
+        for flags in (("SLOP", "2"), ("INORDER",), ("SLOP", "2", "INORDER")):
+            result = client.execute_command("FT.SEARCH", "idx", 'term10 term9 term8 term7 term6 term5 term4 term3 term2 term1', *flags)
+            assert (result[0], set(result[1::2])) == (2, {b"doc:1", b"doc:2"})
 
     def test_proximity_predicate(self):
         client: Valkey = self.server.get_new_client()

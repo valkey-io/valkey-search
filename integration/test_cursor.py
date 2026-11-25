@@ -275,6 +275,15 @@ class TestAggregateCursor(ValkeySearchTestCaseBase):
         # The default MAXIDLE is capped by the configured maximum.
         assert client.execute_command("FT._DEBUG", "SHOW_CURSORS")[0][1] <= 1000
         client.execute_command("FT.CURSOR", "DEL", "idx", cursor)
+        # The default COUNT is capped by the configured maximum.
+        batch, default_cursor = aggregate(client)
+        assert prices(batch) == [b"10", b"20", b"30"]
+        assert default_cursor != 0
+        batch, default_cursor = client.execute_command(
+            "FT.CURSOR", "READ", "idx", default_cursor
+        )
+        assert prices(batch) == [b"40", b"50"]
+        assert default_cursor == 0
 
     def test_multi(self):
         client = self._client()

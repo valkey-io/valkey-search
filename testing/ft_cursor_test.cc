@@ -355,6 +355,77 @@ TEST_F(FTCursorTest, DestructionObeysBackgroundCleanupSetting) {
   VMSDK_EXPECT_OK(background.SetValue(saved));
 }
 
+TEST_F(FTCursorTest, DefaultCountIsCappedByMaxCount) {
+  auto &max_count_opt =
+      const_cast<vmsdk::config::Number &>(options::GetCursorMaxCount());
+  const int64_t saved = max_count_opt.GetValue();
+
+  auto parse = [&](absl::string_view args_str) {
+    std::vector<ValkeyModuleString *> argv;
+    if (!args_str.empty()) {
+      for (auto word : absl::StrSplit(args_str, ' ')) {
+        argv.push_back(
+            ValkeyModule_CreateString(&fake_ctx_, word.data(), word.size()));
+      }
+    }
+    vmsdk::ArgsIterator itr{argv.data(), static_cast<int>(argv.size())};
+    auto res = ParseCursorOptions(itr);
+    for (auto *arg : argv) {
+      ValkeyModule_FreeString(&fake_ctx_, arg);
+    }
+    return res;
+  };
+
+  // Default max_count (100000) > kDefaultCursorCount: default stays 1000.
+  auto opts = parse("");
+  VMSDK_EXPECT_OK(opts.status());
+  EXPECT_EQ(opts->count, kDefaultCursorCount);
+
+  // Lowering cursor-max-count below 1000 clamps the implicit default COUNT.
+  VMSDK_EXPECT_OK(max_count_opt.SetValue(100));
+  opts = parse("");
+  VMSDK_EXPECT_OK(opts.status());
+  EXPECT_EQ(opts->count, 100);
+
+  // Explicit COUNT within [1, 100] is accepted; outside [1, 100] is rejected.
+  opts = parse("COUNT 1");
+  VMSDK_EXPECT_OK(opts.status());
+  EXPECT_EQ(opts->count, 1);
+  opts = parse("COUNT 100");
+  VMSDK_EXPECT_OK(opts.status());
+  EXPECT_EQ(opts->count, 100);
+  EXPECT_FALSE(parse("COUNT 0").ok());
+  EXPECT_FALSE(parse("COUNT 101").ok());
+
+  // Boundary: cursor-max-count == 1 clamps implicit default to 1.
+  VMSDK_EXPECT_OK(max_count_opt.SetValue(1));
+  opts = parse("");
+  VMSDK_EXPECT_OK(opts.status());
+  EXPECT_EQ(opts->count, 1);
+
+  // Boundary: cursor-max-count == kDefaultCursorCount keeps 1000.
+  VMSDK_EXPECT_OK(max_count_opt.SetValue(kDefaultCursorCount));
+  opts = parse("");
+  VMSDK_EXPECT_OK(opts.status());
+  EXPECT_EQ(opts->count, kDefaultCursorCount);
+
+  // Subsequent FT.CURSOR READ without COUNT uses the clamped default count.
+  VMSDK_EXPECT_OK(max_count_opt.SetValue(3));
+  opts = parse("");
+  VMSDK_EXPECT_OK(opts.status());
+  EXPECT_EQ(opts->count, 3);
+  auto id = InsertCursor(5, nullptr, 0, "idx", *opts);
+  VMSDK_EXPECT_OK(Run(absl::StrCat("FT.CURSOR READ idx ", id)));
+  EXPECT_EQ(fake_ctx_.reply_capture.GetReply(),
+            absl::StrCat("*2\r\n*4\r\n:3\r\n:0\r\n:1\r\n:2\r\n:", id, "\r\n"));
+  EXPECT_FALSE(Run(absl::StrCat("FT.CURSOR READ idx ", id, " COUNT 4")).ok());
+  VMSDK_EXPECT_OK(Run(absl::StrCat("FT.CURSOR READ idx ", id)));
+  EXPECT_EQ(fake_ctx_.reply_capture.GetReply(),
+            "*2\r\n*3\r\n:2\r\n:3\r\n:4\r\n:0\r\n");
+
+  VMSDK_EXPECT_OK(max_count_opt.SetValue(saved));
+}
+
 TEST_F(FTCursorTest, ShowCursors) {
   auto id = InsertCursor(5);
   fake_ctx_.reply_capture.ClearReply();

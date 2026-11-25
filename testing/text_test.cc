@@ -7,9 +7,11 @@
 
 #include "src/indexes/text.h"
 
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
@@ -25,6 +27,7 @@
 #include "src/indexes/text/text_index.h"
 #include "src/query/predicate.h"
 #include "src/utils/string_interning.h"
+#include "testing/common.h"
 
 namespace valkey_search::indexes {
 
@@ -785,6 +788,70 @@ TEST_F(StemScoringTest, MissingOriginalWordScoresStemOnly) {
   iter->NextKey();
   EXPECT_TRUE(iter->DoneKeys());
   EXPECT_GT(score, 0.0f);
+}
+
+// A TermIterator must keep its Postings alive on its own: KeyIterators hold
+// raw pointers into Postings, so dropping every index-held reference while the
+// iterator is live must not free them.
+class TermIteratorLifetimeTest : public ValkeySearchTest {};
+
+TEST_F(TermIteratorLifetimeTest, OwnsPostingsAfterIndexReleased) {
+  using BuildFn = std::function<std::unique_ptr<text::TextIterator>(
+      const std::shared_ptr<text::TextIndexSchema> &)>;
+  const std::vector<std::pair<std::string, BuildFn>> cases = {
+      {"term",
+       [](const auto &schema) {
+         return query::TermPredicate(schema, ~0ULL, "hello", /*exact=*/true)
+             .BuildTextIterator(schema->GetTextIndex(), ~0ULL, false, 1.0f);
+       }},
+      {"prefix",
+       [](const auto &schema) {
+         return query::PrefixPredicate(schema, ~0ULL, "hel")
+             .BuildTextIterator(schema->GetTextIndex(), ~0ULL, false, 1.0f);
+       }},
+      {"suffix",
+       [](const auto &schema) {
+         return query::SuffixPredicate(schema, ~0ULL, "llo")
+             .BuildTextIterator(schema->GetTextIndex(), ~0ULL, false, 1.0f);
+       }},
+      {"fuzzy",
+       [](const auto &schema) {
+         return query::FuzzyPredicate(schema, ~0ULL, "hallo", 1)
+             .BuildTextIterator(schema->GetTextIndex(), ~0ULL, false, 1.0f);
+       }},
+      {"stem",
+       [](const auto &schema) {
+         return query::TermPredicate(schema, ~0ULL, "runs", /*exact=*/false)
+             .BuildTextIterator(schema->GetTextIndex(), ~0ULL, false, 1.0f);
+       }},
+  };
+  for (const auto &[name, build] : cases) {
+    SCOPED_TRACE(name);
+    auto schema = std::make_shared<text::TextIndexSchema>(
+        text::LanguageRegistry::Instance().Get(data_model::LANGUAGE_ENGLISH),
+        " ", std::vector<std::string>{}, /*with_offsets=*/false,
+        /*min_stem_size=*/4);
+    data_model::TextIndex proto;
+    proto.set_with_suffix_trie(true);
+    auto text = std::make_unique<Text>(proto, schema);
+    schema->SetStemTextFieldMask(1ULL << text->GetTextFieldNumber());
+    auto key = StringInternStore::Intern("d1");
+    // "run" is the literal stem root of "runs"; "running" is a stem parent.
+    ASSERT_TRUE(
+        text->AddRecord(key, AttributeData(vmsdk::MakeUniqueValkeyString(
+                                 "hello running run")))
+            .ok());
+    schema->CommitKeyData(key);
+
+    auto iter = build(schema);
+    text.reset();
+    schema.reset();
+
+    ASSERT_FALSE(iter->DoneKeys());
+    EXPECT_EQ(iter->CurrentKey()->Str(), "d1");
+    EXPECT_FALSE(iter->NextKey());
+    EXPECT_TRUE(iter->DoneKeys());
+  }
 }
 
 }  // namespace valkey_search::indexes

@@ -47,12 +47,15 @@ absl::StatusOr<int64_t> ParseCursorCount(vmsdk::ArgsIterator &itr) {
 
 absl::StatusOr<CursorOptions> ParseCursorOptions(vmsdk::ArgsIterator &itr) {
   CursorOptions cursor_options;
+  const int64_t max_count = options::GetCursorMaxCount().GetValue();
+  cursor_options.count = std::min(kDefaultCursorCount, max_count);
   const int64_t max_idle_ms = options::GetCursorMaxIdleMs().GetValue();
   cursor_options.max_idle =
       absl::Milliseconds(std::min(kDefaultCursorMaxIdleMs, max_idle_ms));
   while (true) {
     if (itr.PopIfNextIgnoreCase("COUNT")) {
-      VMSDK_ASSIGN_OR_RETURN(cursor_options.count, ParseCursorCount(itr));
+      VMSDK_ASSIGN_OR_RETURN(cursor_options.count,
+                             ParseBoundedValue(itr, "COUNT", max_count));
     } else if (itr.PopIfNextIgnoreCase("MAXIDLE")) {
       VMSDK_ASSIGN_OR_RETURN(auto ms,
                              ParseBoundedValue(itr, "MAXIDLE", max_idle_ms));

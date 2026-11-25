@@ -394,6 +394,9 @@ absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
   } else if (keyword == "TEXTINFO") {
     return IndexSchema::TextInfoCmd(ctx, itr);
   } else if (keyword == "SHOW_METADATA") {
+    if (!valkey_search::coordinator::MetadataManager::IsInitialized()) {
+      return absl::FailedPreconditionError("Coordinator is not enabled");
+    }
     return valkey_search::coordinator::MetadataManager::Instance().ShowMetadata(
         ctx, itr);
   } else if (keyword == "SHOW_INDEXSCHEMAS") {

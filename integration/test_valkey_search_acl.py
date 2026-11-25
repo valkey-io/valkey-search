@@ -42,6 +42,14 @@ class TestCommandsACLs(ValkeySearchTestCaseBase):
                 True,
                 True,
                 True,
+                False,
+            ),
+            (
+                "ACL SETUSER user1 on >search_pass ~* &* -@all +@admin",
+                False,
+                False,
+                False,
+                True,
                 True,
             ),
             (
@@ -289,7 +297,7 @@ class TestCommandsACLs(ValkeySearchTestCaseBase):
                     b"loading",
                     b"stale",
                 ],
-                [b"@admin", b"@slow", b"@dangerous", b"@search"],
+                [b"@admin", b"@slow", b"@dangerous"],
             ),
         ]
         for cmd in valkey_search_commands:

@@ -88,6 +88,9 @@ absl::Status IndexSchema::TextInfoCmd(ValkeyModuleCtx* ctx,
   std::string subcommand;
   VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, subcommand));
   vmsdk::ReaderMutexLock lock(&index_schema->time_sliced_mutex_);
+  if (!index_schema->GetTextIndexSchema()) {
+    return absl::InvalidArgumentError("Index has no TEXT fields");
+  }
   subcommand = absl::AsciiStrToUpper(subcommand);
   if (subcommand == "PREFIX") {
     std::string word;

@@ -50,10 +50,12 @@ class TestFTDebugSafety(ValkeySearchTestCaseBase):
         if pausepoint == "unrelated_point":
             client.execute_command("FT._DEBUG", "PAUSEPOINT", "RESET", pausepoint)
 
-        # Keep a fork child alive (~3 s) so the writer pool stays suspended.
+        # Keep the fork child alive until BGSAVE CANCEL below, so the writer
+        # pool stays suspended: with a set mutation_processing pause point and
+        # a resumed pool, FT.SEARCH would wait forever on the parked mutation.
         for i in range(10):
             client.hset(f"pad:{i}", "v", "x")
-        client.config_set("rdb-key-save-delay", 300000)
+        client.config_set("rdb-key-save-delay", 1000000000)
         client.bgsave()
         waiters.wait_for_true(
             lambda: client.info("persistence")["rdb_bgsave_in_progress"] == 1)
@@ -67,6 +69,7 @@ class TestFTDebugSafety(ValkeySearchTestCaseBase):
 
         if pausepoint == "mutation_processing":
             client.execute_command("FT._DEBUG", "PAUSEPOINT", "RESET", pausepoint)
+        client.execute_command("BGSAVE", "CANCEL")
         client.config_set("rdb-key-save-delay", 0)
         waiters.wait_for_true(
             lambda: client.info("persistence")["rdb_bgsave_in_progress"] == 0,

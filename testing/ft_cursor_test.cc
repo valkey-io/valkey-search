@@ -218,6 +218,24 @@ TEST_F(FTCursorTest, IndexRemovalDiscardsCursors) {
               testing::HasSubstr("Cursor not found"));
 }
 
+TEST_F(FTCursorTest, CursorOfAReplacedIndexIsDiscarded) {
+  // A cursor whose index is no longer the one registered under its name is
+  // discarded by READ and DEL alike, rather than checked against, or read
+  // through, the index now holding that name.
+  for (auto subcommand : {"READ", "DEL"}) {
+    std::atomic<bool> destroyed{false};
+    auto id = CursorTable::Instance().Insert(
+        std::make_unique<FakeCursor>(5, "idx", std::weak_ptr<IndexSchema>{},
+                                     CursorOptions{}, &destroyed),
+        0, absl::Now());
+    auto status = Run(absl::StrCat("FT.CURSOR ", subcommand, " idx ", id));
+    EXPECT_EQ(status.code(), absl::StatusCode::kNotFound) << subcommand;
+    EXPECT_EQ(fake_ctx_.reply_capture.GetReply(), "") << subcommand;
+    EXPECT_TRUE(destroyed) << subcommand;
+    EXPECT_EQ(CursorTable::Instance().Size(), 0) << subcommand;
+  }
+}
+
 TEST_F(FTCursorTest, ExpireIdle) {
   auto &table = CursorTable::Instance();
   auto now = absl::Now();

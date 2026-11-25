@@ -369,6 +369,49 @@ class TestCursorAcl(ValkeySearchTestCaseBase):
         client.execute_command("FT.CURSOR", "DEL", "idx", agg_cursor)
         client.execute_command("FT.CURSOR", "DEL", "idx", search_cursor)
 
+    def test_cursor_has_the_security_of_its_index(self):
+        # A cursor is not private to the user that created it: any user that
+        # may read its index may read or release it.
+        client: Valkey = self.server.get_new_client()
+        create_index(client)
+        populate(client)
+        users = []
+        for name in ("cursor_a", "cursor_b"):
+            client.execute_command(f"ACL SETUSER {name} reset on >p ~h:* +@search")
+            user: Valkey = self.server.get_new_client()
+            user.execute_command("AUTH", name, "p")
+            users.append(user)
+        a, b = users
+        _, a_cursor = aggregate(a, "COUNT", "1")
+        _, b_cursor = aggregate(b, "COUNT", "1")
+        batch, _ = b.execute_command("FT.CURSOR", "READ", "idx", a_cursor, "COUNT", "1")
+        assert prices(batch) == [b"20"]
+        assert a.execute_command("FT.CURSOR", "DEL", "idx", b_cursor) == b"OK"
+        assert num_cursors(client) == 1
+        a.execute_command("FT.CURSOR", "DEL", "idx", a_cursor)
+
+    def test_acl_needs_every_prefix_of_the_cursors_index(self):
+        client: Valkey = self.server.get_new_client()
+        client.execute_command(
+            "FT.CREATE", "two", "ON", "HASH", "PREFIX", "2", "h:", "g:",
+            "SCHEMA", "price", "NUMERIC",
+        )
+        waiters.wait_for_true(
+            lambda: IndexingTestHelper.is_indexing_complete_on_node(client, "two"))
+        populate(client)
+        _, cursor = aggregate(client, "COUNT", "1", index="two")
+        # A user that may read only one of the index's two prefixes.
+        client.execute_command("ACL SETUSER half reset on >p ~h:* +@search")
+        other: Valkey = self.server.get_new_client()
+        other.execute_command("AUTH", "half", "p")
+        denied = "The user does not have permission to access the key prefix"
+        with pytest.raises(ResponseError, match=denied):
+            other.execute_command("FT.CURSOR", "READ", "two", cursor)
+        with pytest.raises(ResponseError, match=denied):
+            other.execute_command("FT.CURSOR", "DEL", "two", cursor)
+        assert num_cursors(client) == 1
+        client.execute_command("FT.CURSOR", "DEL", "two", cursor)
+
 
 class TestCursorReadDefaultCount(ValkeySearchTestCaseBase):
     def _client(self) -> Valkey:

@@ -35,7 +35,7 @@ A row of an `FT.AGGREGATE` or `FT.HYBRID` cursor is an array of field/value pair
 ### Errors
 
 - `Index with name '<index-name>' not found in database <db>` (`READ` and `DEL`): the named index does not exist.
-- `Cursor not found, id: <cursor-id>` (`READ`) / `Cursor does not exist` (`DEL`): there is no such cursor in this database, including a cursor discarded because its index was removed.
+- `Cursor not found, id: <cursor-id>` (`READ`) / `Cursor does not exist` (`DEL`): there is no such cursor in this database, including a cursor discarded because its index was removed, and, for `DEL`, a cursor whose index was replaced since its creation.
 - `The user does not have permission to access the key prefix...` (`READ` and `DEL`): the user may not read the cursor's index.
 - `The index was dropped while the cursor was idle` (`READ` only): the cursor's index was replaced between the cursor's creation and this read.
 

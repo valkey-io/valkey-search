@@ -63,24 +63,25 @@ absl::Status FTCursorCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                                    ? absl::StrCat("Cursor not found, id: ", id)
                                    : "Cursor does not exist");
   }
-  // The rows of a cursor are the rows of its own index, so reading or
-  // releasing one needs the same key permissions FT.SEARCH and FT.AGGREGATE
-  // require of that index.
+  // A cursor has the security of the index it was created from: reading or
+  // releasing one needs the key permissions FT.SEARCH and FT.AGGREGATE
+  // require of that index. If that index is gone, even if another has since
+  // been created under its name, nobody may use the cursor, so it is
+  // discarded before any permission check.
   auto index_schema =
       SchemaManager::Instance().GetIndexSchema(db_num, cursor->GetIndexName());
-  if (index_schema.ok()) {
-    VMSDK_RETURN_IF_ERROR(AclPrefixCheck(ctx, acl::KeyAccess::kRead,
-                                         (*index_schema)->GetKeyPrefixes()));
+  if (!index_schema.ok() || !cursor->IsSameIndex(*index_schema)) {
+    table.Erase(id);
+    return absl::NotFoundError(
+        is_read ? "The index was dropped while the cursor was idle"
+                : "Cursor does not exist");
   }
+  VMSDK_RETURN_IF_ERROR(AclPrefixCheck(ctx, acl::KeyAccess::kRead,
+                                       (*index_schema)->GetKeyPrefixes()));
   if (!is_read) {
     table.Erase(id);
     ValkeyModule_ReplyWithSimpleString(ctx, "OK");
     return absl::OkStatus();
-  }
-  if (!index_schema.ok() || !cursor->IsSameIndex(*index_schema)) {
-    table.Erase(id);
-    return absl::NotFoundError(
-        "The index was dropped while the cursor was idle");
   }
 
   table.Touch(id, absl::Now());

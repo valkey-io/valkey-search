@@ -140,7 +140,7 @@ SchemaManager::SchemaManager(
           return this->OnMetadataCallback(obj_name, metadata, fingerprint,
                                           version);
         },
-        [this](auto) { return this->GetMinVersion(); });
+        [this](auto) { return this->GetMinVersion(); }, ValidateMetadata);
   }
 }
 
@@ -473,6 +473,24 @@ absl::flat_hash_set<std::string> SchemaManager::GetIndexSchemasInDB(
     int db_num) const {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   return GetIndexSchemasInDBInternal(db_num);
+}
+
+absl::Status SchemaManager::ValidateMetadata(
+    absl::string_view encoded_id, const google::protobuf::Any &metadata) {
+  data_model::IndexSchema schema;
+  if (!metadata.UnpackTo(&schema)) {
+    return absl::InvalidArgumentError("Unable to unpack index schema");
+  }
+  // Compare against the id this schema would be stored under, not the decoded
+  // id: decoding is ambiguous for db-0 names that start with a {<digits>} tag.
+  if (coordinator::ObjName(schema.db_num(), schema.name()).Encode() !=
+      encoded_id) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("index schema ", schema.db_num(), "/",
+                     vmsdk::config::RedactIfNeeded(schema.name()),
+                     " does not match its id"));
+  }
+  return absl::OkStatus();
 }
 
 absl::StatusOr<uint64_t> SchemaManager::ComputeFingerprint(

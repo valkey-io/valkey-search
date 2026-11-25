@@ -55,6 +55,8 @@ using FingerprintCallback = absl::AnyInvocable<absl::StatusOr<uint64_t>(
 using MetadataUpdateCallback = absl::AnyInvocable<absl::Status(
     const ObjName &, const google::protobuf::Any *metadata,
     uint64_t fingerprint, uint32_t version)>;
+using ValidateCallback = absl::AnyInvocable<absl::Status(
+    absl::string_view encoded_id, const google::protobuf::Any &metadata)>;
 using MinVersionCallback = std::function<absl::StatusOr<vmsdk::ValkeyVersion>(
     const google::protobuf::Any &metadata)>;
 using AuxSaveCallback = void (*)(ValkeyModuleIO *rdb, int when);
@@ -110,11 +112,15 @@ class MetadataManager {
   // of the metadata for the given encoding version. This function can only
   // change when the encoding version is bumped.
   // * update_callback will be called whenever the metadata is updated.
+  // * validate_callback checks an entry's contents against its encoded id. It
+  // is called on metadata received from outside the module (FT.INTERNAL_UPDATE
+  // and RDB load) before that metadata is used.
   // * encoding_version should only be set in unit tests.
   void RegisterType(absl::string_view type_name,
                     FingerprintCallback fingerprint_callback,
                     MetadataUpdateCallback callback,
                     MinVersionCallback min_version_callback,
+                    ValidateCallback validate_callback,
                     vmsdk::ValkeyVersion encoding_version = kModuleVersion);
 
   void BroadcastMetadata(ValkeyModuleCtx *ctx);
@@ -169,10 +175,13 @@ class MetadataManager {
     FingerprintCallback fingerprint_callback;
     MetadataUpdateCallback update_callback;
     MinVersionCallback min_version_callback;
+    ValidateCallback validate_callback;
   };
   absl::StatusOr<uint64_t> ComputeFingerprint(
       absl::string_view type_name, const google::protobuf::Any &contents,
       absl::flat_hash_map<std::string, RegisteredType> &registered_types);
+  absl::Status ValidateEntry(absl::string_view type_name, absl::string_view id,
+                             const GlobalMetadataEntry &entry);
   int GetSectionsCount() const;
   absl::StatusOr<const GlobalMetadataEntry *> GetEntry(
       absl::string_view type_name, const ObjName &obj_name) const;

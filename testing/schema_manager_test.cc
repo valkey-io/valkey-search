@@ -680,4 +680,34 @@ TEST_P(OnSwapDBCallbackTest, OnSwapDBCallback) {
                                             : test_case.index_schema_db_num);
 }
 
+TEST(SchemaManagerValidateMetadataTest, ChecksIdAgainstContents) {
+  auto pack = [](absl::string_view name, std::optional<uint32_t> db_num) {
+    data_model::IndexSchema schema;
+    schema.set_name(std::string(name));
+    if (db_num) schema.set_db_num(*db_num);
+    google::protobuf::Any any;
+    any.PackFrom(schema);
+    return any;
+  };
+  auto code = [](absl::string_view id, const google::protobuf::Any &any) {
+    return SchemaManager::ValidateMetadata(id, any).code();
+  };
+
+  VMSDK_EXPECT_OK(SchemaManager::ValidateMetadata("{3}idx", pack("idx", 3)));
+  // Pre-9.0 entries have no db_num and a bare-name id.
+  VMSDK_EXPECT_OK(
+      SchemaManager::ValidateMetadata("idx", pack("idx", std::nullopt)));
+  // A db-0 name that looks like a db prefix is stored unencoded.
+  VMSDK_EXPECT_OK(SchemaManager::ValidateMetadata("{5}idx", pack("{5}idx", 0)));
+
+  EXPECT_EQ(code("{3}idx", pack("other", 3)),
+            absl::StatusCode::kInvalidArgument);
+  EXPECT_EQ(code("{3}idx", pack("idx", 4)), absl::StatusCode::kInvalidArgument);
+  EXPECT_EQ(code("{5}idx", pack("idx", 0)), absl::StatusCode::kInvalidArgument);
+
+  google::protobuf::Any not_a_schema;
+  not_a_schema.PackFrom(coordinator::GlobalMetadataVersionHeader());
+  EXPECT_EQ(code("{3}idx", not_a_schema), absl::StatusCode::kInvalidArgument);
+}
+
 }  // namespace valkey_search

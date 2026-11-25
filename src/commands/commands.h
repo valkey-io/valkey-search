@@ -57,7 +57,7 @@ const absl::flat_hash_set<absl::string_view> kCreateCmdPermissions{
 const absl::flat_hash_set<absl::string_view> kDropIndexCmdPermissions{
     kSearchCategory, kWriteCategory, kFastCategory};
 const absl::flat_hash_set<absl::string_view> kInternalUpdateCmdPermissions{
-    kAdminCategory, kSearchCategory, kWriteCategory, kFastCategory};
+    kAdminCategory, kDangerousCategory};
 const absl::flat_hash_set<absl::string_view> kSearchCmdPermissions{
     kSearchCategory, kReadCategory, kSlowCategory};
 const absl::flat_hash_set<absl::string_view> kInfoCmdPermissions{

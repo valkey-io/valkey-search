@@ -11,6 +11,7 @@
 #include "src/metrics.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search_options.h"
+#include "vmsdk/src/utils.h"
 
 namespace valkey_search {
 
@@ -53,8 +54,10 @@ absl::Status HandleInternalUpdateFailure(ValkeyModuleCtx *ctx,
 
 absl::Status FTInternalUpdateCmd(ValkeyModuleCtx *ctx,
                                  ValkeyModuleString **argv, int argc) {
-  CHECK_EQ(argc, kFTInternalUpdateArgCount)
-      << "FT.INTERNAL_UPDATE called with wrong argument count: " << argc;
+  if (argc != kFTInternalUpdateArgCount) {
+    return absl::InvalidArgumentError(
+        vmsdk::WrongArity(kInternalUpdateCommand));
+  }
 
   auto id_view = vmsdk::ToStringView(argv[1]);
   std::string id(id_view);

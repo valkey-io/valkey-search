@@ -177,6 +177,27 @@ absl::Status MetadataManager::TriggerCallbacks(
   return absl::OkStatus();
 }
 
+absl::Status MetadataManager::ValidateEntry(absl::string_view type_name,
+                                            absl::string_view id,
+                                            const GlobalMetadataEntry &entry) {
+  if (!entry.has_content()) {
+    return absl::OkStatus();  // Tombstone: no contents to validate.
+  }
+  auto &registered_types = registered_types_.Get();
+  auto it = registered_types.find(type_name);
+  if (it == registered_types.end()) {
+    // Unknown types are carried through unchanged; there is no validator.
+    return absl::OkStatus();
+  }
+  auto status = it->second.validate_callback(id, entry.content());
+  if (!status.ok()) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Invalid ", type_name, " metadata entry ",
+        vmsdk::config::RedactIfNeeded(id), ": ", status.message()));
+  }
+  return absl::OkStatus();
+}
+
 absl::StatusOr<const GlobalMetadataEntry *> MetadataManager::GetEntry(
     absl::string_view type_name, const ObjName &obj_name) const {
   auto encoded_id = obj_name.Encode();
@@ -313,6 +334,7 @@ void MetadataManager::RegisterType(absl::string_view type_name,
                                    FingerprintCallback fingerprint_callback,
                                    MetadataUpdateCallback callback,
                                    MinVersionCallback min_version_callback,
+                                   ValidateCallback validate_callback,
                                    vmsdk::ValkeyVersion encoding_version) {
   auto insert_result =
       registered_types_.Get().insert(std::pair<std::string, RegisteredType>{
@@ -321,7 +343,8 @@ void MetadataManager::RegisterType(absl::string_view type_name,
               .encoding_version = encoding_version,
               .fingerprint_callback = std::move(fingerprint_callback),
               .update_callback = std::move(callback),
-              .min_version_callback = std::move(min_version_callback)}});
+              .min_version_callback = std::move(min_version_callback),
+              .validate_callback = std::move(validate_callback)}});
   VMSDK_LOG(DEBUG, nullptr) << "Registering type: " << type_name;
   CHECK(insert_result.second) << "Type already registered: " << type_name;
 }
@@ -681,6 +704,13 @@ absl::Status MetadataManager::LoadMetadata(
         "Unexpected RDB section type passed to MetadataManager");
   }
 
+  for (const auto &[type_name, inner_map] :
+       section->global_metadata_contents().type_namespace_map()) {
+    for (const auto &[id, entry] : inner_map.entries()) {
+      VMSDK_RETURN_IF_ERROR(ValidateEntry(type_name, id, entry));
+    }
+  }
+
   if (staging_metadata_due_to_repl_load_.Get()) {
     staged_metadata_ = section->global_metadata_contents();
   } else {
@@ -923,6 +953,7 @@ absl::Status MetadataManager::CreateEntryOnReplica(
     ValkeyModuleCtx *ctx, absl::string_view type_name, absl::string_view id,
     const coordinator::GlobalMetadataEntry *metadata_entry,
     const coordinator::GlobalMetadataVersionHeader *global_version_header) {
+  VMSDK_RETURN_IF_ERROR(ValidateEntry(type_name, id, *metadata_entry));
   auto obj_name = ObjName::Decode(id);
 
   if (vmsdk::IsReplica(ctx)) {

@@ -28,7 +28,8 @@ constexpr uint64_t kBurnCpuTimeUsec = 10000;
 // Spins until the calling thread has consumed at least `cpu_time_usec` of CPU
 // time, as reported by the same source ScopedThreadCPUMonitor reads from.
 void BurnCpu(uint64_t cpu_time_usec) {
-  ThreadMonitor monitor(pthread_self());
+  ThreadMonitor monitor;
+  monitor.Init();
   auto start = monitor.GetCPUTime();
   ASSERT_TRUE(start.ok());
   volatile uint64_t sink = 0;

@@ -9,8 +9,10 @@
 
 #include <pthread.h>
 
+#include "absl/log/check.h"
 #include "absl/time/clock.h"
 #include "vmsdk/src/status/status_macros.h"
+#include "vmsdk/src/utils.h"
 
 #ifdef __APPLE__
 #include <mach/mach.h>
@@ -30,9 +32,13 @@ thread_inspect_t ConvertToMachThread(pthread_t tid) {
 }  // namespace
 #endif
 
-ThreadMonitor::ThreadMonitor(pthread_t thread_id) { thread_id_ = thread_id; }
+void ThreadMonitor::Init() {
+  thread_id_ = pthread_self();
+  initialized_.store(true, std::memory_order_release);
+}
 
 absl::StatusOr<double> ThreadMonitor::GetThreadCPUPercentage() {
+  CHECK(IsMainThread());
   // First call, initializing values
   if (!last_cpu_time_.has_value() || !last_wall_time_micro_.has_value()) {
     last_wall_time_micro_ = absl::GetCurrentTimeNanos() / 1000;
@@ -66,6 +72,9 @@ absl::StatusOr<double> ThreadMonitor::GetThreadCPUPercentage() {
 }
 
 absl::StatusOr<uint64_t> ThreadMonitor::GetCPUTime() const {
+  if (!initialized_.load(std::memory_order_acquire)) {
+    return absl::UnavailableError("Thread monitor not initialized");
+  }
 #ifdef __APPLE__
   thread_basic_info_data_t info;
   mach_msg_type_number_t count = THREAD_BASIC_INFO_COUNT;

@@ -13,8 +13,9 @@ FT.INFO <index-name>
 - `PRIMARY` (optional): The primary nodes of every shard in the cluster are queried to generate index information. This is only valid when cluster mode is enabled.
 - `CLUSTER` (optional): All nodes, primary or replica, are queried to generate index information. This is only valid when cluster mode is enabled.
 
-- `ALLSHARDS` (optional): If specified, a response is required from every shard in the system. If all responses are not received within a time window the command is terminated with an error. This is the default.
-- `SOMESHARDS` (optional): If specified, a response is NOT required from every shard in the system. If all responses are not received within the time window, only the received responses are returned and no error is generated.
+- `ALLSHARDS` (optional): If specified, a response is required from every shard in the system. If all responses are not received within a time window the command is terminated with an error. This explicitly disables partial results.
+- `SOMESHARDS` (optional): If specified, a response is NOT required from every shard in the system. If all responses are not received within the time window, only the received responses are returned and no error is generated. This explicitly enables partial results.
+- For the `PRIMARY` and `CLUSTER` scopes, if neither `ALLSHARDS` nor `SOMESHARDS` is specified, the command uses the `search.enable-partial-results` configuration. Its default value is `true`, which is equivalent to `SOMESHARDS`.
 
 - `CONSISTENT` (optional): If specified, the command is terminated with an error if any received response isn't from a consistent version of the index. This is the default.
 - `INCONSISTENT` (optional): If specified, a command result is generated using only the responses from nodes with a consistent version of the index.

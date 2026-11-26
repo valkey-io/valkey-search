@@ -8,6 +8,7 @@ from valkey_search_test_case import (
 from indexes import *
 from valkeytestframework.util import waiters
 from test_cancel import search, search_command, Any
+from utils import wait_for_async_queries_drained
 
 class TestFTSearchPartitionConsistencyControls(ClusterTestUtils, ValkeySearchClusterTestCaseDebugMode):
     def test_ft_search_partition_controls(self):
@@ -31,14 +32,24 @@ class TestFTSearchPartitionConsistencyControls(ClusterTestUtils, ValkeySearchClu
         self.control_set("ForceTimeout", "yes")
         self.control_set("TimeoutPollFrequency", "0")
 
-        # Disable partial results, get empty result due to timeout
+        # Disable partial results, get empty result due to timeout. The first
+        # shard to time out cancels the rest of the fan-out (#1284), so the
+        # other shards may stop without a forced timeout of their own.
+        fanout_cancels = self._check_info_sum("search_fanout-cancels")
         hnsw_result = search(client, "hnsw", True, None, enable_partial_results=False)
         assert hnsw_result == []
-        self.check_info_sum("search_test-counter-ForceCancels", 3)
+        self.check_info_sum("search_fanout-cancels", fanout_cancels + 1)
+        waiters.wait_for_true(
+            lambda: self._check_info_sum("search_test-counter-ForceCancels") >= 1)
 
-        # Enable and get partial results
+        # Enable and get partial results. Nothing cancels the fan-out, so each
+        # of the 3 shards records exactly one forced timeout. A shard that the
+        # query above cancelled can still count after its reply, so let all
+        # queries finish before the snapshot.
+        wait_for_async_queries_drained(self)
+        force_cancels = self._check_info_sum("search_test-counter-ForceCancels")
         hnsw_result = search(client, "hnsw", False, None, enable_partial_results=True)
-        self.check_info_sum("search_test-counter-ForceCancels", 6)
+        self.check_info_sum("search_test-counter-ForceCancels", force_cancels + 3)
         assert hnsw_result[0] != nominal_hnsw_result[0]
 
         self.control_set("ForceTimeout", "no")

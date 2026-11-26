@@ -18,6 +18,7 @@
 #include <memory>
 #include <random>
 #include <set>
+#include <stop_token>
 #include <string>
 #include <thread>
 #include <utility>
@@ -950,8 +951,12 @@ class CountingToken : public cancel::Base {
     ++polls;
     return false;
   }
-  void Cancel() override {}
+  void Cancel() override { stop_source_.request_stop(); }
+  std::stop_token GetStopToken() override { return stop_source_.get_token(); }
   int polls = 0;
+
+ private:
+  std::stop_source stop_source_;
 };
 
 // Range search over every storage type, metric and algorithm. The expected
@@ -2063,10 +2068,15 @@ class CancelAfter : public cancel::Base {
  public:
   explicit CancelAfter(int polls) : polls_(polls) {}
   bool IsCancelled() override { return polls_-- <= 0; }
-  void Cancel() override { polls_ = 0; }
+  void Cancel() override {
+    polls_ = 0;
+    stop_source_.request_stop();
+  }
+  std::stop_token GetStopToken() override { return stop_source_.get_token(); }
 
  private:
   int polls_;
+  std::stop_source stop_source_;
 };
 
 // Parks the scan at its first poll until released.
@@ -2079,9 +2089,13 @@ class ParkingToken : public cancel::Base {
     }
     return false;
   }
-  void Cancel() override {}
+  void Cancel() override { stop_source_.request_stop(); }
+  std::stop_token GetStopToken() override { return stop_source_.get_token(); }
   absl::Notification parked;
   absl::Notification release;
+
+ private:
+  std::stop_source stop_source_;
 };
 
 // A cancelled range search stops early and returns what it found so far, not

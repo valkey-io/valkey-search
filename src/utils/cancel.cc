@@ -7,6 +7,8 @@
 
 #include "src/utils/cancel.h"
 
+#include <atomic>
+
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/info.h"
 #include "vmsdk/src/log.h"
@@ -32,25 +34,31 @@ struct TokenImpl : public Base {
   TokenImpl(long long deadline_ms, grpc::CallbackServerContext *context)
       : deadline_ms_(deadline_ms), context_(context) {}
 
-  void Cancel() override {
-    is_cancelled_ = true;  // Once cancelled, stay cancelled
-  }
+  void Cancel() override { stop_source_.request_stop(); }
 
   bool IsCancelled() override {
-    if (++count_ > TimeoutPollFrequency.GetValue()) {
-      count_ = 0;
-      if (!is_cancelled_) {
+    // Throttle the expensive checks (clock syscall, gRPC read) to one in every
+    // TimeoutPollFrequency polls. count_ is a per-token member, so the throttle
+    // resets for each query. It is atomic because one token is polled by
+    // concurrent threads (the fanout local responder and its remote callbacks,
+    // and both FT.HYBRID arms); a plain int would race (#1427). Relaxed is
+    // enough: a lost increment only shifts a poll by one, and cancellation
+    // itself rides on stop_source_, read unconditionally below.
+    if (count_.fetch_add(1, std::memory_order_relaxed) + 1 >
+        TimeoutPollFrequency.GetValue()) {
+      count_.store(0, std::memory_order_relaxed);
+      if (!stop_source_.stop_requested()) {
         if (ValkeyModule_Milliseconds() >= deadline_ms_) {
-          is_cancelled_ = true;  // Operation should be cancelled
+          Cancel();
           Timeouts.Increment(1);
           VMSDK_LOG(DEBUG, nullptr)
               << "CANCEL: Timeout reached, cancelling operation";
         } else if (context_ && context_->IsCancelled()) {
-          is_cancelled_ = true;  // Operation should be cancelled
+          Cancel();
           gRPCCancels.Increment(1);
           VMSDK_LOG(DEBUG, nullptr) << "CANCEL: gRPC context cancelled";
         } else if (ForceTimeout.GetValue()) {
-          is_cancelled_ = true;  // Operation should be cancelled
+          Cancel();
           ForceCancels.Increment(1);
           VMSDK_LOG(WARNING, nullptr) << "CANCEL: Timeout forced";
         } else if (!vmsdk::IsMainThread()) {
@@ -58,14 +66,15 @@ struct TokenImpl : public Base {
         }
       }
     }
-    return is_cancelled_;
+    return stop_source_.stop_requested();
   }
 
-  bool is_cancelled_{false};  // Once cancelled, stay cancelled
+  std::stop_token GetStopToken() override { return stop_source_.get_token(); }
 
+  std::stop_source stop_source_;
   long long deadline_ms_;
   grpc::CallbackServerContext *context_;
-  int count_{0};
+  std::atomic<int> count_{0};
 };
 
 Token Make(long long timeout_ms, grpc::CallbackServerContext *context) {

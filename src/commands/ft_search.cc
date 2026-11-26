@@ -457,7 +457,7 @@ size_t SearchCommand::ReplyRowElements(ValkeyModuleCtx *ctx,
       absl::string_view ret_id =
           vmsdk::ToStringView(return_attribute.identifier.get());
       if (is_vector && vmsdk::ToStringView(score_as.get()) == ret_id) {
-        ReplyScore(ctx, *score_as, neighbor);
+        ReplyScore(ctx, *return_attribute.alias, neighbor);
         ++cnt;
         continue;
       }

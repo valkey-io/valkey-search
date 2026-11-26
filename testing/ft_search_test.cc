@@ -463,6 +463,47 @@ INSTANTIATE_TEST_SUITE_P(
                 "*3\r\n:2\r\n$3\r\nabc\r\n$3\r\ndef\r\n",
         },
         {
+            .test_name = "return_attributes_knn_score_alias",
+            .input =
+                {
+                    .neighbors =
+                        {{.external_id = "abc", .score = 0.00999999977648},
+                         {.external_id = "def", .score = 0.019999999553}},
+                    .attribute_alias = "attribute_alias_1",
+                    .score_as = "score_as_1",
+                    .limit = {.first_index = 0, .number = 10},
+                    .return_attributes = {{.identifier = "score_as_1",
+                                           .alias = "dist"}},
+                },
+            .expected_output =
+                "*5\r\n:2\r\n$3\r\nabc\r\n*2\r\n$4\r\ndist\r\n$"
+                "16\r\n0.00999999977648\r\n$3\r\ndef\r\n*2\r\n$4\r\ndist\r\n$"
+                "14\r\n0.019999999553\r\n",
+            .expected_output_no_content =
+                "*3\r\n:2\r\n$3\r\nabc\r\n$3\r\ndef\r\n",
+        },
+        {
+            .test_name = "return_attributes_knn_default_score_alias_and_field",
+            .input =
+                {
+                    .neighbors =
+                        {{.external_id = "abc", .score = 0.00999999977648}},
+                    .attribute_alias = "attribute_alias_1",
+                    .score_as = "__v_score",
+                    .limit = {.first_index = 0, .number = 10},
+                    .return_attributes =
+                        {{.identifier = "__v_score", .alias = "dist"},
+                         {.identifier = "attribute_alias_1",
+                          .alias = "attr_alias"}},
+                },
+            .expected_output =
+                "*3\r\n:1\r\n$3\r\nabc\r\n*4\r\n$4\r\ndist\r\n$"
+                "16\r\n0.00999999977648\r\n$10\r\nattr_alias\r\n$"
+                "28\r\nattribute_alias_1_hash_value\r\n",
+            .expected_output_no_content =
+                "*2\r\n:1\r\n$3\r\nabc\r\n",
+        },
+        {
             .test_name = "pagination_offset_exceeds_remaining",
             .input =
                 {

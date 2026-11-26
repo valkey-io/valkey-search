@@ -516,6 +516,11 @@ absl::Status SchemaManager::OnMetadataCallback(
       return absl::InternalError(absl::StrCat(
           "Unable to unpack metadata for index schema ", obj_name));
     }
+    if (proposed_schema->db_num() != obj_name.GetDbNum() ||
+        proposed_schema->name() != obj_name.GetName()) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Metadata payload identity mismatch for index schema ", obj_name));
+    }
   }
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   auto old_schema =

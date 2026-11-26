@@ -455,6 +455,115 @@ TEST_F(SchemaManagerTest,
 }
 
 TEST_F(SchemaManagerTest,
+       TestOnMetadataCallbackPreservesExistingSchemaOnMalformedAny) {
+  coordinator::MetadataManager::InitInstance(std::move(test_metadata_manager_));
+  SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
+      &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/true));
+
+  auto created = SchemaManager::Instance().CreateIndexSchema(
+      &fake_ctx_, test_index_schema_proto_);
+  VMSDK_EXPECT_OK(created);
+  const uint64_t orig_fingerprint = created->fingerprint();
+  const uint32_t orig_version = created->version();
+
+  ON_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx_))
+      .WillByDefault(testing::Return(VALKEYMODULE_CTX_FLAGS_LOADING));
+
+  coordinator::GlobalMetadataEntry malformed_entry;
+  malformed_entry.set_version(orig_version + 1);
+  malformed_entry.set_fingerprint(orig_fingerprint + 1);
+  malformed_entry.mutable_content()->set_type_url(
+      "type.googleapis.com/valkey_search.InvalidType");
+  malformed_entry.mutable_content()->set_value("corrupted_payload");
+
+  coordinator::GlobalMetadataVersionHeader header;
+  header.set_top_level_version(orig_version + 1);
+
+  auto status = coordinator::MetadataManager::Instance().CreateEntryOnReplica(
+      &fake_ctx_, kSchemaManagerMetadataTypeName, index_name_, &malformed_entry,
+      &header);
+  EXPECT_EQ(status.code(), absl::StatusCode::kInternal);
+
+  // Existing schema must remain intact when unpacking the incoming Any fails.
+  auto existing =
+      SchemaManager::Instance().GetIndexSchema(db_num_, index_name_);
+  ASSERT_TRUE(existing.ok()) << existing.status();
+  EXPECT_EQ((*existing)->GetFingerprint(), orig_fingerprint);
+  EXPECT_EQ((*existing)->GetVersion(), orig_version);
+}
+
+TEST_F(SchemaManagerTest,
+       TestOnMetadataCallbackReplacesExistingSchemaOnValidUpdate) {
+  coordinator::MetadataManager::InitInstance(std::move(test_metadata_manager_));
+  SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
+      &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/true));
+
+  auto created = SchemaManager::Instance().CreateIndexSchema(
+      &fake_ctx_, test_index_schema_proto_);
+  VMSDK_EXPECT_OK(created);
+  const uint64_t new_fingerprint = created->fingerprint() + 42;
+  const uint32_t new_version = created->version() + 1;
+
+  ON_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx_))
+      .WillByDefault(testing::Return(VALKEYMODULE_CTX_FLAGS_LOADING));
+
+  auto updated_proto = test_index_schema_proto_;
+  updated_proto.clear_subscribed_key_prefixes();
+  updated_proto.add_subscribed_key_prefixes("prefix_2");
+
+  coordinator::GlobalMetadataEntry valid_entry;
+  valid_entry.set_version(new_version);
+  valid_entry.set_fingerprint(new_fingerprint);
+  valid_entry.mutable_content()->PackFrom(updated_proto);
+
+  coordinator::GlobalMetadataVersionHeader header;
+  header.set_top_level_version(new_version);
+
+  VMSDK_EXPECT_OK(
+      coordinator::MetadataManager::Instance().CreateEntryOnReplica(
+          &fake_ctx_, kSchemaManagerMetadataTypeName, index_name_, &valid_entry,
+          &header));
+
+  auto replaced =
+      SchemaManager::Instance().GetIndexSchema(db_num_, index_name_);
+  ASSERT_TRUE(replaced.ok()) << replaced.status();
+  EXPECT_EQ((*replaced)->GetFingerprint(), new_fingerprint);
+  EXPECT_EQ((*replaced)->GetVersion(), new_version);
+}
+
+TEST_F(SchemaManagerTest,
+       TestOnMetadataCallbackDropsExistingSchemaOnTombstone) {
+  coordinator::MetadataManager::InitInstance(std::move(test_metadata_manager_));
+  SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
+      &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/true));
+
+  auto created = SchemaManager::Instance().CreateIndexSchema(
+      &fake_ctx_, test_index_schema_proto_);
+  VMSDK_EXPECT_OK(created);
+
+  ON_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx_))
+      .WillByDefault(testing::Return(VALKEYMODULE_CTX_FLAGS_LOADING));
+
+  // Entry without content represents a DROP tombstone (nullptr metadata).
+  coordinator::GlobalMetadataEntry tombstone_entry;
+  tombstone_entry.set_version(created->version() + 1);
+
+  coordinator::GlobalMetadataVersionHeader header;
+  header.set_top_level_version(created->version() + 1);
+
+  VMSDK_EXPECT_OK(
+      coordinator::MetadataManager::Instance().CreateEntryOnReplica(
+          &fake_ctx_, kSchemaManagerMetadataTypeName, index_name_,
+          &tombstone_entry, &header));
+
+  EXPECT_EQ(SchemaManager::Instance()
+                .GetIndexSchema(db_num_, index_name_)
+                .status()
+                .code(),
+            absl::StatusCode::kNotFound);
+}
+
+TEST_F(SchemaManagerTest,
        TestOnLoadingEndedRestoresFingerprintVersionForNonZeroDb) {
   constexpr uint32_t kDbNum = 5;
   ON_CALL(*kMockValkeyModule, SelectDb(testing::_, kDbNum))

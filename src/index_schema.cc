@@ -2512,7 +2512,10 @@ absl::StatusOr<vmsdk::ValkeyVersion> IndexSchema::GetMinVersion(
       return min_lang_version;
     }
     return kRelease12;
-  } else if (unpacked->has_db_num() && unpacked->db_num() != 0) {
+  } else if ((unpacked->has_db_num() && unpacked->db_num() != 0) ||
+             vmsdk::StartsWithDbTag(unpacked->name())) {
+    // Both use the "{<db>}<name>" id. A DB 0 name that starts with a tag of
+    // digits gets "{0}" (coordinator::ObjName::Encode).
     return kRelease11;
   } else {
     return kRelease10;

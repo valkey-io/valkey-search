@@ -911,11 +911,12 @@ ObjName ObjName::Decode(absl::string_view encoded) {
 }
 
 std::string ObjName::Encode() const {
-  if (db_num_ == 0) {
+  if (db_num_ == 0 && !vmsdk::StartsWithDbTag(name_)) {
     // 8/1.0 encoding.
     return name_;
   }
-  // 9/1.1 encoding.
+  // 9/1.1 encoding. A DB 0 name that starts with a tag of digits also gets
+  // its DB number, "{0}", so Decode does not read that tag as the DB number.
   return absl::StrCat("{", db_num_, "}", name_);
 }
 

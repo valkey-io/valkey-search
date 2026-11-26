@@ -2255,4 +2255,20 @@ TEST_F(MetadataManagerTest, IndexName) {
   EXPECT_EQ(1, obj_name.GetDbNum());
 }
 
+TEST_F(MetadataManagerTest, Db0NameWithDbTagGetsItsDbNumber) {
+  // A DB 0 name that starts with a tag of digits gets the prefix "{0}".
+  for (std::string name : {"{1}idx", "{0}idx", "{12-x}idx"}) {
+    std::string encoded = ObjName(0, name).Encode();
+    EXPECT_EQ("{0}" + name, encoded);
+    auto decoded = ObjName::Decode(encoded);
+    EXPECT_EQ(0, decoded.GetDbNum());
+    EXPECT_EQ(name, decoded.GetName());
+  }
+  // Other names keep their ids.
+  EXPECT_EQ("idx", ObjName(0, "idx").Encode());
+  EXPECT_EQ("{a}idx", ObjName(0, "{a}idx").Encode());
+  EXPECT_EQ("idx{1}", ObjName(0, "idx{1}").Encode());
+  EXPECT_EQ("{1}idx", ObjName(1, "idx").Encode());
+}
+
 }  // namespace valkey_search::coordinator

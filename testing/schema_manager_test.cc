@@ -454,6 +454,23 @@ TEST_F(SchemaManagerTest,
   EXPECT_EQ(schema->GetVersion(), created->version());
 }
 
+TEST_F(SchemaManagerTest, Db0NameWithDbTagRaisesHeaderMinVersion) {
+  coordinator::MetadataManager::InitInstance(std::move(test_metadata_manager_));
+  SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
+      &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/true));
+
+  auto proto = test_index_schema_proto_;
+  proto.set_name("{1}idx");
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().CreateIndexSchema(&fake_ctx_, proto).status());
+
+  EXPECT_EQ(coordinator::MetadataManager::Instance()
+                .GetGlobalMetadata()
+                ->version_header()
+                .top_level_min_version(),
+            kRelease11.ToInt());
+}
+
 TEST_F(SchemaManagerTest,
        TestOnLoadingEndedRestoresFingerprintVersionForNonZeroDb) {
   constexpr uint32_t kDbNum = 5;

@@ -111,6 +111,10 @@ inline std::ostream &operator<<(std::ostream &os, ValkeyModuleString *s) {
 //
 std::optional<absl::string_view> ParseHashTag(absl::string_view);
 
+// True if `name` starts with a hash tag whose first character is a digit.
+// coordinator::ObjName::Decode reads such a tag as a DB number.
+bool StartsWithDbTag(absl::string_view name);
+
 bool IsRealUserClient(ValkeyModuleCtx *ctx);
 bool MultiOrLua(ValkeyModuleCtx *ctx);
 

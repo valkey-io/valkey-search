@@ -108,6 +108,9 @@ jobs:
   integration-tests-coverage:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: write
 
     steps:
       - name: Checkout Code
@@ -122,12 +125,11 @@ jobs:
         run: docker build -t presubmit-image -f .devcontainer/Dockerfile .
 
       - name: Restore ccache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: .ccache
-          key: ccache-codecov-integration-${{ github.ref }}-${{ github.sha }}
+          key: ccache-codecov-integration-${{ github.sha }}
           restore-keys: |
-            ccache-codecov-integration-${{ github.ref }}-
             ccache-codecov-integration-
 
       - name: Build and Run Integration Tests with Coverage
@@ -159,6 +161,20 @@ jobs:
                    --output-file /workspace/test-results/integration.info \
                    --ignore-errors mismatch,unused,inconsistent,empty,negative
             '
+
+      - name: Save ccache
+        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: .ccache
+          key: ccache-codecov-integration-${{ github.sha }}
+
+      - name: Prune superseded ccache
+        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ci/prune_ccache.sh ccache-codecov-integration-
 
       - name: Update Test Results Permissions
         if: always()

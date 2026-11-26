@@ -38,6 +38,7 @@ The module also has developer-only configurations, intended for testing and diag
 | search.max-numeric-field-length               | Number | 128 | Controls the max length of a numeric field. Range: 1 to 256. |
 | search.max-prefixes                           | Number | 8 | Controls the max number of prefixes per index. Range: 1 to 16. |
 | search.max-query-queue-depth                  | Number | 100000 | When the reader thread pool queue reaches this depth, FT.SEARCH, FT.AGGREGATE and FT.HYBRID are rejected with `Search query queue depth exceeded` before fan-out. Checked on each node that receives the query. 0 means unlimited. Range: 0 to 2147483647. |
+| search.max-regex-pattern-bytes                | Number | 1024 | Maximum length (bytes) of the `REGEX` pattern accepted by `FT._LIST`. Range: 1 to 1048576. |
 | search.max-search-result-fields-count         | Number | 500 | Controls the max number of fields in the content of the search response. Range: 1 to 1000. |
 | search.max-search-result-record-size          | Number | 5242880 | Controls the max content size for a record in the search response. Range: 100 to 10485760. |
 | search.max-tag-field-length                   | Number | 256 | Controls the max length of a tag field. Range: 1 to 10000. |

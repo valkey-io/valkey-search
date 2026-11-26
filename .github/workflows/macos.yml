@@ -24,6 +24,9 @@ concurrency:
 jobs:
   cmake-tests-macos:
     runs-on: macos-latest
+    permissions:
+      contents: read
+      actions: write
 
     steps:
     # Checkout the code from the repository
@@ -36,5 +39,52 @@ jobs:
     - name: Pin OpenSSL 3
       run: echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
 
+    # ccache is picked up automatically by CMakeLists.txt when it is on PATH.
+    - name: Install ccache
+      run: brew install ccache
+
+    - name: Restore ccache
+      uses: actions/cache/restore@v4
+      with:
+        path: .ccache
+        key: ccache-macos-${{ github.sha }}
+        restore-keys: |
+          ccache-macos-
+
+    # gRPC/protobuf/abseil, googletest and benchmark are built from source on
+    # macOS (~20 min). submodules/CMakeLists.txt skips each build when its
+    # installed files already exist, so cache the install prefix. Versions are
+    # pinned in that file, hence the key.
+    - name: Restore third-party deps
+      id: deps-cache
+      uses: actions/cache/restore@v4
+      with:
+        path: .build-release/.deps/install
+        key: macos-deps-${{ runner.arch }}-${{ hashFiles('submodules/CMakeLists.txt') }}
+
     - name: Build Code
+      env:
+        CCACHE_DIR: ${{ github.workspace }}/.ccache
+        CCACHE_MAXSIZE: 2G
       run: ./build.sh
+
+    - name: Save third-party deps
+      if: steps.deps-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+      uses: actions/cache/save@v4
+      with:
+        path: .build-release/.deps/install
+        key: macos-deps-${{ runner.arch }}-${{ hashFiles('submodules/CMakeLists.txt') }}
+
+    - name: Save ccache
+      if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+      uses: actions/cache/save@v4
+      with:
+        path: .ccache
+        key: ccache-macos-${{ github.sha }}
+
+    - name: Prune superseded ccache
+      if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+      continue-on-error: true
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: ci/prune_ccache.sh ccache-macos-

@@ -24,7 +24,7 @@ class ScopedThreadCPUMonitor {
 
  private:
   ShardedAtomic<uint64_t> *accumulator_;
-  std::optional<ThreadMonitor> thread_monitor_;
+  ThreadMonitor thread_monitor_;
   std::optional<uint64_t> start_cpu_time_usec_;
 };
 

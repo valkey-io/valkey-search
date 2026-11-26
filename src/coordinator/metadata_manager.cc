@@ -925,23 +925,19 @@ absl::Status MetadataManager::CreateEntryOnReplica(
     const coordinator::GlobalMetadataVersionHeader *global_version_header) {
   auto obj_name = ObjName::Decode(id);
 
-  if (vmsdk::IsReplica(ctx)) {
-    // On a live replica, apply the entry to the SchemaManager immediately.
-    auto callback_result =
-        TriggerCallbacks(type_name, obj_name, *metadata_entry);
-    if (!callback_result.ok()) {
-      return callback_result;
-    }
-  } else {
-    // The only other valid caller is AOF/RDB loading. The SchemaManager is not
-    // ready during early replay, so the callback is skipped here; the entry is
-    // still stored below. Schemas themselves are recreated from their own AOF
-    // commands (FT.CREATE/FT.DROP/...), and OnLoadingEnded then re-applies the
-    // coordinator fingerprint/version onto them via
-    // PopulateFingerprintVersionFromMetadata.
-    CHECK(ValkeyModule_GetContextFlags(ctx) & VALKEYMODULE_CTX_FLAGS_LOADING)
-        << "CreateEntryOnReplica should only be called on a replica or during "
-           "loading";
+  const bool is_loading =
+      (ValkeyModule_GetContextFlags(ctx) & VALKEYMODULE_CTX_FLAGS_LOADING) != 0;
+  CHECK(vmsdk::IsReplica(ctx) || is_loading)
+      << "CreateEntryOnReplica should only be called on a replica or during "
+         "loading";
+  // Apply the entry to registered callbacks (such as SchemaManager) on both
+  // live replicas and AOF loading: in coordinator mode, FT.CREATE/FT.DROPINDEX
+  // are persisted only via FT.INTERNAL_UPDATE, so skipping callbacks during
+  // LOADING would lose schemas on AOF-only restarts.
+  auto callback_result =
+      TriggerCallbacks(type_name, obj_name, *metadata_entry);
+  if (!callback_result.ok()) {
+    return callback_result;
   }
 
   auto result = metadata_.Get();

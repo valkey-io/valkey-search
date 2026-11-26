@@ -2255,4 +2255,104 @@ TEST_F(MetadataManagerTest, IndexName) {
   EXPECT_EQ(1, obj_name.GetDbNum());
 }
 
+
+TEST_F(MetadataManagerTest, CreateEntryOnReplicaTriggersCallbackDuringLoading) {
+  ValkeyModuleCtx* fake_ctx = reinterpret_cast<ValkeyModuleCtx*>(0xBADF00D0);
+  ON_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
+      .WillByDefault(testing::Return(fake_ctx));
+  ON_CALL(*kMockValkeyModule, FreeThreadSafeContext(testing::_))
+      .WillByDefault(testing::Return());
+  ON_CALL(*kMockValkeyModule, GetContextFlags(fake_ctx))
+      .WillByDefault(testing::Return(VALKEYMODULE_CTX_FLAGS_LOADING));
+
+  ClientPool client_pool{vmsdk::UniqueValkeyDetachedThreadSafeContext(fake_ctx)};
+  MockMetadataManager manager(fake_ctx, client_pool);
+
+  struct CallRecord {
+    uint32_t db_num;
+    std::string name;
+    bool has_content;
+    uint64_t fingerprint;
+    uint32_t version;
+  };
+  std::vector<CallRecord> calls;
+  absl::Status next_status = absl::OkStatus();
+  manager.RegisterType(
+      "my_type",
+      [](const google::protobuf::Any&) { return uint64_t{1}; },
+      [&](const ObjName& obj_name, const google::protobuf::Any* content,
+          uint64_t fingerprint, uint32_t version) {
+        calls.push_back({obj_name.GetDbNum(), std::string(obj_name.GetName()),
+                         content != nullptr, fingerprint, version});
+        return next_status;
+      },
+      [](const google::protobuf::Any&) {
+        return vmsdk::ValkeyVersion(0, 0, 1);
+      });
+
+  const std::string encoded_id = ObjName(0, "cme_idx").Encode();
+  GlobalMetadataVersionHeader header;
+
+  // 1. CREATE during AOF LOADING must invoke the schema callback.
+  GlobalMetadataEntry create_entry;
+  create_entry.set_version(1);
+  create_entry.set_fingerprint(111);
+  create_entry.set_encoding_version(1);
+  create_entry.mutable_content()->set_type_url("type.googleapis.com/FakeType");
+  create_entry.mutable_content()->set_value("schema_v1");
+  header.set_top_level_version(1);
+  VMSDK_EXPECT_OK(manager.CreateEntryOnReplica(fake_ctx, "my_type", encoded_id,
+                                               &create_entry, &header));
+  ASSERT_EQ(calls.size(), 1);
+  EXPECT_EQ(calls[0].db_num, 0);
+  EXPECT_EQ(calls[0].name, "cme_idx");
+  EXPECT_TRUE(calls[0].has_content);
+  EXPECT_EQ(calls[0].fingerprint, 111);
+  EXPECT_EQ(calls[0].version, 1);
+
+  // 2. DROP tombstone during AOF LOADING must invoke callback with nullptr.
+  GlobalMetadataEntry drop_entry;
+  drop_entry.set_version(2);
+  drop_entry.set_fingerprint(0);
+  drop_entry.set_encoding_version(1);
+  header.set_top_level_version(2);
+  VMSDK_EXPECT_OK(manager.CreateEntryOnReplica(fake_ctx, "my_type", encoded_id,
+                                               &drop_entry, &header));
+  ASSERT_EQ(calls.size(), 2);
+  EXPECT_FALSE(calls[1].has_content);
+  EXPECT_EQ(calls[1].version, 2);
+
+  // 3. RE-CREATE during AOF LOADING must invoke callback with new schema.
+  GlobalMetadataEntry recreate_entry;
+  recreate_entry.set_version(3);
+  recreate_entry.set_fingerprint(333);
+  recreate_entry.set_encoding_version(1);
+  recreate_entry.mutable_content()->set_type_url("type.googleapis.com/FakeType");
+  recreate_entry.mutable_content()->set_value("schema_v3");
+  header.set_top_level_version(3);
+  VMSDK_EXPECT_OK(manager.CreateEntryOnReplica(fake_ctx, "my_type", encoded_id,
+                                               &recreate_entry, &header));
+  ASSERT_EQ(calls.size(), 3);
+  EXPECT_TRUE(calls[2].has_content);
+  EXPECT_EQ(calls[2].fingerprint, 333);
+  EXPECT_EQ(calls[2].version, 3);
+
+  // 4. Callback error during LOADING must propagate without mutating metadata.
+  next_status = absl::InternalError("callback failed");
+  GlobalMetadataEntry bad_entry;
+  bad_entry.set_version(4);
+  bad_entry.set_fingerprint(444);
+  bad_entry.set_encoding_version(1);
+  bad_entry.mutable_content()->set_type_url("type.googleapis.com/FakeType");
+  bad_entry.mutable_content()->set_value("schema_v4");
+  header.set_top_level_version(4);
+  EXPECT_EQ(manager
+                .CreateEntryOnReplica(fake_ctx, "my_type", encoded_id,
+                                      &bad_entry, &header)
+                .code(),
+            absl::StatusCode::kInternal);
+  EXPECT_EQ(manager.GetGlobalMetadata()->version_header().top_level_version(),
+            3);
+}
+
 }  // namespace valkey_search::coordinator

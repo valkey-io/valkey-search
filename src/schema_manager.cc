@@ -506,6 +506,22 @@ absl::StatusOr<uint64_t> SchemaManager::ComputeFingerprint(
 absl::Status SchemaManager::OnMetadataCallback(
     const coordinator::ObjName &obj_name, const google::protobuf::Any *metadata,
     uint64_t fingerprint, uint32_t version) {
+  // Unpack incoming metadata before mutating or removing any existing schema so
+  // that a malformed Any cannot destroy an already-loaded index (for example,
+  // during AOF replay with skip-corrupted-internal-update-entries enabled).
+  std::unique_ptr<data_model::IndexSchema> proposed_schema;
+  if (metadata != nullptr) {
+    proposed_schema = std::make_unique<data_model::IndexSchema>();
+    if (!metadata->UnpackTo(proposed_schema.get())) {
+      return absl::InternalError(absl::StrCat(
+          "Unable to unpack metadata for index schema ", obj_name));
+    }
+    if (proposed_schema->db_num() != obj_name.GetDbNum() ||
+        proposed_schema->name() != obj_name.GetName()) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Metadata payload identity mismatch for index schema ", obj_name));
+    }
+  }
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   auto old_schema =
       RemoveIndexSchemaInternal(obj_name.GetDbNum(), obj_name.GetName());
@@ -513,25 +529,17 @@ absl::Status SchemaManager::OnMetadataCallback(
     return old_schema.status();
   }
   absl::Status result = absl::OkStatus();
-  if (metadata == nullptr) {
-    // Nothing to create — just clean up the old schema below.
-  } else {
-    auto proposed_schema = std::make_unique<data_model::IndexSchema>();
-    if (!metadata->UnpackTo(proposed_schema.get())) {
-      result = absl::InternalError(absl::StrCat(
-          "Unable to unpack metadata for index schema ", obj_name));
+  if (proposed_schema != nullptr) {
+    auto create_status =
+        CreateIndexSchemaInternal(detached_ctx_.get(), *proposed_schema);
+    if (!create_status.ok()) {
+      result = create_status;
     } else {
-      auto create_status =
-          CreateIndexSchemaInternal(detached_ctx_.get(), *proposed_schema);
-      if (!create_status.ok()) {
-        result = create_status;
-      } else {
-        auto created_schema =
-            LookupInternal(obj_name.GetDbNum(), obj_name.GetName()).value();
-        CHECK(created_schema != nullptr);
-        created_schema->SetFingerprint(fingerprint);
-        created_schema->SetVersion(version);
-      }
+      auto created_schema =
+          LookupInternal(obj_name.GetDbNum(), obj_name.GetName()).value();
+      CHECK(created_schema != nullptr);
+      created_schema->SetFingerprint(fingerprint);
+      created_schema->SetVersion(version);
     }
   }
   if (old_schema.ok()) {

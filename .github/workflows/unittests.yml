@@ -24,6 +24,9 @@ concurrency:
 jobs:
   cmake-tests:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
 
     steps:
     # Checkout the code from the repository
@@ -56,7 +59,7 @@ jobs:
           --mount type=bind,source="$(pwd)/test-results",target=/workspace/test-results \
           -v "$(pwd):/workspace" \
           -e CCACHE_DIR=/workspace/.ccache \
-          -e CCACHE_MAXSIZE=1G \
+          -e CCACHE_MAXSIZE=2G \
           --user "ubuntu:ubuntu" \
           presubmit-image \
           sudo -E ci/build_ubuntu.sh --run-tests --unittest-output=/workspace/test-results
@@ -67,6 +70,13 @@ jobs:
       with:
         path: .ccache
         key: ccache-unittests-plain-${{ github.sha }}
+
+    - name: Prune superseded ccache
+      if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+      continue-on-error: true
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: ci/prune_ccache.sh ccache-unittests-plain-
 
     - name: Update Test Results Permissions
       if: always()

@@ -96,9 +96,10 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         mixed: bool = False,
         name: str = "idx",
         prefix: str = "doc",
+        distance: str = "L2",
     ) -> Index:
         self.assert_sharing_active()
-        fields = [Vector("vec", DIM, type=algo, distance="L2")]
+        fields = [Vector("vec", DIM, type=algo, distance=distance)]
         if mixed:
             fields += [Numeric("num"), Tag("tag")]
         return Index(
@@ -2022,6 +2023,9 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         self.client.hdel("doc:0", "vec")
         self.client.rename("doc:0", "outside:0")
         assert self.client.ping()
+        # The field is not visible, so the record is kept until the key goes.
+        assert self.registry_stat("entry_cnt") == 1
+        self.client.delete("outside:0")
         waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0)
 
         # Case 2: Logically expired field (still live when HPEXPIRE's hexpire
@@ -2034,6 +2038,10 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         assert self.registry_stat("entry_cnt") == 1
         self.client.rename("doc:1", "outside:1")
         assert self.client.ping()
+        # The expired field still holds the shared bytes: keep the record
+        # until the key is deleted.
+        assert self.registry_stat("entry_cnt") == 1
+        self.client.delete("outside:1")
         waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0)
 
     def test_rename_during_pending_unshare_keeps_vector(self):
@@ -2078,6 +2086,222 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         client_db1.select(1)
         for k in range(self.GAP_KEYS):
             assert client_db1.hget(f"doc:{k}", "vec") == vector(k), f"doc:{k} in DB 1 reads freed memory"
+
+    def test_dropindex_keeps_expired_field_vector(self):
+        """A logically expired vector field is hidden from the module but still
+        holds the shared bytes, which RDB save reads. The unshare cron must
+        keep the record until the key is deleted."""
+        self.client.execute_command("DEBUG", "SET-ACTIVE-EXPIRE", "0")
+        index = self.build_index()
+        index.create(self.client)
+        self.client.hset("doc:0", mapping={"vec": vector(0), "other": "x"})
+        self.wait_for_docs(index, 1)
+        self.client.execute_command("HPEXPIRE", "doc:0", 1, "FIELDS", 1, "vec")
+        time.sleep(0.05)
+        before = self.client.execute_command("DEBUG", "DIGEST")
+
+        index.drop(self.client)
+        self.wait_for_unshare_drain()
+        assert self.registry_stat("entry_cnt") == 1
+
+        fill = self.reuse_freed_vector_memory()
+        self.client.delete(*[f"fill:{k}" for k in range(self.GAP_KEYS)])
+        fill.drop(self.client)
+        self.wait_for_unshare_drain()
+        assert self.client.execute_command("DEBUG", "DIGEST") == before
+
+        self.client.delete("doc:0")
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0)
+
+    def test_dropindex_keeps_expired_key_vector(self):
+        """Unsharing a logically expired key must retain its VectorRecord until
+        Valkey physically reclaims the key, even with zero indexes subscribed."""
+        self.client.execute_command("DEBUG", "SET-ACTIVE-EXPIRE", "0")
+        index = self.build_index()
+        index.create(self.client)
+        self.client.hset("doc:0", mapping={"vec": vector(0)})
+        self.client.pexpire("doc:0", 1)
+        time.sleep(0.05)
+        before = self.client.execute_command("DEBUG", "DIGEST")
+
+        index.drop(self.client)
+        self.wait_for_unshare_drain()
+        assert self.registry_stat("entry_cnt") == 1
+
+        fill = self.reuse_freed_vector_memory()
+        self.client.delete(*[f"fill:{k}" for k in range(self.GAP_KEYS)])
+        fill.drop(self.client)
+        self.wait_for_unshare_drain()
+
+        assert self.client.info("keyspace")["db0"]["keys"] == 1
+        assert self.client.execute_command("DEBUG", "DIGEST") == before, (
+            "expired doc:0 reads different vector bytes: its field points at freed memory"
+        )
+
+        # With zero active indexes remaining, re-enabling active expiry fires
+        # the "expired" keyspace notification, which reclaims doc:0's retained
+        # VectorRecord.
+        self.client.execute_command("DEBUG", "SET-ACTIVE-EXPIRE", "1")
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0)
+
+    @pytest.mark.parametrize("distance", ["L2", "IP", "COSINE"])
+    @pytest.mark.parametrize("expire", ["key", "field"])
+    @pytest.mark.parametrize("index_count", [1, 2], ids=["one_index", "two_indexes"])
+    def test_dropindex_keeps_expired_hnsw_vectors_readable(
+        self, distance: str, expire: str, index_count: int
+    ):
+        """Dropping the indexes over shared HNSW vectors whose key or field
+        has logically expired frees bytes the hash still points at.
+
+        Stimulus: index GAP_KEYS hashes, expire the key or the vector field,
+        then drop each index in turn and let new vectors reuse freed memory.
+        The cron cannot see the expired key or field, so it skips the unshare
+        but still erased the registry entry that owns the bytes.
+
+        Expected: HGET and DUMP (the RDB serializer, as SAVE uses) still read
+        the original vector after every drop.
+        Observed before the fix: SIGSEGV in HGET, or the entry already gone.
+        """
+        # Import mode stops both active and lazy expiry, and lets an
+        # import-source client read logically expired keys and fields.
+        self.client.config_set("import-mode", "yes")
+        reader = self.server.get_new_client()
+        reader.execute_command("CLIENT", "IMPORT-SOURCE", "ON")
+
+        indexes = [
+            self.build_index(name=f"idx{i}", distance=distance)
+            for i in range(index_count)
+        ]
+        for index in indexes:
+            index.create(self.client, wait_for_backfill=True)
+        self.write_distinct_keys("doc", other="x")
+        for index in indexes:
+            self.wait_for_docs(index, self.GAP_KEYS)
+        assert self.registry_stat("entry_cnt") == self.GAP_KEYS
+
+        keys = [f"doc:{k}" for k in range(self.GAP_KEYS)]
+        for key in keys:
+            if expire == "key":
+                self.client.pexpire(key, 1)
+            else:
+                self.client.execute_command("HPEXPIRE", key, 1, "FIELDS", 1, "vec")
+        time.sleep(0.05)
+        assert self.client.hget(keys[0], "vec") is None, "vector is not expired"
+        dumps = [reader.dump(key) for key in keys]
+
+        for dropped, index in enumerate(indexes, start=1):
+            index.drop(self.client)
+            self.wait_for_unshare_drain()
+
+            fill = self.reuse_freed_vector_memory()
+            for k, key in enumerate(keys):
+                assert reader.hget(key, "vec") == vector(k), (
+                    f"{key} reads freed memory after {dropped} of {index_count} drops"
+                )
+                assert reader.dump(key) == dumps[k], (
+                    f"{key} serializes freed memory after {dropped} of {index_count} drops"
+                )
+            assert self.client.save()
+            assert self.registry_stat("entry_cnt") == 2 * self.GAP_KEYS
+            self.client.delete(*[f"fill:{k}" for k in range(self.GAP_KEYS)])
+            fill.drop(self.client)
+            self.wait_for_unshare_drain()
+
+        reader.delete(*keys)
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0)
+
+    def assert_unshares_not_stuck(self, stalled_before: int):
+        """A dropped index queues its keys after FT.DROPINDEX returns, so let
+        the cron run a few ticks before checking that the queue drained
+        without re-deferring anything."""
+        time.sleep(1)
+        assert self.registry_stat("pending_unshare_cnt") == 0, (
+            "unshares are stuck behind references from another index"
+        )
+        assert self.registry_stat("unshare_stalled_batches") == stalled_before
+
+    @pytest.mark.parametrize("distance", ["L2", "IP", "COSINE"])
+    def test_dropindex_after_backfill_drops_expired_field(self, distance: str):
+        """A deleted HNSW node must not hold the shared vector, or the unshare
+        of a dropped index's keys waits on it forever.
+
+        Stimulus: idx1's backfill runs after the vector field expired, so it
+        removes the vectors idx0 still tracks. Then idx0 is dropped.
+
+        Expected: the unshare queue drains, and the hash still reads its
+        vector.
+        Observed: with L2 and IP, the deleted nodes kept each record busy and
+        the queue re-deferred every item on every cron tick.
+        """
+        self.client.config_set("import-mode", "yes")
+        reader = self.server.get_new_client()
+        reader.execute_command("CLIENT", "IMPORT-SOURCE", "ON")
+        idx0 = self.build_index(name="idx0", distance=distance)
+        idx0.create(self.client, wait_for_backfill=True)
+        self.client.execute_command(
+            "FT._DEBUG", "CONTROLLED_VARIABLE", "SET", "StopBackfill", "yes"
+        )
+        idx1 = self.build_index(name="idx1", distance=distance)
+        idx1.create(self.client)
+        self.write_distinct_keys("doc", other="x")
+        self.wait_for_docs(idx0, self.GAP_KEYS)
+        self.wait_for_docs(idx1, self.GAP_KEYS)
+
+        keys = [f"doc:{k}" for k in range(self.GAP_KEYS)]
+        for key in keys:
+            self.client.execute_command("HPEXPIRE", key, 1, "FIELDS", 1, "vec")
+        time.sleep(0.05)
+        self.client.execute_command(
+            "FT._DEBUG", "CONTROLLED_VARIABLE", "SET", "StopBackfill", "no"
+        )
+        idx1.wait_for_backfill_complete(self.client)
+        assert idx0.info(self.client).num_records == self.GAP_KEYS
+        assert idx1.info(self.client).num_records == 0
+
+        stalled = self.registry_stat("unshare_stalled_batches")
+        idx0.drop(self.client)
+        self.assert_unshares_not_stuck(stalled)
+        # The expired field still holds the shared bytes: the record stays.
+        assert self.registry_stat("entry_cnt") == self.GAP_KEYS
+
+        self.reuse_freed_vector_memory()
+        for k, key in enumerate(keys):
+            assert reader.hget(key, "vec") == vector(k), f"{key} reads freed memory"
+
+        # Deleting the keys reclaims their records; the fill vectors remain.
+        reader.delete(*keys)
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), self.GAP_KEYS)
+
+    @pytest.mark.parametrize("distance", ["L2", "IP", "COSINE"])
+    def test_dropindex_after_filter_rejects_shared_vector(self, distance: str):
+        """Like the backfill case, but idx1 drops the documents because its
+        FILTER rejects them, so the unshare can complete."""
+        idx0 = self.build_index(name="idx0", distance=distance)
+        idx0.create(self.client, wait_for_backfill=True)
+        idx1 = self.build_index(name="idx1", distance=distance)
+        self.client.execute_command(
+            "FT.CREATE", idx1.name, "ON", "HASH", "PREFIX", "1", "doc",
+            "FILTER", "@other=='x'",
+            "SCHEMA", *idx1.fields[0].create(KeyDataType.HASH),
+        )
+        idx1.wait_for_backfill_complete(self.client)
+        self.write_distinct_keys("doc", other="x")
+        self.wait_for_docs(idx0, self.GAP_KEYS)
+        self.wait_for_docs(idx1, self.GAP_KEYS)
+        for k in range(self.GAP_KEYS):
+            self.client.hset(f"doc:{k}", "other", "y")
+        self.wait_for_docs(idx1, 0)
+        assert idx0.info(self.client).num_records == self.GAP_KEYS
+
+        stalled = self.registry_stat("unshare_stalled_batches")
+        idx0.drop(self.client)
+        self.assert_unshares_not_stuck(stalled)
+        # Every field is visible, so every vector is copied back to its hash.
+        assert self.registry_stat("entry_cnt") == 0
+
+        self.reuse_freed_vector_memory()
+        for k in range(self.GAP_KEYS):
+            assert self.client.hget(f"doc:{k}", "vec") == vector(k), f"doc:{k} lost its vector"
 
 
 class TestVectorRegistryPersistence(ValkeySearchTestCaseDebugMode):

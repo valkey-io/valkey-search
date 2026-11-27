@@ -348,6 +348,10 @@ IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
       stop_words_(index_schema_proto.stop_words().begin(),
                   index_schema_proto.stop_words().end()),
       skip_initial_scan_(index_schema_proto.skip_initial_scan()),
+      query_timeout_ms_(
+          index_schema_proto.has_query_timeout_ms()
+              ? std::make_optional(index_schema_proto.query_timeout_ms())
+              : std::nullopt),
       filter_expression_str_(
           index_schema_proto.has_filter() ? index_schema_proto.filter() : ""),
       min_stem_size_(index_schema_proto.min_stem_size() > 0
@@ -659,6 +663,9 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
   auto key_cstr = vmsdk::ToStringView(key);
   auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
       ctx, key, VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
+  if (!key_obj && from_backfill) {
+    return;
+  }
 
   auto interned_key = StringInternStore::Intern(key_cstr);
   if (key_obj && !GetAttributeDataType().IsProperType(key_obj.get())) {
@@ -816,7 +823,10 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
   if (ABSL_PREDICT_FALSE(invalid_data)) {
     VALKEY_SEARCH_COMPATIBILITY_FIX(
         1, 3, 0, "invalid_data_drops_key",
-        [&] { RemoveKeyFromAllIndexes(ctx, key); }, [] {});
+        [&]() ABSL_NO_THREAD_SAFETY_ANALYSIS {
+          RemoveKeyFromAllIndexes(ctx, key);
+        },
+        [] {});
   }
 }
 
@@ -1444,6 +1454,9 @@ std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {
   }
   if (!filter_expression_str_.empty()) {
     index_schema_proto->set_filter(filter_expression_str_);
+  }
+  if (query_timeout_ms_.has_value()) {
+    index_schema_proto->set_query_timeout_ms(*query_timeout_ms_);
   }
 
   auto *stats = index_schema_proto->mutable_stats();
@@ -2177,9 +2190,10 @@ bool IndexSchema::WaitForContendedKeys(
   absl::MutexLock lock(&mutated_records_mutex_);
   // A record is erased only after its mutation is applied.
   auto applied = [&]() ABSL_NO_THREAD_SAFETY_ANALYSIS {
-    return std::ranges::none_of(contended, [&](const Key &key) {
-      return tracked_mutated_records_.contains(key);
-    });
+    return std::ranges::none_of(
+        contended, [&](const Key &key) ABSL_NO_THREAD_SAFETY_ANALYSIS {
+          return tracked_mutated_records_.contains(key);
+        });
   };
   if (applied()) {
     return true;

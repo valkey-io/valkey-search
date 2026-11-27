@@ -250,10 +250,7 @@ class MockIndex : public indexes::VectorBase {
     static indexes::VectorRecord p;
     return p;
   }
-  indexes::VectorRecord &GetVector(uint64_t) const override {
-    static indexes::VectorRecord p;
-    return p;
-  }
+  indexes::VectorRecord GetVector(uint64_t) const override { return {}; }
   float ComputeDistance(absl::string_view, const indexes::VectorRecord &,
                         float) const override {
     return 0.0f;

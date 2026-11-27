@@ -45,7 +45,7 @@ Where:
   - `ADHOC_BF` evaluates the filter first, then computes exact distances for the matching vectors.
   - `BATCHES` searches the vector index first and applies the filter while traversing vector candidates. An explicit `BATCHES` also takes precedence when `INKEYS` is supplied; the named keys remain part of the inline candidate filter. With the automatic policy, `INKEYS` uses filter-first execution.
   - When omitted, Valkey Search chooses the path using its existing planner heuristic.
-- `AS <name>` (optional): Overrides the default naming of the output distance field; the supplied name is used as-is. By default this field is named `__<field>_score`, where `<field>` is the field named in `@<field>` (the attribute's `AS` alias from `FT.CREATE`, if it has one). For example, `@vec` produces `__vec_score`.
+- `AS <name>` (optional): Overrides the default naming of the output distance field. The name may be `$<param>`, in which case the value of that `PARAMS` entry is used; `K`, `EF_RUNTIME` and `HYBRID_POLICY` can also be given as `$<param>`. By default this field is named `__<field>_score`, where `<field>` is the field named in `@<field>` (the attribute's `AS` alias from `FT.CREATE`, if it has one). For example, `@vec` produces `__vec_score`.
 
 For example, this query forces exact filter-first execution for documents tagged `electronics`:
 
@@ -85,6 +85,8 @@ The BNF for a filter is:
                   | <fuzzy-match>
                   | <vector-range-match>
                   | "(" <logical-or> ")"
+                  | "@" <field-name> ":(" <logical-or> ")"
+                  | <matcher> "=>{$weight:" <number> "}"
 
 ```
 
@@ -233,6 +235,19 @@ For examples, see [Example Vector Range Queries](#example-vector-range-queries).
 
 Unlike the other search operators. The text search operators do not require that a field be specified. If a field is not specified for a text search operator, then all text fields within the index are searched. Regardless, if multiple text search operators are combined in an expression, then only keys which have all of the text search operators will satisfy the query.
 
+With `search.emulate-release` 1.3.0 or later, a query that is not valid UTF-8 fails with `Invalid UTF-8 in query expression`. See [COMPATIBILITY.md](../../COMPATIBILITY.md).
+
+### Field-scoped Groups
+
+A field followed by a parenthesized expression applies the field to every text term inside the parentheses.
+
+```
+@title:(hello | world)     same as @title:hello | @title:world
+@title:(red shoes)         same as @title:red @title:shoes
+```
+
+Only text terms (term, prefix, suffix, fuzzy and exact phrase) may appear inside the parentheses. A field modifier inside the group, such as `@title:(red | @body:shoes)`, is a syntax error, and empty parentheses are rejected.
+
 ### Term Search
 
 The term search operator matches a single word. If the word is a stop word, the term search operator is removed from the query expression.
@@ -259,6 +274,7 @@ hello*                  matches words that start with hello such as hello, hello
 A term with a leading `*` matches any word that ends with that term.
 
 Note that suffix searching will only locate words in fields that have `WITHSUFFIXTRIE` specified, i.e., fields declared with `NOSUFFIXTRIE` will not be searched.
+Without a field specifier, a suffix term searches every text field that has `WITHSUFFIXTRIE`; if no text field has it, an error is issued.
 If a field specifier is added to a suffix term search and that particular field was declared with `NOSUFFIXTRIE` then an error will be issued.
 
 ```
@@ -268,7 +284,9 @@ If a field specifier is added to a suffix term search and that particular field 
 
 ### Exact Phrase Search
 
-The exact phrase search operator matches an exact sequence of words in a text field. The words to be matched are enclosed in double quotes. The words are not subject to stop word removal nor stemming, otherwise this is equivalent to having the same words in a query with `SLOP 0` and `INORDER` options being specified.
+The exact phrase search operator matches an exact sequence of words in a text field. The words to be matched are enclosed in double quotes. Each word in a phrase is matched exactly; prefix, suffix and fuzzy operators are not supported inside a phrase. The words are not subject to stop word removal nor stemming, otherwise this is equivalent to having the same words in a query with `SLOP 0` and `INORDER` options being specified.
+
+Note: with `search.emulate-release` 1.3.0 or later, single quotes also delimit a phrase, for example `'hello world'`; with the default setting (1.0.0), single quotes are treated as punctuation.
 
 ```
 "hello world"            matches the exact phrase "hello world" in any text field
@@ -286,6 +304,15 @@ The fuzzy search operator matches words within a fixed damerau-levenshtein dista
 %%hello%               Error: leading and trailing count % count are different
 ```
 
+## Query Weights
+
+A `=>{$weight: <weight>}` attribute after a term, a matcher or a parenthesized group multiplies the relevance score of that clause. The weight must be a non-negative, finite number, and `$weight` is the only supported attribute. See [Query Weights](search-scoring.md#query-weights).
+
+```
+jacket=>{$weight: 2.0}
+jacket (@color:{red})=>{$weight: 2.0}
+```
+
 ## Logical Operators
 
 ### Logical Negation
@@ -297,7 +324,7 @@ For example, the negative query `-@genre:{comedy}` will return all books that ar
 The following query will return all books with "comedy" genre that are not published between 2015 and 2024, or that have no year field:
 
 ```
-@genre: {comedy} \-@year:[2015 2024]
+@genre:{comedy} -@year:[2015 2024]
 ```
 
 ### Logical `OR`

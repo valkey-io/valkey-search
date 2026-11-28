@@ -113,8 +113,8 @@ class MetadataManager {
   // change when the encoding version is bumped.
   // * update_callback will be called whenever the metadata is updated.
   // * validate_callback checks an entry's contents against its encoded id. It
-  // is called on metadata received from outside the module (FT.INTERNAL_UPDATE
-  // and RDB load) before that metadata is used.
+  // is called on metadata received from outside the module (FT.INTERNAL_UPDATE,
+  // RDB load and metadata fetched from peers) before that metadata is used.
   // * encoding_version should only be set in unit tests.
   void RegisterType(absl::string_view type_name,
                     FingerprintCallback fingerprint_callback,
@@ -182,6 +182,7 @@ class MetadataManager {
       absl::flat_hash_map<std::string, RegisteredType> &registered_types);
   absl::Status ValidateEntry(absl::string_view type_name, absl::string_view id,
                              const GlobalMetadataEntry &entry);
+  absl::Status ValidateGlobalMetadata(const GlobalMetadata &metadata);
   int GetSectionsCount() const;
   absl::StatusOr<const GlobalMetadataEntry *> GetEntry(
       absl::string_view type_name, const ObjName &obj_name) const;

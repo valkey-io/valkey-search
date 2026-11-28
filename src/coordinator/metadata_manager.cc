@@ -52,6 +52,8 @@ constexpr float kMetadataBroadcastJitterRatio = 0.5;
 }  // namespace
 
 CONTROLLED_BOOLEAN(PauseHandleClusterMessage, false);
+// Makes every metadata entry that would be validated fail validation.
+CONTROLLED_BOOLEAN(ForceMetadataValidationFailure, false);
 
 void DelayedClusterMessageTimerCallback(ValkeyModuleCtx *ctx, void *data) {
   auto *params = static_cast<
@@ -189,11 +191,25 @@ absl::Status MetadataManager::ValidateEntry(absl::string_view type_name,
     // Unknown types are carried through unchanged; there is no validator.
     return absl::OkStatus();
   }
-  auto status = it->second.validate_callback(id, entry.content());
+  auto status = ForceMetadataValidationFailure.GetValue()
+                    ? absl::InvalidArgumentError(
+                          "forced by ForceMetadataValidationFailure")
+                    : it->second.validate_callback(id, entry.content());
   if (!status.ok()) {
+    Metrics::GetStats().metadata_validation_failures_cnt++;
     return absl::InvalidArgumentError(absl::StrCat(
         "Invalid ", type_name, " metadata entry ",
         vmsdk::config::RedactIfNeeded(id), ": ", status.message()));
+  }
+  return absl::OkStatus();
+}
+
+absl::Status MetadataManager::ValidateGlobalMetadata(
+    const GlobalMetadata &metadata) {
+  for (const auto &[type_name, inner_map] : metadata.type_namespace_map()) {
+    for (const auto &[id, entry] : inner_map.entries()) {
+      VMSDK_RETURN_IF_ERROR(ValidateEntry(type_name, id, entry));
+    }
   }
   return absl::OkStatus();
 }
@@ -500,6 +516,13 @@ void MetadataManager::HandleBroadcastedMetadata(
               << "Got GlobalMetadata from " << address << ": "
               << schema->DebugString();
           auto &metadata_manager = MetadataManager::Instance();
+          auto validation = metadata_manager.ValidateGlobalMetadata(*schema);
+          if (!validation.ok()) {
+            VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
+                << "Rejecting GlobalMetadata from " << address << ": "
+                << validation.message();
+            return;
+          }
           auto status = metadata_manager.ReconcileMetadata(*schema, address);
           if (!status.ok()) {
             VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
@@ -704,12 +727,8 @@ absl::Status MetadataManager::LoadMetadata(
         "Unexpected RDB section type passed to MetadataManager");
   }
 
-  for (const auto &[type_name, inner_map] :
-       section->global_metadata_contents().type_namespace_map()) {
-    for (const auto &[id, entry] : inner_map.entries()) {
-      VMSDK_RETURN_IF_ERROR(ValidateEntry(type_name, id, entry));
-    }
-  }
+  VMSDK_RETURN_IF_ERROR(
+      ValidateGlobalMetadata(section->global_metadata_contents()));
 
   if (staging_metadata_due_to_repl_load_.Get()) {
     staged_metadata_ = section->global_metadata_contents();

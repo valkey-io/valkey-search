@@ -446,6 +446,12 @@ static vmsdk::info_field::Integer ft_internal_update_process_failures_cnt(
       return Metrics::GetStats().ft_internal_update_process_failures_cnt;
     }));
 
+static vmsdk::info_field::Integer metadata_validation_failures_cnt(
+    "coordinator", "metadata_validation_failures_cnt",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().metadata_validation_failures_cnt;
+    }));
+
 static vmsdk::info_field::Integer process_internal_update_callback_failures_cnt(
     "coordinator", "process_internal_update_callback_failures_cnt",
     vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {

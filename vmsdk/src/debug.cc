@@ -44,13 +44,13 @@ static std::string ToString(const std::source_location& location) {
 }
 
 void PausePoint(absl::string_view point, std::source_location location) {
-  CHECK(!IsMainThread()) << "Pause point not allowed on main thread.";
   {
     absl::MutexLock lock(&pause_point_lock);
     auto it = pause_point_waiters.find(point);
     if (it == pause_point_waiters.end()) {
       return;
     }
+    CHECK(!IsMainThread()) << "Pause point not allowed on main thread.";
     it->second.push_back(Waiter{
         .location_ = location,
         .threadid_ = pthread_self(),

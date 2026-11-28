@@ -1116,7 +1116,7 @@ void IndexSchema::ProcessMutation(ValkeyModuleCtx *ctx,
 void IndexSchema::ProcessSingleMutationAsync(ValkeyModuleCtx *ctx,
                                              bool from_backfill, const Key &key,
                                              vmsdk::StopWatch *delay_capturer) {
-  PAUSEPOINT("mutation_processing");
+  BACKGROUND_PAUSEPOINT("mutation_processing");
   {
     vmsdk::WriterMutexLock lock(&time_sliced_mutex_);
     bool first_time = true;

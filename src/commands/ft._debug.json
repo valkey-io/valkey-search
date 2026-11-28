@@ -3,8 +3,7 @@
     "acl_categories": [
       "ADMIN",
       "SLOW",
-      "DANGEROUS",
-      "SEARCH"
+      "DANGEROUS"
     ],
     "arity": -2,
     "arguments": [

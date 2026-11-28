@@ -29,6 +29,13 @@ class TestFTDebugSafety(ValkeySearchTestCaseBase):
             client.execute_command("FT._DEBUG", "SHOW_METADATA")
         assert client.ping()
 
+    @pytest.mark.parametrize("args", [["NOSUCH"], ["NOSUCH", "extra"]])
+    def test_unknown_subcommand_errors(self, args):
+        client: Valkey = self.server.get_new_client()
+        with pytest.raises(ResponseError, match="Unknown subcommand: NOSUCH"):
+            client.execute_command("FT._DEBUG", *args)
+        assert client.ping()
+
     def test_search_user_cannot_run_debug(self):
         client: Valkey = self.server.get_new_client()
         client.execute_command(
@@ -56,6 +63,9 @@ class TestFTDebugSafety(ValkeySearchTestCaseBase):
         for i in range(10):
             client.hset(f"pad:{i}", "v", "x")
         client.config_set("rdb-key-save-delay", 1000000000)
+        # The server cron resumes the pool after this limit even while the
+        # child is alive; use the maximum so it cannot expire mid-test.
+        client.config_set("search.max-worker-suspension-secs", 3600)
         client.bgsave()
         waiters.wait_for_true(
             lambda: client.info("persistence")["rdb_bgsave_in_progress"] == 1)

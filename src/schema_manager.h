@@ -123,6 +123,8 @@ class SchemaManager {
   absl::Status SaveIndexes(ValkeyModuleCtx *ctx, SafeRDB *rdb, int when);
   static absl::StatusOr<uint64_t> ComputeFingerprint(
       const google::protobuf::Any &metadata);
+  static absl::Status ValidateMetadata(absl::string_view encoded_id,
+                                       const google::protobuf::Any &metadata);
   absl::StatusOr<vmsdk::ValkeyVersion> GetMinVersion() const;
 
   absl::Status ShowIndexSchemas(ValkeyModuleCtx *ctx,

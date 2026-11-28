@@ -39,9 +39,10 @@ TEST_F(FTInternalUpdateTest, WrongArguments) {
       TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.INTERNAL_UPDATE");
   argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_id");
 
-  VMSDK_EXPECT_DEATH(
-      [[maybe_unused]] auto res = FTInternalUpdateCmd(&fake_ctx_, argv, 2),
-      "FT.INTERNAL_UPDATE called with wrong argument count: 2");
+  auto status = FTInternalUpdateCmd(&fake_ctx_, argv, 2);
+  EXPECT_EQ(status.code(), absl::StatusCode::kInvalidArgument);
+  EXPECT_EQ(status.message(),
+            "ERR wrong number of arguments for 'FT.INTERNAL_UPDATE' command");
 
   TestValkeyModule_FreeString(&fake_ctx_, argv[0]);
   TestValkeyModule_FreeString(&fake_ctx_, argv[1]);
@@ -179,9 +180,10 @@ TEST_F(FTInternalUpdateTest, TooManyArguments) {
   argv[3] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "data2");
   argv[4] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "extra");
 
-  VMSDK_EXPECT_DEATH(
-      [[maybe_unused]] auto res = FTInternalUpdateCmd(&fake_ctx_, argv, 5),
-      "FT.INTERNAL_UPDATE called with wrong argument count: 5");
+  auto status = FTInternalUpdateCmd(&fake_ctx_, argv, 5);
+  EXPECT_EQ(status.code(), absl::StatusCode::kInvalidArgument);
+  EXPECT_EQ(status.message(),
+            "ERR wrong number of arguments for 'FT.INTERNAL_UPDATE' command");
 
   for (int i = 0; i < 5; i++) {
     TestValkeyModule_FreeString(&fake_ctx_, argv[i]);

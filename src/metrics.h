@@ -73,6 +73,7 @@ class Metrics {
     std::atomic<uint64_t> ft_internal_update_call_failures_cnt{0};
     std::atomic<uint64_t> process_internal_update_callback_failures_cnt{0};
     std::atomic<uint64_t> ft_internal_update_skipped_entries_cnt{0};
+    std::atomic<uint64_t> metadata_validation_failures_cnt{0};
     vmsdk::LatencySampler hnsw_vector_index_search_latency{
         absl::ToInt64Nanoseconds(absl::Nanoseconds(1)),
         absl::ToInt64Nanoseconds(absl::Seconds(1)), LATENCY_PRECISION};

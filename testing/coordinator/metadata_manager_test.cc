@@ -132,7 +132,11 @@ TEST_P(EntryOperationTest, TestEntryOperations) {
           callbacks_tracker.push_back(std::move(callback_result));
           return type_to_register.status_to_return;
         },
-        [](auto) { return 1; }, type_to_register.encoding_version);
+        [](auto) { return 1; },
+        [](absl::string_view, const google::protobuf::Any&) {
+          return absl::OkStatus();
+        },
+        type_to_register.encoding_version);
   }
   if (test_case.expect_num_broadcasts > 0) {
     EXPECT_CALL(*kMockValkeyModule,
@@ -596,7 +600,11 @@ TEST_P(MetadataManagerReconciliationTest, TestReconciliation) {
           });
           return type_to_register.status_to_return;
         },
-        [](auto) { return kModuleVersion; }, type_to_register.encoding_version);
+        [](auto) { return kModuleVersion; },
+        [](absl::string_view, const google::protobuf::Any&) {
+          return absl::OkStatus();
+        },
+        type_to_register.encoding_version);
   }
 
   if (test_case.expect_broadcast && !expect_failure) {
@@ -1664,7 +1672,11 @@ TEST_F(MetadataManagerReconciliationTest,
         callback_called = true;
         return absl::OkStatus();
       },
-      [](auto) { return kModuleVersion; }, vmsdk::ValkeyVersion{0, 0, 1});
+      [](auto) { return kModuleVersion; },
+      [](absl::string_view, const google::protobuf::Any&) {
+        return absl::OkStatus();
+      },
+      vmsdk::ValkeyVersion{0, 0, 1});
 
   int context_flags = 0;
   ON_CALL(*kMockValkeyModule, GetContextFlags(testing::_))
@@ -2253,6 +2265,106 @@ TEST_F(MetadataManagerTest, IndexName) {
   auto obj_name = ObjName::Decode("{1abc}def");
   EXPECT_EQ("def", obj_name.GetName());
   EXPECT_EQ(1, obj_name.GetDbNum());
+}
+
+class MetadataManagerValidateTest : public MetadataManagerTest {
+ protected:
+  void SetUp() override {
+    MetadataManagerTest::SetUp();
+    test_metadata_manager_->RegisterType(
+        "my_type",
+        [](const google::protobuf::Any&) -> absl::StatusOr<uint64_t> {
+          return 1234;
+        },
+        [this](const ObjName&, const google::protobuf::Any*, uint64_t,
+               uint32_t) {
+          update_called_ = true;
+          return absl::OkStatus();
+        },
+        [](auto) { return kModuleVersion; },
+        [this](absl::string_view id, const google::protobuf::Any&) {
+          validated_.emplace_back(id);
+          return validate_status_;
+        });
+  }
+
+  static GlobalMetadataEntry EntryWithContent() {
+    GlobalMetadataEntry entry;
+    entry.set_version(1);
+    entry.mutable_content()->PackFrom(GlobalMetadataVersionHeader());
+    return entry;
+  }
+
+  absl::Status Load(absl::string_view id, const GlobalMetadataEntry& entry) {
+    FakeSafeRDB fake_rdb;
+    auto section = std::make_unique<data_model::RDBSection>();
+    section->set_type(data_model::RDB_SECTION_GLOBAL_METADATA);
+    (*(*section->mutable_global_metadata_contents()
+            ->mutable_type_namespace_map())["my_type"]
+          .mutable_entries())[std::string(id)] = entry;
+    section->set_supplemental_count(0);
+    return test_metadata_manager_->LoadMetadata(
+        fake_ctx, std::move(section), SupplementalContentIter(&fake_rdb, 0));
+  }
+
+  absl::Status validate_status_ = absl::OkStatus();
+  bool update_called_ = false;
+  std::vector<std::string> validated_;
+};
+
+TEST_F(MetadataManagerValidateTest, CreateEntryOnReplicaRejectsInvalidEntry) {
+  validate_status_ = absl::InvalidArgumentError("bad");
+  auto entry = EntryWithContent();
+  GlobalMetadataVersionHeader header;
+  header.set_top_level_version(5);
+
+  auto status = test_metadata_manager_->CreateEntryOnReplica(
+      fake_ctx, "my_type", "{3}idx", &entry, &header);
+
+  EXPECT_EQ(status.code(), absl::StatusCode::kInvalidArgument);
+  EXPECT_THAT(validated_, testing::ElementsAre("{3}idx"));
+  EXPECT_FALSE(update_called_);
+  EXPECT_TRUE(google::protobuf::util::MessageDifferencer::Equals(
+      *test_metadata_manager_->GetGlobalMetadata(), GlobalMetadata()));
+}
+
+TEST_F(MetadataManagerValidateTest, LoadMetadataRejectsInvalidEntry) {
+  validate_status_ = absl::InvalidArgumentError("bad");
+
+  auto status = Load("idx", EntryWithContent());
+
+  EXPECT_EQ(status.code(), absl::StatusCode::kInvalidArgument);
+  EXPECT_THAT(validated_, testing::ElementsAre("idx"));
+  EXPECT_TRUE(google::protobuf::util::MessageDifferencer::Equals(
+      *test_metadata_manager_->GetGlobalMetadata(), GlobalMetadata()));
+}
+
+TEST_F(MetadataManagerValidateTest, LoadMetadataDuringReplicationRejects) {
+  validate_status_ = absl::InvalidArgumentError("bad");
+  test_metadata_manager_->OnReplicationLoadStart(fake_ctx);
+
+  EXPECT_EQ(Load("idx", EntryWithContent()).code(),
+            absl::StatusCode::kInvalidArgument);
+  test_metadata_manager_->OnLoadingEnded(fake_ctx);
+
+  // The rejected entry was never staged, so nothing is applied at load end.
+  EXPECT_TRUE(test_metadata_manager_->GetGlobalMetadata()
+                  ->type_namespace_map()
+                  .empty());
+}
+
+TEST_F(MetadataManagerValidateTest, LoadMetadataAcceptsValidEntry) {
+  VMSDK_EXPECT_OK(Load("{2}idx", EntryWithContent()));
+  EXPECT_THAT(validated_, testing::ElementsAre("{2}idx"));
+}
+
+TEST_F(MetadataManagerValidateTest, TombstoneIsNotValidated) {
+  validate_status_ = absl::InvalidArgumentError("bad");
+  GlobalMetadataEntry tombstone;
+  tombstone.set_version(2);
+
+  VMSDK_EXPECT_OK(Load("idx", tombstone));
+  EXPECT_TRUE(validated_.empty());
 }
 
 }  // namespace valkey_search::coordinator
